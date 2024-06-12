@@ -20,7 +20,7 @@ return
 //+-----------------------------------------------------------------------------------------------+
 //! Rotina para montagem dos dados do relatório. !
 //+-----------------------------------------------------------------------------------------------+
-Static Function ReportPrint(oReport,cAlias) //teste
+Static Function ReportPrint(oReport,cAlias) 
 
 	local oSecao1 := oReport:Section(1)
 
