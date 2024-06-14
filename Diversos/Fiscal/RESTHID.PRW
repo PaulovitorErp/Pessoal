@@ -158,7 +158,7 @@ WHERE SFT.%notdel%
 		cLinha +=CRLF
 		(cAlias)->(DbSkip())
 	EndDo
-    // Registro Tipo 3 – Nota Fiscal
+    // RRegistro Tipo 3 – Rodapé
        cLinha += PADL("3",1) // Cod segmento - 1
 	FWrite(nHandle, cLinha)
 	FCLOSE(nHandle)
