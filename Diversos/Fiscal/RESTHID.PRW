@@ -37,7 +37,7 @@ Static Function Execute(osay)
 
 	BeginSql Alias cAlias
 	
-		SELECT CASE
+		SELECT DISTINCT CASE
            WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 3 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
            WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 4 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
            ELSE CONVERT(VARCHAR(10), FT_CODISS)
@@ -129,7 +129,7 @@ WHERE SFT.%notdel%
 	// Registro Tipo 2 – Nota Fiscal
 	While (cAlias)->(! Eof())
 
-		cLinha += PADL("2",1) // Cod segmento -1
+		cLinha += PADL("2",1) // Cod segmento - 1
 		cLinha += PADL(Alltrim((cAlias)->CODISS),7) // Cod serviço  - 2/8 -Informe o código do serviço, de acordo com Lei 116 de 2003
 		cLinha += (cAlias)->MODELO // Tipo documento 9/10
 		cLinha += PADL(Alltrim((cAlias)->CODEST),2) // Código Cidade Serviço prestado - 11/17
@@ -157,7 +157,8 @@ WHERE SFT.%notdel%
 		cLinha +=CRLF
 		(cAlias)->(DbSkip())
 	EndDo
-
+    // Registro Tipo 3 – Nota Fiscal
+       cLinha += PADL("3",1) // Cod segmento - 1
 	FWrite(nHandle, cLinha)
 	FCLOSE(nHandle)
 
