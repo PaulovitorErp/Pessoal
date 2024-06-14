@@ -6,7 +6,7 @@
 
 User Function RESTHD()
 
-	
+
 
 	If Pergunte("RESTHD", .T.)
 		MakeDir( DRIVE_LETTER + "\RESTHD" )
@@ -22,7 +22,7 @@ Return
 Static Function Execute(osay)
 
 
-	Local cDir    := DRIVE_LETTER + "\RESTHD\RESTHD0101.txt"
+	Local cDir    := DRIVE_LETTER + "\RESTHD\loteREST.txt"
 	Local nHandle := FCreate(cDir)
 	Local cLinha  :=''
 	Local cAlias  :=Getnextalias()
@@ -120,7 +120,7 @@ WHERE SFT.%notdel%
 
 	cData    := Date()
 	// Registro Tipo 1 – Cabeçalho
-	cLinha +="1" //Tipo de Registro - 1 
+	cLinha +="1" //Tipo de Registro - 1
 	cLinha +=PADL("REST_LOTE",12) //Tipo do Arquivo - 2/13
 	cLinha +=PADL((cAlias)->M0IM,15) //Inscrição Municipal do Tomador - 14/28
 	cLinha +=PADL("",3) // Campo Reservado Prefeitura - 29/31
@@ -129,7 +129,7 @@ WHERE SFT.%notdel%
 	// Registro Tipo 2 – Nota Fiscal
 	While (cAlias)->(! Eof())
 
-		cLinha += PADL("2",1) // Cod segmento -1 
+		cLinha += PADL("2",1) // Cod segmento -1
 		cLinha += PADL(Alltrim((cAlias)->CODISS),7) // Cod serviço  - 2/8 -Informe o código do serviço, de acordo com Lei 116 de 2003
 		cLinha += (cAlias)->MODELO // Tipo documento 9/10
 		cLinha += PADL(Alltrim((cAlias)->CODEST),2) // Código Cidade Serviço prestado - 11/17
@@ -157,7 +157,7 @@ WHERE SFT.%notdel%
 		cLinha +=CRLF
 		(cAlias)->(DbSkip())
 	EndDo
-       
+
 	FWrite(nHandle, cLinha)
 	FCLOSE(nHandle)
 
