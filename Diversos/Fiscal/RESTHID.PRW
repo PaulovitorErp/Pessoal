@@ -53,7 +53,7 @@ Static Function Execute(osay)
            WHEN FT_ALIQICM = 0 THEN '0'
        END AS TRIBMUN,
        FT_VALCONT AS VLNFTRIB,
-       FT_ALIQICM AS ALIQ,
+       REPLACE(FT_ALIQICM, '.', '') AS ALIQ,
        FT_VALICM AS VLRISS,
        A2_CGC AS CGC,
        A2_INSCRM AS IMUNI,
@@ -116,6 +116,7 @@ WHERE SFT.%notdel%
   AND FT_ENTRADA >= %Exp:Dtos(MV_PAR03)%
   AND FT_ENTRADA <= %Exp:Dtos(MV_PAR04)%
   AND FT_ESPECIE = 'NFS'
+  ORDER BY NF
 	EndSql
 
 	cData    := Date()
@@ -128,7 +129,7 @@ WHERE SFT.%notdel%
 	cLinha +=CRLF
 	// Registro Tipo 2 – Nota Fiscal
 	While (cAlias)->(! Eof())
-
+        cAliq := STRTRAN((cAlias)->ALIQ," ","")
 		cLinha += PADL("2",1) // Cod segmento - 1
 		cLinha += PADL(Alltrim((cAlias)->CODISS),7) // Cod serviço  - 2/8 -Informe o código do serviço, de acordo com Lei 116 de 2003
 		cLinha += (cAlias)->MODELO // Tipo documento 9/10
@@ -138,8 +139,8 @@ WHERE SFT.%notdel%
 		cLinha += PADL(Alltrim((cAlias)->NF),15) // Numero documento - 26/40
 		cLinha += (cAlias)->TRIBMUN // Tributado no municipio - 1
 		cLinha += PADL(ALLTRIM(STRTRAN(STR((cAlias)->VLNFTRIB, 15, 2), ".", "")), 15, "0") // Valor do Serviço - 42/56
-		cLinha += PADL(ALLTRIM(STRTRAN(STR((cAlias)->ALIQ, 3, 2), ".", "")), 3, "0") // Alíquota 57/59
-		cLinha += PADL(ALLTRIM(STRTRAN(STR((cAlias)->VLRISS, 15, 2), ".", "")), 15, "0") //Valor Retenção ISS - 60/74
+        cLinha += PADR(cAliq,3,"0")// Alíquota 57/59
+        cLinha += PADL(ALLTRIM(STRTRAN(STR((cAlias)->VLRISS, 15, 2), ".", "")), 15, "0") //Valor Retenção ISS - 60/74
 		cLinha += PADL(Alltrim((cAlias)->CGC),15) // CPF / CNPJ Prestador - 75/89
 		cLinha += PADL(Alltrim((cAlias)->IMUNI),15) // Inscrição Municipal prestador - 90/104
 		cLinha += PADL(Alltrim((cAlias)->IEST),15) // Inscrição Estadual prestador - 105/119
