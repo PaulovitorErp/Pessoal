@@ -37,87 +37,105 @@ Static Function Execute(osay)
 
 	BeginSql Alias cAlias
 	
-		SELECT DISTINCT CASE
-           WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 3 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
-           WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 4 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
-           ELSE CONVERT(VARCHAR(10), FT_CODISS)
-       END AS CODISS,
-       CASE
-           WHEN FT_ESPECIE = 'NFS' THEN 'NF'
-       END AS MODELO,
-       A2_COD_MUN AS [MUNPREST],
-       FT_EMISSAO AS EMISNF,
-       FT_NFISCAL AS NF,
-       CASE
-           WHEN FT_ALIQICM > 0 THEN '1'
-           WHEN FT_ALIQICM = 0 THEN '0'
-       END AS TRIBMUN,
-       FT_VALCONT AS VLNFTRIB,
-       REPLACE(FT_ALIQICM, '.', '') AS ALIQ,
-       FT_VALICM AS VLRISS,
-       A2_CGC AS CGC,
-       A2_INSCRM AS IMUNI,
-       A2_INSCR AS IEST,
-       A2_NOME AS NOME,
-       A2_END AS ENDE,
-       A2_NR_END AS NUMERO,
-       A2_COMPLEM AS COMPL,
-       A2_BAIRRO AS BAIRRO,
-       A2_COD_MUN AS [MUNPREST],
-       A2_CEP AS CEP,
-       A2_EMAIL AS EMAIL,
-       FT_FILIAL AS Filial,
-       M0_INSCM M0IM,
-       CASE
-           WHEN SA2.A2_EST = 'RO' THEN '11'
-           WHEN SA2.A2_EST = 'AC' THEN '12'
-           WHEN SA2.A2_EST = 'AM' THEN '13'
-           WHEN SA2.A2_EST = 'RR' THEN '14'
-           WHEN SA2.A2_EST = 'PA' THEN '15'
-           WHEN SA2.A2_EST = 'AP' THEN '16'
-           WHEN SA2.A2_EST = 'TO' THEN '17'
-           WHEN SA2.A2_EST = 'MA' THEN '21'
-           WHEN SA2.A2_EST = 'PI' THEN '22'
-           WHEN SA2.A2_EST = 'CE' THEN '23'
-           WHEN SA2.A2_EST = 'RN' THEN '24'
-           WHEN SA2.A2_EST = 'PB' THEN '25'
-           WHEN SA2.A2_EST = 'PE' THEN '26'
-           WHEN SA2.A2_EST = 'AL' THEN '27'
-           WHEN SA2.A2_EST = 'MG' THEN '31'
-           WHEN SA2.A2_EST = 'ES' THEN '32'
-           WHEN SA2.A2_EST = 'RJ' THEN '33'
-           WHEN SA2.A2_EST = 'SP' THEN '35'
-           WHEN SA2.A2_EST = 'PR' THEN '41'
-           WHEN SA2.A2_EST = 'SC' THEN '42'
-           WHEN SA2.A2_EST = 'RS' THEN '43'
-           WHEN SA2.A2_EST = 'MS' THEN '50'
-           WHEN SA2.A2_EST = 'MT' THEN '51'
-           WHEN SA2.A2_EST = 'GO' THEN '52'
-           WHEN SA2.A2_EST = 'DF' THEN '53'
-           WHEN SA2.A2_EST = 'SE' THEN '28'
-           WHEN SA2.A2_EST = 'BA' THEN '29'
-           WHEN SA2.A2_EST = 'EX' THEN '99'
-       END AS CODEST
-FROM %TABLE:SFT% SFT
-INNER JOIN %TABLE:SA2% SA2 ON (SFT.FT_CLIEFOR = SA2.A2_COD
-                               AND SFT.FT_LOJA = SA2.A2_LOJA)
-INNER JOIN %TABLE:SE2% SE2 ON (SFT.FT_NFISCAL = SE2.E2_NUM
-                               AND SFT.FT_SERIE = SE2.E2_PREFIXO
-                               AND SFT.FT_CLIEFOR = SE2.E2_FORNECE
-                               AND SFT.FT_LOJA = SE2.E2_LOJA
-                               AND SFT.D_E_L_E_T_ = SE2.D_E_L_E_T_)
+SELECT DISTINCT CASE
+                    WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 3 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
+                    WHEN LEN(CONVERT(VARCHAR(10), FT_CODISS)) = 4 THEN FORMAT(CAST(FT_CODISS AS NUMERIC(10, 2)) / 100.0, '0.00')
+                    ELSE CONVERT(VARCHAR(10), FT_CODISS)
+                END AS CODISS,
+                CASE
+                    WHEN FT_ESPECIE = 'NFS' THEN 'NF'
+                END AS MODELO,
+                A2_COD_MUN AS [MUNPREST],
+                FT_EMISSAO AS EMISNF,
+                FT_NFISCAL AS NF,
+                CASE
+                    WHEN FT_ALIQICM > 0 THEN '1'
+                    WHEN FT_ALIQICM = 0 THEN '0'
+                END AS TRIBMUN,
+                SUM(FT_VALCONT) AS VLNFTRIB,
+                REPLACE(FT_ALIQICM, '.', '') AS ALIQ,
+                SUM(FT_VALICM) AS VLRISS,
+                A2_CGC AS CGC,
+                A2_INSCRM AS IMUNI,
+                A2_INSCR AS IEST,
+                A2_NOME AS NOME,
+                A2_END AS ENDE,
+                A2_NR_END AS NUMERO,
+                A2_COMPLEM AS COMPL,
+                A2_BAIRRO AS BAIRRO,
+                A2_COD_MUN AS [MUNPREST],
+                A2_CEP AS CEP,
+                A2_EMAIL AS EMAIL,
+                FT_FILIAL AS Filial,
+                M0_INSCM M0IM,
+                CASE
+                    WHEN SA2.A2_EST = 'RO' THEN '11'
+                    WHEN SA2.A2_EST = 'AC' THEN '12'
+                    WHEN SA2.A2_EST = 'AM' THEN '13'
+                    WHEN SA2.A2_EST = 'RR' THEN '14'
+                    WHEN SA2.A2_EST = 'PA' THEN '15'
+                    WHEN SA2.A2_EST = 'AP' THEN '16'
+                    WHEN SA2.A2_EST = 'TO' THEN '17'
+                    WHEN SA2.A2_EST = 'MA' THEN '21'
+                    WHEN SA2.A2_EST = 'PI' THEN '22'
+                    WHEN SA2.A2_EST = 'CE' THEN '23'
+                    WHEN SA2.A2_EST = 'RN' THEN '24'
+                    WHEN SA2.A2_EST = 'PB' THEN '25'
+                    WHEN SA2.A2_EST = 'PE' THEN '26'
+                    WHEN SA2.A2_EST = 'AL' THEN '27'
+                    WHEN SA2.A2_EST = 'MG' THEN '31'
+                    WHEN SA2.A2_EST = 'ES' THEN '32'
+                    WHEN SA2.A2_EST = 'RJ' THEN '33'
+                    WHEN SA2.A2_EST = 'SP' THEN '35'
+                    WHEN SA2.A2_EST = 'PR' THEN '41'
+                    WHEN SA2.A2_EST = 'SC' THEN '42'
+                    WHEN SA2.A2_EST = 'RS' THEN '43'
+                    WHEN SA2.A2_EST = 'MS' THEN '50'
+                    WHEN SA2.A2_EST = 'MT' THEN '51'
+                    WHEN SA2.A2_EST = 'GO' THEN '52'
+                    WHEN SA2.A2_EST = 'DF' THEN '53'
+                    WHEN SA2.A2_EST = 'SE' THEN '28'
+                    WHEN SA2.A2_EST = 'BA' THEN '29'
+                    WHEN SA2.A2_EST = 'EX' THEN '99'
+                END AS CODEST
+FROM %table:SFT% SFT
+INNER JOIN %table:SA2% SA2 ON (SFT.FT_CLIEFOR = SA2.A2_COD
+                          AND SFT.FT_LOJA = SA2.A2_LOJA)
 INNER JOIN SYS_COMPANY EMP ON EMP.M0_CODFIL = SFT.FT_FILIAL
 AND EMP.D_E_L_E_T_ = SFT.D_E_L_E_T_
 WHERE SFT.%notdel%
-  AND E2_TIPO = 'NF'
   AND A2_COD_MUN <> '09705'
   AND FT_FILIAL >= %Exp:MV_PAR01%
   AND FT_FILIAL <= %Exp:MV_PAR02%
   AND FT_ENTRADA >= %Exp:Dtos(MV_PAR03)%
   AND FT_ENTRADA <= %Exp:Dtos(MV_PAR04)%
   AND FT_ESPECIE = 'NFS'
+
+ GROUP BY FT_CODISS,
+         FT_ESPECIE,
+         A2_COD_MUN,
+         FT_EMISSAO,
+         FT_NFISCAL,
+         FT_ALIQICM,
+         FT_VALICM,
+         A2_CGC,
+         A2_INSCRM,
+         A2_INSCR,
+         A2_NOME,
+         A2_END,
+         A2_NR_END,
+         A2_COMPLEM,
+         A2_BAIRRO,
+         A2_CEP,
+         A2_EMAIL,
+         FT_FILIAL,
+         M0_INSCM,
+         A2_EST 
+  
+  GROUP BY FT_CODISS,FT_ESPECIE,A2_COD_MUN,FT_EMISSAO,FT_NFISCAL,FT_ALIQICM,FT_VALICM,A2_CGC,A2_INSCRM,A2_INSCR,A2_NOME,A2_END,A2_NR_END,A2_COMPLEM,A2_BAIRRO,A2_CEP,A2_EMAIL,FT_FILIAL,M0_INSCM,A2_EST
   ORDER BY NF
-	EndSql
+	
+    EndSql
 
 	cData    := Date()
 	// Registro Tipo 1 – Cabeçalho
