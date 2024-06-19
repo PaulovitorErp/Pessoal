@@ -131,8 +131,7 @@ WHERE SFT.%notdel%
          FT_FILIAL,
          M0_INSCM,
          A2_EST 
-  
-  GROUP BY FT_CODISS,FT_ESPECIE,A2_COD_MUN,FT_EMISSAO,FT_NFISCAL,FT_ALIQICM,FT_VALICM,A2_CGC,A2_INSCRM,A2_INSCR,A2_NOME,A2_END,A2_NR_END,A2_COMPLEM,A2_BAIRRO,A2_CEP,A2_EMAIL,FT_FILIAL,M0_INSCM,A2_EST
+    
   ORDER BY NF
 	
     EndSql
@@ -151,8 +150,8 @@ WHERE SFT.%notdel%
 		cLinha += PADL("2",1) // Cod segmento - 1
 		cLinha += PADL(Alltrim((cAlias)->CODISS),7) // Cod serviço  - 2/8 -Informe o código do serviço, de acordo com Lei 116 de 2003
 		cLinha += (cAlias)->MODELO // Tipo documento 9/10
-		cLinha += PADL(Alltrim((cAlias)->CODEST),2) // Código Cidade Serviço prestado - 11/17
-		cLinha += PADL(Alltrim((cAlias)->MUNPREST),5) // Código Cidade Serviço prestado - 11/17
+		cLinha += PADL("52",2) // Código Cidade Serviço prestado - 11/17
+		cLinha += PADL("09705",5) // Código Cidade Serviço prestado - 11/17
 		cLinha += PADL(Alltrim((cAlias)->EMISNF),8) // Data do serviço - 18/25
 		cLinha += PADL(Alltrim((cAlias)->NF),15) // Numero documento - 26/40
 		cLinha += (cAlias)->TRIBMUN // Tributado no municipio - 1
@@ -167,7 +166,8 @@ WHERE SFT.%notdel%
 		cLinha += PADL(Alltrim((cAlias)->NUMERO),10) // Número prestador - 270/279
 		cLinha += PADL(Alltrim((cAlias)->COMPL),30) // Complemento Endereço prestador - 280/309
 		cLinha += PADL(Alltrim((cAlias)->BAIRRO),30) //Bairro Prestador - 310/339
-		cLinha += PADL(Alltrim((cAlias)->MUNPREST),7) // Código Cidade prestador(Código IBGE) - 340/346
+        cLinha += PADL(Alltrim((cAlias)->CODEST),2) // Código Cidade prestador(Código IBGE) - 340/346
+		cLinha += PADL(Alltrim((cAlias)->MUNPREST),5) // Código Cidade prestador(Código IBGE) - 340/346
 		cLinha += PADL(Alltrim((cAlias)->CEP),8) // CEP prestador - 347/354
 		cLinha += PADL(Alltrim((cAlias)->EMAIL),100) // E-mail prestador - 355/454
 		cLinha += PADL("SERVICO TOMADO",100) // Descrição de Serviço - 462 <=2000
