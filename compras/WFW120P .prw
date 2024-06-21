@@ -3,4 +3,6 @@
 
 
 User Function WFW120P()
-Local cPedido  :=  PARAMIXBdBselectArea('SC7')dbSetOrder(1)dbSeek(cPedido)
+Local cPedido  :=  PARAMIXBdBselectArea('SC7')
+dbSetOrder(1)
+dbSeek(cPedido)
