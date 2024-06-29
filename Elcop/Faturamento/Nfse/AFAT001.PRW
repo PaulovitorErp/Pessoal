@@ -26,40 +26,40 @@ User Function AFAT001()
 	//->Perguntas
 	AjustaSX1(cPerg)
 	if !pergunte(cPerg,.T.)
-      Return
-   endif
-   
+		Return
+	endif
+
 	cSep	:= MV_PAR03
 
-	//->Validacoes                    
+	//->Validacoes
 	If Empty(MV_PAR03)
 		Alert("Separador Invalido!!!")
 		Return(.F.)
-	Endif         
+	Endif
 
-    if MsgYesNo("Confirma Importacao do Arquivo => "+Alltrim(MV_PAR01)+Alltrim(MV_PAR02)+ " ?")
-        Processa( {|| AFATIMP(Alltrim(MV_PAR01)+Alltrim(MV_PAR02),MV_PAR03) }, "Aguarde...",;
-                         "Importando LocalizaÃ§oes ",.F.)
+	if MsgYesNo("Confirma Importacao do Arquivo => "+Alltrim(MV_PAR01)+Alltrim(MV_PAR02)+ " ?")
+		Processa( {|| AFATIMP(Alltrim(MV_PAR01)+Alltrim(MV_PAR02),MV_PAR03) }, "Aguarde...",;
+			"Importando LocalizaÃ§oes ",.F.)
 
-	    msginfo("Importacao Finalizada..","Importacao")
-    endif
+		msginfo("Importacao Finalizada..","Importacao")
+	endif
 
-Return()           
+Return()
 
 /*
 Importa Arquivo
 */
 Static Function AFATIMP(cArquivo,cSep)
 	Local aItens  := {}
-	Local nCont   := 0	
-    Local aPedidos:= {}
+	Local nCont   := 0
+	Local aPedidos:= {}
 
 	Private nHdl  := 0
 	Private cEOL  := "CHR(8)"
 
 	If Empty(Alltrim(cArquivo))
 		Alert("Nao existem arquivos para importar. Processo ABORTADO")
-		Return.F.	
+		Return.F.
 	EndIf
 
 	//+---------------------------------------------------------------------+
@@ -96,7 +96,7 @@ Static Function AFATIMP(cArquivo,cSep)
 	//+---------------------------------------------------------------------+
 	//| Verifica quantas linhas tem o arquivo                               |
 	//+---------------------------------------------------------------------+
-	nLinhas := FT_FLastRec() 
+	nLinhas := FT_FLastRec()
 
 	ProcRegua(nLinhas)
 
@@ -106,7 +106,7 @@ Static Function AFATIMP(cArquivo,cSep)
 		Endif
 
 		if nCont == 0
-			FT_FSKIP()  
+			FT_FSKIP()
 			nCont++
 			loop
 		endif
@@ -120,20 +120,20 @@ Static Function AFATIMP(cArquivo,cSep)
 			aItens:=strToKarr2(cLinha,cSep,.T.)
 			AFATEXA(aItens,aPedidos)
 		Endif
-		FT_FSKIP()  
+		FT_FSKIP()
 		nCont++
 	EndDo
 
 	FT_FUSE()
-	fClose(nHdl )      
+	fClose(nHdl )
 
-    if len(aPedidos) > 0
-        //Gerando os Pedidos de Venda
+	if len(aPedidos) > 0
+		//Gerando os Pedidos de Venda
 
-        fFatPed(aPedidos)
+		fFatPed(aPedidos)
 
-    endif
-Return                                        
+	endif
+Return
 
 Static Function AFATEXA(aItens,aPedidos)
 
@@ -178,13 +178,11 @@ Static Function AFATEXA(aItens,aPedidos)
                         aItens[04]                              ,; // Grupo Comprador (Centro de Custo)
                         sTrTran(aItens[03],"_"," ")             ,; // Descriï¿½ï¿½o do Serviï¿½o
                         alltrim(aItens[01])                     ,; // Nï¿½mero do Pedido
-                        alltrim(aItens[02])                     ,; // Nï¿½mero do Contrato                              
-                        alltrim(aitens[20])})                      // Centro de Custo  
-                        //SUBSTR(aitens[21],1,45)              }) // ISSQN RETIDO    
-                        //alltrim(aitens[21])              }) // ISSQN RETIDO   
+                        alltrim(aItens[02])                     ,; // Nï¿½mero do Contrato      
+                        alltrim(aitens[20])                     ,; // Centro de Custo 
+                        alltrim(aitens[19])})                      // Cod iss                     
+                  
 
-                        //          
-                     //GO 5200902 
    else
         aPedidos[nPos][5] += val(strTran(aItens[12],",","."))        
     endif
@@ -216,6 +214,8 @@ Local lOk        := .T.
 Local cQuery     := ""
 Local nItem      := 1
 Local cEOL 		:= Chr(13)+Chr(10)
+Local cComerc := ""
+Local cCodiss := ""
 
 Private lMsErroAuto    := .F.
 Private lAutoErrNoFile := .F.
@@ -249,11 +249,13 @@ for nItem := 1 to len(aPedidos)
    aadd(aCabec, {"C5_LOJAENT" , cA1Loja   , Nil})
    aadd(aCabec, {"C5_CONDPAG" , cE4Codigo , Nil})
 
-   IncProc("Gerando Pedidos, Nï¿½mero ==> "+Alltrim(cDoc))
+   IncProc("Gerando Pedidos, Número ==> "+Alltrim(cDoc))
 
    //Buscando o Cï¿½digo do Produto, que conterï¿½, TES, Municï¿½pio, Centro de Custo, CodISS, Aliqu ISS, CNAE
    cEstado  := aPedidos[nItem][3]
    cMunic   := aPedidos[nItem][4]
+   cComerc  := aPedidos[nItem][9]
+   cCodiss  := aPedidos[nItem][11]
 
    cAliasTop := GetNextAlias()
 
@@ -261,9 +263,10 @@ for nItem := 1 to len(aPedidos)
       (cAliasTop)->(DbcloseArea())
    endif
 
-   cQuery := "SELECT SB1.B1_COD, SB1.B1_XEST, SB1.B1_XCODMUN "
+   cQuery := "SELECT SB1.B1_COD, SB1.B1_XEST, SB1.B1_XCODMUN,B1_CODISS "
    cQuery += "FROM "+RetSqlName("SB1")+" SB1 "
-   cQuery += "WHERE SB1.D_E_L_E_T_=' ' AND SB1.B1_XEST ='"+cEstado+"' AND SB1.B1_XCODMUN = '"+cMunic+"' "
+   cQuery += "WHERE SB1.D_E_L_E_T_=' ' AND SB1.B1_XEST ='"+cEstado+"' AND SB1.B1_XCODMUN = '"+cMunic+"' AND SB1.B1_CODISS = '"+cCodiss+"' " 
+  
    cQuery := ChangeQuery(cQuery)
    dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQuery),cAliasTop,.T.,.T.)
 
@@ -278,8 +281,8 @@ for nItem := 1 to len(aPedidos)
    (cAliasTop)->(DbcloseArea())
 
    if empty(alltrim(cB1Cod))
-      Help( ,, "Produto","Municï¿½pio",;
-               "Nï¿½o foi Localizado Municï¿½pio no Cadastro do Produto => "+cMunic, 1, 0)     
+      Help( ,, "Produto","Municipio",;
+               "Não foi Localizado Municipio no Cadastro do Produto => "+cMunic, 1, 0)     
    else
 
       cb1CodISS   := strZero(val(alltrim(Posicione("SB1",1,xFilial("SB1")+cB1Cod,"B1_CODISS"))),4)
@@ -307,57 +310,57 @@ for nItem := 1 to len(aPedidos)
       Contrato: 52L0002168
       */
 
-      Aadd(aCabec, {"C5_ESTPRES" , cEstado   , Nil}) 
-      Aadd(aCabec, {"C5_MUNPRES" , cMunic    , Nil})
-      Aadd(aCabec, {"C5_XMENNFS" , cXMennfs  , Nil})
+	Aadd(aCabec, {"C5_ESTPRES" , cEstado   , Nil})
+	Aadd(aCabec, {"C5_MUNPRES" , cMunic    , Nil})
+	Aadd(aCabec, {"C5_XMENNFS" , cXMennfs  , Nil})
 
-      If SF4->(! MsSeek(cFilSF4 + cF4TES))
-         cMsgLog += "Cadastrar o TES: " + cF4TES + cEOL
-         lOk     := .F.
-      EndIf
+	If SF4->(! MsSeek(cFilSF4 + cF4TES))
+		cMsgLog += "Cadastrar a TES: " + cF4TES + cEOL
+		lOk     := .F.
+	EndIf
 
-      If SE4->(! MsSeek(cFilSE4 + cE4Codigo))
-         cMsgLog += "Cadastrar a Condiï¿½ï¿½o de Pagamento: " + cE4Codigo + cEOL
-         lOk     := .F.
-      EndIf
+	If SE4->(! MsSeek(cFilSE4 + cE4Codigo))
+		cMsgLog += "Cadastrar a Codição de Pagamento: " + cE4Codigo + cEOL
+		lOk     := .F.
+	EndIf
 
-      If SA1->(! MsSeek(cFilSA1 + cA1Cod+cA1Cod))
-         cMsgLog += "Cadastrar o Cliente: " + cA1Cod+cA1Cod + cEOL
-         lOk     := .F.
-      EndIf
+	If SA1->(! MsSeek(cFilSA1 + cA1Cod+cA1Cod))
+		cMsgLog += "Cadastrar o Cliente: " + cA1Cod+cA1Cod + cEOL
+		lOk     := .F.
+	EndIf
 
-      if lOk
-         //--- Informando os dados do item do Pedido de Venda
-         aLinha := {}
-         aadd(aLinha,{"C6_ITEM"     , "01"               , Nil})
-         aadd(aLinha,{"C6_PRODUTO"  , cB1Cod             , Nil})
-         aadd(aLinha,{"C6_QTDVEN"   , 1                  , Nil})
-         aadd(aLinha,{"C6_QTDLIB"   , 1                  , Nil})
-         aadd(aLinha,{"C6_PRCVEN"   , aPedidos[nItem][5] , Nil})
-         aadd(aLinha,{"C6_PRUNIT"   , aPedidos[nItem][5] , Nil})
-         aadd(aLinha,{"C6_VALOR"    , aPedidos[nItem][5] , Nil})
-         aadd(aLinha,{"C6_TES"      , cF4TES             , Nil})
-         aadd(aLinha,{"C6_CC"       , cB1CC              , Nil})
-         aadd(aLinha,{"C6_PEDCLI"   , aPedidos[nItem][8] , Nil})
-         aadd(aItens, aLinha)
-         
-         nOpcX := 3
-        
-         MSExecAuto({|x, y, z| MATA410(x, y, z)}, aCabec, aItens, nOpcX)
-         if lMsErroAuto
-            aErroAuto := GetAutoGRLog()
-            For nCount := 1 To Len(aErroAuto)
-               cLogErro += StrTran(StrTran(aErroAuto[nCount], "<", ""), "-", "") + " " 
-               ConOut(cLogErro)
-            Next nCount
-            RollbackSX8()
-         else
-            ConfirmSX8()
-         endIf
-      else
-         Help( ,, "Cadastros","Informacoes", cMsgLog, 1, 0)          
-      endif    
-   endif
+	if lOk
+		//--- Informando os dados do item do Pedido de Venda
+		aLinha := {}
+		aadd(aLinha,{"C6_ITEM"     , "01"               , Nil})
+		aadd(aLinha,{"C6_PRODUTO"  , cB1Cod             , Nil})
+		aadd(aLinha,{"C6_QTDVEN"   , 1                  , Nil})
+		aadd(aLinha,{"C6_QTDLIB"   , 1                  , Nil})
+		aadd(aLinha,{"C6_PRCVEN"   , aPedidos[nItem][5] , Nil})
+		aadd(aLinha,{"C6_PRUNIT"   , aPedidos[nItem][5] , Nil})
+		aadd(aLinha,{"C6_VALOR"    , aPedidos[nItem][5] , Nil})
+		aadd(aLinha,{"C6_TES"      , cF4TES             , Nil})
+		aadd(aLinha,{"C6_CC"       , cB1CC              , Nil})
+		aadd(aLinha,{"C6_PEDCLI"   , aPedidos[nItem][8] , Nil})
+		aadd(aItens, aLinha)
+
+		nOpcX := 3
+
+		MSExecAuto({|x, y, z| MATA410(x, y, z)}, aCabec, aItens, nOpcX)
+		if lMsErroAuto
+			aErroAuto := GetAutoGRLog()
+			For nCount := 1 To Len(aErroAuto)
+				cLogErro += StrTran(StrTran(aErroAuto[nCount], "<", ""), "-", "") + " "
+				ConOut(cLogErro)
+			Next nCount
+			RollbackSX8()
+		else
+			ConfirmSX8()
+		endIf
+	else
+		Help( ,, "Cadastros","Informações", cMsgLog, 1, 0)
+	endif
+endif
 next
 
 Return
@@ -381,35 +384,35 @@ Return
 */
 
 Static Function AjustaSX1(cPerg)
-	Local aRegs     := {}  
-   Local _sAlias	:= Alias()
-   Local i, j
+	Local aRegs     := {}
+	Local _sAlias	:= Alias()
+	Local i, j
 
-   dbSelectArea("SX1")
-   dbSetOrder(1)
-   cPerg	:= PADR(cPerg,10)
+	dbSelectArea("SX1")
+	dbSetOrder(1)
+	cPerg	:= PADR(cPerg,10)
 
-   //          Grupo/Ordem/Pergunta          /1Perspa/2Pereng/3Variavel/4Tipo/5Tamanho/6Decimal/7Presel/8GSC/9Valid/10Var01/11Def01/12Defspa1/13Defeng1/14Cnt01/15Var02/16Def02/17Defspa2/18Defeng2/19Cnt02/20Var03/21Def03/22Defspa3/23Defeng3/24Cnt03/25Var04/26Def04/27Defspa4/28Defeng4/29Cnt04/30Var05/31Def05/32Defspa5/33Defeng5/34Cnt05/35F3
-   aAdd(aRegs,{cPerg,'01','Local do Arquivo   ?','Local do Arquivo   ?','Local do Arquivo   ?','mv_ch1','C',40,0,0,'G','','mv_par01','','','','','','',"","","","","","","","","","","","","","","","","","",""})
-   aAdd(aRegs,{cPerg,'02','Nome do arquivo    ?','Nome do arquivo    ?','Nome do arquivo    ?','mv_ch2','C',20,0,0,'G','','mv_par02','','','','','','',"","","","","","","","","","","","","","","","","","",""})
-   aAdd(aRegs,{cPerg,'03','Separador          ?','Separador          ?','Separador          ?','mv_ch3','C', 1,0,0,'G','','mv_par03','','','','','','',"","","","","","","","","","","","","","","","","","",""})
-   aAdd(aRegs,{cPerg,'04','Cï¿½digo do Cliente  ?','Cï¿½digo do Cliente  ?','Cï¿½digo do Cliente  ?','mv_ch4','C', 6,0,0,'G','','mv_par04','','','','','','',"","","","","","","","","","","","","","","","","","","SA1"})
-   aAdd(aRegs,{cPerg,'05','Loja do Cliente    ?','Loja do Cliente    ?','Loja do Cliente    ?','mv_ch5','C', 2,0,0,'G','','mv_par05','','','','','','',"","","","","","","","","","","","","","","","","","","SA1"})
-   aAdd(aRegs,{cPerg,'06','Cond. Pagto        ?','Cond. Pagto        ?','Cond. Pagto        ?','mv_ch6','C', 3,0,0,'G','','mv_par06','','','','','','',"","","","","","","","","","","","","","","","","","","SE4"})
+	//          Grupo/Ordem/Pergunta          /1Perspa/2Pereng/3Variavel/4Tipo/5Tamanho/6Decimal/7Presel/8GSC/9Valid/10Var01/11Def01/12Defspa1/13Defeng1/14Cnt01/15Var02/16Def02/17Defspa2/18Defeng2/19Cnt02/20Var03/21Def03/22Defspa3/23Defeng3/24Cnt03/25Var04/26Def04/27Defspa4/28Defeng4/29Cnt04/30Var05/31Def05/32Defspa5/33Defeng5/34Cnt05/35F3
+	aAdd(aRegs,{cPerg,'01','Local do Arquivo   ?','Local do Arquivo   ?','Local do Arquivo   ?','mv_ch1','C',40,0,0,'G','','mv_par01','','','','','','',"","","","","","","","","","","","","","","","","","",""})
+	aAdd(aRegs,{cPerg,'02','Nome do arquivo    ?','Nome do arquivo    ?','Nome do arquivo    ?','mv_ch2','C',20,0,0,'G','','mv_par02','','','','','','',"","","","","","","","","","","","","","","","","","",""})
+	aAdd(aRegs,{cPerg,'03','Separador          ?','Separador          ?','Separador          ?','mv_ch3','C', 1,0,0,'G','','mv_par03','','','','','','',"","","","","","","","","","","","","","","","","","",""})
+	aAdd(aRegs,{cPerg,'04','Cï¿½digo do Cliente  ?','Cï¿½digo do Cliente  ?','Cï¿½digo do Cliente  ?','mv_ch4','C', 6,0,0,'G','','mv_par04','','','','','','',"","","","","","","","","","","","","","","","","","","SA1"})
+	aAdd(aRegs,{cPerg,'05','Loja do Cliente    ?','Loja do Cliente    ?','Loja do Cliente    ?','mv_ch5','C', 2,0,0,'G','','mv_par05','','','','','','',"","","","","","","","","","","","","","","","","","","SA1"})
+	aAdd(aRegs,{cPerg,'06','Cond. Pagto        ?','Cond. Pagto        ?','Cond. Pagto        ?','mv_ch6','C', 3,0,0,'G','','mv_par06','','','','','','',"","","","","","","","","","","","","","","","","","","SE4"})
 
-   For i:=1 to Len(aRegs)
-	   If !dbSeek(cPerg+aRegs[i,2])
-	      RecLock("SX1",.T.)
-   		For j:=1 to FCount()
-	   		If j <= Len(aRegs[i])
-		    		FieldPut(j,aRegs[i,j])
-			   Endif
-    		Next
-	    	MsUnlock()
-	   Endif
-   Next
+	For i:=1 to Len(aRegs)
+		If !dbSeek(cPerg+aRegs[i,2])
+			RecLock("SX1",.T.)
+			For j:=1 to FCount()
+				If j <= Len(aRegs[i])
+					FieldPut(j,aRegs[i,j])
+				Endif
+			Next
+			MsUnlock()
+		Endif
+	Next
 
-   dbSelectArea(_sAlias)
+	dbSelectArea(_sAlias)
 Return
 
 
