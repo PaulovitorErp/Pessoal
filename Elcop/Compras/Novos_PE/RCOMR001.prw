@@ -186,13 +186,13 @@ While !oReport:Cancel() .And. !(cAliasSD1)->(Eof())
 
 			endif
 	
-			/*if (cAliasSD1)->D1_XNOTREC == "1"
+			if (cAliasSD1)->D1_XNOTREC == "1"
 				nRefQP	+= 100 //Atende
 			elseif (cAliasSD1)->D1_XNOTREC == "2"
 					nRefQP	+= 50 //Atende Parcialmente
 			else
 				nRefQP	+= 100  // Não Atende
-			endif*/// Retirado Validação 09/01/2024
+			endif  // Retirado Validação 09/01/2024
 			
 			nQtdeEnt ++
 			nSomaQP += 100
