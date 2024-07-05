@@ -21,8 +21,8 @@ User Function zExe079()
     Local cArquivo  := ""
  
     //Aciona a verificação se a tabela (padrão) não existir, será criada
-    cAlias    := "ZC1"
-    cArquivo  := "ZC1010"
+    cAlias    := "ZC2"
+    cArquivo  := "ZC2010"
     CheckFile(cAlias, cArquivo)
 
      FWRestArea(aArea)
