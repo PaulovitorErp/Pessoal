@@ -1027,10 +1027,10 @@ WSMETHOD ConsultaCentroCustos WSRECEIVE EntCentroCusto WSSEND RetCentroCustos WS
 
 	Conout("############ Web Services para Consulta de centro de custos ############")
 
-	cQry := " SELECT TOP 100 CTT_CUSTO, CTT_DESC01							 							" + cEOL
+	cQry := " SELECT CTT_CUSTO, CTT_DESC01							 							" + cEOL
 	cQry += " FROM " + RetSqlName("CTT") + " 															" + cEOL
 	cQry += " WHERE D_E_L_E_T_ <> '*' AND CTT_BLOQ = '2' AND CTT_CLASSE='2'								" + cEOL
-	cQry += " AND CTT_CUSTO NOT IN ('20101','20201')													" + cEOL
+	
 
 	if !empty(AllTrim(oDadosEnt:cDescricao))
 
