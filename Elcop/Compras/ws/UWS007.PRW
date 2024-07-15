@@ -325,6 +325,7 @@ WSMETHOD ConsultaOrdemServico WSRECEIVE EntOrdemServico WSSEND RetOrdemServico W
 	Local cEOL 		:= Chr(13)+Chr(10)
 	Local cQry		:= ""
 	Local cMsgRet	:= ""
+	
 
 	oDadosEnt := EntOrdemServico
 	oDadosRet := RetOrdemServico
@@ -484,7 +485,7 @@ WSMETHOD IncluiSolicitaCompra WSRECEIVE IncSolicitaCompra WSSEND RetIncSolicitaC
 
 		If !lMsErroAuto
 
-			cMsgRet := "Solicitacao de Compras Inclu�da com Sucesso!"
+			cMsgRet := ("Solicitacao de Compras Incluida com Sucesso!" + SC1->C1_NUM)
 			Conout(cMsgRet)
 			RetIncSolicitaCompra:cInformacao	:= cMsgRet
 			ConfirmSx8()
