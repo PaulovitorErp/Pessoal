@@ -216,6 +216,8 @@ Local nItem      := 1
 Local cEOL 		:= Chr(13)+Chr(10)
 Local cComerc := ""
 Local cCodiss := ""
+Local cNat1     := SuperGetMv( "MV_XNAT1")
+Local cNat2     := SuperGetMv( "MV_XNAT2")
 
 Private lMsErroAuto    := .F.
 Private lAutoErrNoFile := .F.
@@ -248,7 +250,7 @@ for nItem := 1 to len(aPedidos)
    aadd(aCabec, {"C5_LOJACLI" , cA1Loja   , Nil})
    aadd(aCabec, {"C5_LOJAENT" , cA1Loja   , Nil})
    aadd(aCabec, {"C5_CONDPAG" , cE4Codigo , Nil})
-
+  
    IncProc("Gerando Pedidos, Número ==> "+Alltrim(cDoc))
 
    //Buscando o Cï¿½digo do Produto, que conterï¿½, TES, Municï¿½pio, Centro de Custo, CodISS, Aliqu ISS, CNAE
@@ -313,7 +315,14 @@ for nItem := 1 to len(aPedidos)
 	Aadd(aCabec, {"C5_ESTPRES" , cEstado   , Nil})
 	Aadd(aCabec, {"C5_MUNPRES" , cMunic    , Nil})
 	Aadd(aCabec, {"C5_XMENNFS" , cXMennfs  , Nil})
+	 	If cCodiss ='1705' 
+	Aadd(aCabec, {"C5_NATUREZ" , cNat1  , Nil})
+	Endif
+	If cCodiss = '1701'
+	Aadd(aCabec, {"C5_NATUREZ" , cNat2  , Nil})
+	Endif
 
+	
 	If SF4->(! MsSeek(cFilSF4 + cF4TES))
 		cMsgLog += "Cadastrar a TES: " + cF4TES + cEOL
 		lOk     := .F.
