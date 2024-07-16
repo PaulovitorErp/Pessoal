@@ -315,14 +315,14 @@ for nItem := 1 to len(aPedidos)
 	Aadd(aCabec, {"C5_ESTPRES" , cEstado   , Nil})
 	Aadd(aCabec, {"C5_MUNPRES" , cMunic    , Nil})
 	Aadd(aCabec, {"C5_XMENNFS" , cXMennfs  , Nil})
-	 	If cCodiss ='1705' 
-	Aadd(aCabec, {"C5_NATUREZ" , cNat1  , Nil})
+	If cCodiss ='1705'
+		Aadd(aCabec, {"C5_NATUREZ" , cNat1  , Nil})
 	Endif
 	If cCodiss = '1701'
-	Aadd(aCabec, {"C5_NATUREZ" , cNat2  , Nil})
+		Aadd(aCabec, {"C5_NATUREZ" , cNat2  , Nil})
 	Endif
 
-	
+
 	If SF4->(! MsSeek(cFilSF4 + cF4TES))
 		cMsgLog += "Cadastrar a TES: " + cF4TES + cEOL
 		lOk     := .F.
