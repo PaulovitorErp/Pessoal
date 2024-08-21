@@ -149,9 +149,9 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 						SetMVValue("CN300CRG","MV_PAR01",1	) //Mensal == 1
 						SetMVValue("CN300CRG","MV_PAR02",30	) //dias
 						SetMVValue("CN300CRG","MV_PAR03",1	) //Dt não existir == 1
-						SetMVValue("CN300CRG","MV_PAR04","042024") //SubStr(dTos(cTod(AllTrim(aDados[nI][aScan(aCampos,"CN9_DTINIC")]))),5,2)//20491231
+						SetMVValue("CN300CRG","MV_PAR04","082024") //SubStr(dTos(cTod(AllTrim(aDados[nI][aScan(aCampos,"CN9_DTINIC")]))),5,2)//20491231
 						SetMVValue("CN300CRG","MV_PAR05", dDtVencto ) //Colocar ultima data do mÊs.
-						SetMVValue("CN300CRG","MV_PAR06", 307) // Qtd, puxar da cnb.
+						SetMVValue("CN300CRG","MV_PAR06", 303) // Qtd, puxar da cnb.
 						SetMVValue("CN300CRG","MV_PAR07", "   ") //condição de apgto vazia.
 						SetMVValue("CN300CRG","MV_PAR08", 0) //Tx de jutos.
 						
@@ -232,7 +232,7 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 						ELSEIF Upper(aCampos[nCampos]) != "CN9_NUMERO"
 				
 							IF TamSx3(Upper(aCampos[nCampos]))[3] =='N'
-								oModelCN9:SetValue(Upper(aCampos[nCampos]),VAL(strtran(aDados[nI,nCampos],",",".")))
+								oModelCN9:SetValue(Upper(aCampos[nCampos]),VAL(strtran(strtran(aDados[nI,nCampos],".",""),",",".")))
 							ELSEIF TamSx3(Upper(aCampos[nCampos]))[3] =='D'
 								oModelCN9:SetValue(Upper(aCampos[nCampos]), CTOD(aDados[nI,nCampos] ))
 							ELSE
@@ -248,7 +248,7 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 							oModelCNC:SetValue("CNC_LOJACL", aClient[2])
 						ELSE
 							IF  TamSx3(Upper(aCampos[nCampos]))[3] =='N'
-								oModelCNC:SetValue(Upper(aCampos[nCampos]),VAL(strtran(aDados[nI,nCampos],",",".")))
+								oModelCNC:SetValue(Upper(aCampos[nCampos]),VAL(strtran(strtran(aDados[nI,nCampos],".",""),",",".")))
 							ELSEIF TamSx3(Upper(aCampos[nCampos]))[3] =='D'
 								oModelCNC:SetValue(Upper(aCampos[nCampos]), CTOD(aDados[nI,nCampos] ))
 							ELSE
@@ -266,7 +266,7 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 							//oModelCNA:SetValue(Upper(aCampos[nCampos]), aClient[1])				
 						//ELSE
 							IF	TamSx3(Upper(aCampos[nCampos]))[3] =='N'
-								oModelCNA:SetValue(Upper(aCampos[nCampos]),VAL(strtran(aDados[nI,nCampos],",",".")))
+								oModelCNA:SetValue(Upper(aCampos[nCampos]),VAL(strtran(strtran(aDados[nI,nCampos],".",""),",",".")))
 							ELSEIF TamSx3(Upper(aCampos[nCampos]))[3] =='D'
 								oModelCNA:SetValue(Upper(aCampos[nCampos]), CTOD(aDados[nI,nCampos] ))
 							ELSE
@@ -288,7 +288,7 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 							oModelCNB:SetValue(Upper(aCampos[nCampos]), cCNBProd)
 						ELSE
 							IF  TamSx3(Upper(aCampos[nCampos]))[3] =='N'
-								oModelCNB:SetValue(Upper(aCampos[nCampos]),VAL(strtran(aDados[nI,nCampos],",",".")))
+								oModelCNB:SetValue(Upper(aCampos[nCampos]),VAL(strtran(strtran(aDados[nI,nCampos],".","") ,",",".")))
 							ELSEIF TamSx3(Upper(aCampos[nCampos]))[3] =='D'
 								oModelCNB:SetValue(Upper(aCampos[nCampos]), CTOD(aDados[nI,nCampos] ))
 							ELSE
@@ -306,26 +306,27 @@ User Function MGIMP007(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 				fWrite(nHdlLog,cPulaLinha)
 			ENDIF
 		ELSE
-			fWrite(nHdlLog,"Registro: " + cValToChar(nI))
-			fWrite(nHdlLog,cPulaLinha)
-			fWrite(nHdlLog,"CNPJ: " + PadL(AllTrim(aDados[nI][aScan(aCampos,"CN9_NUMERO")]),TamSx3("CN9_NUMERO")[1] ,"0") + " contrato ja existe!")
-			fWrite(nHdlLog,cPulaLinha)
+			//fWrite(nHdlLog,"Registro: " + cValToChar(nI))
+			//fWrite(nHdlLog,cPulaLinha)
+			//fWrite(nHdlLog,"CNPJ: " + PadL(AllTrim(aDados[nI][aScan(aCampos,"CN9_NUMERO")]),TamSx3("CN9_NUMERO")[1] ,"0") + " contrato ja existe!")
+			//fWrite(nHdlLog,cPulaLinha)
 		ENDIF
+		
 	Next nI
-
+	
 	//Cronograma Financeiro
-	SetMVValue("CN300CRG","MV_PAR01",1	) //Mensal == 1
-	SetMVValue("CN300CRG","MV_PAR02",30	) //dias
-	SetMVValue("CN300CRG","MV_PAR03",1	) //Dt não existir == 1
-	SetMVValue("CN300CRG","MV_PAR04","042024") //SubStr(dTos(cTod(AllTrim(aDados[nI][aScan(aCampos,"CN9_DTINIC")]))),5,2)//20491231
-	SetMVValue("CN300CRG","MV_PAR05", dDtVencto) //Colocar ultima data do mÊs.
-	SetMVValue("CN300CRG","MV_PAR06", 307) // Qtd, puxar da cnb.
-	SetMVValue("CN300CRG","MV_PAR07", "   ") //condição de apgto vazia.
-	SetMVValue("CN300CRG","MV_PAR08", 0) //Tx de jutos.
-									
-	Pergunte("CN300CRG",.F.)
-	CN300PrCF(.T.) 
-  
+		SetMVValue("CN300CRG","MV_PAR01",1	) //Mensal == 1
+		SetMVValue("CN300CRG","MV_PAR02",30	) //dias
+		SetMVValue("CN300CRG","MV_PAR03",1	) //Dt não existir == 1
+		SetMVValue("CN300CRG","MV_PAR04","082024") //SubStr(dTos(cTod(AllTrim(aDados[nI][aScan(aCampos,"CN9_DTINIC")]))),5,2)//20491231
+		SetMVValue("CN300CRG","MV_PAR05", dDtVencto) //Colocar ultima data do mÊs.
+		SetMVValue("CN300CRG","MV_PAR06", 303) // Qtd, puxar da cnb.
+		SetMVValue("CN300CRG","MV_PAR07", "   ") //condição de apgto vazia.
+		SetMVValue("CN300CRG","MV_PAR08", 0) //Tx de jutos.
+										
+		Pergunte("CN300CRG",.F.)
+		CN300PrCF(.T.) 
+
 	//Validação e Gravação do Modelo
 	If oModel:VldData()
 		oModel:CommitData()
@@ -396,7 +397,7 @@ Default cCNPJ 	:= ""
 	cQuery := " SELECT A1_COD, A1_LOJA 			 "			+ CRLF
 	cQuery += " FROM " + RetSqlName("SA1") + " SA1 " 		+ CRLF
 	cQuery += " WHERE SA1.D_E_L_E_T_ = ' '  " 				+ CRLF
-	cQuery += " AND A1_XIDSAP = '"+cCNPJ+"' " 				+ CRLF
+	cQuery += " AND ( A1_CGC = '"+cCNPJ+"' OR A1_XIDSAP = '"+cCNPJ+"' ) "	+ CRLF
 	cQuery += " AND A1_FILIAL = '"+FWxFilial("SA1")+"' " 	+ CRLF
 	
 	cAliasQry := MPSysOpenQuery(cQuery)
