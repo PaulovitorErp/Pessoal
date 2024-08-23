@@ -86,6 +86,7 @@ User Function fRetCads()
 	aAdd(aRet,"11 - Cadastro de Natureza Financeira - SED"				)
 	aAdd(aRet,"12 - Cadastro de Condição de Pagamentos - SE4" 			)
 	aAdd(aRet,"13 - Cadastro de Centro de Custo - CTT"       			)
+	aAdd(aRet,"14 - Cadastro de Orçamentos (Faturamento) - 2 arquivos SCJ/SCK"   )
     
 Return(aRet)
 

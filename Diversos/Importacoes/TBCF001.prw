@@ -295,6 +295,9 @@ Static Function ProcImp(oSay)
         Case SubStr(cEntidade,1,2) == "13" // Importa cadastro de Centro de Custo. - CTT.
             U_TBCF014(oSay,cArquivo,@nHdlLog,@nObjProc,@nSucesso)
 
+        Case SubStr(cEntidade,1,2) == "14" // Importa cadastro de Orçamentos.
+            U_ORC001(oSay,cArquivo,@nHdlLog,@nObjProc,@nSucesso)
+
         EndCase
 
     fWrite(nHdlLog,Replicate("-",44))
