@@ -1,6 +1,6 @@
 /*             
 Sintaxe
-MT121BRW - Ponto de Entrada para Envio de E-mail de Confirmação da chegada dos Documentos 
+MT121BRW - Ponto de Entrada para Envio de E-mail de ConfirmaÃ§Ã£o da chegada dos Documentos 
             Nota Fiscal e Boletos
 
 Retorno
@@ -26,11 +26,11 @@ user function FENVPED()
 
 	cMailFor := Posicione("SA2",1,XFILIAL("SA2")+SC7->(C7_FORNECE+C7_LOJA),"A2_EMAIL")
 
-	DEFINE MSDIALOG oDlg FROM 0,0 TO 200,680 PIXEL TITLE 'Informações Envio de e-mail'
+	DEFINE MSDIALOG oDlg FROM 0,0 TO 200,680 PIXEL TITLE 'InformaÃ§Ãµes Envio de e-mail'
 
-	oSay := TSay():New( 05, 10, {|| 'Data 1º Venc.:'},oDlg,, ,,,, .T.,,)
+	oSay := TSay():New( 05, 10, {|| 'Data 1Âº Venc.:'},oDlg,, ,,,, .T.,,)
 	oSay := TSay():New( 20, 10, {|| 'E-mail Fornec:'},oDlg,, ,,,, .T.,,)
-	oSay := TSay():New( 35, 10, {|| 'Cópia e-mail.:'},oDlg,, ,,,, .T.,,)
+	oSay := TSay():New( 35, 10, {|| 'CÃ³pia e-mail.:'},oDlg,, ,,,, .T.,,)
 	oSay := TSay():New( 55, 10, {|| 'Local Entrega:'},oDlg,, ,,,, .T.,,)
 	oSay:lTransparent:= .F.
 
@@ -58,11 +58,11 @@ user Function ACOM001(cPedido, cFornece, cLoja)
 	Local xRet
 	Local oServer, oMessage
 	Local lMailAuth	:= SuperGetMv("MV_RELAUTH",,.F.)
-	Local nPorta    := 587 //informa a porta que o servidor SMTP irá se comunicar, podendo ser 25 ou 587
+	Local nPorta    := 587 //informa a porta que o servidor SMTP irÃ¡ se comunicar, podendo ser 25 ou 587
 	Local cPara     := GETMV("MV_XPEMAIL")
 	Local cCopia    := GETMV("MV_XCEMAIL")
 	Local cAssunto  := "Nota Fiscal Anexada ao Pedido"
-	Local cMensagem := "Confirmação da Chegada da Nota Fiscal do Pedido "+cPedido+" do Fornecedor "+;
+	Local cMensagem := "ConfirmaÃ§Ã£o da Chegada da Nota Fiscal do Pedido "+cPedido+" do Fornecedor "+;
 		Posicione("SA2",1,xFilial("SA2")+cFornece+cLoja,"A2_NOME")
 	Local aArquivos := {}
 	Local nArq      := 1
@@ -89,7 +89,7 @@ user Function ACOM001(cPedido, cFornece, cLoja)
 		For nArq := 1 To Len(aArquivos)
 			xRet := oMessage:AttachFile( aArquivos[nArq] )
 			if xRet < 0
-				cMsg := "O arquivo " + aArquivos[nArq] + " não foi anexado!"
+				cMsg := "O arquivo " + aArquivos[nArq] + " nÃ£o foi anexado!"
 				alert( cMsg )
 				return
 			endif
@@ -97,30 +97,30 @@ user Function ACOM001(cPedido, cFornece, cLoja)
 	EndIf
 
 	oServer := tMailManager():New()
-	oServer:SetUseTLS( .T. ) //Indica se será utilizará a comunicação segura através de SSL/TLS (.T.) ou não (.F.)
+	oServer:SetUseTLS( .T. ) //Indica se serÃ¡ utilizarÃ¡ a comunicaÃ§Ã£o segura atravÃ©s de SSL/TLS (.T.) ou nÃ£o (.F.)
 
 	xRet := oServer:Init( "", cMailServer, cMailConta, cMailSenha, nPorta ) //inicilizar o servidor
 	if xRet != 0
-		alert("O servidor SMTP não foi inicializado: " + oServer:GetErrorString( xRet ) )
+		alert("O servidor SMTP nÃ£o foi inicializado: " + oServer:GetErrorString( xRet ) )
 		return
 	endif
 
 	xRet := oServer:SetSMTPTimeout( 60 ) //Indica o tempo de espera em segundos.
 	if xRet != 0
-		alert("Não foi possível definir " + cProtocol + " tempo limite para " + cValToChar( nTimeout ))
+		alert("NÃ£o foi possÃ­vel definir " + cProtocol + " tempo limite para " + cValToChar( nTimeout ))
 	endif
 
 	xRet := oServer:SMTPConnect()
 	if xRet <> 0
-		alert("Não foi possível conectar ao servidor SMTP: " + oServer:GetErrorString( xRet ))
+		alert("NÃ£o foi possÃ­vel conectar ao servidor SMTP: " + oServer:GetErrorString( xRet ))
 		return
 	endif
 
 	if lMailAuth
-		//O método SMTPAuth ao tentar realizar a autenticação do
-		//usuário no servidor de e-mail, verifica a configuração
-		//da chave AuthSmtp, na seção [Mail], no arquivo de
-		//configuração (INI) do TOTVS Application Server, para determinar o valor.
+		//O mÃ©todo SMTPAuth ao tentar realizar a autenticaÃ§Ã£o do
+		//usuÃ¡rio no servidor de e-mail, verifica a configuraÃ§Ã£o
+		//da chave AuthSmtp, na seÃ§Ã£o [Mail], no arquivo de
+		//configuraÃ§Ã£o (INI) do TOTVS Application Server, para determinar o valor.
 		xRet := oServer:SmtpAuth( cMailConta, cMailSenha )
 		if xRet <> 0
 			cMsg := "Could not authenticate on SMTP server: " + oServer:GetErrorString( xRet )
@@ -131,7 +131,7 @@ user Function ACOM001(cPedido, cFornece, cLoja)
 	Endif
 	xRet := oMessage:Send( oServer )
 	if xRet <> 0
-		alert("Não foi possível enviar mensagem: " + oServer:GetErrorString( xRet ))
+		alert("NÃ£o foi possÃ­vel enviar mensagem: " + oServer:GetErrorString( xRet ))
 	else
 		MsgInfo("E-mail enviado com suscesso","E-mail" )
 
@@ -150,6 +150,6 @@ user Function ACOM001(cPedido, cFornece, cLoja)
 
 	xRet := oServer:SMTPDisconnect()
 	if xRet <> 0
-		alert("Não foi possível desconectar o servidor SMTP: " + oServer:GetErrorString( xRet ))
+		alert("NÃ£o foi possÃ­vel desconectar o servidor SMTP: " + oServer:GetErrorString( xRet ))
 	endif
 return

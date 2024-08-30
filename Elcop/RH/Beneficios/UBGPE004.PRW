@@ -206,7 +206,7 @@ Static Function ExecCalcBenef()
 							U03->U03_SITFOL  := (cAliasSRA)->RA_SITFOLH
 							U03->U03_SALARI  := (cAliasSRA)->RA_SALARIO
 							U03->U03_FUNCAO  := (cAliasSRA)->RA_CODFUNC
-							U03->U03_DTNASC  := STOD((cAliasSRA)->RA_NASC)
+							U03->U03_DTNASC  := CTOD((cAliasSRA)->RA_NASC)
 							//Valores Beneficios
 							U03->U03_VLVT    := IIF(U01->U01_TPVT='D'  ,(U02->U02_DIASTR-(cDiasAbat)) * U01->U01_VLVT   ,U01->U01_VLVT) 
 							U03->U03_VLVR    := IIF(U01->U01_TPVR='D'  ,(U02->U02_DIASTR-(cDiasAbat)) * U01->U01_VLVR   ,U01->U01_VLVR)
@@ -222,15 +222,14 @@ Static Function ExecCalcBenef()
 							U03->U03_DIASME  := U02->U02_DIASME
 							U03->U03_DIASUT  := U02->U02_DIASUT
 							U03->U03_DIASTR  := U02->U02_DIASTR
-							U03->U03_STATUS  := 'A'
-
+							U03->U03_STATUS  := 'A'						
 							U03->U03_DESCVT  := IIF(U01->U01_DEVT='S'  ,nVal020 * 0.06 , 0)
-							U03->U03_DESCVR  := IIF(U01->U01_TPVR='S'  ,U03->U03_VLVR * 0.10 , 0)
-							U03->U03_DESCVA  := IIF(U01->U01_DEVA='S'  ,U03->U03_VLVA * 0.10 , 0)
-							U03->U03_DESCVC  := IIF(U01->U01_DEVC='S'  ,U03->U03_VLVC * 0.60 , 0)
+							U03->U03_DESCVR  := IIF(U01->U01_TPVR='S'  ,U03->U03_VLVR * U01->U01_VARIAV, 0)
+							U03->U03_DESCVA  := IIF(U01->U01_DEVA='S'.AND. U01->U01_TPDEVA ="P" ,U03->U03_VLVA * U01->U01_VARIAV , U01->U01_DESCVA) // U01_DESCVA O CONTEUDO DO CAMPO E SEMPRE O VALOR E NAO %
+							U03->U03_DESCVC  := IIF(U01->U01_DEVC='S'  ,U03->U03_VLVC * U01->U01_VARIAV, 0)
 							U03->U03_DESCES  := 0
-							//U03_DTENCE := ''
-							U03->U03_JUSTIF  := ''   
+							U03->U03_JUSTIF  := ''  
+
 						U03->(MsUnLock())
 
 					EndIf

@@ -16,15 +16,15 @@ User Function UMNTA001()
 	Local aDados	 	:= {}
 	Private cCadastro	:= "Importação de combustíveis"
 
-	if MsgYesNo("Os movimentos anteriores serão apagados, deseja prosseguir com a execução da rotina ?","Atenção!")
-		If fPergunte(@cLocFile)
-			FWMsgRun(,{|| fDelTR6() },'Aguarde...','Realizando deleção dos registros...')
-			FwMsgRun(Nil, {|oSayBar| aDados := fGetRegs(cLocFile) }, "Aguarde... Realizando a leitura do arquivo...", "Iniciando o processo...")
-			FwMsgRun(Nil, {|oSayBar| fGerTR6(aDados) }, "Aguarde... Incluindo as informações...", "Processo em andamento...")
-			FwMsgRun(Nil, {|oSayBar| fAtuVeic() }, "Aguarde... Atualizando os veiculos...", "Finalizando o processo...")
-			MsgInfo("Registros importados com sucesso!","Atenção!")
-		EndIf
+	if MsgYesNo("Deseja apagar os movimentos retroativos da tabela?","Atenção!")
+		FWMsgRun(,{|| fDelTR6() },'Aguarde...','Realizando deleção dos registros...')
+		MsgInfo("Registros deletados com sucesso!","Atenção!")
 	endif
+	If fPergunte(@cLocFile)
+		FwMsgRun(Nil, {|oSayBar| aDados := fGetRegs(cLocFile) }, "Aguarde... Realizando a leitura do arquivo...", "Iniciando o processo...")
+		FwMsgRun(Nil, {|oSayBar| fGerTR6(aDados) }, "Aguarde... Atualizando as informações...", "Finalizando o processo...")
+		MsgInfo("Registros importados com sucesso!","Atenção!")
+	EndIf
 
 	FwRestArea(aArea)
 
@@ -39,8 +39,8 @@ Return(Nil)
 
 Static Function fGerTR6(aDados)
 
-	Local aAreaTR6   := TR6->(FwGetArea())
-	Local aArea 	 := FwGetArea()
+	Local aAreaTR6 := TR6->(FwGetArea())
+	Local aArea 	:= FwGetArea()
 	Local aLinha	 := {}
 	Local aCampos	 := {}
 	Local nPosCmp	 := 1
@@ -235,90 +235,5 @@ Static Function fDelTR6()
 	enddo
 
 	FwRestArea(aAreaTR6)
-
-Return(Nil)
-
-/*/-------------------------------------------------------------------
-	- Programa: fAtuVeic
-	- Autor: Tarcisio Silva Miranda
-	- Data: 02/07/2024
-	- Descrição: Atualiza os dados dos veículos.
--------------------------------------------------------------------/*/
-
-Static Function fAtuVeic()
-
-	Local aAreaST9 	  := ST9->(FwGetArea())
-	Local cQuery      := ""
-	Local cAliasQry   := ""//Query de todas as placas.
-	Local cAliasQry2  := ""//Query que seleciona o ultimo abastecimento referente a placa selecionada.
-	Local cAliasQry3  := ""//Query que posiciona no veiculo com base na placa.
-	//Seleciona todas as placas importadas.
-	cQuery := " SELECT  " 									+ CRLF
-	cQuery += " 	DISTINCT(TR6_PLACA) AS PLACA  " 		+ CRLF
-	cQuery += " FROM " + RetSqlName("TR6") + " TR6 " 		+ CRLF
-	cQuery += " WHERE TR6.D_E_L_E_T_ = ' ' " 				+ CRLF
-	cQuery += " AND TR6_FILIAL = '"+FWxFilial("TR6")+"' " 	+ CRLF
-	//Monta a tabela das placas importadas.
-	cAliasQry := MPSysOpenQuery(cQuery)
-	//Percorre todas as placas importadas.
-	While !(cAliasQry)->(Eof())
-		//Seleciona o ultimo abastecimento da placa selecionada.
-		cQuery := " SELECT   " 										+ CRLF
-		cQuery += " 	 TOP 1   " 									+ CRLF
-		cQuery += " 	 TR6_PLACA 		AS PLACA  " 				+ CRLF
-		cQuery += " 	,TR6_KMABAS 	AS KM  " 					+ CRLF
-		cQuery += " 	,TR6_DTABAS 	AS DATA  " 					+ CRLF
-		cQuery += " FROM " + RetSqlName("TR6") + " TR6 " 			+ CRLF
-		cQuery += " WHERE TR6.D_E_L_E_T_ = ' '   " 					+ CRLF
-		cQuery += " AND TR6_PLACA  = '"+(cAliasQry)->PLACA+"'   "	+ CRLF
-		cQuery += " AND TR6_FILIAL = '"+FWxFilial("TR6")+"'   "		+ CRLF
-		cQuery += " ORDER BY " 										+ CRLF
-		cQuery += " 	R_E_C_N_O_ DESC  " 							+ CRLF
-		//monta a query do ultimo abastecimento da placa selecionada.
-		cAliasQry2 := MPSysOpenQuery(cQuery)
-		//Verica se encontrou o ultimo abastecimento da placa selecioanda.
-		if !(cAliasQry2)->(Eof())
-			//Seleciona o veiculo com base na placa posicionada.
-			cQuery := " SELECT  " 									 + CRLF
-			cQuery += " 	R_E_C_N_O_ AS CHAVEST9  " 				 + CRLF
-			cQuery += " FROM " + RetSqlName("ST9") + " ST9 " 		 + CRLF
-			cQuery += " WHERE ST9.D_E_L_E_T_ = ' '  " 				 + CRLF
-			cQuery += " AND T9_PLACA  = '"+(cAliasQry2)->PLACA+"'  " + CRLF
-			cQuery += " AND T9_FILIAL = '"+FWxFilial("TR6")+"' "	 + CRLF
-			//Monata query temporaria.
-			cAliasQry3 := MPSysOpenQuery(cQuery)
-			//Verifica se encontrou o veiculo com base na placa selecionada.
-			if !(cAliasQry3)->(Eof())
-				//Posiciona no veiculo.
-				ST9->(DbGoto( (cAliasQry3)->CHAVEST9 ))
-				//Garante que a rotina não esta sendo executado 2 vezes no mesmo dia o mesmo arquivo.
-				if (cAliasQry2)->KM != ST9->T9_POSCONT .AND. (cAliasQry2)->KM > ST9->T9_POSCONT
-					//Abre o registro para alteração.
-					ST9->(RecLock("ST9",.F.))
-					//Atualiza os campos.
-					ST9->T9_CONTACU := ST9->T9_POSCONT
-					ST9->T9_POSCONT := (cAliasQry2)->KM
-					ST9->T9_DTULTAC	:= sTod((cAliasQry2)->DATA)
-					//Fecha o registro para alteração.
-					ST9->(MsUnLock())
-				endif
-			endif
-			//Fecha a query de posicionamento do veiculo.
-			if Select(cAliasQry3) > 0 .AND. !Empty(cAliasQry3)
-				(cAliasQry3)->(DbCloseArea())
-			endif
-		endif
-		//Fecha a query de posicionamento do ultimo abastecimento referente a placa selecioanda.
-		if Select(cAliasQry2) > 0 .AND. !Empty(cAliasQry2)
-			(cAliasQry2)->(DbCloseArea())
-		endif
-		(cAliasQry)->(DbSkip())
-	enddo
-	//Fecha a query de seleção de todos os abastecimento.
-	if Select(cAliasQry) > 0 .AND. !Empty(cAliasQry)
-		(cAliasQry)->(DbCloseArea())
-	endif
-
-	FwRestArea(aAreaST9)
 
 Return(Nil)
