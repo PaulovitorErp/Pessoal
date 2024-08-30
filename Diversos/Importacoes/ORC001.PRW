@@ -231,13 +231,13 @@ User Function ORC001(oSay,cArquivo,nHdlLog,nObjProc,nSucesso)
 		Next nCampos
 
 		cBemN1  := aDados[nI][1]
-		cItemN1 := aDados[nI][2]
+		cItemN1 := aDados[nI][3]
 
 		//Monta array dos itens
 		For nId:=1 to  Len(aDadosd)
 
-			cBemN3  := aDadosd[nId][1]
-			cItemN3 := aDadosd[nId][2]
+			cBemN3  := aDadosd[nId][6]
+			cItemN3 := aDadosd[nId][4]
 
 			aExecAutol := {}
 			IF cBemN3 == cBemN1 .AND. cItemN3 == cItemN1
