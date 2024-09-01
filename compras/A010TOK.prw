@@ -29,6 +29,6 @@ User Function A010TOK()
 		FWAlertHelp("Não é permitido Inclusão/Alteração/Cópia do Produto! Procure o departamento Responsavel!","MV_XUSRPRO")
     endif
      
-    RestArea(aAreaB1 )
+    RestArea(aAreaB1)
     RestArea(aArea)
 Return xRet
