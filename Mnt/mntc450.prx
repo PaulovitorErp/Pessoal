@@ -1,0 +1,653 @@
+#INCLUDE "mntc450.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC450
+Consulta gerencial de Custo de O.S. de Reforma
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC450()
+
+	//+-------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  	  |
+	//+-------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	//Tabela Temporária
+	Local oTmpTbl1 //Objeto Tabela Temporária 1
+	Local oTmpTbl2 //Objeto Tabela Temporária 2
+
+	Local cSavRegua
+	Local aAlias := {}
+	Local aPesq := {}
+
+	Private vVETHORAS := {}
+
+	Private cTRB3 := GetNextAlias()//Alias Tabela Temporária 1
+	Private cTRB4 := GetNextAlias()//Alias Tabela Temporária 2
+
+	//+-------------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros                         	  |
+	//| mv_par01     // De Ordem                                     	  |
+	//| mv_par02     // Ate Ordem                                    	  |
+	//| mv_par03     // Tipo de Custo  (Medio/Standard)              	  |
+	//+-------------------------------------------------------------------+
+
+	If !Pergunte("MNT45C",.T.)
+		Return
+	EndIf
+
+	If !NGVERSTOQ(MV_PAR03)
+		Return .F.
+	EndIf
+	aRotina   := {{ STR0006 ,"MNTC450FIL",0,4}} //"O.S. Filhos"
+	cCadastro := OemToAnsi(STR0007) //"Custo da O.S. de Reforma Pai"
+
+	aDBF := {{"ORDEPAI"  , "C", 06,0} ,;
+			 {"CODBEM1"  , "C", 16,0} ,;
+			 {"NOMBEM1"  , "C", 30,0} ,;
+			 {"PREVIST1" , "N", 12,2} ,;
+			 {"REALIZA1" , "N", 12,2}}
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB3, aDBF )
+	//Cria indices
+	oTmpTbl1:AddIndex( "Ind01" , {"ORDEPAI"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	aFIELD3 :={{STR0008,"ORDEPAI"  ,"C",06,0,"@!"}                 ,; //"Num.O.S"
+			   {STR0041,"CODBEM1"  ,"C",16,0,"@!"}                 ,; //"Bem"
+			   {STR0042,"NOMBEM1"  ,"C",30,0,"@!"}                 ,; //"Nome Do Bem"
+			   {STR0009,"PREVIST1" ,"N",09,0,"@E 999,999,999.99"}  ,; //"Custo Previsto"
+			   {STR0010,"REALIZA1" ,"N",09,0,"@E 999,999,999.99"}}    //"Custo Realizado"
+
+	aDBF2 := {{"ORDEM1"   , "C", 06,0},;
+			  {"ORDEM2"   , "C", 06,0},;
+			  {"CODBEM2"  , "C", 16,0},;
+			  {"NOMBEM2"  , "C", 30,0},;
+			  {"PREVIST2" , "N", 12,2},;
+			  {"REALIZA2" , "N", 12,2},;
+			  {"ARQUIVO"  , "C", 03,0}}
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRB4, aDBF2 )
+	//Cria indices
+	oTmpTbl2:AddIndex( "Ind02" , {"ORDEM1","ORDEM2"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	aFIELD4 := {{STR0008 ,"ORDEM2"   ,"C",06,0,"@!"}                 ,; //"Num.O.S"
+				{STR0041 ,"CODBEM2"  ,"C",16,0,"@!"}                 ,; //"Bem"
+				{STR0042 ,"NOMBEM2"  ,"C",30,0,"@!"}                 ,; //"Nome Do Bem"
+				{STR0009 ,"PREVIST2" ,"N",09,0,"@E 999,999,999.99"}  ,; //"Custo Previsto"
+				{STR0010 ,"REALIZA2" ,"N",09,0,"@E 999,999,999.99"}}    //"Custo Realizado"
+
+	Processa({|| PROCMNTC450()})
+
+	DbSelectArea(cTRB3)
+	DbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , {STR0008,{{"","C" , 255 , 0 ,"","@!"} }} ) // Indices de pesquisa
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRB3)
+	oBrowse:SetFields(aFIELD3)
+	oBrowse:SetProfileID( '1' )
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	oTmpTbl1:Delete()//Deleta Tabela Temporária 1
+	oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+
+	//---------------------------------------------------------------------
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                      |
+	//---------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PROCMNTC450
+Processa o Custo do Plano de Manutenção ( O.S. )
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function PROCMNTC450()
+
+	// PROCESSA O.S. DE REFORMA DO STJ
+	DbSelectArea("STJ")
+	DbSetOrder(11)
+	DbSeek(xFilial("STJ")+MV_PAR01,.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STS")
+	DbSetOrder(06)
+	DbSeek(xFilial("STS")+ MV_PAR01,.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	DbSelectArea("STJ")
+	ProcRegua(nReg)
+	While !Eof() .And. STJ->TJ_FILIAL == xFILIAL("STJ") .And. ;
+	STJ->TJ_ORDEPAI <= MV_PAR02
+
+		IncProc()
+		If STJ->TJ_SITUACA == 'L' .And. !Empty(STJ->TJ_ORDEPAI) .And. STJ->TJ_TIPOOS = "B"
+
+			DbSelectArea("ST9")
+			DbSetOrder(01)
+			DbSeek(xFilial("ST9")+STJ->TJ_CODBEM)
+
+			DbSelectArea("STL")
+			DbSetOrder(01)
+			DbSeek(xFilial("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+
+			nPRE := 0.00
+			nREA := 0.00
+			While !Eof() .And. STL->TL_FILIAL = Xfilial("STL") .And.;
+			STL->TL_ORDEM == STJ->TJ_ORDEM .And. STL->TL_PLANO == STJ->TJ_PLANO
+
+				vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+				STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+				STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+				nQTDHORAS := vVETHORAS[1]
+
+				nCUSTO := NGCUSTIN(STL->TL_SEQRELA,STL->TL_TIPOREG,STL->TL_CODIGO,nQTDHORAS,;
+				STL->TL_UNIDADE,STL->TL_DTINICI,STL->TL_HOINICI,STL->TL_DTFIM,;
+				STL->TL_HOFIM,If(NGCADICBASE('TL_PCTHREX','A','STL',.F.), STL->TL_PCTHREX, STL->TL_HREXTRA),;
+				MV_PAR03,STJ->TJ_SERVICO,STL->TL_CUSTO)
+
+				If Alltrim(STL->TL_SEQRELA) == "0"
+					nPRE := nPRE + nCUSTO
+				Else
+					nREA := nREA + nCUSTO
+				EndIf
+
+				DbSelectArea("STL")
+				DbSkip()
+			End
+
+			DbSelectArea(cTRB4)
+			If !DBSeek(STJ->TJ_ORDEPAI+STJ->TJ_ORDEM)
+				DbAppend()
+				(cTRB4)->ORDEM1  := STJ->TJ_ORDEPAI
+				(cTRB4)->ORDEM2  := STJ->TJ_ORDEM
+				(cTRB4)->ARQUIVO := "STJ"
+				(cTRB4)->CODBEM2 := STJ->TJ_CODBEM
+				(cTRB4)->NOMBEM2 := Substr(ST9->T9_NOME,1,30)
+			EndIf
+			(cTRB4)->PREVIST2   := (cTRB4)->PREVIST2 + nPRE
+			(cTRB4)->REALIZA2   := (cTRB4)->REALIZA2 + nREA
+
+			DbSelectArea(cTRB3)
+			If !DBSeek(STJ->TJ_ORDEPAI)
+				DbAppend()
+				(cTRB3)->ORDEPAI := STJ->TJ_ORDEPAI
+				(cTRB3)->CODBEM1 := STJ->TJ_CODBEM
+				(cTRB3)->NOMBEM1 := Substr(ST9->T9_NOME,1,30)
+			EndIf
+			(cTRB3)->PREVIST1 := (cTRB3)->PREVIST1 + nPRE
+			(cTRB3)->REALIZA1 := (cTRB3)->REALIZA1 + nREA
+		EndIf
+		DbSelectArea("STJ")
+		DbSkip()
+	End
+
+	// PROCESSA O.S. DE REFORMA DO STS
+	DbSelectArea("STS")
+	While !Eof() .And. STS->TS_FILIAL == xFILIAL("STS") .And. ;
+	STS->TS_ORDEPAI <= MV_PAR02
+
+		IncProc()
+		If STS->TS_SITUACA == 'L' .And. !Empty(STS->TS_ORDEPAI) .And. STS->TS_TIPOOS = "B"
+
+			DbSelectArea("ST9")
+			DbSetOrder(01)
+			DbSeek(xFilial("ST9")+STS->TS_CODBEM)
+
+			DbSelectArea("STT")
+			DbSetOrder(01)
+			DbSeek(xFilial("STT")+STS->TS_ORDEM+STS->TS_PLANO)
+
+			nPRE := 0.00
+			nREA := 0.00
+			While !Eof() .And. STT->TT_FILIAL = Xfilial("STT") .And.;
+			STT->TT_ORDEM == STS->TS_ORDEM .And. STT->TT_PLANO == STS->TS_PLANO
+
+				vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+				STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+				STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+				nQTDHORAS := vVETHORAS[1]
+
+				nCUSTO := NGCUSTIN(STT->TT_SEQRELA,STT->TT_TIPOREG,STT->TT_CODIGO,nQTDHORAS,;
+				STT->TT_UNIDADE,STT->TT_DTINICI,STT->TT_HOINICI,STT->TT_DTFIM,;
+				STT->TT_HOFIM,If(NGCADICBASE('TT_PCTHREX','A','STT',.F.), STT->TT_PCTHREX, STT->TT_HREXTRA),;
+				MV_PAR03,STS->TS_SERVICO,STT->TT_CUSTO)
+
+				If Alltrim(STT->TT_SEQRELA) == "0"
+					nPRE := nPRE + nCUSTO
+				Else
+					nREA := nREA + nCUSTO
+				EndIf
+
+				DbSelectArea("STT")
+				DbSkip()
+			End
+
+			DbSelectArea(cTRB4)
+			If !DBSeek(STS->TS_ORDEPAI+STS->TS_ORDEM)
+				DbAppend()
+				(cTRB4)->ORDEM1  := STS->TS_ORDEPAI
+				(cTRB4)->ORDEM2  := STS->TS_ORDEM
+				(cTRB4)->CODBEM2 := STS->TS_CODBEM
+				(cTRB4)->ARQUIVO := "STS"
+				(cTRB4)->CODBEM2 := STS->TS_CODBEM
+				(cTRB4)->NOMBEM2 := Substr(ST9->T9_NOME,1,30)
+			EndIf
+			(cTRB4)->PREVIST2   := (cTRB4)->PREVIST2 + nPRE
+			(cTRB4)->REALIZA2   := (cTRB4)->REALIZA2 + nREA
+
+			DbSelectArea(cTRB3)
+			If !DBSeek(STS->TS_ORDEPAI)
+				DbAppend()
+				(cTRB3)->ORDEPAI := STS->TS_ORDEPAI
+				(cTRB3)->CODBEM1 := STS->TS_CODBEM
+				(cTRB3)->NOMBEM1 := Substr(ST9->T9_NOME,1,30)
+			EndIf
+			(cTRB3)->PREVIST1 := (cTRB3)->PREVIST1 + nPRE
+			(cTRB3)->REALIZA1 := (cTRB3)->REALIZA1 + nREA
+		EndIf
+		DbSelectArea("STS")
+		DbSkip()
+	End
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC450FIL
+Processa o Custo das O.S. de Reforma
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC450FIL()
+
+	Local OldRot := aCLONE(aROTINA)
+	Local aPesq	 := {}
+
+	aRotina := {}
+	cCadold := cCadastro
+
+	cMESTRE := "STJ"
+	aRotina := {{STR0011 ,"MNTC450POS(1)" , 0 , 2},; //"Visual."
+				{STR0012 ,"MNTC450POS(2)" , 0 , 3},; //"Detalhes"
+				{STR0013 ,"MNTC450POS(3)" , 0 , 4},; //"Ocorren."
+				{STR0014 ,"MNTC450POS(4)" , 0 , 6},; //"proBlemas"
+				{STR0015 ,"MNTC450POS(5)" , 0 , 7}}  //"Etapas   "
+
+	cCadastro := OemToAnsi(STR0016) //"Custo das O.S. de Reforma Filhos"
+
+	DbSelectArea(cTRB4)
+	DbGoTop()
+	Set Filter To (cTRB4)->ORDEM1 == (cTRB3)->ORDEPAI
+
+	//mBrowse(6,1,22,75,(cTRB4),aFIELD4)
+
+	aAdd( aPesq , { STR0008 ,{{"","C" , 255 , 0 ,"","@!"} }} ) // Indices de pesquisa
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRB4)
+	oBrowse:SetFields(aFIELD4)
+	oBrowse:SetProfileID( '2' )
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	DbSelectArea(cTRB4)
+	Set Filter To
+
+	DbSelectArea(cTRB3)
+
+	aRotina   := aCLONE(OldRot)
+	cCadastro := OemToAnsi(cCadold)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC450POS
+Processa o Posiciona para visualizar
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@param nVALOR, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC450POS(nVALOR)
+
+	cALIASOLD := ALIAS()
+	If (cTRB4)->ARQUIVO == "STJ"
+		DbSelectArea("STJ")
+		DbSetOrder(01)
+		DbSeek(xFilial("STJ")+(cTRB4)->ORDEM2)
+
+		If nVALOR == 1
+			NGCAD01("STJ",Recno(),1)
+		ElseIf nVALOR == 2
+			MNTC550D()
+		ElseIf nVALOR == 3
+			MNTC550E()
+		ElseIf nVALOR == 4
+			MNTC550A()
+		ElseIf nVALOR == 5
+			MNTC550B()
+		EndIf
+
+	Else
+		DbSelectArea("STS")
+		DbSetOrder(01)
+		DbSeek(xFilial("STS")+(cTRB4)->ORDEM2)
+
+		If nVALOR == 1
+			NGCAD01("STS",Recno(),1)
+		ElseIf nVALOR == 2
+			OSDETASTT()
+		ElseIf nVALOR == 3
+			OSOCORSTT()
+		ElseIf nVALOR == 4
+			OSPROBLSTT()
+		ElseIf nVALOR == 5
+			OSETASTT()
+		EndIf
+	EndIf
+
+	DbSelectArea(cALIASOLD)
+	DbGoTop()
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} OSDETASTT
+Monta um browse dos Detalhes da ordem de Manutenção
+@author Inacio Luiz Kolling
+@since 16/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function OSDETASTT()
+
+	Local olddetalhe
+
+	cCadold := cCadastro
+
+	Private cCadastro := OemtoAnsi(STR0017) //"Detalhe da Ordem de Manutencao"
+
+	olddetalhe := aCLONE(aROTINA)
+
+	cMESTRE := "STT"
+	aRotina := {{STR0018 ,"AXPesqui" , 0 , 1},; //"Pesquisar"
+				{STR0019 ,"NGCAD01"  , 0 , 2}}  //"Visualizar"
+
+	M->TS_ORDEM := STS->TS_ORDEM
+	M->TS_PLANO := STS->TS_PLANO
+
+	DbSelectArea("STT")
+	bWHILE := {|| !Eof() .And. STT->TT_ORDEM == M->TS_ORDEM .And. STT->TT_PLANO == M->TS_PLANO}
+
+	bFOR   := {|| TT_FILIAL == xFilial("STT") .And. ;
+	TT_ORDEM  == M->TS_ORDEM    .And. ;
+	TT_PLANO  == m->TS_PLANO }
+
+	NGCONSULTA("TRBT", M->TS_ORDEM + M->TS_PLANO, bWHILE, bFOR, aRotina,{})
+
+	DbSelectArea("STT")
+	DbSetOrder(01)
+
+	DbSelectArea("STS")
+
+	cMESTRE := "STS"
+
+	aRotina := aCLONE(olddetalhe)
+
+	cCadastro := OemToAnsi(cCadold)
+
+Return  .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} OSOCORSTT
+Monta um browse das Ocorrencias da ordem de Manutenção
+@author Inacio Luiz Kolling
+@since 16/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function OSOCORSTT()
+
+	cCadold := cCadastro
+
+	Private cCadastro := OemtoAnsi(STR0020) //"Ocorrencias da Ordem Servico Manutencao"
+
+	oldocorre := aCLONE(aROTINA)
+	aRotina   := {{STR0018 ,"AXPesqui" , 0 , 1},; //"Pesquisar"
+				  {STR0019 ,"NGCAD01"  , 0 , 2}}  //"Visualizar"
+
+	M->TS_ORDEM := STS->TS_ORDEM
+	M->TS_PLANO := STS->TS_PLANO
+
+	DbSelectArea("STU")
+	DbSetOrder(01)
+	bWHILE := {|| !Eof() .And. STU->TU_ORDEM == M->TS_ORDEM .And. STU->TU_PLANO == M->TS_PLANO}
+
+	bFOR   := {|| TU_FILIAL == xFilial("STU") .And. ;
+	TU_ORDEM  == M->TS_ORDEM    .And. ;
+	TU_PLANO  == M->TS_PLANO }
+
+	NGCONSULTA("TRBN",M->TS_ORDEM+M->TS_PLANO, bWHILE, bFOR, aRotina,{})
+
+	DbSelectArea("STU")
+	DbSetOrder(01)
+
+	aRotina   := aCLONE(oldocorre)
+	cCadastro := OemToAnsi(cCadold)
+
+Return  .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} OSPROBLSTT
+Monta um browse dos Problemas da ordem de Manutenção
+@author Inacio Luiz Kolling
+@since 16/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function OSPROBLSTT
+
+	cCadold := cCadastro
+	Private cCadastro := OemtoAnsi(STR0021) //"Problemas da Ordem Servico Manutencao"
+
+	oldproble := aCLONE(aROTINA)
+	aRotina   := {{ STR0018 ,"AXPesqui" , 0 , 1},; //"Pesquisar"
+				  { STR0019 ,"NGCAD01"  , 0 , 2}}  //"Visualizar"
+
+	M->TS_ORDEM := STS->TS_ORDEM
+	M->TS_PLANO := STS->TS_PLANO
+
+	DbSelectArea("STV")
+	DbSetOrder(01)
+	bWHILE := {|| !Eof() .And. STV->TV_ORDEM == M->TS_ORDEM .And. STV->TV_PLANO == M->TS_PLANO}
+
+	bFOR   := {||TV_FILIAL == xFilial("STV") .And. ;
+	TV_ORDEM  == M->TS_ORDEM    .And. ;
+	TV_PLANO  == M->TS_PLANO }
+
+	NGCONSULTA("TRBV", M->TS_ORDEM+M->TS_PLANO, bWHILE, bFOR, aRotina,{})
+
+	DbSelectArea("STV")
+	DbSetOrder(01)
+
+	aRotina   := aCLONE(oldproble)
+	cCadastro := OemToAnsi(cCadold)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} OSETASTT
+Monta um browse das Etapas Executada da O.S. Manutenção
+@author Inacio Luiz Kolling
+@since 16/02/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function OSETASTT()
+
+	cCadold := cCadastro
+	Private cCadastro := OemtoAnsi(STR0022) //"Etapas O. S. Manutencao"
+
+	oldetapas := aCLONE(aROTINA)
+	aRotina   := {{STR0018 ,"AXPesqui" , 0 , 1},; //"Pesquisar"
+				  {STR0019 ,"NGCAD01"  , 0 , 2}}  //"Visualizar"
+
+	M->TS_ORDEM := STS->TS_ORDEM
+	M->TS_PLANO := STS->TS_PLANO
+
+	DbSelectArea("STX")
+	DbSetOrder(01)
+	bWHILE := {|| !Eof() .And. STX->TX_ORDEM == M->TS_ORDEM .And. STX->TX_PLANO == M->TS_PLANO}
+
+	bFOR := {|| TX_FILIAL  == xFilial("STX") .And. ;
+	TX_ORDEM   == M->TS_ORDEM    .And. ;
+	TX_PLANO   == M->TS_PLANO }
+
+	NGCONSULTA("TRBQ", M->TS_ORDEM+M->TS_PLANO, bWHILE, bFOR, aRotina,{})
+
+	DbSelectArea("STX")
+	DbSetOrder(01)
+
+	aRotina   := aCLONE(oldetapas)
+	cCadastro := OemToAnsi(cCadold)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGCUSTIN
+Calcula o custo Standard do insumo
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@param cSEQ, characters, ( 0-PREVISTO > O-RELIZADO )
+@param cTIPO, characters
+@param cCOD, characters
+@param nQTD, numeric
+@param cUNID, characters
+@param dDTINI, date
+@param cHOINI, characters
+@param dDTFIM, date
+@param cHOFIM, characters
+@param nEXTRA, numeric
+@param nTIPO, numeric, ( 2-STAND 1-MEDIO )
+@param cSERV, characters
+@param nCUSTOINS, numeric
+@return nVALCUST - VALOR DO CUSTO DO INSUMO
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGCUSTIN(cSEQ,cTIPO,cCOD,nQTD,cUNID,dDTINI,cHOINI,dDTFIM,cHOFIM,nEXTRA,nTIPO,cSERV,nCUSTOINS)
+
+	Local nVALCUST := 0.00, nVALOR := 0.00
+	nQTDH := nQTD
+
+	//Mantem campo de Hr. Extra como numerico
+	nEXTRA := If(ValType(nEXTRA)=="N",nEXTRA,Val(nEXTRA))  //NGCADICBASE('TL_PCTHREX','A','STL',.F.)
+
+	If cTIPO <> 'P'
+		If Alltrim(cUNID) <> 'H'
+			nHORA := (dDTFIM - dDTINI) *  1440
+			nHORA := nHORA + ( HtoM(cHOFIM) - HtoM(cHOINI) )
+			nHORA := nHORA /60
+			nQTDH := nHORA
+		EndIf
+	EndIf
+
+	If nTIPO = 1
+		nVALCUST := nCUSTOINS
+	Else
+
+		If cTIPO == "M"
+			DbSelectArea("ST1")
+			DbSeek(xFilial("ST1")+Substr(cCOD,1,6))
+			If Empty(ST1->T1_SALARIO)
+				DbSelectArea("ST2")
+				DbSeek(xFilial("ST2")+Substr(cCOD,1,6))
+
+				DbSelectArea("ST0")
+				DbSeek(xFilial("ST0")+ST2->T2_ESPECIA)
+				nValor := ST0->T0_SALARIO
+			Else
+				nValor := ST1->T1_SALARIO
+			EndIf
+
+			nEXTRA := 1+(nEXTRA/100)
+			nValor := nValor*nEXTRA
+
+		ElseIf cTIPO == "E"
+			DbSelectArea("ST0")
+			DbSeek(xFilial("ST0")+Substr(cCOD,1,6))
+			nValor := ST0->T0_SALARIO
+
+			nEXTRA := 1+(nEXTRA/100)
+			nValor := nValor*nEXTRA
+
+		ElseIf cTIPO == "P"
+			DbSelectArea("SB1")
+			DbSeek(xFilial("SB1")+cCOD)
+			nValor := SB1->B1_CUSTD
+
+		ElseIf cTIPO == "T"
+			DbSelectArea("SA2")
+			If DbSeek(xFilial("SA2")+Substr(cCOD,1,6))
+				DbSelectArea("TPO")
+				DbSetOrder(01)
+				If DbSeek(xFilial("TPO")+Substr(cCOD,1,6)+SA2->A2_LOJA+cSERV)
+					nValor := TPO->TPO_CUSTO
+				EndIf
+			EndIf
+		ElseIf cTIPO == "F"
+			DbSelectArea("SH4")
+			DbSeek(xFilial('SH4')+cCOD)
+			nValor := SH4->H4_CUSTOH
+		EndIf
+
+		nVALCUST := nVALOR * nQTDH
+	EndIf
+
+Return nVALCUST
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGVERSTOQ
+Verifica se tem integracao e se o tipo de custo
+@author Inacio Luiz Kolling
+@since 15/02/2001
+@version undefined
+@param nTIPO, numeric,( 1-STAND 2-MEDIO )
+@type function
+@return .T. - Se está Ok / .F. - sem integracao e tipo custo Médio
+/*/
+//---------------------------------------------------------------------
+Function NGVERSTOQ(nTIPO)
+
+	Local cUsaInEst := AllTrim(GetMv("MV_NGMNTES"))
+
+	If cUsaInEst == 'N' .AND. nTIPO = 1
+		MsgStop(STR0023+CRLF+CRLF; //"O SIGAMNT nao tem integracao com ESTOQUE..."
+		+STR0024)          //"Somente podera ser utilizado Tipo de Custo Standard.."
+		Return .F.
+	EndIf
+
+Return .T.

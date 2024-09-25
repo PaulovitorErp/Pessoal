@@ -1,0 +1,216 @@
+#INCLUDE "MNTR575.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR575
+Relatório de bens transferidos entre filiais.
+
+@author Marcos Wagner Junior
+@since 21/09/2006
+@return Nil
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function MNTR575()
+
+	WNREL   := "MNTR575"
+	LIMITE  := 132
+	cDESC1  := STR0001 //"O relatório apresentará os pneus que foram transferidos "
+	cDESC2  := STR0002 //"de filial após uma determinada data. "
+	cDESC3  := ""
+	cSTRING := "SCP"
+
+	Private NOMEPROG      := "MNTR575"
+	Private TAMANHO       := "M"
+	Private aRETURN       := { STR0003,1,STR0004,1,2,1,"",1 }   //"Zebrado"###"Administracao"
+	Private TITULO        := STR0005  //"Controle de Transferencia de Pneus por filial"
+	Private nTIPO         := 0
+	Private nLASTKEY      := 0
+	Private CABEC1,CABEC2 := ""
+	Private aVETINR       := {}
+	Private cPerg         := "MNR575"
+	Private aPerg         := {}
+
+	Pergunte(cPERG,.F.)
+	//-----------------------------------------
+	// Envia controle para a funcao SETPRINT
+	//-----------------------------------------
+	WNREL := SetPrint(cSTRING,WNREL,cPERG,TITULO,cDESC1,cDESC2,cDESC3,.F.,"")
+
+	If nLASTKEY = 27
+	   Set Filter To
+	   DbSelectArea("TR2")
+	   Return Nil
+	EndIf
+
+	SetDefault(aReturn,cSTRING)
+	RptStatus({|lEND| MNTR575IMP(@lEND,WNREL,TITULO,TAMANHO)},STR0009,STR0010) //"Aguarde..."###"Processando Registros..."
+
+	Dbselectarea("TR2")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR575IMP
+Chamada do relatório
+
+@author Marcos Wagner Junior
+@since 14/09/2006
+@return Nil
+@version MP11
+/*/
+//---------------------------------------------------------------------
+
+Function MNTR575IMP(lEND,WNREL,TITULO,TAMANHO)
+
+	Local nQtdeReg   := 0
+
+	Private cRODATXT := ""
+	Private nCNTIMPR := 0
+	Private li       := 80
+	Private m_pag    := 1
+	Private cNomeOri := ""
+	Private nCont    := 0
+	Private nQuanti  := 0
+
+	nTIPO  := IIf(aReturn[4]==1,15,18)
+
+	CABEC1 := STR0011 // "                      Transferencia                                                     Solicitacao"
+	CABEC2 := STR0012 // "Filial              Data        Hora   Num.Fogo    Medida do Pneu        Sulco   Banda  Numero  Data            Lote de Transferencia"
+
+	/*
+	          1         2         3         4         5         6         7         8         9         0         1         2
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456
+	*******************************************************************************************************************************
+	                                              Relatorio de Pneus
+	*******************************************************************************************************************************
+
+	*******************************************************************************************************************************
+	                      Transferˆncia                                                     Solicitacao
+	Filial                Data      Hora   Num.Fogo    Medida do Pneu        Sulco   Banda  Numero  Data      Lote de Transferˆncia
+
+	xx - xxxxxxxxxxxxxxx  99/99/99  99:99  xxxxxxxxxx  xxxxxxxxxxxxxxxxxxxx  999,99  xx     xxxxxx  99/99/99  xxxxxx
+	*/
+
+	//---------------------------------------------------
+	// Tabelas Query:
+	// SCP: Solicitação de Armazém
+	// TR2: Cabeçalho do Lote de Transferência de Bens
+	// TR3: Itens do lote de transferência de bens
+	// TQS: Complemento do Bem - Pneus
+	//---------------------------------------------------
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT SCP.CP_FILIAL, TR2.TR2_DTTRAN, TR2.TR2_HRTRAN, TQS.TQS_NUMFOG, TQS.TQS_MEDIDA, "
+	cQuery += " TQS.TQS_SULCAT, TQS.TQS_BANDAA, SCP.CP_NUM, SCP.CP_EMISSAO, TR3.TR3_LOTE, SCP.CP_QUJE"
+	cQuery += " FROM " + RetSqlName("SCP")+" SCP," + RetSqlName("TR2")+" TR2," + RetSqlName("TR3")+" TR3," + ;
+							   RetSqlName("TQS")+" TQS"
+	cQuery += " WHERE SCP.CP_FILIAL  >= '"+MV_PAR01+"' AND SCP.CP_FILIAL <= '" +MV_PAR02+"'
+	cQuery += " AND   SCP.CP_EMISSAO >=  '" + DTOS( MV_PAR03 ) + "'"
+	cQuery += " AND   SCP.CP_LOTE    <> ' '"
+	cQuery += " AND SCP.CP_LOTE     = TR2.TR2_LOTE "
+	cQuery += " AND TR2.TR2_LOTE    = TR3.TR3_LOTE "
+	cQuery += " AND TR3.TR3_CODBEM  = TQS.TQS_CODBEM "
+	cQuery += " AND TQS.TQS_FILIAL  = '"+xFilial("TR2")+"'"
+	cQuery += " AND SCP.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TQS.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TR2.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TR3.D_E_L_E_T_ <> '*' "
+	cQuery += " ORDER BY SCP.CP_FILIAL"
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	// Ajusta o tratamento do tipo do campo
+	TCSetField( cAliasQry,"TR2_DTTRAN","D",8,0 )
+	TCSetField( cAliasQry,"CP_EMISSAO","D",8,0 )
+
+	SetRegua(LastRec())
+
+	DbSelectArea( cAliasQry )
+	DbGoTop()
+	While !EoF()
+
+		IncRegua()
+		If lEnd
+	      @ Prow()+1,001 PSay STR0013 //"CANCELADO PELO OPERADOR"
+	      Exit
+	  	EndIf
+
+	 	If cNomeOri <> (cAliasQry)->CP_FILIAL
+	 		If nCont != 0
+				@ Li,106		 PSay STR0014 //"Quantidade:"
+				@ Li,120		 PSay nQuanti
+				nQuanti := 0
+	 		Endif
+	      DbSelectArea("SM0")
+			SM0->(DbSetOrder(1))
+			If MsSeek(SM0->M0_CODIGO+(cAliasQry)->CP_FILIAL)
+				NgSomaLi(58)
+				@ Li,000   Psay (cAliasQry)->CP_FILIAL + " - " + SM0->M0_FILIAL
+				NgSomaLi(58)
+			Endif
+	   EndIf
+	   dbSelectArea("TR2")
+	   cNomeOri := (cAliasQry)->CP_FILIAL
+
+		@ Li,020		 PSay (cAliasQry)->TR2_DTTRAN
+		@ Li,032		 PSay (cAliasQry)->TR2_HRTRAN
+		@ Li,039		 PSay (cAliasQry)->TQS_NUMFOG
+		DbSelectArea("TQT")
+		DbSetOrder(01)
+		If DbSeek(xFilial("TQT")+(cAliasQry)->TQS_MEDIDA )
+			@ Li,051		 PSay TQT->TQT_DESMED
+		Endif
+		@ Li,073		 PSay (cAliasQry)->TQS_SULCAT Picture "@E 999.99"
+		If (cAliasQry)->TQS_BANDAA = '1'
+			@ Li,081		 PSay 'OR'
+		ElseIf(cAliasQry)->TQS_BANDAA = '2'
+			@ Li,081		 PSay 'R1'
+		ElseIf(cAliasQry)->TQS_BANDAA = '3'
+			@ Li,081		 PSay 'R2'
+		ElseIf(cAliasQry)->TQS_BANDAA = '4'
+			@ Li,081		 PSay 'R3'
+		ElseIf(cAliasQry)->TQS_BANDAA = '5'
+			@ Li,081		 PSay 'R4'
+		Endif
+		@ Li,088 PSay (cAliasQry)->CP_NUM
+		@ Li,096 PSay (cAliasQry)->CP_EMISSAO
+		@ Li,112 PSay (cAliasQry)->TR3_LOTE
+
+	   NgSomaLi(58)
+	   DbSelectArea(cAliasQry)
+	   DbSkip()
+	   nCont++
+	   nQuanti++
+	End While
+
+	@ Li,106 PSay STR0014 // "Quantidade:"
+	@ Li,120 PSay nQuanti
+
+	nQtdeReg := Contar( cAliasQry,".T." )
+
+	( cAliasQry )->( DbCloseArea() )
+
+	RODA( nCNTIMPR,cRODATXT,TAMANHO )
+
+	If nQtdeReg == 0
+		MsgStop( STR0015 ) // "Não há dados para imprimir no relatório"
+		Return Nil
+	EndIf
+
+	//---------------------------------------------------
+	// Devolve a condicao original do arquivo principal
+	//---------------------------------------------------
+	RetIndex('SCP')
+	Set Filter To
+	Set Device To Screen
+	If aReturn[5] == 1
+	   Set Printer To
+	   DbCommitAll()
+	   OurSpool(WNREL)
+	EndIf
+
+	MS_FLUSH()
+
+Return Nil

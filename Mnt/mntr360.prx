@@ -1,0 +1,2029 @@
+#INCLUDE "MNTR360.CH"
+#INCLUDE "PROTHEUS.CH"
+
+Static lRPORel17  := GetRPORelease() <= '12.1.017'
+Static aCalendars := {}
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MNTR360  ³ Autor ³ Deivys Joenck         ³ Data ³ 22/08/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Relatorio de MTBF e MTTR                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³OBSERVACAO³ Revisao t‚cnica 10/10/2002                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTR360()
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  	  ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local oReport
+	Local aArea := GetArea()
+	Local lRet   := .T.
+
+	Private cCodeST9   :="", cFAMILIA:="", cCUSTO:="", cCENTRAB:=""
+	Private nNUMDIAS  := 0, nREFORMA:=0, cTMHORAS:="",nTotHoras := 0,nTotEntF := 0,nHrsParada
+	Private nTotBens  := 0
+	Private aARRAYSTJ := {}
+	Private aRETURN   := {STR0004,1,STR0005,1,2,1,"",1}   //"Zebrado"###"Administracao"
+	Private oNGKPI
+	Private cTRB
+	Private cAlsST9   := GetNextAlias()
+
+	// Caso seja release maior que 12.1.17
+	If !lRPORel17
+
+		oNGKPI := NGKPI():New()
+
+		If !oNGKPI:ValidPre( { 'MTBF', 'MTTR' } )
+
+			oNGKPI:showHelp()
+
+			oNGKPI:Free()
+
+			lRet := .F.
+
+		EndIf
+
+	Else
+		cTRB := GetNextAlias()
+	EndIf
+
+	If lRet
+		//Modo personalizável (MV_TREPORT)
+		If FindFunction("TRepInUse") .And. TRepInUse()
+			//-- Interface de impressao
+			Pergunte("MNT36R", .T. )
+			oReport := ReportDef()
+			oReport:SetLandscape() //Default Paisagem
+			oReport:PrintDialog()
+		Else
+			MNTR360R3()
+		EndIf
+		RestArea(aArea)
+
+		If !lRPORel17 // Caso seja release maior que 12.1.17
+			oNGKPI:Free()
+		EndIf
+
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+
+Return lRet
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Define as seções impressas no relatório .
+@type function
+
+@author Elisangela Costa
+@since 29/06/2006
+
+@param
+@return Objeto, Objeto do tipo TReport referente ao relatório.
+/*/
+//----------------------------------------------------------------------
+Static Function ReportDef()
+
+	Local oReport := Nil
+	Local oSec1   := Nil
+	Local oSec2   := Nil
+	Local oSec3   := Nil
+
+	/*-------------------------------------------#
+	# MV_PAR01 - De  Familia                     #
+	# MV_PAR02 - Ate Familia                     #
+	# MV_PAR03 - De  Bem                         #
+	# MV_PAR04 - Ate Bem                         #
+	# MV_PAR05 - De  Centro de Custo             #
+	# MV_PAR06 - Ate Centro de Custo             #
+	# MV_PAR07 - De  Centro de Trabalho          #
+	# MV_PAR08 - Ate Centro de Trabalho          #
+	# MV_PAR09 - De  Data                        #
+	# MV_PAR10 - Ate Data                        #
+	# MV_PAR11 - Ordenar Por ?                   #
+	# MV_PAR12 - Considera Calendário do Bem ?   #
+	# MV_PAR13 - Considera Tempo Antes/Depois ?  #
+	#-------------------------------------------*/
+
+	Pergunte( "MNT36R", .F. )
+
+	oReport := TReport():New( 'MNTR360', OemToAnsi( STR0001 ), 'MNT36R', { |oReport| ReportPrint( oReport ) }, STR0001 + ". " + STR0002 +" "+STR0003)
+	oReport:ParamReadOnly()
+	oReport:SetPageFooter( 5, { || fReportRod( oReport ) }, .F. )
+
+	If !lRPORel17 // Caso seja versão maior que 12.1.17
+
+		// Ordenação por Centro de Custos
+		If MV_PAR11 == 1
+
+			oSec1 := TRSection():New( oReport, STR0012 )
+
+				TRCell():New( oSec1, 'T9_CCUSTO' , cAlsST9, STR0012, '@!', 20, , , , .T., , , 2, .T. ) // Centro Custo
+				TRCell():New( oSec1, 'CTT_DESC01', cAlsST9, STR0013, '@!', 40, , , , .T., , , 2, .T. ) // Descrição
+				TRCell():New( oSec1, 'T9_CENTRAB', cAlsST9, STR0014, '@!', 20, , , , .T., , , 2, .T. ) // C.Trabalho
+				TRCell():New( oSec1, 'HB_NOME'   , cAlsST9, STR0013, '@!', 80, , , , .T., , , 2, .T. ) // Descrição
+
+			oSec2 := TRSection():New( oReport, STR0020, , , , , , , , , , , 3 ) // Familias
+
+				// Informações do Equipamento
+				TRCell():New( oSec2, 'T9_CODBEM' , cAlsST9, STR0016, '@!', 18 , , , , .T., , , 2, .T. ) // Bem
+				TRCell():New( oSec2, 'T9_NOME'   , cAlsST9, STR0013, '@!', 40 , , , , .T., , , 2, .T. ) // Descrição
+				TRCell():New( oSec2, 'T9_CODFAMI', cAlsST9, STR0015, '@!', 10 , , , , .T., , , 2, .T. ) // Familia
+				TRCell():New( oSec2, 'T6_NOME'   , cAlsST9, STR0013, '@!', 40 , , , , .T., , , 2, .T. ) // Descrição
+
+				// Indicadores
+				TRCell():New( oSec2, 'MTBF' , , STR0044, '@!', 12, , { || NGRETVAL( 1 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Hrs
+				TRCell():New( oSec2, 'MTTR' , , STR0045, '@!', 12, , { || NGRETVAL( 5 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Hrs
+				TRCell():New( oSec2, 'MTBFD', , STR0046, '@!', 12, , { || NGRETVAL( 2 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Dias
+				TRCell():New( oSec2, 'MTTRD', , STR0047, '@!', 12, , { || NGRETVAL( 6 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Dias
+
+			oSec3 := TRSection():New( oReport, STR0023 ) // Média Geral:
+
+				// Título
+				TRCell():New( oSec3, '', '', STR0023, '@!', 158 ) // Média Geral:
+
+				// Indicadores Gerais
+				TRCell():New( oSec3, 'MTBF' , , STR0044, '@!', 12, , { || NGRETVAL( 3 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Hrs
+				TRCell():New( oSec3, 'MTTR' , , STR0045, '@!', 12, , { || NGRETVAL( 7 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Hrs
+				TRCell():New( oSec3, 'MTBFD', , STR0046, '@!', 12, , { || NGRETVAL( 4 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Dias
+				TRCell():New( oSec3, 'MTTRD', , STR0047, '@!', 12, , { || NGRETVAL( 8 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Dias
+
+		// Ordenação por Equipamento
+		Else
+
+			oSec1 := TRSection():New( oReport, STR0012 )
+
+				// Informações do Equipamento
+				TRCell():New( oSec1, 'T9_CODBEM' , cAlsST9, STR0016, '@!', 18, , , , .T., , , 5, .T. ) // Bem
+				TRCell():New( oSec1, 'T9_NOME'   , cAlsST9, STR0013, '@!', 40, , , , .T., , , 5, .T. ) // Descrição
+				TRCell():New( oSec1, 'T9_CCUSTO' , cAlsST9, STR0012, '@!', 20, , , , .T., , , 5, .T. ) // Centro Custo
+				TRCell():New( oSec1, 'CTT_DESC01', cAlsST9, STR0013, '@!', 40, , , , .T., , , 5, .T. ) // Descrição
+				TRCell():New( oSec1, 'T9_CODFAMI', cAlsST9, STR0015, '@!', 12, , , , .T., , , 5, .T. ) // Familia
+				TRCell():New( oSec1, 'T6_NOME'   , cAlsST9, STR0013, '@!', 40, , , , .T., , , 5, .T. ) // Descrição
+
+				// Indicadores
+				TRCell():New( oSec1, 'MTBF' , , STR0044, '@!', 12, , { || NGRETVAL( 1 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Hrs
+				TRCell():New( oSec1, 'MTTR' , , STR0045, '@!', 12, , { || NGRETVAL( 5 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Hrs
+				TRCell():New( oSec1, 'MTBFD', , STR0046, '@!', 12, , { || NGRETVAL( 2 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Dias
+				TRCell():New( oSec1, 'MTTRD', , STR0047, '@!', 12, , { || NGRETVAL( 6 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Dias
+
+			oSec2 := TRSection():New( oReport, STR0023 ) // Média Geral:
+
+				// Título
+				TRCell():New( oSec2, '', '', STR0023, '@!', 178 ) // Média Geral:
+
+				// Indicadores Gerais
+				TRCell():New( oSec2, 'MTBF' , , STR0044, '@!', 12, , { || NGRETVAL( 3 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Hrs
+				TRCell():New( oSec2, 'MTTR' , , STR0045, '@!', 12, , { || NGRETVAL( 7 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Hrs
+				TRCell():New( oSec2, 'MTBFD', , STR0046, '@!', 12, , { || NGRETVAL( 4 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTBF/Dias
+				TRCell():New( oSec2, 'MTTRD', , STR0047, '@!', 12, , { || NGRETVAL( 8 ) }, 'CENTER', .T., 'CENTER', , 2, .T. ) // MTTR/Dias
+
+		EndIf
+
+	Else
+
+		If MV_PAR11 == 1
+
+			oSec1 := TRSection():New( oReport, STR0012, { cTRB, 'CTT', 'SHB' } )
+
+				TRCell():New( oSec1, '(cTRB)->CUSTO'  , cTRB , STR0012, '@!', 20 , .F.,,,,,, 3 ) // C. Custo
+				TRCell():New( oSec1, 'CTT_DESC01'     , 'CTT', STR0013, '@!', 80 , .F.,,,,,, 3 ) // Descrição
+				TRCell():New( oSec1, '(cTRB)->CENTRAB', cTRB , STR0014, '@!', 25 , .F.,,,,,, 3 ) // C.Trabalho
+				TRCell():New( oSec1, 'HB_NOME'        , 'SHB', STR0013, '@!', 72 , .F.         ) // Descrição
+				TRCell():New( oSec1, ''               , ''   , STR0041, '@!', 160, .F.         ) // Horas / Dias
+
+				TRPosition():New( oSec1, 'CTT', 1, { || xFilial( 'CTT' ) + (cTRB)->CUSTO   } )
+				TRPosition():New( oSec1, 'SHB', 1, { || xFilial( 'SHB' ) + (cTRB)->CENTRAB } )
+
+			oSec2 := TRSection():New( oReport, STR0020, { cTRB, 'ST6', 'ST9' } ) // Familias
+
+				TRCell():New( oSec2, 'CODFAMI', ''   , STR0015, '@!', 6 , .F., { ||NGRETFAM() }   ,,,,, 3 ) // Familia
+				TRCell():New( oSec2, 'T6_NOME', 'ST6', STR0013, '@!', 40, .F.,                    ,,,,, 3 ) // Descrição
+				TRCell():New( oSec2, 'CODBEM' , ''   , STR0016, '@!', 16, .F., { ||NGRETCODB() }  ,,,,, 3 ) // Bem
+				TRCell():New( oSec2, 'T9_NOME', 'ST9', STR0013, '@!', 40, .F.,                    ,,,,, 3 ) // Descrição
+				TRCell():New( oSec2, 'MTBF'   , ''   , STR0018, '@!', 10, .F., { ||NGRETVAL( 1 ) }        ) // MTBF
+				TRCell():New( oSec2, 'MTTR'   , ''   , STR0019, '@!', 10, .F., { ||NGRETVAL( 2 ) }        ) // MTTR
+				TRCell():New( oSec2, 'MTBFD'  , ''   , STR0018, '@!', 11, .F., { ||NGRETVAL( 5 ) }        ) // MTBF em Dias
+				TRCell():New( oSec2, 'MTTRD'  , ''   , STR0019, '@!', 11, .F., { ||NGRETVAL( 6 ) }        ) // MTTR em Dias
+
+				TRPosition():New( oSec2, 'ST6', 1, { || xFilial( 'ST6' ) + cFAMILIA } )
+				TRPosition():New( oSec2, 'ST9', 1, { || xFilial( 'ST9' ) + cCodeST9  } )
+
+				oSec2:Cell( 'MTBF' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTTR' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTTRD' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTBFD' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTBF' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTTR' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTBFD' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTTRD' ):SetHeaderAlign( 'CENTER' )
+
+			oSec3 := TRSection():New( oReport, STR0023, { cTRB } ) //"Média Geral:"
+
+				TRCell():New( oSec3, ''    , '', STR0023, '@!', 114, ,                     ) // Média Geral
+				TRCell():New( oSec3, 'MTBF', '', STR0018, '@!', 10 , , { ||NGRETVAL( 4 ) } ) // MTBF
+				TRCell():New( oSec3, 'MTTR', '', STR0019, '@!', 10 , , { ||NGRETVAL( 3 ) } ) // MTTR
+				TRCell():New( oSec3, 'MTBFD' , '', STR0018, '@!', 11 , , { ||NGRETVAL( 5 ) } ) // MTBF
+				TRCell():New( oSec3, 'MTTRD' , '', STR0019, '@!', 11 , , { ||NGRETVAL( 6 ) } ) // MTTR
+
+				oSec3:Cell( 'MTBF' ):SetAlign( 'CENTER' )
+				oSec3:Cell( 'MTTR' ):SetAlign( 'CENTER' )
+				oSec3:Cell( 'MTBF' ):SetHeaderAlign( 'CENTER' )
+				oSec3:Cell( 'MTTR' ):SetHeaderAlign( 'CENTER' )
+				oSec3:Cell( 'MTBFD' ):SetAlign( 'CENTER' )
+				oSec3:Cell( 'MTTRD' ):SetAlign( 'CENTER' )
+				oSec3:Cell( 'MTBFD' ):SetHeaderAlign( 'CENTER' )
+				oSec3:Cell( 'MTTRD' ):SetHeaderAlign( 'CENTER' )
+
+		Else
+
+			oSec1 := TRSection():New( oReport, STR0012, { cTRB, 'ST9', 'CTT', 'ST6' } )
+
+				TRCell():New( oSec1, '(cTRB)->CODBEM' , cTRB , STR0016, '@!', 16, .F., { ||NGRETCODB() } ,,,,, 3 ) // Bem
+				TRCell():New( oSec1, 'T9_NOME'        , 'ST9', STR0013, '@!', 35, .F.,                   ,,,,, 3 ) // Descrição
+				TRCell():New( oSec1, '(cTRB)->CUSTO'  , cTRB , STR0012, '@!', 20, .F., { ||NGRETCCUST() },,,,, 3 ) // Centro Custo
+				TRCell():New( oSec1, 'CTT_DESC01'     , 'CTT', STR0013, '@!', 30, .F.,                   ,,,,, 3 ) // Descrição
+				TRCell():New( oSec1, '(cTRB)->CODFAMI', cTRB , STR0015, '@!', 6 , .F., { ||NGRETFAM() }  ,,,,, 3 ) // Familia
+				TRCell():New( oSec1, 'T6_NOME'        , 'ST6', STR0013, '@!', 30, .F.,                   ,,,,, 3 ) // Descrição
+				TRCell():New( oSec1, '(cTRB)->MTBF'   , cTRB , STR0018, '@!', 10, , { ||NGRETVAL( 1 ) } ) // MTBF
+				TRCell():New( oSec1, '(cTRB)->MTTR'   , cTRB , STR0019, '@!', 10, , { ||NGRETVAL( 2 ) } ) // MTTR
+				TRCell():New( oSec1, '(cTRB)->MTBFD'  , cTRB , STR0018, '@!', 11, , { ||NGRETVAL( 5 ) } ) // MTBF
+				TRCell():New( oSec1, '(cTRB)->MTTRD'  , cTRB , STR0019, '@!', 11, , { ||NGRETVAL( 6 ) } ) // MTTR
+
+				oSec1:Cell( '(cTRB)->MTTR' ):SetAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTBF' ):SetAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTBF' ):SetHeaderAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTTR' ):SetHeaderAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTTRD' ):SetAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTBFD' ):SetAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTBFD' ):SetHeaderAlign( 'CENTER' )
+				oSec1:Cell( '(cTRB)->MTTRD' ):SetHeaderAlign( 'CENTER' )
+
+				TRPosition():New( oSec1, 'ST9', 1, { || xFilial( 'ST9' ) + cCodeST9 }  )
+				TRPosition():New( oSec1, 'CTT', 1, { || xFilial( 'CTT' ) + cCUSTO  }  )
+				TRPosition():New( oSec1, 'ST6', 1, { || xFilial( 'ST6' ) + cFAMILIA } )
+
+			oSec2 := TRSection():New( oReport, STR0023, { cTRB } ) //"Média Geral:"
+
+				TRCell():New( oSec2, ''     , '', STR0023, '@!', 155, ,                     ) //"Média Geral:"
+				TRCell():New( oSec2, 'MTBF' , '', STR0018, '@!', 10 , , { ||NGRETVAL( 4 ) } )
+				TRCell():New( oSec2, 'MTTR' , '', STR0019, '@!', 10 , , { ||NGRETVAL( 3 ) } )
+				TRCell():New( oSec2, 'MTBFD' , '', STR0018, '@!', 11 , , { ||NGRETVAL( 5 ) } )
+				TRCell():New( oSec2, 'MTTRD' , '', STR0019, '@!', 11 , , { ||NGRETVAL( 6 ) } )
+
+				oSec2:Cell( 'MTTR' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTBF' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTBF' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTTR' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTBFD' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTTRD' ):SetAlign( 'CENTER' )
+				oSec2:Cell( 'MTBFD' ):SetHeaderAlign( 'CENTER' )
+				oSec2:Cell( 'MTTRD' ):SetHeaderAlign( 'CENTER' )
+
+		EndIf
+
+	EndIf
+
+Return oReport
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MNTR360R3³ Autor ³ Deivys Joenck         ³ Data ³ 22/08/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Relatorio de MTBF e MTTR                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR300                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTR360R3()
+
+	Local WNREL      := "MNTR360"
+	Local cDESC1     := STR0001 //"Analise de MTBF e MTTR."
+	Local cDESC2     := STR0002 //"O usuario pode selecionar quais os campos que deverao ser mostrados,"
+	Local cDESC3     := STR0003 //"bem como informar parametros de selecao para a impressao."
+	Local cSTRING    := "ST9"
+
+	Private NOMEPROG := "MNTR360"
+	Private TAMANHO  := "G"
+	Private aRETURN  := {STR0004,1,STR0005,1,2,1,"",1}   //"Zebrado"###"Administracao"
+	Private TITULO   := STR0001 //"Analise de MTBF e MTTR."
+	Private nLASTKEY := 0
+	Private CABEC1, CABEC2, CABEC3
+
+	/*
+	ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	³ Variaveis utilizadas para parametros!                        ³
+	³ mv_par01     // De  Familia                                  ³
+	³ mv_par02     // Ate Familia                                  ³
+	³ mv_par03     // De  Bem                                      ³
+	³ mv_par04     // Ate Bem                                      ³
+	³ mv_par05     // De  Centro de Custo                          ³
+	³ mv_par06     // Ate Centro de Custo                          ³
+	³ mv_par07     // De  Centro de Trabalho                       ³
+	³ mv_par08     // Ate Centro de Trabalho                       ³
+	³ mv_par09     // De  Data                                     ³
+	³ mv_par10     // Ate Data                                     ³
+	³ mv_par11     // Ordenar Por ?                                ³
+	ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	*/
+	Private cPERG := "MNT36R"
+	Pergunte(cPERG,.F.)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	WNREL:=SetPrint(cSTRING,WNREL,cPERG,TITULO,cDESC1,cDESC2,cDESC3,.F.,"")
+	If nLASTKEY = 27
+		Set Filter To
+		DbSelectArea("STJ")
+		Return
+	EndIf
+	SetDefault(aReturn,cSTRING)
+
+	RptStatus({|lEND| MNTR360IMP(@lEND,WNREL,TITULO,TAMANHO)},TITULO)
+	DbSelectArea("STJ")
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTR360IMP³ Autor ³ Deivys Joenck         ³ Data ³ 22/08/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³ Chamada do Relat¢rio                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR360                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTR360IMP(lEND,WNREL,TITULO,TAMANHO)
+
+	Local aINDR360	:= {}
+	Local cCUSTO,dDIAS
+	Local dDtI,cHrI,dDtF,cHrF
+	Local nTotMTBF	:= 0
+	Local nTotMTTR	:= 0
+
+	Local nTotGDia	:= 0
+	Local nHrsParada := 0
+	Local oARQTR360
+	Local cCalendar := ''
+
+	Private li := 80,m_pag := 1
+	Private aVETINR := {}
+
+	nTIPO  := IIf(aReturn[4]==1,15,18)
+
+	If MV_PAR11 == 2
+
+		// --------------Horas-------------- ## --------------Dias--------------
+		Cabec1 := Space( 122 ) + STR0042 + Space( 10 ) + STR0043
+
+		// Bem     Descrição        Centro Custo     Descrição        Familia Descrição     MTBF               MTTR
+		Cabec2 := STR0022 + Space( 20 ) + STR0018 + Space( 14 ) + STR0019
+
+	Else
+
+		/*
+		Centro Custo          Descrição                   C.Trabalho Descrição
+		--------------Horas-------------- ## --------------Dias--------------
+		*/
+		Cabec1 := STR0006 + Space( 18 ) + STR0042 + Space( 10 ) + STR0043
+
+		// Família Descrição                 Bem              Descrição             MTBF                          MTTR
+		Cabec2 := STR0007 + Space( 20 ) + STR0018 + Space( 14 ) + STR0019
+
+	EndIf
+
+	If !lRPORel17 // Caso seja uma release maior que 12.1.17
+
+		cHrIni := ""
+
+		BeginSQL Alias cAlsST9
+
+			SELECT
+				ST9.T9_CODBEM ,
+				ST9.T9_NOME   ,
+				ST9.T9_CCUSTO ,
+				ISNULL( ( SELECT
+							CTT.CTT_DESC01
+				  		  FROM
+				  			%table:CTT% CTT
+				  		  WHERE
+				  			CTT.CTT_CUSTO  = ST9.T9_CCUSTO AND
+							CTT.CTT_FILIAL = %xFilial:CTT% AND
+							CTT.%NotDel% ), '' ) AS CTT_DESC01,
+				ST9.T9_CENTRAB,
+				ISNULL( ( SELECT
+							SHB.HB_NOME
+				  		  FROM
+				  			%table:SHB% SHB
+				  		  WHERE
+				  			SHB.HB_COD    = ST9.T9_CENTRAB AND
+							SHB.HB_FILIAL = %xFilial:SHB%  AND
+							SHB.%NotDel% ), '' ) AS HB_NOME,
+				ST9.T9_CODFAMI,
+				ISNULL( ( SELECT
+							ST6.T6_NOME
+				  		  FROM
+				  			%table:ST6% ST6
+				  		  WHERE
+				  			ST6.T6_CODFAMI = ST9.T9_CODFAMI AND
+							ST6.T6_FILIAL  = %xFilial:ST6%  AND
+							ST6.%NotDel% ), '' ) AS T6_NOME
+			FROM
+				%table:ST9% ST9
+			WHERE
+				( ST9.T9_CODBEM  BETWEEN %exp:MV_PAR03% AND %exp:MV_PAR04% ) AND
+				( ST9.T9_CODFAMI BETWEEN %exp:MV_PAR01% AND %exp:MV_PAR02% ) AND
+				ST9.T9_FILIAL = %xFilial:ST9%                   AND
+				ST9.%NotDel%
+
+		EndSQL
+
+		// Ordenação por Centro de Custos
+		If MV_PAR11 == 1
+
+			Do While (cAlsST9)->( !EoF() )
+
+				cCodeST9  := (cAlsST9)->T9_CODBEM
+
+				SomaLinha()
+
+				@LI,000 Psay (cAlsST9)->T9_CCUSTO
+				@LI,022 Psay SubStr( (cAlsST9)->CTT_DESC01, 1, 20 )
+
+				@LI,050 Psay (cAlsST9)->T9_CENTRAB
+				@LI,061 Psay SubStr( (cAlsST9)->HB_NOME, 1, 20 )
+
+				SomaLinha()
+
+				@LI,000 Psay (cAlsST9)->T9_CODFAMI
+				@LI,008 Psay SubStr( (cAlsST9)->T6_NOME, 1, 20 )
+
+				@LI,033 Psay (cAlsST9)->T9_CODBEM
+				@LI,050 Psay SubStr( (cAlsST9)->T9_NOME, 1, 20 )
+
+				// Indicadores
+				@Li,092 Psay NGRETVAL( 1 ) Picture '@!' // Horas MTBF
+				@Li,112 Psay NGRETVAL( 5 ) Picture '@!' // Horas MTTR
+				@Li,136 Psay NGRETVAL( 2 ) Picture '@!' // Dias MTBF
+				@Li,154 Psay NGRETVAL( 6 ) Picture '@!' // Dias MTTR
+
+				SomaLinha()
+				SomaLinha()
+
+				(cAlsST9)->( dbSkip() )
+
+			EndDo
+
+			SomaLinha()
+
+			// Indicadores gerais
+			@Li,033 Psay STR0023 // Média Geral:
+			@Li,092 Psay NGRETVAL( 3 ) Picture '@!' // Totalizador MTBF em Horas
+			@Li,112 Psay NGRETVAL( 7 ) Picture '@!' // Totalizador MTTR em Horas
+			@Li,136 Psay NGRETVAL( 4 ) Picture '@!' // Totalizador MTBF em Dias
+			@Li,154 Psay NGRETVAL( 8 ) Picture '@!' // Totalizador MTTR em Dias
+
+		// Ordenação por Equipamento
+		Else
+
+			Do While (cAlsST9)->( !EoF() )
+
+				cCodeST9  := (cAlsST9)->T9_CODBEM
+
+				SomaLinha()
+				@LI,000 Psay (cAlsST9)->T9_CODBEM
+				@LI,018 Psay SubStr( (cAlsST9)->T9_NOME, 1, 25 )
+
+				@LI,044 Psay (cAlsST9)->T9_CCUSTO
+				@LI,065 Psay SubStr( (cAlsST9)->CTT_DESC01, 1, 20 )
+
+				@LI,087 Psay (cAlsST9)->T9_CODFAMI
+				@LI,095 Psay SubStr( (cAlsST9)->T6_NOME, 1, 15 )
+
+				// Indicadores
+				@Li,127 Psay NGRETVAL( 1 ) Picture '@!' // Horas MTBF
+				@Li,146 Psay NGRETVAL( 5 ) Picture '@!' // Horas MTTR
+				@Li,170 Psay NGRETVAL( 2 ) Picture '@!' // Dias MTBF
+				@Li,188 Psay NGRETVAL( 6 ) Picture '@!' // Dias MTTR
+
+				(cAlsST9)->( dbSkip() )
+
+			EndDo
+
+			SomaLinha()
+			SomaLinha()
+
+			// Indicadores gerais
+			@LI,087 Psay STR0023 // Média Geral:
+			@Li,127 Psay NGRETVAL( 3 ) Picture '@!' // Totalizador MTBF em Horas
+			@Li,146 Psay NGRETVAL( 7 ) Picture '@!' // Totalizador MTTR em Horas
+			@LI,170 Psay NGRETVAL( 4 ) Picture '@!'
+			@LI,188 Psay NGRETVAL( 8 ) Picture '@!'
+
+		EndIf
+
+		// Impressão do rodapé
+		If LI < 64
+
+			// Encerra a página
+			SomaLinha( .T. )
+
+		EndIf
+
+		(cAlsST9)->( dbCloseArea() )
+
+
+	Else
+
+		aDBFR360 := {{ 'CODBEM' , 'C', TAMSX3( 'T9_CODBEM' )[1] , 0 },;
+				 	 { 'CUSTO'  , 'C', TAMSX3( 'CTT_CUSTO' )[1] , 0 },;
+				 	 { 'CENTRAB', 'C', 06                       , 0 },;
+				 	 { 'FAMILIA', 'C', TAMSX3( 'T9_CODFAMI' )[1], 0 },;
+				 	 { 'CALEND' , 'C', TAMSX3( 'T9_CALENDA' )[1], 0 },;
+				 	 { 'ORDEM'  , 'C', 06                       , 0 },;
+				 	 { 'DTPRIN' , 'D', 08                       , 0 },;
+	             	 { 'HOPRIN' , 'C', 05                       , 0 },;
+	             	 { 'DTPRFI' , 'D', 08                       , 0 },;
+	             	 { 'HOPRFI' , 'C', 05                       , 0 },;
+	             	 { 'DTMRIN' , 'D', 08                       , 0 },;
+	             	 { 'HOMRIN' , 'C', 05                       , 0 },;
+	             	 { 'DTMRFI' , 'D', 08                       , 0 },;
+	             	 { 'HOMRFI' , 'C', 05                       , 0 }}
+
+		//Indice Tabela Temporária
+		If MV_PAR11 == 1
+			aAdd( aINDR360, { 'CUSTO', 'CENTRAB', 'FAMILIA', 'CODBEM', 'DTMRIN' } )
+		Else
+			aAdd( aINDR360, { 'CODBEM', 'DTMRIN', 'HOMRIN', 'ORDEM' } )
+		EndIf
+		aAdd( aINDR360, { 'ORDEM' , 'DTMRIN', 'HOMRIN', 'DTMRFI', 'HOMRFI' } )
+
+		//Cria Tabela Temporária
+		oARQTR360 := NGFwTmpTbl( cTRB, aDBFR360, aINDR360 )
+
+		Processa( { |lEND| MNTR360STJ() }, STR0008 + STR0009 ) //Processando Arquivo...
+
+		dbSelectArea( cTRB )
+		dbSetOrder( 1 )
+		dbGoTop()
+		SetRegua(LastRec())
+
+		cHrIni := ''
+		If MV_PAR11 == 1
+
+			Do While (cTRB)->( !EoF() )
+
+				cCUSTO := (cTRB)->CUSTO
+				Do While (cTRB)->( !EoF() ) .And. (cTRB)->CUSTO == cCUSTO
+					cCENTRAB := (cTRB)->CENTRAB
+
+					SomaLinha()
+
+					@Li,000 Psay (cTRB)->CUSTO
+					@Li,022 Psay Posicione( 'CTT', 1, xFilial( 'CTT' ) + (cTRB)->CUSTO, 'SubStr( CTT_DESC01, 1, 25 )' )
+
+					@Li,050 Psay (cTRB)->CENTRAB
+					@Li,061 Psay NGSEEK('SHB',(cTRB)->CENTRAB,1,"Substr(HB_NOME,1,20)")
+
+					dbSelectArea( cTRB )
+					dbSetOrder( 1 )
+					Do While (cTRB)->( !EoF() ) .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB
+
+						lPRIMEIRO := .T.
+						Store 0 To nNUMDIAS,nHORAS,nHrsParada
+						nREFORMA := 0
+						cFAMILIA := (cTRB)->FAMILIA
+						cCodeST9  := (cTRB)->CODBEM
+
+						SomaLinha()
+						@Li,000 Psay (cTRB)->FAMILIA
+						@Li,008 Psay NGSEEK('ST6',(cTRB)->FAMILIA,1,"Substr(T6_NOME,1,20)")
+
+						@Li,033 Psay (cTRB)->CODBEM
+						@Li,050 Psay NGSEEK('ST9',(cTRB)->CODBEM,1,"Substr(T9_NOME,1,20)")
+
+						If !Empty( (cTRB)->ORDEM )
+
+							nTotDias := IIf( MV_PAR12 == 1 , fVerTotDia( NGSEEK( "ST9" , cCodeST9 , 1 , "T9_CALENDA" ) ) , 24 )
+							nTotGDia += nTotDias
+							nTotBens++
+
+							dbSelectArea( cTRB )
+							Do While (cTRB)->( !EoF() ) .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB;
+							.And. (cTRB)->FAMILIA == cFAMILIA .And. (cTRB)->CODBEM == cCodeST9
+
+								IncRegua()
+								fGetDateOS(@dDtI,@cHrI,@dDtF,@cHrF)
+								nREFORMA++
+
+								If lPRIMEIRO
+									dDIAS	  := dDtI
+									cHrIni    := cHrI
+									cCalendar := IIf( MV_PAR12 == 1, (cTRB)->CALEND, '' )
+									lPRIMEIRO := .F.
+								EndIf
+
+								If MV_PAR13 == 2 //Considera apenas intervalo do inicio da primeira O.S e termino da ultima
+									//horas entre inicio e fim da manutencao
+									If DtoS(dDIAS)+cHrIni <= Dtos(dDtI)+cHrI
+
+										If MV_PAR12 == 2 //calcula tempo corrido
+											nHrsParada += HtoM(NGCALCHCAR(dDIAS,cHrIni,dDtI,cHrI)) / 60
+										ElseIf MV_PAR12 == 1 //calcula tempo baseado em calendario
+											cCalendar  := NGSEEK('ST9',cCodeST9,1,'T9_CALENDA')
+											nHrsParada += TimeWork( dDias, cHrIni, dDtI, cHrI, cCalendar )
+										EndIf
+
+									EndIf
+								EndIf
+
+								nHORAS += fCalcHor( cCalendar )
+								dDIAS  := dDtF
+								cHrIni := cHrF
+
+								(cTRB)->( dbskip() )
+
+							EndDo
+
+							If MV_PAR13 == 1 //Considera periodo anterior ao inicio da primeira O.S e posterior ao termino da ultima
+
+								If MV_PAR12 == 2
+									nHrsParada := HtoM( NGCALCHCAR( MV_PAR09, '00:00', MV_PAR10, '24:00' ) ) / 60
+								Else
+									nHrsParada := TimeWork( MV_PAR09, '00:00', MV_PAR10, '24:00', cCalendar )
+								EndIf
+
+								nHrsParada := nHrsParada - nHoras
+
+							EndIf
+
+							//Impressão dos indicadores
+							@Li,092 Psay NTOH(nHrsParada/nREFORMA)
+							cTMHORAS := NTOH(nHORAS/nREFORMA)
+
+							nPOS := Ascan(aARRAYSTJ,{|x| x[1] == cCodeST9})
+							@Li,112 Psay NTOH(nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0))
+							@Li,127 Psay (nHrsParada/nREFORMA)/nTotDias Picture '@E 999,999,999.99'
+							@Li,145 Psay (nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0))/nTotDias Picture '@E 999,999,999.99'
+
+							nTotMTBF += nHrsParada/nREFORMA
+							nTotMTTR += nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0)
+
+						Else
+
+							@Li,094 Psay '-'
+							@Li,114 Psay '-'
+							@Li,138 Psay '-'
+							@Li,156 Psay '-'
+
+							(cTRB)->( dbskip() )
+
+							nREFORMA := 0
+
+						EndIf
+
+					EndDo
+
+					SomaLinha()
+					SomaLinha()
+
+				EndDo
+
+			EndDo
+
+			SomaLinha()
+
+			//Total Geral
+			@Li,033 Psay STR0023 // Média Geral:
+			@Li,092 Psay NtoH( nTotMTBF/nTotBens ) //Totalizador MTBF em Horas
+			@Li,112 Psay NtoH( nTotMTTR/nTotBens ) //Totalizador MTTR em Horas
+			@Li,127 Psay (nTotMTBF/nTotBens)/(nTotGDia/nTotBens) Picture '@E 999,999,999.99'
+			@Li,145 Psay (nTotMTTR/nTotBens)/(nTotGDia/nTotBens) Picture '@E 999,999,999.99'
+
+		Else
+
+			Do While (cTRB)->( !EoF() )
+
+				cCodeST9  := (cTRB)->CODBEM
+				cCUSTO   := (cTRB)->CUSTO
+				cFAMILIA := (cTRB)->FAMILIA
+				cCENTRAB := (cTRB)->CENTRAB
+
+				SomaLinha()
+				@Li,000 Psay (cTRB)->CODBEM
+				@Li,018 Psay NGSEEK('ST9',(cTRB)->CODBEM,1,"Substr(T9_NOME,1,25)")
+
+				@Li,044 Psay (cTRB)->CUSTO
+				@Li,065 Psay Posicione( 'CTT', 1, xFilial( 'CTT' ) + (cTRB)->CUSTO, 'SubStr( CTT_DESC01, 1, 20 )' )
+
+				@Li,087 Psay (cTRB)->FAMILIA
+				@Li,095 Psay NGSEEK('ST6',(cTRB)->FAMILIA,1,"Substr(T6_NOME,1,15)")
+
+				lPRIMEIRO:= .T.
+				Store 0 To nNUMDIAS,nREFORMA,nHORAS,nHrsParada
+
+				If !Empty((cTRB)->ORDEM)
+
+					nTotDias := If( MV_PAR12 == 1 , fVerTotDia( NGSEEK( "ST9" , cCodeST9 , 1 , "T9_CALENDA" ) ) , 24 )
+					nTotGDia += nTotDias
+					nTotBens++
+
+					dbSelectArea( cTRB )
+					Do While (cTRB)->( !EoF() ) .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB;
+					.And. (cTRB)->FAMILIA == cFAMILIA .And. (cTRB)->CODBEM == cCodeST9
+
+						IncRegua()
+						fGetDateOS(@dDtI,@cHrI,@dDtF,@cHrF)
+						nREFORMA++
+
+						If lPRIMEIRO
+							dDIAS	  := dDtI
+							cHrIni    := cHrI
+							cCalendar := IIf( MV_PAR12 == 1, (cTRB)->CALEND, '' )
+							lPRIMEIRO := .F.
+						EndIf
+
+						If MV_PAR13 == 2 //Considera apenas intervalo do inicio da primeira O.S e termino da ultima
+							//horas entre inicio e fim da manutencao
+							If DtoS(dDIAS)+cHrIni <= Dtos(dDtI)+cHrI
+
+								If MV_PAR12 == 2 //calcula tempo corrido
+									nHrsParada += HtoM(NGCALCHCAR(dDIAS,cHrIni,dDtI,cHrI)) / 60
+								ElseIf MV_PAR12 == 1 //calcula tempo baseado em calendario
+									cCalendar  := NGSEEK('ST9',cCodeST9,1,'T9_CALENDA')
+									nHrsParada += TimeWork( dDias, cHrIni, dDtI, cHrI, cCalendar )
+								EndIf
+
+							EndIf
+						EndIf
+
+						nHORAS += fCalcHor( cCalendar )
+						dDIAS  := dDtF
+						cHrIni := cHrF
+
+						(cTRB)->( dbskip() )
+
+					EndDo
+
+					If MV_PAR13 == 1 //Considera periodo anterior ao inicio da primeira O.S e posterior ao termino da ultima
+
+						If MV_PAR12 == 2
+							nHrsParada := HtoM( NGCALCHCAR( MV_PAR09, '00:00', MV_PAR10, '24:00' ) ) / 60
+						Else
+							nHrsParada := TimeWork( MV_PAR09, '00:00', MV_PAR10, '24:00', cCalendar )
+						EndIf
+
+						nHrsParada := nHrsParada - nHoras
+
+					EndIf
+
+					@Li,127 Psay NtoH( nHrsParada / nREFORMA )
+					cTMHORAS := NtoH( nHORAS / nREFORMA )
+					nPOS     := aScan( aARRAYSTJ, { |x| x[1] == cCodeST9 } )
+					@Li,146 Psay NtoH( nHORAS / IIf( aARRAYSTJ[nPOS,2] > 0, aARRAYSTJ[nPOS,2], 0 ) )
+					@Li,161 Psay ( nHrsParada / nREFORMA ) / nTotDias Picture '@E 999,999,999.99'
+					@Li,179 Psay ( nHORAS / IIf( aARRAYSTJ[nPOS,2] > 0, aARRAYSTJ[nPOS,2], 0 ) ) / nTotDias Picture '@E 999,999,999.99'
+
+					nTotMTBF += ( nHrsParada / nREFORMA )
+					nTotMTTR += ( nHORAS / IIf( aARRAYSTJ[nPOS,2] > 0, aARRAYSTJ[nPOS,2], 0 ) )
+
+				Else
+
+					@Li,129 Psay '-'
+					@Li,148 Psay '-'
+					@Li,172 Psay '-'
+					@Li,190 Psay '-'
+
+					(cTRB)->( dbskip() )
+
+				EndIf
+
+			EndDo
+
+			SomaLinha()
+
+			//Total Geral
+			@Li,087 Psay STR0023 // Média Geral:
+			@Li,127 Psay NTOH( nTotMTBF/nTotBens ) //Totalizador MTBF em Horas
+			@Li,146 Psay NTOH( nTotMTTR/nTotBens ) //Totalizador MTTR em Horas
+			@Li,161 Psay (nTotMTBF/nTotBens)/(nTotGDia/nTotBens) Picture '@E 999,999,999.99'
+			@Li,179 Psay (nTotMTTR/nTotBens)/(nTotGDia/nTotBens) Picture '@E 999,999,999.99'
+		EndIf
+
+		SomaLinha( .T. )
+
+		//Deleta o arquivo temporario fisicamente
+		oARQTR360:Delete()
+
+	EndIf
+
+	RetIndex("STJ")
+	Set Filter To
+	Set Device To Screen
+	If aReturn[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(WNREL)
+	EndIf
+	MS_FLUSH()
+Return Nil
+
+//--------------------------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Realiza a impressão em TReport.
+@type static
+
+@author Elisangela Costa
+@since 29/06/2006
+
+@sample ReportPrint( oObj )
+
+@param  oReport   , Objeto, Definições do relatório conforme classe TReport.
+@return .T.
+/*/
+//--------------------------------------------------------------------------------------
+Static Function ReportPrint( oReport )
+
+	Local aINDR360 := {}
+	Local oSec1    := oReport:Section( 1 )
+	Local oSec2    := oReport:Section( 2 )
+	Local oSec3	   := oReport:Section( 3 )
+	Local cCost    := ''
+	Local cOrder   := IIf( MV_PAR11 == 1, '%ORDER BY T9_CCUSTO, T9_CODBEM%', '%ORDER BY T9_CODBEM%' )
+	Local nCount   := 0
+
+	Local oARQTR360
+	Local dDtI,cHrI,dDtF,cHrF
+	Local lRet      := .T.
+
+	Private aVETINR := {}
+	Private nTotDias	:= 24
+	Private nTotGDia	:= 0
+
+	If !Empty(oReport:uParam)
+		Pergunte(oReport:uParam,.F.)
+	EndIf
+
+	If !lRPORel17 // Caso seja realease maior que 12.1.17
+
+		BeginSQL Alias cAlsST9
+
+			SELECT
+				ST9.T9_CODBEM ,
+				ST9.T9_NOME   ,
+				ST9.T9_CCUSTO ,
+				ISNULL( ( SELECT
+							CTT.CTT_DESC01
+				  		  FROM
+				  			%table:CTT% CTT
+				  		  WHERE
+				  			CTT.CTT_CUSTO  = ST9.T9_CCUSTO AND
+							CTT.CTT_FILIAL = %xFilial:CTT% AND
+							CTT.%NotDel% ), '' ) AS CTT_DESC01,
+				ST9.T9_CENTRAB,
+				ISNULL( ( SELECT
+							SHB.HB_NOME
+				  		  FROM
+				  			%table:SHB% SHB
+				  		  WHERE
+				  			SHB.HB_COD    = ST9.T9_CENTRAB AND
+							SHB.HB_FILIAL = %xFilial:SHB%  AND
+							SHB.%NotDel% ), '' ) AS HB_NOME,
+				ST9.T9_CODFAMI,
+				ISNULL( ( SELECT
+							ST6.T6_NOME
+				  		  FROM
+				  			%table:ST6% ST6
+				  		  WHERE
+				  			ST6.T6_CODFAMI = ST9.T9_CODFAMI AND
+							ST6.T6_FILIAL  = %xFilial:ST6%  AND
+							ST6.%NotDel% ), '' ) AS T6_NOME,
+				ST9.T9_CALENDA
+			FROM
+				%table:ST9% ST9
+			WHERE
+				T9_FILIAL = %xFilial:ST9% AND
+				( T9_CCUSTO  BETWEEN %exp:MV_PAR05% AND %exp:MV_PAR06% ) AND
+				( T9_CENTRAB BETWEEN %exp:MV_PAR07% AND %exp:MV_PAR08% ) AND
+				( T9_CODFAMI BETWEEN %exp:MV_PAR01% AND %exp:MV_PAR02% ) AND
+				( T9_CODBEM  BETWEEN %exp:MV_PAR03% AND %exp:MV_PAR04% ) AND
+				%NotDel%
+			%exp:cOrder%
+
+		EndSQL
+
+		If (cAlsST9)->( !EoF() )
+
+			Count To nCount // Retorna quantidade de registros obtidos pela query
+
+			oReport:SetMeter( nCount )
+
+			(cAlsST9)->( dbGoTop() )
+			If MV_PAR11 == 1
+
+				Do While (cAlsST9)->( !EoF() )
+
+					cCost    := (cAlsST9)->T9_CCUSTO
+
+					oSec1:Init()
+					oSec1:PrintLine()
+
+					Do While (cAlsST9)->( !EoF() ) .And. (cAlsST9)->T9_CCUSTO == cCost
+
+						oReport:IncMeter()
+
+						cCodeST9 := (cAlsST9)->T9_CODBEM
+
+						oSec2:Init()
+						oSec2:PrintLine()
+
+						(cAlsST9)->( dbSkip() )
+
+					EndDo
+
+					oSec1:Finish()
+
+				EndDo
+
+				oSec3:Init()
+				oSec3:PrintLine()
+				oSec3:Finish()
+
+			Else
+
+				Do While (cAlsST9)->( !EoF() )
+
+					oReport:IncMeter()
+
+					cCodeST9   := (cAlsST9)->T9_CODBEM
+
+					oSec1:Init()
+					oSec1:PrintLine()
+
+					(cAlsST9)->( dbSkip() )
+
+				End
+
+				oSec1:Finish()
+
+				oSec2:Init()
+				oSec2:PrintLine()
+				oSec2:Finish()
+
+			EndIf
+
+		Else
+
+			Help(' ',1, STR0024, , STR0025, 2, 0 ) // Atenção ## Não há dados para a impressão!
+			lRet := .T.
+
+		EndIf
+
+		(cAlsST9)->( dbCloseArea() )
+
+	Else
+
+		aDBFR360 := {{ 'CODBEM' , 'C', TAMSX3( 'T9_CODBEM' )[1] , 0 },;
+				 	 { 'CUSTO'  , 'C', TAMSX3( 'CTT_CUSTO' )[1] , 0 },;
+				 	 { 'CENTRAB', 'C', 06                       , 0 },;
+				 	 { 'FAMILIA', 'C', TAMSX3( 'T9_CODFAMI' )[1], 0 },;
+				 	 { 'CALEND' , 'C', TAMSX3( 'T9_CALENDA' )[1], 0 },;
+				 	 { 'ORDEM'  , 'C', 06                       , 0 },;
+				 	 { 'DTPRIN' , 'D', 08                       , 0 },;
+	             	 { 'HOPRIN' , 'C', 05                       , 0 },;
+	             	 { 'DTPRFI' , 'D', 08                       , 0 },;
+	             	 { 'HOPRFI' , 'C', 05                       , 0 },;
+	             	 { 'DTMRIN' , 'D', 08                       , 0 },;
+	             	 { 'HOMRIN' , 'C', 05                       , 0 },;
+	             	 { 'DTMRFI' , 'D', 08                       , 0 },;
+	             	 { 'HOMRFI' , 'C', 05                       , 0 }}
+
+		//Indice Tabela Temporária
+		If MV_PAR11 == 1
+			aAdd( aINDR360, { 'CUSTO', 'CENTRAB', 'FAMILIA', 'CODBEM', 'DTMRIN' } )
+		Else
+			aAdd( aINDR360, { 'CODBEM', 'DTMRIN', 'HOMRIN', 'ORDEM' } )
+		EndIf
+		aAdd( aINDR360, { 'ORDEM' , 'DTMRIN', 'HOMRIN', 'DTMRFI', 'HOMRFI' } )
+
+		//Cria Tabela Temporária
+		oARQTR360 := NGFwTmpTbl( cTRB, aDBFR360, aINDR360 )
+
+		Processa( { |lEND| MNTR360STJ() }, STR0008 + STR0009 ) //Processando Arquivo...
+
+		dbSelectArea( cTRB )
+		dbSetOrder( 1 )
+		dbGoTop()
+		oReport:SetMeter(RecCount())
+
+		If MV_PAR11 == 1
+
+			Do While (cTRB)->( !EoF() ) .And. !oReport:Cancel()
+
+				cCUSTO   := (cTRB)->CUSTO
+				cCENTRAB := (cTRB)->CENTRAB
+
+				oSec1:Init()
+				oSec1:PrintLine()
+				oSec2:Init()
+
+				Do While (cTRB)->( !EoF() ) .And. !oReport:Cancel() .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB
+					cFAMILIA  := (cTRB)->FAMILIA
+					cCodeST9   := (cTRB)->CODBEM
+					lPRIMEIRO := .T.
+					Store 0 To nNUMDIAS,nREFORMA,nHORAS,nHrsParada
+
+					If !Empty( (cTRB)->ORDEM )
+
+						nTotDias  := If( MV_PAR12 == 1 , fVerTotDia( NGSEEK( "ST9" , cCodeST9 , 1 , "T9_CALENDA" ) ) , 24 )
+						nTotGDia  += nTotDias
+						nTotBens++
+
+						dbSelectArea( cTRB )
+						Do While (cTRB)->( !EoF() ) .And. !oReport:Cancel() .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB;
+						.And. (cTRB)->FAMILIA == cFAMILIA .And. (cTRB)->CODBEM == cCodeST9
+
+							oReport:IncMeter()
+							fGetDateOS(@dDtI,@cHrI,@dDtF,@cHrF)
+							nREFORMA++
+
+							If lPRIMEIRO
+								dDIAS	:= dDtI
+								cHrIni  := cHrI
+								cCalend := IIf( MV_PAR12 == 1, (cTRB)->CALEND, '' )
+								lPRIMEIRO := .F.
+							EndIf
+
+							If MV_PAR13 == 2 //Considera apenas intervalo do inicio da primeira O.S e termino da ultima
+								//horas entre inicio e fim da manutencao
+								If DtoS(dDIAS)+cHrIni <= Dtos(dDtI)+cHrI
+
+									If MV_PAR12 == 2 //calcula tempo corrido
+										nHrsParada += HtoM(NGCALCHCAR(dDIAS,cHrIni,dDtI,cHrI)) / 60
+									ElseIf MV_PAR12 == 1 //calcula tempo baseado em calendario
+										cCalend := NGSEEK('ST9',cCodeST9,1,'T9_CALENDA')
+										nHrsParada += TimeWork( dDIAS, cHrIni, dDtI, cHrI, cCalend )
+									EndIf
+
+								EndIf
+							EndIf
+
+							nHORAS += fCalcHor( cCalend )
+							dDIAS  := dDtF
+							cHrIni := cHrF
+
+							(cTRB)->( dbskip() )
+
+						EndDo
+
+						If MV_PAR13 == 1 //Considera periodo anterior ao inicio da primeira O.S e posterior ao termino da ultima
+
+							If MV_PAR12 == 2
+								nHrsParada := HtoM( NGCALCHCAR( MV_PAR09, '00:00', MV_PAR10, '24:00' ) ) / 60
+							Else
+								nHrsParada := TimeWork( MV_PAR09, '00:00', MV_PAR10, '24:00', cCalend )
+							EndIf
+
+							nHrsParada := nHrsParada - nHoras
+
+						EndIf
+
+					Else
+
+						nREFORMA := 0
+						(cTRB)->( dbskip() )
+
+					EndIf
+
+					nPOS := Ascan(aARRAYSTJ,{|x| x[1] == cCodeST9})
+					cTMHORAS := NTOH(nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0))
+					nTotEntF  += nHrsParada/nREFORMA
+					nTotHoras += nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0)
+					oSec2:PrintLine()
+				End
+				oSec1:Finish()
+				oSec2:Finish()
+			End
+			oSec3:Init()
+			oSec3:PrintLine()
+			oSec3:Finish()
+		Else
+
+			lPrtCab := .t.
+
+			Do While (cTRB)->( !Eof() ) .And. !oReport:Cancel()
+
+				oSec1:Init()
+
+				If lPrtCab
+					oReport:PrintText( Space( 144 ) + STR0041 ) // Horas Dias
+					lPrtCab := .F.
+				EndIf
+
+				cCUSTO   := (cTRB)->CUSTO
+				cCENTRAB := (cTRB)->CENTRAB
+				cFAMILIA := (cTRB)->FAMILIA
+				cCodeST9  := (cTRB)->CODBEM
+
+				lPRIMEIRO := .T.
+				Store 0 To nNUMDIAS,nREFORMA,nHORAS,nHrsParada
+
+				If !Empty( (cTRB)->ORDEM )
+
+					nTotDias := If( MV_PAR12 == 1 , fVerTotDia( NGSEEK( "ST9" , cCodeST9 , 1 , "T9_CALENDA" ) ) , 24 )
+					nTotGDia += nTotDias
+					nTotBens++
+
+					dbSelectArea( cTRB )
+					Do While (cTRB)->( !Eof() ) .And. !oReport:Cancel() .And. (cTRB)->CUSTO == cCUSTO .And. (cTRB)->CENTRAB == cCENTRAB;
+					.And. (cTRB)->FAMILIA == cFAMILIA .And. (cTRB)->CODBEM == cCodeST9
+
+						oReport:IncMeter()
+
+						fGetDateOS(@dDtI,@cHrI,@dDtF,@cHrF)
+						nREFORMA++
+
+						If lPRIMEIRO
+							dDIAS	:= dDtI
+							cHrIni  := cHrI
+							cCalend := IIf( MV_PAR12 == 1, (cTRB)->CALEND, '' )
+							lPRIMEIRO := .F.
+						EndIf
+
+						If MV_PAR13 == 2 //Considera apenas intervalo do inicio da primeira O.S e termino da ultima
+							//horas entre inicio e fim da manutencao
+							If DtoS(dDIAS)+cHrIni <= Dtos(dDtI)+cHrI
+
+								If MV_PAR12 == 2 //calcula tempo corrido
+									nHrsParada += HtoM(NGCALCHCAR(dDIAS,cHrIni,dDtI,cHrI)) / 60
+								ElseIf MV_PAR12 == 1 //calcula tempo baseado em calendario
+									cCalend := NGSEEK('ST9',cCodeST9,1,'T9_CALENDA')
+									nHrsParada += TimeWork( dDias, cHrIni, dDtI, cHrI, cCalend )
+								EndIf
+
+							EndIf
+						EndIf
+
+						nHORAS += fCalcHor( cCalend )
+						dDIAS  := dDtF
+						cHrIni := cHrF
+
+						(cTRB)->( dbskip() )
+
+					End
+
+					If MV_PAR13 == 1 //Considera periodo anterior ao inicio da primeira O.S e posterior ao termino da ultima
+
+						If MV_PAR12 == 2
+							nHrsParada := HtoM( NGCALCHCAR( MV_PAR09, '00:00', MV_PAR10, '24:00' ) ) / 60
+						Else
+							nHrsParada := TimeWork( MV_PAR09, '00:00', MV_PAR10, '24:00', cCalend )
+						EndIf
+
+						nHrsParada := nHrsParada - nHoras
+
+					EndIf
+
+				Else
+
+					nREFORMA := 0
+					(cTRB)->( dbskip() )
+
+				EndIf
+
+				Dbselectarea(cTRB)
+				Dbskip(-1)
+
+				nPOS := Ascan(aARRAYSTJ,{|x| x[1] == cCodeST9})
+				cTMHORAS := NTOH(nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0))
+				nTotEntF  += nHrsParada/nREFORMA
+				nTotHoras += nHORAS/If(aARRAYSTJ[nPOS][2] > 0,aARRAYSTJ[nPOS][2],0)
+				oSec1:PrintLine()
+
+				(cTRB)->( dbskip() )
+
+			End
+			oSec1:Finish()
+
+			oSec2:Init()
+			oSec2:PrintLine()
+			oSec2:Finish()
+		Endif
+		//Deleta o arquivo temporario fisicamente
+		oARQTR360:Delete()
+
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------------
+/*/{Protheus.doc} fCalcHor
+Cálcula o tempo de duração da manutenção.
+@type static
+
+@author Deivys Joenck
+@since 03/09/2001
+
+@sample fCalcHor( '001' )
+
+@param  [cCalendar], Caracter, Código do calendário a ser verificado.
+@return Númerico   , Tempo em horas do período de duração da manutenção.
+
+@obs Reescrito por: Alexandre Santos, 22/04/2019.
+/*/
+//-------------------------------------------------------------------------
+Static Function fCalcHor( cCalendar )
+
+	Local nHours      := 0
+	Local cDataIni    := ''
+	Local cHoraIni    := ''
+	Local cDataFim    := ''
+	Local cHoraFim    := ''
+
+	Default cCalendar := ''
+
+	fGetDateOS( @cDataIni, @cHoraIni, @cDataFim, @cHoraFim )
+
+	If !Empty( cCalendar )
+
+		nHours := TimeWork( cDataIni, cHoraIni, cDataFim, cHoraFim, cCalendar )
+
+	Else
+
+		If ( cDataFim - cDataIni ) > 0
+
+			nHours := ( cDataFim - cDataIni ) * 1440
+
+		EndIf
+
+		nHours += ( HtoM( cHoraFim ) - HtoM( cHoraIni ) )
+		nHours := ( nHours / 60 )
+
+	EndIf
+
+Return nHours
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³NGRETFAM  ³ Autor ³Elisangela Costa       ³ Data ³ 29/06/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Retorna o codigo da familia                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³REPORTDEF                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function NGRETFAM()
+Return cFAMILIA
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³NGRETCODB ³ Autor ³Elisangela Costa       ³ Data ³ 29/06/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Retorna o codigo do bem                                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³REPORTDEF                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function NGRETCODB()
+Return cCodeST9
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³NGRETCCUST³ Autor ³Elisangela Costa       ³ Data ³ 29/06/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Retorna o codigo do centro de Custo                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³REPORTDEF                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function NGRETCCUST()
+Return cCUSTO
+
+//--------------------------------------------------------------------------------------
+/*/{Protheus.doc} NGRETVAL
+Retorna o valor dos dos indicadores MTBF e MTTR para impressão em TReport.
+@type function
+
+@author Elisangela Costa
+@since 29/06/2006
+
+@sample NGRETVAL( 1 )
+
+@param  nOption   , Númerico, Opção que indica qual indicador deve ser retornado.
+								1 - MTBF/Hrs. - Por equipamento
+								2 - MTBF/Dias - Por equipamento
+								3 - MTBF/Hrs. - Totalizador
+								4 - MTBF/Dias - Totalizador
+								5 - MTTR/Hrs. - Por equipamento
+								6 - MTTR/Dias - Por equipamento
+								7 - MTTR/Hrs. - Totalizador
+								8 - MTTR/Dias - Totalizador
+@return Indefinido, Resultado apresrntado no indicador, pode ser caracter ou númerico.
+/*/
+//--------------------------------------------------------------------------------------
+Static Function NGRETVAL( nOption )
+
+	Local xResult    := 0
+	Local aParams    := {}
+	Local cDeBem     := cCodeST9
+	Local cAteBem    := cCodeST9
+	Local cIndicator := ""
+	Local nTotDays   := IIf( MV_PAR12 == 1 , fVerTotDia( Posicione( 'ST9', 1, xFilial( 'ST9' ) + cCodeST9, 'T9_CALENDA' ) ), 24 )
+
+	If !lRPORel17 // Caso seja release maior que 12.1.17
+
+		// MTBF
+		If nOption < 5
+
+			cIndicator := 'MTBF'
+
+			// Totalizadores MTBF
+			If nOption == 3 .Or. nOption == 4
+				cDeBem  := MV_PAR03
+				cAteBem := MV_PAR04
+			EndIf
+
+		// MTTR
+		ElseIf nOption > 4
+
+			cIndicator := 'MTTR'
+
+			// Totalizadores MTTR
+			If nOption == 7 .Or. nOption == 8
+				cDeBem  := MV_PAR03
+				cAteBem := MV_PAR04
+			EndIf
+
+		EndIf
+
+		// Valida se existe a quantidade mínima de ordens de serviço para o equipamento.
+		nCount := fQtdOrder( { MV_PAR09, MV_PAR10 }, { cDeBem, cAteBem }, { MV_PAR05, MV_PAR06 }, { MV_PAR07, MV_PAR08 } )
+
+		If ( cIndicator == 'MTTR' .And. nCount > 0 ) .Or. ( cIndicator == 'MTBF' .And. nCount > 1 )
+
+			// Utilização da Classe de indicadores NGKPI
+			aParams := { { 'DE_DATA'   , MV_PAR09               },;
+						{ 'ATE_DATA'  , MV_PAR10               },;
+						{ 'DE_BEM'    , cDeBem                 },;
+						{ 'ATE_BEM'   , cAteBem                },;
+						{ 'DE_CCUSTO' , MV_PAR05               },;
+						{ 'ATE_CCUSTO', MV_PAR06               },;
+						{ 'DE_CENTRA' , MV_PAR07               },;
+						{ 'ATE_CENTRA', MV_PAR08               },;
+						{ 'CON_CALEND', cValToChar( MV_PAR12 ) },;
+						{ 'CON_ANTDPS', cValToChar( MV_PAR13 ) },;
+						{ 'CON_PARADA', cValToChar( MV_PAR14 ) } }
+
+			oNGKPI:setIndParams( aParams )
+
+			oNGKPI:setOperation( 4 )
+
+			xResult := oNGKPI:getKPI( cIndicator, oNGKPI:lValidOK )
+
+			// Exibe Error da Classe se Houver.
+			If xResult == Nil
+
+				oNGKPI:showHelp()
+				xResult := 0
+
+			// Conversão do valor para dias, exclusivo para as opções que utilizam  está unidade.
+			ElseIf ( nOption == 2 .Or. nOption == 4 .Or. nOption == 6 .Or. nOption == 8 )
+
+				xResult := IIf( ValType( xResult ) == 'C', Round( ( ( HtoM( xResult ) / 60 ) / nTotDays ), 2 ), 0 )
+
+			EndIf
+
+		EndIf
+
+		// Para indicadores que não possuem valor, apresenta um traço.
+		If ( ValType( xResult ) == 'C' .And. HtoM( xResult ) == 0 ) .Or. ( ValType( xResult ) != 'C' .And. xResult == 0 )
+
+			xResult := '-'
+
+		// Conversão do valor para dias, exclusivo para as opções que utilizam  está unidade.
+		ElseIf ( nOption == 2 .Or. nOption == 4 .Or. nOption == 6 .Or. nOption == 8 )
+
+			xResult := AllTrim( Transform( xResult, '@E 999,999,999.99' ) )
+
+		EndIf
+
+	Else
+
+		If ( nOption == 3 .And. nTotHoras <= 0 ) .Or. ( nOption == 4 .And. nTotEntF <= 0 ) .Or.;
+		   ( ( nOption == 1 .Or. nOption == 2 .Or. nOption == 5 .Or. nOption == 6 ) .And. nREFORMA == 0 )
+
+			nOption := 0
+
+		EndIf
+
+		Do Case
+
+			Case nOption == 0 // Bem sem falhas no periodo.
+				xResult := ' - '
+
+			Case nOption == 1 // MTBF em Horas
+				xResult := NtoH( nHrsParada / nREFORMA )
+
+			Case nOption == 2 // MTTR em Horas
+				xResult := cTMHORAS
+
+			Case nOption == 3 // Média geral MTBF
+				xResult := NtoH( nTotHoras / nTotBens )
+
+			Case nOption == 4 // Média geral MTTR
+				xResult := NtoH( nTotEntF / nTotBens )
+
+			Case nOption == 5 // MTBF em Dias
+				xResult := Round( ( ( nHrsParada / nREFORMA ) / nTotDias ), 2 )
+
+			Case nOption == 6 // MTTR em Dias
+				xResult := Round( ( ( HtoM( cTMHORAS ) / 60 ) / nTotDias ), 2 )
+
+		EndCase
+	EndIf
+
+Return xResult
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTR360STJ
+Carrega a tabela tempraria com os registros necessarios para o calculo dos indicadores.
+@type static
+
+@author Marcos Wagner Junior
+@since 14/01/2009
+
+@param
+@return
+
+@obs Reescrito por Alexandre Santos, 18/02/2019.
+/*/
+//-------------------------------------------------------------------------------------
+Static Function MNTR360STJ()
+
+	Local aArea     := GetArea()
+	Local cOldOrdem := ''
+	Local cExpSTJ   := ''
+	Local cExpSTS   := ''
+	Local cDeData   := DtoS( MV_PAR09 )
+	Local cAtData   := DtoS( MV_PAR10 )
+
+	cExpSTJ := '%' + NGMODCOMP( 'STJ', 'ST9' )
+	cExpSTS := '%' + NGMODCOMP( 'STS', 'ST9' )
+
+	If MV_PAR14 == 1 // Parada da OS
+		cExpSTJ += " AND STJ.TJ_DTPRINI <> '' AND STJ.TJ_HOPRINI <> '' AND STJ.TJ_DTPRFIM <> '' AND STJ.TJ_HOPRFIM <> '' "
+		cExpSTS += " AND STS.TS_DTPRINI <> '' AND STS.TS_HOPRINI <> '' AND STS.TS_DTPRFIM <> '' AND STS.TS_HOPRFIM <> '' "
+	EndIf
+
+	cExpSTJ += '%'
+	cExpSTS += '%'
+
+	cAliasQry := GetNextAlias()
+
+	BeginSQL Alias cAliasQry
+
+		SELECT
+			ST90.T9_CODBEM  AS CODBEM,
+			ST90.T9_CCUSTO  AS CUSTO,
+			ST90.T9_CENTRAB AS CENTRAB ,
+			ST90.T9_CODFAMI AS FAMILIA,
+			ST90.T9_CALENDA AS CALEND,
+			ISNULL(STJ.TJ_ORDEM  , '')  AS ORDEM ,
+			ISNULL(STJ.TJ_DTPRINI, '')  AS DTPRIN,
+			CASE
+				WHEN STJ.TJ_HOPRINI = '  :  ' THEN ''
+				ELSE ISNULL( STJ.TJ_HOPRINI, '' )
+			END AS HOPRIN,
+			ISNULL(STJ.TJ_DTPRFIM, '')  AS DTPRFI,
+			CASE
+				WHEN STJ.TJ_HOPRFIM = '  :  ' THEN ''
+				ELSE ISNULL( STJ.TJ_HOPRFIM, '' )
+			END AS HOPRFI,
+			ISNULL(STJ.TJ_DTMRINI, '')  AS DTMRIN,
+			ISNULL(STJ.TJ_HOMRINI, '')  AS HOMRIN,
+			ISNULL(STJ.TJ_DTMRFIM, '')  AS DTMRFI,
+			ISNULL(STJ.TJ_HOMRFIM, '')  AS HOMRFI
+		FROM %table:ST9% ST90
+		LEFT JOIN %table:STJ% STJ
+			ON STJ.TJ_SITUACA = %exp:'L'%       AND
+			   STJ.TJ_TERMINO = %exp:'S'%       AND
+			   STJ.TJ_TIPOOS  = %exp:'B'%       AND
+			   STJ.TJ_PLANO   = %exp:'000000'%  AND
+			   ST90.T9_CODBEM  = STJ.TJ_CODBEM  AND
+			   ((STJ.TJ_DTPRINI >= %exp:cDeData% AND STJ.TJ_DTPRINI <> %exp:''%) OR STJ.TJ_DTMRINI >= %exp:cDeData% ) AND
+			   ((STJ.TJ_DTPRFIM <= %exp:cAtData% AND STJ.TJ_DTPRFIM <> %exp:''%) OR STJ.TJ_DTMRFIM <= %exp:cAtData%)  AND
+			   %exp:cExpSTJ% AND
+			   STJ.%NotDel%
+		WHERE
+			(ST90.T9_CODBEM  BETWEEN %exp:MV_PAR03% AND %exp:MV_PAR04%) AND
+			(ST90.T9_CCUSTO  BETWEEN %exp:MV_PAR05% AND %exp:MV_PAR06%) AND
+			(ST90.T9_CENTRAB BETWEEN %exp:MV_PAR07% AND %exp:MV_PAR08%) AND
+			(ST90.T9_CODFAMI BETWEEN %exp:MV_PAR01% AND %exp:MV_PAR02%) AND
+			ST90.T9_FILIAL = %xFilial:ST9%  AND
+			ST90.%NotDel%
+		UNION
+		SELECT
+			STS.TS_CODBEM   AS CODBEM,
+			STS.TS_CCUSTO   AS CUSTO,
+			STS.TS_CENTRAB  AS CENTRAB ,
+			ST91.T9_CODFAMI AS FAMILIA,
+			ST91.T9_CALENDA AS CALEND,
+			STS.TS_ORDEM    AS ORDEM ,
+			STS.TS_DTPRINI  AS DTPRIN,
+			CASE
+				WHEN STS.TS_HOPRINI = '  :  ' THEN ''
+				ELSE ISNULL( STS.TS_HOPRINI, '' )
+			END AS HOPRIN,
+			STS.TS_DTPRFIM  AS DTPRFI,
+			CASE
+				WHEN STS.TS_HOPRFIM = '  :  ' THEN ''
+				ELSE ISNULL( STS.TS_HOPRFIM, '' )
+			END AS HOPRFI,
+			STS.TS_DTMRINI  AS DTMRIN,
+			STS.TS_HOMRINI  AS HOMRIN,
+			STS.TS_DTMRFIM  AS DTMRFI,
+			STS.TS_HOMRFIM  AS HOMRFI
+		FROM %table:STS% STS
+		INNER JOIN %table:ST9% ST91
+			ON STS.TS_CODBEM = ST91.T9_CODBEM AND
+			   STS.TS_FILIAL = ST91.T9_FILIAL
+		WHERE
+			(STS.TS_CODBEM  BETWEEN %exp:MV_PAR03% AND %exp:MV_PAR04%) AND
+			(STS.TS_CCUSTO  BETWEEN %exp:MV_PAR05% AND %exp:MV_PAR06%) AND
+			(STS.TS_CENTRAB BETWEEN %exp:MV_PAR07% AND %exp:MV_PAR08%) AND
+			((STS.TS_DTPRINI >= %exp:cDeData% AND STS.TS_DTPRINI <> %exp:''%) OR STS.TS_DTMRINI >= %exp:cDeData% ) AND
+		    ((STS.TS_DTPRFIM <= %exp:cAtData% AND STS.TS_DTPRFIM <> %exp:''%) OR STS.TS_DTMRFIM <= %exp:cAtData%)  AND
+			STS.TS_SITUACA = %exp:'L'%      AND
+			STS.TS_TERMINO = %exp:'S'%      AND
+			STS.TS_TIPOOS  = %exp:'B'%      AND
+			STS.TS_PLANO   = %exp:'000000'% AND
+			%exp:cExpSTS% AND
+			STS.%NotDel%
+
+	EndSql
+
+	Do While (cAliasQry)->( !EoF() )
+
+        // Filtro direto na ST9, definido na tela de configuração da impressão.
+		If ( !Empty( aReturn[7] ) )
+
+			dbSelectArea( 'ST9' )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( 'ST9' ) + (cAliasQry)->CODBEM )
+			If (!&(aReturn[7]))
+				(cAliasQry)->( dbSkip() )
+				Loop
+			EndIf
+
+		EndIf
+
+		dDataInP := StoD( (cAliasQry)->DTPRIN )
+		dDataFiP := StoD( (cAliasQry)->DTPRFI )
+		dDataIni := StoD( (cAliasQry)->DTMRIN )
+		dDataFim := StoD( (cAliasQry)->DTMRFI )
+
+		If cOldOrdem <> (cAliasQry)->ORDEM
+			nPOS := aScan( aARRAYSTJ, { |x| x[1] == (cAliasQry)->CODBEM } )
+			If nPOS == 0
+				aAdd( aARRAYSTJ, { (cAliasQry)->CODBEM, 1 } )
+			Else
+				aARRAYSTJ[nPOS][2] += 1
+			EndIf
+		EndIf
+
+		cOldOrdem := (cAliasQry)->CODBEM
+		cHoraInP  := (cAliasQry)->HOPRIN
+		cHoraFiP  := (cAliasQry)->HOPRFI
+		cHoraIni  := (cAliasQry)->HOMRIN
+		cHoraFim  := (cAliasQry)->HOMRFI
+
+		dbSelectArea( cTRB )
+		dbSetOrder( 2 )
+		If !MsSeek( (cAliasQry)->ORDEM + DtoS( dDataIni ) ) .Or. Empty( (cAliasQry)->ORDEM )//NAO EXISTE O DIA NA TRB
+
+			RecLock( cTRB, .T. )
+			(cTRB)->CUSTO   := (cAliasQry)->CUSTO
+			(cTRB)->CENTRAB := (cAliasQry)->CENTRAB
+			(cTRB)->CODBEM  := (cAliasQry)->CODBEM
+			(cTRB)->FAMILIA := (cAliasQry)->FAMILIA
+			(cTRB)->DTMRIN  := dDataIni
+			(cTRB)->HOMRIN  := cHoraIni
+			(cTRB)->DTMRFI  := dDataFim
+			(cTRB)->HOMRFI  := cHoraFim
+			(cTRB)->DTPRIN  := dDataInP
+			(cTRB)->HOPRIN  := cHoraInP
+			(cTRB)->DTPRFI  := dDataFiP
+			(cTRB)->HOPRFI  := cHoraFiP
+			(cTRB)->CALEND  := (cAliasQry)->CALEND
+			(cTRB)->ORDEM   := (cAliasQry)->ORDEM
+			MsUnLock()
+
+		EndIf
+
+		(cAliasQry)->( dbSkip() )
+
+	EndDo
+
+	(cAliasQry)->(dbCloseArea())
+	RestArea( aArea )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT360CALE
+Retorna tempo em horas de um intervalo para um determinado calendário.
+@type function
+
+@author Felipe Nathan Welter
+@since 26/05/2010
+
+@sample MNT360CALE( 28/05/1996, '08:00', 29/05/1996, '07:45', 'Calend' )
+
+@param dDrIni, Data    , Data Inicio.
+@param cHrIni, Caracter, Hora Inicio.
+@param dDtFim, Data    , Data Fim.
+@param cHrFim, Caracter, Hora Fim.
+@param cCalen, Caracter, Calendário a ser considerado.
+@return lRet, Lógico, Se processo foi concluido com sucesso.
+
+@obs Esta função foi substituida no relatório MNTR360 pela genérica TimeWork(),
+mantendo-se para utilizações externas ao relatório.
+/*/
+//---------------------------------------------------------------------
+Function MNT360CALE( dDtIni, cHrIni, dDtFim, cHrFim, cCalen )
+
+	Local dDataIni := dDtIni
+	Local dDataFim := dDtFim
+	Local cHoraIni := cHoraFim := ''
+	Local nX, nTotHr := 0
+
+	Local aCALEN := NGCALENDAH(cCalen)
+
+	If Len( aCalen ) <= 0
+		Return nTotHr
+	EndIf
+	//Encontra a primeira data e horario valido para o calendario,
+	//a partir dos parametros passados.
+	While .T.
+		If aCALEN[DOW(dDataIni),1] <> '00:00'
+			If dDataIni != dDtIni
+				cHoraIni := aCALEN[DOW(dDataIni),2,1,1]
+				Exit
+			Else
+				For nX := 1 To Len(aCALEN[DOW(dDataIni),2])
+					If aCALEN[DOW(dDataIni),2,nX,1] <= cHrIni .And. cHrIni <= aCALEN[DOW(dDataIni),2,nX,2]
+						cHoraIni := cHrIni
+						Exit
+					Else
+						If nX == 1
+							If cHrIni <= aCALEN[DOW(dDataIni),2,nX,1]
+								cHoraIni := aCALEN[DOW(dDataIni),2,nX,1]
+								Exit
+							EndIf
+						ElseIf nX > 1
+							If aCALEN[DOW(dDataIni),2,nX-1,2] < cHrIni .And. cHrIni < aCALEN[DOW(dDataIni),2,nX,1]
+								cHoraIni := aCALEN[DOW(dDataIni),2,nX-1,2]
+								Exit
+							EndIf
+						EndIf
+					EndIf
+				Next nX
+				If !Empty(cHoraIni)
+					Exit
+				EndIf
+			EndIf
+		EndIf
+		dDataIni++
+	EndDo
+
+	//Encontra a ultima data e horario valido para o calendario,
+	//a partir dos parametros passados.
+	While .T.
+		If aCALEN[DOW(dDataFim),1] <> '00:00'
+			If dDataFim != dDtFim
+				cHoraFim := aCALEN[DOW(dDataFim),2, Len(aCALEN[DOW(dDataFim),2]) ,2] // Hora final do calendario no dia em questao
+				Exit
+			Else
+				For nX := Len(aCALEN[DOW(dDataFim),2]) To 1 Step -1
+					If aCALEN[DOW(dDataFim),2,nX,1] <= cHrFim .And. cHrFim <= aCALEN[DOW(dDataFim),2,nX,2]
+						cHoraFim := cHrFim
+						Exit
+					Else
+						If nX == Len(aCALEN[DOW(dDataFim),2])
+							If cHrFim >= aCALEN[DOW(dDataFim),2,nX,2]
+								cHoraFim := aCALEN[DOW(dDataFim),2,nX,2]
+								Exit
+							EndIf
+						ElseIf nX < Len(aCALEN[DOW(dDataFim),2])
+							If aCALEN[DOW(dDataFim),2,nX,1] < cHrFim .And. cHrFim < aCALEN[DOW(dDataFim),2,nX+1,2]
+								cHoraFim := aCALEN[DOW(dDataFim),2,nX,2]
+								Exit
+							EndIf
+						EndIf
+					EndIf
+				Next nX
+				If !Empty(cHoraFim)
+					Exit
+				EndIf
+			EndIf
+		EndIf
+		dDataFim--
+	EndDo
+
+	//Calcula quantidade de horas no intervalo para o calendario
+	If dDataIni < dDataFim .Or. ((dDataIni == dDataFim) .And. cHoraIni <= cHoraFim)
+		nTotHr :=  NGCONVERHORA( NGCALENHORA(dDataIni,cHoraIni,dDataFim,cHoraFim,cCalen) ,"S","D")
+	EndIf
+
+Return nTotHr
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerTotDia
+Verifica a média de horas por dia para calculo do MTBF/dia
+
+@return
+
+@param cCalendario - Codigo do calendario a ser verificado
+
+@sample
+fVerTotDia( "001" )
+
+@author Jackson Machado
+@since 05/03/2013
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fVerTotDia( cCalendario )
+
+	Local nDias		:= 0 //Contador do For
+	Local nTotDias	:= 0 //Verifica a quantidade de dias da semana
+	Local nMedHr 	:= 0 //Salva a media de horas por semana
+	Local aDias 	:= {}
+	Local nPosCld   := aScan( aCalendars, { |x| x[1] == cCalendario } )
+
+	If nPosCld == 0
+
+		aAdd( aCalendars, { cCalendario, NGCALENDAH( cCalendario ) } )
+		nPosCld := Len( aCalendars )
+
+	EndIf
+
+	aDias := aClone( aCalendars[nPosCld, 2] )
+
+	For nDias := 1 To Len( aDias )//Percorre todos os dias da semana
+		If aDias[ nDias , 1 ] <> "00:00"//Se contador de horas do dia for maior que zero, considera
+			nTotDias++//Incrementa um dia
+			nMedHr += HtoN( aDias[ nDias , 1 ] )//Salva a somatoria da quantidade de horas
+		EndIf
+	Next nDias
+
+	nMedHr := nMedHr / nTotDias//Divide a somatoria da quantidade de horas pela quantidade de dias para obter a media
+
+Return nMedHr
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetDateOS
+Pega data da OS referente ao parametro mv_par14 - Considera Tempo de OS
+Carrega variaveis conforme posicionamento da TRB
+@type static
+
+@author Guilherme Benkendorf
+@since 06/08/2013
+
+@sample fGetDateOS( 28/05/1996, '12:00', 28/05/1996, '20:00' )
+
+@param dDtI, Data    , Data inicial da OS
+@param cHrI, Caracter, Hora inicial da OS
+@param dDtF, Data    , Data final da OS
+@param cHrF, Caracter, Hora final da OS
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function fGetDateOS( dDtI, cHrI, dDtF, cHrF )
+
+	If MV_PAR14 == 1 //Parada da OS?
+		dDtI := (cTRB)->DTPRIN //Todo
+		cHrI := (cTRB)->HOPRIN
+		dDtF := (cTRB)->DTPRFI
+		cHrF := (cTRB)->HOPRFI
+	ElseIf MV_PAR14 == 2 // Execução da OS?
+		dDtI := (cTRB)->DTMRIN
+		cHrI := (cTRB)->HOMRIN
+		dDtF := (cTRB)->DTMRFI
+		cHrF := (cTRB)->HOMRFI
+	Else // Ambos?
+		dDtI := IIf( Empty( (cTRB)->DTPRIN ), (cTRB)->DTMRIN, (cTRB)->DTPRIN )
+		cHrI := IIf( Empty( (cTRB)->HOPRIN ), (cTRB)->HOMRIN, (cTRB)->HOPRIN )
+		dDtF := IIf( Empty( (cTRB)->DTPRFI ), (cTRB)->DTMRFI, (cTRB)->DTPRFI )
+		cHrF := IIf( Empty( (cTRB)->HOPRFI ), (cTRB)->HOMRFI, (cTRB)->HOPRFI )
+	EndIf
+
+Return .T.
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} fReportRod
+Imprime rodapé no relatório modelo TReport.
+@type static
+
+@author Alexandre Santos
+@since 17/04/2019
+
+@param  oReport, Objeto, Objeto do tipo TReport referente ao relatório.
+@return
+/*/
+//----------------------------------------------------------------------
+Static Function fReportRod( oReport )
+
+	If oReport != Nil // Modelo TReport
+
+		oReport:ThinLine()
+		oReport:PrintText( '' )
+
+		// Observação: Nos casos onde o bem não possuir falhas no período consultado, será apresentando ' - ' em seu respectivo indicador.
+		oReport:PrintText( STR0040 )
+		oReport:PrintText( '' )
+		oReport:ThinLine()
+
+	Else // Modelo Padrão
+
+		SomaLinha()
+		@Li, 000 Psay Replicate( '-', 150 )
+		SomaLinha()
+
+		// Observação: Nos casos onde o bem não possuir falhas no período consultado, será apresentando ' - ' em seu respectivo indicador.
+		@Li, 000 Psay STR0040
+		SomaLinha()
+		@Li, 000 Psay Replicate( '-', 150 )
+		SomaLinha()
+
+	EndIf
+
+Return
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} SomaLinha
+Incrementa Linha e controla salto de página.
+@type static
+
+@author Alexandre Santos
+@since 17/04/2019
+
+@param  EndPrint, Lógico, Define se terminou a impressão.
+@return
+/*/
+//----------------------------------------------------------------------
+Static Function SomaLinha( EndPrint )
+
+	Default EndPrint := .F.
+
+	Li++
+	Li := IIf( EndPrint, 64, Li )
+
+	If Li == 64
+		fReportRod()
+	ElseIf Li > 67
+		Cabec( Titulo, Cabec1, Cabec2, NomeProg, Tamanho, nTipo )
+		Li := Prow() + 1
+	EndIf
+
+Return
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} fQtdOrder
+Define a quantidade de ordens de serviço para o equipamento.
+@type function
+
+@author Alexandre Santos
+@since 03/03/2020
+
+@param  aDate      , Array, [1] - Data Inicio
+							[2] - Data fim
+@param  aEquipment , Array, [1] - Equipamento Inicio
+							[2] - Equipamento fim
+@param  aCostCenter, Array, [1] - Centro de Custos Inicio
+							[2] - Centro de Custos fim
+@param  aWorkCenter, Array, [1] - Centro de Trabalho Inicio
+							[2] - Centro de Trabalho fim
+@return Númerico   , Define a quantidade de ordens de serviço.
+/*/
+//----------------------------------------------------------------------------
+Static Function fQtdOrder( aDate, aEquipment, aCostCenter, aWorkCenter )
+
+	Local cAlsOrder := GetNextAlias()
+	Local nRet      := 0
+	Local aWhere    := {}
+
+	If FindFunction( 'KPIDateOS' )
+
+		// Define condição de data para consulta
+		aWhere  := KPIDateOS( aDate, cValToChar( MV_PAR14 ) )
+
+	Else
+
+		cQueryTJ += '%'
+		cQueryTS += '%'
+
+		If cValToChar( MV_PAR14 ) == '1' // Considera somente com Parada de OS.
+
+			cQueryTJ += " AND STJ.TJ_DTPRINI <> ' ' AND STJ.TJ_HOPRINI <> ' ' "
+			cQueryTJ += " AND STJ.TJ_DTPRFIM <> ' ' AND STJ.TJ_HOPRFIM <> ' ' "
+
+			cQueryTS += " AND STS.TS_DTPRINI <> ' ' AND STS.TS_HOPRINI <> ' ' "
+			cQueryTS += " AND STS.TS_DTPRFIM <> ' ' AND STS.TS_HOPRFIM <> ' ' "
+
+		EndIf
+
+		cQueryTJ += ' AND ( STJ.TJ_DTPRINI >= ' + ValToSQL( aDate[1] ) + ' OR '
+		cQueryTJ +=	      ' STJ.TJ_DTMRINI >= ' + ValToSQL( aDate[1] ) + ' ) AND '
+		cQueryTJ +=	     '( STJ.TJ_DTPRFIM <= ' + ValToSQL( aDate[2] ) + ' OR '
+		cQueryTJ +=	      ' STJ.TJ_DTMRFIM <= ' + ValToSQL( aDate[2] ) + ' ) AND '
+
+		cQueryTS += ' AND ( STS.TS_DTPRINI >= ' + ValToSQL( aDate[1] ) + ' OR '
+		cQueryTS +=	      ' STS.TS_DTMRINI >= ' + ValToSQL( aDate[1] ) + ' ) AND '
+		cQueryTS +=	     '( STS.TS_DTPRFIM <= ' + ValToSQL( aDate[2] ) + ' OR '
+		cQueryTS +=	      ' STS.TS_DTMRFIM <= ' + ValToSQL( aDate[2] ) + ' ) AND '
+
+		cQueryTJ += '%'
+		cQueryTS += '%'
+
+		aWhere := { cQueryTJ, cQueryTS }
+
+	EndIf
+
+	BeginSQL Alias cAlsOrder
+
+		SELECT
+			SUM( COUNT_ORDER ) AS TOT_ORDER
+		FROM
+			( SELECT
+				COUNT( TJ_ORDEM ) AS COUNT_ORDER
+			FROM
+				%table:STJ%
+			WHERE
+				TJ_FILIAL  = %xFilial:STJ% AND
+				TJ_PLANO   = '000000'      AND
+				TJ_TIPOOS  = 'B'           AND
+				TJ_TERMINO = 'S'           AND
+				TJ_SITUACA = 'L'           AND
+				( TJ_CODBEM  BETWEEN %exp:aEquipment[1]%  AND %exp:aEquipment[2]%  ) AND
+				( TJ_CCUSTO  BETWEEN %exp:aCostCenter[1]% AND %exp:aCostCenter[2]% ) AND
+				( TJ_CENTRAB BETWEEN %exp:aWorkCenter[1]% AND %exp:aWorkCenter[2]% ) AND
+				%NotDel%
+				%exp:aWhere[1]%
+
+			UNION
+
+				SELECT
+					COUNT( TS_ORDEM ) AS COUNT_ORDER
+				FROM
+					%table:STS%
+				WHERE
+					TS_FILIAL= %xFilial:STS% AND
+					TS_PLANO = '000000'      AND
+					TS_TIPOOS  = 'B'         AND
+					TS_TERMINO = 'S'         AND
+					TS_SITUACA = 'L'         AND
+					( TS_CODBEM  BETWEEN %exp:aEquipment[1]%  AND %exp:aEquipment[2]%  ) AND
+					( TS_CCUSTO  BETWEEN %exp:aCostCenter[1]% AND %exp:aCostCenter[2]% ) AND
+					( TS_CENTRAB BETWEEN %exp:aWorkCenter[1]% AND %exp:aWorkCenter[2]% ) AND
+					%NotDel%
+					%exp:aWhere[2]% ) TOT
+
+	EndSQL
+
+	nRet := (cAlsOrder)->TOT_ORDER
+
+	(cAlsOrder)->( dbCloseArea() )
+
+Return nRet

@@ -1,0 +1,3028 @@
+#INCLUDE "mnta700.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+Static aInfoPosto := {} //  { Cnpj, Filial Posto, Posto, Loja, Tipo Posto }
+
+//--------------------------------------------------------------------
+/*/{Protheus.doc} MNTA700
+Análise de Inconsistências
+
+Permite consultar e corrigir os erros de inconsistencias logicas geradas
+durante a importacao de arquivos de abastecimentos
+
+@author Elisangela Costa
+@since 20/01/06
+@version 1.0
+/*/
+//--------------------------------------------------------------------
+Function MNTA700()
+
+	Local aNGBEGINPRM := {}
+	Local nBtnColuna  := 0
+	Local nSizeFil
+	Local oFont700
+	Local cOldFil
+	Local cOldEmp
+	Local oTmpTbl1
+	Local oTmpTbl2
+
+	If FindFunction( 'MNTAmIIn' ) .And. !MNTAmIIn( 95 )
+
+		Return .F.
+
+	EndIf
+
+	aNGBEGINPRM := NGBEGINPRM()
+	nSizeFil    := If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(TQP->TQP_FILIAL))
+	oFont700    := TFont():New("Arial",10,12,,.F.,,.F.,,.F.,.F.)
+	cOldFil     := cFilAnt
+	cOldEmp     := cEmpAnt
+
+	asMenu := {{STR0067,"OMSA040()" },;//"Motoristas"
+			   {STR0113,"MNTA084()" },;//"Veículos"
+			   {STR0069,"MNTA610()" },;//"Postos"
+			   {STR0070,"GPEA010()" },;//"Funcionários"
+			   {STR0071,"MNTA640()" },;//"Tipos Combustíveis"
+			   {STR0072,"MNTA655()" },;//"Abastecimento Manual"
+			   {STR0073,"MNTA830()" },;//"Informa Contador"
+			   {STR0074,"MNTA840()" },;//"Quebra de Contador"
+			   {STR0075,"MNTA875()" }} //"Acerto de Contador"
+
+	Private cTRB7001	:= GetNextAlias()
+	Private cTRB7002 	:= GetNextAlias()
+	Private oDlgC
+	Private oGetAbas
+	Private oGetErr
+	Private oMenu
+	Private oSayRejei
+	Private bGetLine1
+	Private bGetLine2
+	Private oNG700Ok	:= LoadBitmap( GetResources(),"BR_VERDE" )
+	Private oNG700Ok2	:= LoadBitmap( GetResources(),"BR_VERDE" )
+	Private oNG700Nao	:= LoadBitmap( GetResources(),"BR_VERMELHO")
+	Private oNG700Nao2	:= LoadBitmap( GetResources(),"BR_VERMELHO")
+	Private aVETINR		:= {}
+	Private aVERRABAS1	:= {}
+	Private aVERRABAS2	:= {}
+	Private aReprocess	:= {}
+	Private nx1			:= 1
+	Private cTitulo		:= STR0001  //"Acerto das Inconsistências Lógicas"
+	Private cConEst		:= AllTrim(GetMv("MV_ESTHOME"))
+	Private LVALUNI		:= .F.
+	Private cFilRet		:= Space(2)
+	Private cBemRet     := Space(Len(st9->t9_codbem))
+	Private cPerg		:= 'MNT700'
+	Private cEmpTTM		:= ''
+	Private cFilTTM		:= ''
+
+	Private lConsComb   := SuperGetMv("MV_NGIMPOR",.F.,"1") == "2"
+	Private nIndTQM     := If( lConsComb,1,2 )
+	Private nTamComTQM  := If( (TAMSX3("TQM_CODCOM")[1]) < 1,3,(TAMSX3("TQM_CODCOM")[1]) )
+	Private cCodCom     := ""
+	Private lAfericao   := SuperGetMv("MV_NGMNTAF",.F.,"2") == "1" //Verifica parametro que indica se deve validar com afericao
+	Private lMVIntEst   := (AllTrim(SuperGetMV("MV_NGMNTES", .F., "N")) == "S" ) // Usa Integração com Estoque?
+	Private cConNeg     := GetNewPar("MV_NGCONEG","S")
+	Private cFiliST9    := xFilial("ST9")	//Variável utilizada em chamadas de função do MNTA655
+
+	//Variaveis de tamanho de tela e objetos
+	Private oSize
+	Private oPnlBotCad := NIL //Panel dos botões de cadastros.
+	Private oPnlTabErs := NIL //Panel da tabela que possui os erros.
+	Private oPnlBotAlt := NIL //Panel dos botões de alteração dos abastecimentos rejeitados.
+	Private oPnlTabRej := NIL //Panel dos abastecimentos rejeitados.
+	Private oPnlLegend := NIL //Panel das legendas.
+	Private nSizeXBnt  := 0   //Tamanho horizontal do botão de cadastros
+	Private nEspaco    := 0   //Espaço desde o começo de um botão, até o começo do outro botão.
+	Private nLinIniTla := 0
+	Private nColIniTla := 0
+	Private nLinFimTla := 0
+	Private nColFimTla := 0
+	Private nTam003Per := 0
+	Private nTam006Per := 0
+	Private nTam030Per := 0
+	Private nTam045Per := 0
+	Private nTamHoriz  := 0
+
+	fMontaTela()
+
+	//Variaveis utilizadas para parametros!
+	//mv_par01     De Data
+	//mv_par02     Ate Data
+	//mv_par03     De Erro
+	//mv_par04     Ate Erro
+
+	If !Pergunte("MNT700",.T.)
+		//Devolve variaveis armazenadas (NGRIGHTCLICK)
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	EndIf
+
+	//Tabela que contem todos o erros do abastecimento
+	aDBF7001  := {}
+	aAdd(aDBF7001,{"FILIAL"  ,"C", nSizeFil,0}) //Filial
+	aAdd(aDBF7001,{"CNPJ"    ,"C", 14,0}) 		//Cnpj do posto de gasolina
+	aAdd(aDBF7001,{"CNPJOL " ,"C", 14,0}) 		//Cnpj do Salvo
+	aAdd(aDBF7001,{"DESCPO"  ,"C", 30,0}) 		//Nome do posto de gasolina
+	aAdd(aDBF7001,{"NABAST"  ,"C", 15,0}) 		//Numero do abastecimento
+	aAdd(aDBF7001,{"DTABAS"  ,"D", 08,0}) 		//Data do Abastecimento
+	aAdd(aDBF7001,{"HRABAS"  ,"C", 05,0}) 		//Hora do Abastecimento
+	aAdd(aDBF7001,{"QUANT"   ,"N", 09,3}) 		//Quantidade de litros abastecido
+	aAdd(aDBF7001,{"VALTOT"  ,"N", 15,2}) 		//Valor do abastecimento
+	aAdd(aDBF7001,{"HODOM"   ,"N", 09,0}) 		//Hodometro do abastecimento
+	aAdd(aDBF7001,{"NOMBEM"  ,"C", 40,0}) 		//Descricao do bem
+	aAdd(aDBF7001,{"CODERRO" ,"C", 03,0}) 		//Codigo do Erro
+	aAdd(aDBF7001,{"ALTERR"  ,"C", 01,0}) 		//Indicacao de Registro alterado (S=Sim,N=Nao)
+	aAdd(aDBF7001,{"PLACA"   ,"C", 08,0}) 		//Placa do Bem
+	aAdd(aDBF7001,{"CODFRO"  ,"C", 16,0})		//Código da Frota
+	aAdd(aDBF7001,{"CODMOT"  ,"C", 11,0})		//Código do motorista
+	aAdd(aDBF7001,{"NOMMOT"  ,"C", 40,0})		//Nome Motorista
+	aAdd(aDBF7001,{"FILALT"  ,"C", nSizeFil,0}) //Filial
+	aAdd(aDBF7001,{"ERROVA"  ,"C", 03,0}) //Indica se ha Erro variacao dia ou autonomia
+	aAdd(aDBF7001,{"MEDIAE"  ,"N", 15,2})
+	aAdd(aDBF7001,{"MEDIAR"  ,"N", 15,2})
+	aAdd(aDBF7001,{"POSCO2"  ,"N", 09,0})
+
+	//Criação Tabela Temporária
+	oTmpTbl1 := NGFwTmpTbl(cTRB7001,aDBF7001,{{"FILIAL","NABAST","CNPJOL","CODERRO"},{"CODERRO"}})
+
+	//Tabela que contem o registro de abastecimento rejeitado
+	aDBF7002  := TQQ->(DbStruct())
+		aAdd(aDBF7002,{"TQQ_CNPJOL" ,"C", 14,0}) //Cnpj Salvo
+		aAdd(aDBF7002,{"TQQ_DESFRO" ,"C", 40,0}) //Descricao da frota
+		aAdd(aDBF7002,{"TQQ_DESCPO" ,"C", 30,0}) //Descricao do posto
+		aAdd(aDBF7002,{"TQQ_NOMMOT" ,"C", 40,0}) //Nome do Motorista
+		aAdd(aDBF7002,{"TQQ_ALTERR" ,"C", 01,0}) //Indicacao de Registro alterado (S=Sim,N=Nao)
+		aAdd(aDBF7002,{"FILALT"     ,"C", nSizeFil,0}) //Filial
+
+	//Criação Tabela Temporária
+	oTmpTbl2 := NGFwTmpTbl(cTRB7002,aDBF7002,{{"TQQ_FILIAL","TQQ_NABAST","TQQ_CNPJOL"}})
+
+	Processa({ |lEnd| MNT700PROC() },STR0006) //"Aguarde ..Processando registros de inconsistêcias lógicas"
+
+	If Len(aVERRABAS1) == 0
+		Help(" ",1,"NGATENCAO",,STR0007+Chr(13)+Chr(10)+STR0008,3,1)  //"Nao existe dados para montar a tela de Acerto de Inconsistências"###" Lógicas dentro do periodo selecionado."
+
+	   	//Deleta os Arquivos temporarios fisicamente
+		oTmpTbl1:Delete()
+		oTmpTbl2:Delete()
+
+		//Devolve variaveis armazenadas (NGRIGHTCLICK)                          ³
+		NGRETURNPRM(aNGBEGINPRM)
+		Return .T.
+	EndIf
+
+	nOpcao := 1
+	DEFINE MSDIALOG oDlgC TITLE OemToAnsi(cTitulo) FROM nLinIniTla,nColIniTla TO nLinFimTla,nColFimTla PIXEL STYLE nOR(WS_VISIBLE,WS_POPUP)
+
+		oPnlLeft         := TPanel():New(000,000,,oDlgC,,,,,CLR_WHITE,002,000)
+		oPnlLeft:Align   := CONTROL_ALIGN_LEFT
+
+		oPnlRight        := TPanel():New(000,000,,oDlgC,,,,,CLR_WHITE,002,000)
+		oPnlRight:Align  := CONTROL_ALIGN_RIGHT
+
+		oPnlTot          := TPanel():New(000,000,,oDlgC,,,,,CLR_WHITE,000,000)
+		oPnlTot:Align    := CONTROL_ALIGN_ALLCLIENT
+
+		oPnlBotCad       := TPanel():New(000,000,,oPnlTot,,,,,CLR_WHITE,nTamHoriz,nTam006Per)
+		oPnlBotCad:Align := CONTROL_ALIGN_TOP
+
+		oPnlTabErs       := TPanel():New(nTam006Per,000,,oPnlTot,,,,,CLR_WHITE,nTamHoriz,nTam045Per)
+		oPnlBotAlt       := TPanel():New(nTam045Per+nTam006Per,000,,oPnlTot,,,,,CLR_WHITE,nTamHoriz,nTam006Per)
+		oPnlTabRej       := TPanel():New(nTam045Per+nTam006Per+nTam006Per,000,,oPnlTot,,,,,CLR_WHITE,nTamHoriz,nTam030Per)
+
+		oPnlLegend       := TPanel():New(000,000,,oPnlTot,,,,,CLR_WHITE,nTamHoriz,nTam003Per)
+		oPnlLegend:Align := CONTROL_ALIGN_BOTTOM
+
+		@ 000,001 To nTam006Per,nTamHoriz-2 Label STR0076 Of oPnlBotCad PIXEL //"Acesso aos Cadastros Relacionados aos Erros"
+
+		//------------------------------
+		// Botões: Primeira linha
+		//------------------------------
+		// Botão: Bens
+		@ 007,nBtnColuna Button STR0068 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNT700BEM())   //"Bens"
+
+		// Botão: Motoristas
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0067 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNT700MOFU(1)) //"Motoristas"
+
+		// Botão: Funcionários
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0070 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNT700MOFU(2)) //"Funcionários"
+
+		// Botão: Postos
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0069 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA610())     //"Postos"
+
+		// Botão: Combustíveis
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0071 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA640())     //"Combustíveis"
+
+		// Botão: Abastecimento Manual
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0072 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA655())     //"Abast. Manual"
+
+		// Botão: Informa Contador
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0073 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA830())     //"Informa Cont."
+
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0074 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA840())     //"Quebra Cont."
+
+		// Botão: Acerto de Contador
+		nBtnColuna += nEspaco
+		@ 007,nBtnColuna Button STR0075 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA875())     //"Acerto Cont."
+
+		// Botão: Aferições
+		If lAfericao
+			nBtnColuna += nEspaco
+			@ 007,nBtnColuna Button STR0082 Of oPnlBotCad Size nSizeXBnt,nTam006Per-9 PIXEL Action(MNTA630()) //"Aferições"
+		EndIf
+
+		@ 001,001 Say OemToAnsi(STR0009) Of oPnlTabErs PIXEL Font oFont700 //"Erros"
+		@ 007,001 ListBox oGetAbas Fields aVERRABAS1[n][1],aVERRABAS1[n][2] Headers STR0010,STR0011 Of oPnlTabErs Size nTamHoriz-4,nTam045Per-7 PIXEL;  //"Código do Erro"###"Descrição"
+		On Change (M700LINOk(oGetAbas:nAt))
+
+		oGetAbas:bGotop    := { || nx1 := 1 }
+		oGetAbas:bGoBottom := { || nx1 := eval( oGetAbas:bLogicLen ) }
+		oGetAbas:bSkip     := { | nwant, nold | nold := nx1 , nx1 += nwant, nx1 := max( 1, min( nx1 , eval( oGetAbas:bLogicLen ))), nx1 - nOld }
+		oGetAbas:bLogicLen := { || Len(aVERRABAS1) }
+		oGetAbas:cAlias    := "Array"
+
+		bGAbline1 := { || {aVERRABAS1[oGetAbas:nAt,1],aVERRABAS1[oGetAbas:nAt,2]}}
+		bGAbline2 := { || {Space(03), Space(40)} }
+
+		oGetAbas:SetArray(aVERRABAS1)
+		IIF(Len(aVERRABAS1)>0,oGetAbas:bLine:= bGAbline1,oGetAbas:bLine:= bGAbline2)
+
+		oGetAbas:Refresh()
+
+		@ 001,001 Say oSayRejei VAR OemToAnsi(STR0014) Of oPnlBotAlt PIXEL Font oFont700 //"Abastecimentos Rejeitados"
+
+		@ 007,001 Button STR0013 Of oPnlBotAlt Size 40,10 PIXEL Action(MNT700ALTE()) //"&Alterar"
+		@ 007,043 Button STR0034 Of oPnlBotAlt Size 40,10 PIXEL Action(MNTA700EXC()) //"&Exculir"
+		@ 007,085 Button STR0012 Of oPnlBotAlt Size 40,10 PIXEL Action(MNT700IMPR()) //"&Imprimir"
+
+		@ 000,001 ListBox oGetErr Fields Header " " ,;
+										STR0053    ,; //"Filial"
+										STR0015    ,; //"CNPJ"
+										STR0016    ,; //"Nome do Posto"
+										STR0017    ,; //"Abastecimento"
+										STR0018    ,; //"Data"
+										STR0019    ,; //"Hora"
+										STR0020    ,; //"Litros"
+										STR0021    ,; //"Valor"
+										STR0022    ,; //"Km"
+										STR0023    ,; //"Veiculo"
+										STR0051    ,; //"Placa"
+										STR0052    ,; //"Frota"
+										STR0054    ,; //"Cod. Motorista"
+										STR0056    ,; //"Nome Motorista"
+										STR0077    ,; //"Média Esperada"
+										STR0078     ; //"Média Realizada"
+								   Size nTamHoriz-4,nTam030Per Of oPnlTabRej PIXEL
+
+		AADD(oGetErr:aHeaders,STR0079) //"2o Contador"
+
+		@ 000,001 Bitmap oNG700Ok2 Resource "BR_VERDE"     Size 25,25 PIXEL Of oPnlLegend Noborder When .F.
+		@ 000,011 Say OemToAnsi(STR0024)                   Size 47,7        Of oPnlLegend PIXEL  //"Alterado"
+		@ 000,067 Bitmap oNG700Nao2 Resource "BR_VERMELHO" Size 25,25 PIXEL Of oPnlLegend Noborder When .F.
+		@ 000,077 Say OemToAnsi(STR0025)                   Size 47,7        Of oPnlLegend PIXEL //"Não Alterado"
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlgC:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlgC)}
+		nOpcao := 0
+
+		M700LINOk(oGetAbas:nAt)
+
+	Activate MsDialog oDlgC On Init EnchoiceBar(oDlgC,{||nOpcao:=1,If(!M700GRAVA(),nOpcao := 0,oDlgC:End())},{|| oDlgC:End()}) Centered
+
+	cFilAnt := cOldFil
+	cEmpAnt := cOldEmp
+
+	//Deleta os Arquivos temporarios fisicamente
+	oTmpTbl1:Delete()
+	oTmpTbl2:Delete()
+
+	dbSelectArea("TQQ")
+	dbSetOrder(01)
+	dbSeek(xFilial("TQQ"))
+
+	//Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+	If nOpcao == 1 .And. FindFunction('MNT635CONS') .And. MsgYesNo("Deseja executar o reprocessamento?","ATENÇÃO")
+
+		Processa( { |lEnd| MNTA660( , aReprocess ) }, STR0006 ) // Aguarde.. Processando registros de inconsistêcias lógicas
+		Processa( { |lEnd| MNTA700( ) },STR0006) //"Aguarde ..Processando registros de inconsistêcias lógicas"
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT700PROC
+Carrega os arquivos temporarios
+
+@author Elisangela Costa
+@since 20/01/06
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+Function MNT700PROC()
+
+	Local cMVPAR03  	:= AllTrim(MV_PAR03)
+	Local cMVPAR04   	:= AllTrim(MV_PAR04)
+	Local cWhile     	:= "!Eof() .And. (TQP_DTABAS <= MV_PAR02 .Or. Empty(TQP_DTABAS))"
+	Local cTQQCodCom 	:= ""
+	Local lWhile     	:= .F. // 027181
+	Local lMNTA7003		:= ExistBlock("MNTA7003")
+	Local nPosErr    	:= 0   // Posição do erro
+	Local iy			:= 0
+	Local nInd       	:= 4
+
+	If !Empty(MV_PAR03)
+		nInd   := 5
+		cWhile := "!Eof() .And. AllTrim(TQP_CODERR) <= AllTrim(MV_PAR04)"
+	EndIf
+
+	dbSelectArea("TQP")
+	dbSetOrder(nInd)
+	If nInd = 4
+		dbSeek("",.T.)
+	Else
+		dbSeek(Space(1)+cMVPAR03,.T.)
+	EndIf
+
+	ProcRegua(Reccount())
+	While &(cWhile)
+
+		If nInd = 4
+			If TQP_DTABAS >= MV_PAR01 .Or. Empty(TQP_DTABAS)
+				lWhile := .T.
+			EndIf
+		Else
+			lWhile := .T.
+		EndIf
+
+		If lWhile
+			//-----------------------------------
+			// PE para filtrar a listagem da TQP
+			//-----------------------------------
+			If lMNTA7003
+				If !ExecBlock("MNTA7003",.F.,.F.)
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			IncProc(Oemtoansi(STR0026)) //"Selecionando Registros..."
+			If (TQP->TQP_DTABAS          >= MV_PAR01 .And. TQP->TQP_DTABAS          <= MV_PAR02 .Or. (Empty(TQP->TQP_DTABAS)) ) .And.;
+			   (AllTrim(TQP->TQP_CODERR) >= cMVPAR03 .And. AllTrim(TQP->TQP_CODERR) <= cMVPAR04)
+
+		      	//Grava o registro de abastecimento rejeitado
+				dbSelectArea(cTRB7002)
+				If !dbSeek(TQP->TQP_FILIAL+TQP->TQP_NABAST+TQP->TQP_CNPJ)
+
+					dbSelectArea("TQQ")
+					dbSetOrder(01) //trocado indice de 3 para 1
+					dbSeek(TQP->TQP_FILIAL+TQP->TQP_NABAST+TQP->TQP_CNPJ)
+					If TQQ->TQQ_PLACA < MV_PAR05 .Or. TQQ->TQQ_PLACA > MV_PAR06
+						dbSelectArea("TQP")
+						dbSkip()
+						Loop
+					EndIf
+
+					dbSelectArea("ST9")
+					dbSetOrder(14)
+					MsSeek(TQQ->TQQ_PLACA)
+
+					dbSelectArea(cTRB7002)
+					(cTRB7002)->(dbAppend())
+					(cTRB7002)->TQQ_DESFRO := SubStr(ST9->T9_NOME,1,40)
+					(cTRB7002)->TQQ_DESCPO := NGSEEK("TQF",TQQ->TQQ_CNPJ,02,"TQF->TQF_NREDUZ")
+					(cTRB7002)->TQQ_CNPJOL := TQQ->TQQ_CNPJ
+					If !Empty(TQQ->TQQ_CODMOT)
+						(cTRB7002)->TQQ_CODMOT := NGSEEK("DA4",TQQ->TQQ_CODMOT,03,"DA4->DA4_CGC")
+					Else
+						(cTRB7002)->TQQ_CODMOT := TQQ->TQQ_CODMOT
+					EndIf
+					(cTRB7002)->TQQ_ALTERR := "N"
+
+					dbSelectArea("TQQ")
+					For iy := 1 To FCount()
+						dbSelectArea("TQQ")
+						dbSelectArea(cTRB7002)
+						If (cTRB7002)->(FieldPos(Fieldname(iy))) > 0
+							cCAMPOA700    := "(cTRB7002)->"+Fieldname(iy)
+							&(cCAMPOA700) := TQQ->(FieldPut(iy, TQQ->(FIELDGET(iy)) ))
+						EndIf
+					Next iy
+
+				EndIf
+
+		        //Grava o erros do abastecimento rejeitado
+				dbSelectArea(cTRB7001)
+				dbSetOrder(01)
+				If !dbSeek(TQP->TQP_FILIAL+TQP->TQP_NABAST+TQP->TQP_CNPJ+AllTrim(TQP->TQP_CODERR))
+
+					(cTRB7001)->(dbAppend())
+					(cTRB7001)->FILIAL  := TQP->TQP_FILIAL
+					(cTRB7001)->CNPJ    := TQP->TQP_CNPJ
+					(cTRB7001)->CNPJOL  := TQP->TQP_CNPJ
+					(cTRB7001)->DESCPO  := (cTRB7002)->TQQ_DESCPO
+					(cTRB7001)->NABAST  := TQP->TQP_NABAST
+					(cTRB7001)->DTABAS  := TQP->TQP_DTABAS
+					(cTRB7001)->HRABAS  := (cTRB7002)->TQQ_HRABAS
+					(cTRB7001)->QUANT   := (cTRB7002)->TQQ_QUANT
+					(cTRB7001)->VALTOT  := (cTRB7002)->TQQ_VALTOT
+					(cTRB7001)->HODOM   := (cTRB7002)->TQQ_HODOM
+					(cTRB7001)->PLACA   := (cTRB7002)->TQQ_PLACA
+					(cTRB7001)->CODERRO := TQP->TQP_CODERR
+					(cTRB7001)->ALTERR  := "N"
+					If !Empty((cTRB7002)->TQQ_CODMOT)
+						(cTRB7001)->CODMOT  := NGSEEK("DA4",(cTRB7002)->TQQ_CODMOT,03,"DA4->DA4_COD")
+						(cTRB7001)->NOMMOT  := NGSEEK("DA4",(cTRB7002)->TQQ_CODMOT,03,"DA4->DA4_NOME")
+					Else
+						(cTRB7001)->CODMOT  := (cTRB7002)->TQQ_CODMOT
+						(cTRB7001)->NOMMOT  := " "
+					EndIf
+
+					(cTRB7001)->ERROVA  := (cTRB7002)->TQQ_ERROVA
+
+					(cTRB7001)->POSCO2  := (cTRB7002)->TQQ_POSCO2
+
+					dbSelectArea("ST9")
+					dbSetOrder(14)
+					If MsSeek((cTRB7001)->PLACA)
+
+						(cTRB7001)->NOMBEM := SubStr(ST9->T9_NOME,1,40)
+						(cTRB7001)->CODFRO := ST9->T9_CODBEM
+
+						If lConsComb
+							cTQQCodCom := SubStr((cTRB7002)->TQQ_CODCOM,1,nTamComTQM)
+						Else
+							cTQQCodCom := (cTRB7002)->TQQ_CODCOM
+						EndIf
+
+						cCodCom := NGSEEK("TQM",cTQQCodCom,nIndTQM,"TQM->TQM_CODCOM")
+
+						cChaveTT8	:= ST9->T9_FILIAL+ST9->T9_CODBEM+"1"+cCodCom
+
+						dbSelectArea("TT8")
+						dbSetOrder(2)
+
+						If DbSeek(cChaveTT8)
+							(cTRB7001)->MEDIAE := TT8->TT8_MEDIA
+						Else
+							(cTRB7001)->MEDIAE := ST9->T9_MEDIA
+						EndIf
+
+						aKms := NGCONTAP((cTRB7001)->CODFRO,DtoS((cTRB7001)->DTABAS),(cTRB7001)->HRABAS)
+						nKmPer := (cTRB7001)->HODOM - aKms[1]
+						(cTRB7001)->MEDIAR := Round(nKmper / (cTRB7001)->QUANT ,2)
+
+					EndIf
+
+				EndIf
+
+				If Ascan(aVERRABAS1,{|x| x[1] == TQP->TQP_CODERR}) = 0
+					aAdd(aVERRABAS1,{TQP->TQP_CODERR,NGSEEK("SX5","ER"+AllTrim(TQP->TQP_CODERR),1,"Upper(X5_DESCRI)"),TQP->TQP_NABAST})
+				Else
+					//Se o erro já existe na lista. Atualiza a terceira posição do array o numero do abastecimento.
+					//A nova posição que possuem todos os abastecimentos foi criada para que seja possivel validar
+					//todos os erros existentes para o mesmo abastecimento. Isso é utilizado na função f700VfEdit
+					//que habilita os campos para edição.
+					nPosErr := Ascan(aVERRABAS1,{|x|x[1] == TQP->TQP_CODERR})
+					aVERRABAS1[nPosErr][3] += "|" + TQP->TQP_NABAST
+				EndIf
+			EndIf
+		EndIf
+		dbSelectArea("TQP")
+		dbSkip()
+	End
+
+	If Len(aVERRABAS1) > 0
+		aVERRABAS1 := aSort(aVERRABAS1,,,{ |x,y| x[1] < y[1] } )
+	EndIf
+
+Return .T.
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³M700LINOk³ Autor ³ Elisangela Costa      ³ Data ³ 20/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Cria uma janela contendo a legenda da mBrowse               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function M700LINOk(xy)
+
+	aVERRABAS2 := {}
+	cErAbas    := aVERRABAS1[xy][1]
+
+	dbSelectArea(cTRB7001)
+	dbSetOrder(02)
+	dbGoTop()
+	If dbSeek(cErAbas)
+		While !Eof() .And. (cTRB7001)->CODERRO = cErAbas
+
+			aAdd(aVERRABAS2,{"  ",;              //1
+							(cTRB7001)->FILIAL,;    //2
+							(cTRB7001)->CNPJ,;      //3
+							(cTRB7001)->DESCPO,;    //4
+							(cTRB7001)->NABAST,;    //5
+							(cTRB7001)->DTABAS,;    //6
+							(cTRB7001)->HRABAS,;    //7
+							(cTRB7001)->QUANT,;     //8
+							(cTRB7001)->VALTOT,;    //9
+							(cTRB7001)->HODOM,;     //10
+							(cTRB7001)->NOMBEM,;    //11
+							(cTRB7001)->CODERRO,;   //12
+							(cTRB7001)->ALTERR,;    //13
+							(cTRB7001)->CNPJOL,;    //14
+							(cTRB7001)->PLACA,;     //15
+							(cTRB7001)->CODFRO,;    //16
+							(cTRB7001)->CODMOT,;    //17
+							(cTRB7001)->NOMMOT,;    //18
+							(cTRB7001)->MEDIAE,;    //19
+							(cTRB7001)->MEDIAR,;    //20
+							(cTRB7001)->POSCO2 }) //21
+
+			dbSelectArea(cTRB7001)
+			dbSkip()
+		End
+		If Len(aVERRABAS2) > 0
+			aVERRABAS2 := aSort(aVERRABAS2,,,{ |x,y| x[2]+x[3]+DTOS(x[6])+x[7] < y[2]+y[3]+DTOS(y[6])+y[7]} )
+		EndIf
+	EndIf
+
+	bGetLine1 := { || { If(aVERRABAS2[oGetErr:nAt,13] == "S", oNG700Ok , oNG700Nao) ,;
+						   aVERRABAS2[oGetErr:nAt,2],;
+							PADL(Transform(aVERRABAS2[oGetErr:nAt,3],"@R 99.999.999/9999-99"),18),;
+							aVERRABAS2[oGetErr:nAt,4],;
+							aVERRABAS2[oGetErr:nAt,5],;
+							Dtoc(aVERRABAS2[oGetErr:nAt,6]),;
+							aVERRABAS2[oGetErr:nAt,7],;
+							PADL(Transform(aVERRABAS2[oGetErr:nAt,8],"@E 999,999.99"),10),;
+							PADL(Transform(aVERRABAS2[oGetErr:nAt,9],"@E 99,999,999.999"),14),;
+							PADL(Transform(aVERRABAS2[oGetErr:nAt,10],"@E 999,999,999"),11),;
+							aVERRABAS2[oGetErr:nAt,11],;
+							aVERRABAS2[oGetErr:nAt,15],;
+							aVERRABAS2[oGetErr:nAt,16],;
+							aVERRABAS2[oGetErr:nAt,17],;
+							aVERRABAS2[oGetErr:nAt,18],;
+							aVERRABAS2[oGetErr:nAt,19],;
+							aVERRABAS2[oGetErr:nAt,20],;
+							aVERRABAS2[oGetErr:nAt,21]}}
+
+	bGetLine2 := { || { oNG700Nao, Space(14), Space(30), Space(12), Space(8),Space(5),Space(9),Space(12),Space(9),Space(16),Space(8),Space(16),Space(2),Space(11),Space(40)} }
+
+	oGetErr:SetArray(aVERRABAS2)
+	IIf(Len(aVERRABAS2)>0,oGetErr:bLine := bGetLine1,oGetErr:bLine := bGetLine2)
+
+	oGetErr:Refresh()
+
+	// Define o título de acordo com o erro
+	If Type("oSayRejei") == "O"
+		If AllTrim(cErAbas) == "99" .OR. AllTrim(cErAbas) == "41" .OR. AllTrim(cErAbas) == "42"
+			oSayRejei:SetText(STR0083) // "Transferências Rejeitadas"
+		Else
+			oSayRejei:SetText(STR0014) // "Abastecimentos Rejeitados"
+		EndIf
+		oSayRejei:Refresh()
+	EndIf
+
+Return .T.
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT700VALP³ Autor ³Elisangela Costa       ³ Data ³ 20/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Valida o parametro de erro no SX5                           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700VALP()
+
+	If Empty(MV_PAR04)
+		Help(" ",1,"ATEINVALID")
+		Return .F.
+	Elseif MV_PAR04 < MV_PAR03
+		Help(" ",1,"DEATEINVAL")
+		Return .F.
+	EndIf
+
+	If MV_PAR04 = Replicate('Z',Len(MV_PAR04))
+		Return .T.
+	Else
+		If !ExistCpo("SX5","ER"+MV_PAR04)
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT700ALTE
+Funcao de alteracao do registro de erro sobre o arquivo temporario
+
+@author Elisangela Costa
+@since 20/01/06
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+Function MNT700ALTE()
+
+	Local bCampo
+	Local i
+	Local iy
+	Local oPnlDlg
+	Local oModel
+	Local cNUMABAS		:= ""
+	Local cCNPJPOS		:= ""
+	Local cCAMPOA700	:= ""
+	Local cCAMP7001		:= ""
+	Local cCODERR		:= ""
+	Local cTQQCodCom 	:= ""
+	Local aCmpsEdt		:= {}
+	Local aModelError 	:= {}
+	Local aCampos     	:= {}
+	Local aNao        	:= {}
+	Local lTransf     	:= .F.
+	Local lGravou     	:= .F.
+	Local lMNTA7002		:= ExistBlock("MNTA7002")
+	Local lRPORel17     := GetRPORelease() <= '12.1.017'
+	Local lAceita       := .T.
+	Local cFlPosto      := ''
+	Local cPosto        := ''
+	Local cLoja         := ''
+	Local aPosto        := {}
+	Local cCodConv      := ''
+	Local aTabelas      := { {"SB1"}, {"SB2"}, {"SD3"}, {"SD4"}, {"TQF"}, {"TQG"}, {"TQH"}, {"TQI"}, {"TQJ"}, {"TQM"}, {"TTV"}, {"TTX"} }
+	Local lKmMenor      := .T.
+	Local lPosicTRB     := .F.
+	Local nPosRep       := 0
+
+	If Len(aVERRABAS1) > 0 .And. ( AllTrim( aVERRABAS1[oGetAbas:nAT][1] ) == "99" .Or. AllTrim( aVERRABAS1[oGetAbas:nAT][1] ) == "41" .Or. AllTrim( aVERRABAS1[oGetAbas:nAT][1] ) == "42" )
+		lTransf := .T.
+	EndIf
+
+	Private oDlg700
+	Private oGet
+	Private oMenu
+
+	//Monta a entrada de dados do arquivo
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private Continua
+	Private nUsado    := 0
+	Private aSize     := MsAdvSize(,.F.,430)
+	Private aObjects  := {}
+	Private cCADASTRO := Oemtoansi(STR0027) //"Abastecimento Rejeitado"
+	Private aTrocaF3  := {}
+	Private oEnchoice
+
+	// Inicia as Variáveis de Memória
+	INCLUI := .F.
+	ALTERA := .T.
+
+	If Len(aVERRABAS2) == 0
+		Help("",1,"ARQVAZIO")
+		Return .F.
+	EndIf
+
+	// Objetos em tela
+	aAdd(aObjects,{050,050,.T.,.T. })
+	aAdd(aObjects,{100,100,.T.,.T. })
+
+	aInfo   := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.T.)
+	bCampo  := {|nCPO| Field(nCPO) }
+	aPOS1   := {15,1,95,315}
+
+	//Posiciona o registro de abastecimento do TRB
+	nX700    := oGetErr:nAt
+	cNUMABAS := aVERRABAS2[nX700][5]
+	cCODERR  := aVERRABAS2[nX700][12]
+	cCNPJPOS := aVERRABAS2[nX700][14]
+	cFILABAS := aVERRABAS2[nX700][2]
+
+	// Variávle de controle para quando for identificado que o código do
+	// erro é 17 ou 18( referente ao KM menor ou igual ao ultimo abastecimento )
+	lKmMenor := cCODERR == " 17" .Or. cCODERR == " 18"
+
+	dbSelectArea(cTRB7002)
+	dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+
+	dbSelectArea("TQQ")
+	dbSetOrder(01)
+	If !dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+		MsgInfo(STR0055,STR0042)
+		Return
+	EndIf
+
+	If lConsComb
+		aAdd(aTrocaF3, {"TQQ_CODCOM", "TQM"})
+	EndIf
+
+	If lTransf
+
+		//--------------------
+		// Transferência
+		//--------------------
+		If lConsComb
+			cTQQCodCom := SubStr((cTRB7002)->TQQ_CODCOM,1,nTamComTQM)
+		Else
+			cTQQCodCom := (cTRB7002)->TQQ_CODCOM
+		EndIf
+
+		// Inicia variáveis do cadastro da Transferências (MNTA651)
+		MNTA651VAR()
+
+		// Monta o Modelo
+		oModel := FWLoadModel("MNTA651") // Tenta receber o Modelo de Dados
+		If ValType(oModel) <> "O"
+			MsgInfo(STR0084, STR0042) // "ATENÇÃO"
+			Return .F.
+		EndIf
+
+		oModel:SetOperation(MODEL_OPERATION_INSERT) // Define inclusão
+		oModel:Activate() // Ativa o Modelo de Dados
+
+		dbSelectArea("TUI")
+		PutFileInEof("TUI")
+		RegToMemory("TUI", INCLUI)
+
+		dbSelectArea("TQQ")
+
+		// Atribui os valores do registro à memória
+		M->TUI_DATA   := (cTRB7002)->TQQ_DTABAS
+		M->TUI_HORA   := (cTRB7002)->TQQ_HRABAS
+		M->TUI_MOTIVO := (cTRB7002)->TQQ_MOTTRA
+		M->TUI_DESMOT := NGSEEK("TTX",M->TUI_MOTIVO,1,"TTX->TTX_DESCRI")
+		M->TUI_RESPON := RetCodUsr()
+		M->TUI_NOMRES := UsrFullName(M->TUI_RESPON)
+		M->TUI_OBSERV := IIf(lRPORel17,NGMEMOSYP((cTRB7002)->TQQ_CODOBS),TQQ->TQQ_OBSERV)
+		M->TUI_EMPORI := (cTRB7002)->TQQ_EMPORI
+		M->TUI_FILORI := (cTRB7002)->TQQ_FILORI
+		M->TUI_POSORI := (cTRB7002)->TQQ_POSTO
+		M->TUI_LOJORI := (cTRB7002)->TQQ_LOJA
+		M->TUI_TANORI := (cTRB7002)->TQQ_TANQUE
+		M->TUI_COMORI := NGSEEK("TQM", cTQQCodCom, nIndTQM, "TQM->TQM_CODCOM")
+		M->TUI_PROORI := NGSEEK("TQI", M->TUI_POSORI + M->TUI_LOJORI + M->TUI_TANORI, 1, "TQI->TQI_PRODUT")
+		M->TUI_SAIORI := If(!Empty((cTRB7002)->TQQ_BOMBA), "1", "1")
+		M->TUI_BOMORI := (cTRB7002)->TQQ_BOMBA
+		M->TUI_QUANTI := (cTRB7002)->TQQ_QUANT
+
+		NGPrepTbl(aTabelas, (cTRB7002)->TQQ_EMPDES, (cTRB7002)->TQQ_FILDES)
+
+		M->TUI_EMPDES := (cTRB7002)->TQQ_EMPDES
+		M->TUI_FILDES := (cTRB7002)->TQQ_FILDES
+		M->TUI_POSDES := (cTRB7002)->TQQ_POSDES
+		M->TUI_LOJDES := (cTRB7002)->TQQ_LOJDES
+		M->TUI_TANDES := (cTRB7002)->TQQ_TANDES
+		M->TUI_COMDES := NGSEEK("TQM", cTQQCodCom, nIndTQM, "TQM->TQM_CODCOM")
+		M->TUI_PRODES := NGSEEK("TQI", M->TUI_POSDES + M->TUI_LOJDES + M->TUI_TANDES, 1, "TQI->TQI_PRODUT")
+
+		NGPrepTbl(aTabelas, (cTRB7002)->TQQ_EMPORI,(cTRB7002)->TQQ_FILORI)
+
+		nOpca := 0
+		DEFINE MSDIALOG oDlg700 TITLE cCadastro FROM nLinIniTla,nColIniTla TO nLinFimTla,nColFimTla OF oMainWnd PIXEL STYLE nOR(WS_VISIBLE,WS_POPUP)
+
+			// Painél principal Dialog
+			oPnlDlg := TPanel():New(01, 01, , oDlg700, , , , CLR_BLACK, CLR_WHITE, 100, 100)
+			oPnlDlg:Align := CONTROL_ALIGN_ALLCLIENT
+
+			// Cadsatro
+			aNao      := {"TUI_CODIGO", "TUI_CODOBS", "TUI_STATUS", "TUI_NSEORI", "TUI_NSEDES"}
+			aCampos   := aClone( NGCAMPNSX3("TUI", aNao))
+			oEnchoice := MsMGet():New("TUI", RecNo(), 3,,,,aCampos,aPosObj[1],,3,,,,oPnlDlg,,.T.,.F.,,,,,,,)
+			oEnchoice:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//Faz o gatilho correto do combustivel, conforme parametro
+			If !Empty(M->TQQ_CODCOM)
+				M->TQQ_NOMCOM := NGSEEK('TQM',ALLTRIM(M->TQQ_CODCOM),nIndTQM,'TQM->TQM_NOMCOM')
+			Else
+				M->TQQ_NOMCOM := ""
+			EndIf
+
+		ACTIVATE MSDIALOG oDlg700 ON INIT EnchoiceBar(oDlg700,{||nOpca := 1,If(OBRIGATORIO(aGets,aTela) .And. MNTA700VLD(aCampos),oDlg700:End(),;
+																 nOpca := 2)},{|| nOpca := 2, oDlg700:End() }) CENTERED
+
+		// Se confirmou
+		If nOpca == 1
+
+			lGravou := .F.
+
+			// Dados Gerais
+			oModel:LoadValue("TUIMASTER", "TUI_FILIAL", xFilial("TUI"))
+			oModel:LoadValue("TUIMASTER", "TUI_DATA"  , M->TUI_DATA)
+			oModel:LoadValue("TUIMASTER", "TUI_HORA"  , M->TUI_HORA)
+			oModel:LoadValue("TUIMASTER", "TUI_MOTIVO", M->TUI_MOTIVO)
+			oModel:LoadValue("TUIMASTER", "TUI_RESPON", M->TUI_RESPON)
+
+			If NGIFdbSeek("TTX", M->TUI_MOTIVO, 1) .And. ( lMVIntEst .And. TTX->TTX_ATUEST == "1" )
+				oModel:LoadValue("TUIMASTER", "TUI_STATUS", "1") // 1 - Normal
+			Else
+				oModel:LoadValue("TUIMASTER", "TUI_STATUS", "3") // 3 - Sem Estoque
+			EndIf
+
+			// Origem
+			oModel:LoadValue("TUIMASTER", "TUI_EMPORI", M->TUI_EMPORI)
+			oModel:LoadValue("TUIMASTER", "TUI_FILORI", M->TUI_FILORI)
+			oModel:LoadValue("TUIMASTER", "TUI_POSORI", M->TUI_POSORI)
+			oModel:LoadValue("TUIMASTER", "TUI_LOJORI", M->TUI_LOJORI)
+			oModel:LoadValue("TUIMASTER", "TUI_TANORI", M->TUI_TANORI)
+			oModel:LoadValue("TUIMASTER", "TUI_COMORI", M->TUI_COMORI)
+			oModel:LoadValue("TUIMASTER", "TUI_PROORI", M->TUI_PROORI)
+			oModel:LoadValue("TUIMASTER", "TUI_SAIORI", M->TUI_SAIORI)
+			oModel:LoadValue("TUIMASTER", "TUI_BOMORI", M->TUI_BOMORI)
+			oModel:LoadValue("TUIMASTER", "TUI_QUANTI", M->TUI_QUANTI)
+
+			// Destino
+			oModel:LoadValue("TUIMASTER", "TUI_EMPDES", M->TUI_EMPDES)
+			oModel:LoadValue("TUIMASTER", "TUI_FILDES", M->TUI_FILDES)
+			oModel:LoadValue("TUIMASTER", "TUI_POSDES", M->TUI_POSDES)
+			oModel:LoadValue("TUIMASTER", "TUI_LOJDES", M->TUI_LOJDES)
+			oModel:LoadValue("TUIMASTER", "TUI_TANDES", M->TUI_TANDES)
+			oModel:LoadValue("TUIMASTER", "TUI_COMDES", M->TUI_COMDES)
+			oModel:LoadValue("TUIMASTER", "TUI_PRODES", M->TUI_PRODES)
+
+			// Valida
+			CursorWait()
+			If oModel:VldData()
+
+				// Grava
+				oModel:CommitData()
+				CursorArrow()
+
+				lGravou := .T.
+				MsgInfo(STR0085, STR0042) // "ATENÇÃO"
+			Else
+				CursorArrow()
+
+				aModelError := oModel:GetErrorMessage()
+				// A estrutura do vetor com erro é:
+				// [1] identificador (ID) do formulário de origem
+				// [2] identificador (ID) do campo de origem
+				// [3] identificador (ID) do formulário de erro
+				// [4] identificador (ID) do campo de erro
+				// [5] identificador (ID) do erro
+				// [6] mensagem do erro
+				// [7] mensagem da solução
+				// [8] Valor atribuído
+				// [9] Valor anterior
+
+				AutoGrLog( STR0086 + " [" + AllToChar( aModelError[1] ) + "]" ) // "Id do formulário de origem:"
+				AutoGrLog( STR0087 + " [" + AllToChar( aModelError[2] ) + "]" ) // "Id do campo de origem:"
+				AutoGrLog( STR0088 + " [" + AllToChar( aModelError[3] ) + "]" ) // "Id do formulário de erro:"
+				AutoGrLog( STR0089 + " [" + AllToChar( aModelError[4] ) + "]" ) // "Id do campo de erro:"
+				AutoGrLog( STR0090 + " [" + AllToChar( aModelError[5] ) + "]" ) // "Id do erro:"
+				AutoGrLog( STR0091 + " [" + AllToChar( aModelError[6] ) + "]" ) // "Mensagem do erro:"
+				AutoGrLog( STR0092 + " [" + AllToChar( aModelError[7] ) + "]" ) // "Mensagem da solução:"
+				AutoGrLog( STR0093 + " [" + AllToChar( aModelError[8] ) + "]" ) // "Valor atribuído:"
+				AutoGrLog( STR0094 + " [" + AllToChar( aModelError[9] ) + "]" ) // "Valor anterior:"
+
+				MostraErro()
+			EndIf
+
+			// Desativa o modelo
+			oModel:DeActivate()
+
+			If lGravou
+				ConfirmSX8()
+
+				MNTA700EXC(.T.)
+			Else
+				RollBackSX8()
+
+				//Atualiza os dados alterados no arquivo temporario 1
+				dbSelectArea(cTRB7001)
+				dbSetOrder(01)
+				If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS+cCODERR)
+
+					RecLock((cTRB7001), .F.)
+
+					(cTRB7001)->CNPJ   := NGSEEK("TQF", M->TUI_POSORI + M->TUI_LOJORI, 1, "TQF->TQF_CNPJ")
+					(cTRB7001)->DESCPO := NGSEEK("TQF", M->TUI_POSORI + M->TUI_LOJORI, 1, "TQF->TQF_NREDUZ")
+					(cTRB7001)->DTABAS := M->TUI_DATA
+					(cTRB7001)->HRABAS := M->TUI_HORA
+					(cTRB7001)->QUANT  := M->TUI_QUANTI
+					(cTRB7001)->ALTERR := "S"
+
+					(cTRB7001)->(MsUnlock())
+
+					//Atualiza a array que contem dados do TRB 1
+					nPOS700 := Ascan(aVERRABAS2,{|x| x[2]+x[5]+x[14]+x[12] == cFILABAS+cNUMABAS+cCNPJPOS+cCODERR})
+					If nPOS700 > 0
+
+						aVERRABAS2[nPOS700][3]  := (cTRB7001)->CNPJ
+						aVERRABAS2[nPOS700][4]  := (cTRB7001)->DESCPO
+						aVERRABAS2[nPOS700][6]  := (cTRB7001)->DTABAS
+						aVERRABAS2[nPOS700][7]  := (cTRB7001)->HRABAS
+						aVERRABAS2[nPOS700][8]  := (cTRB7001)->QUANT
+						aVERRABAS2[nPOS700][13] := "S"
+
+					EndIf
+				EndIf
+
+				//Atualiza os dados alterados no arquivo temporario 2
+				dbSelectArea(cTRB7002)
+				If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+
+					RecLock((cTRB7001), .F.)
+
+					(cTRB7002)->TQQ_DESCPO := NGSEEK("TQF", M->TUI_POSORI + M->TUI_LOJORI, 1, "TQF->TQF_NREDUZ")
+					(cTRB7002)->TQQ_ALTERR := "S"
+					(cTRB7002)->TQQ_POSTO  := M->TUI_POSORI
+					(cTRB7002)->TQQ_LOJA   := M->TUI_LOJORI
+					(cTRB7002)->TQQ_CNPJ   := NGSEEK("TQF", M->TUI_POSORI + M->TUI_LOJORI, 1, "TQF->TQF_CNPJ")
+					(cTRB7002)->TQQ_DTABAS := M->TUI_DATA
+					(cTRB7002)->TQQ_HRABAS := M->TUI_HORA
+					(cTRB7002)->TQQ_QUANT  := M->TUI_QUANTI
+					(cTRB7002)->TQQ_CODCOM := If(lConsComb, M->TUI_COMORI, NGSEEK("TQM",PADR(M->TUI_COMORI,TAMSX3("TQM_CODCON")[1]," "),2,"TQM->TQM_CODCON"))
+					(cTRB7002)->TQQ_TANQUE := M->TUI_TANORI
+					(cTRB7002)->TQQ_BOMBA  := M->TUI_BOMORI
+					(cTRB7002)->TQQ_EMPORI := M->TUI_EMPORI
+					(cTRB7002)->TQQ_FILORI := M->TUI_FILORI
+					(cTRB7002)->TQQ_EMPDES := M->TUI_EMPDES
+					(cTRB7002)->TQQ_FILDES := M->TUI_FILDES
+					(cTRB7002)->TQQ_POSDES := M->TUI_POSDES
+					(cTRB7002)->TQQ_LOJDES := M->TUI_LOJDES
+					(cTRB7002)->TQQ_TANDES := M->TUI_TANDES
+					(cTRB7002)->TQQ_MOTTRA := M->TUI_MOTIVO
+					(cTRB7002)->TQQ_POSTO  := M->TUI_POSORI
+					(cTRB7002)->TQQ_LOJA   := M->TUI_LOJORI
+
+					(cTRB7001)->(MsUnlock())
+				EndIf
+			EndIf
+		EndIf
+
+		//Atualiza Legenda
+		oGetAbas:Refresh()
+		M700LINOk(oGetAbas:nAt)
+		oGetErr:Refresh()
+
+	Else
+
+		//--------------------
+		// Abastecimento
+		//--------------------
+		nReg := Recno()
+
+		//Cria variavel private para F3
+		M->TQN_POSTO  := ""
+		M->TQN_LOJA   := ""
+		M->TQN_CODCOM := ""
+
+		cPosto        := ""
+		cLoja         := ""
+		cTanque       := ""
+
+		dbSelectArea("TQQ")
+		dbSetOrder(01)
+		For i := 1 To FCount()
+
+			dbSelectArea("TQQ")
+			cCAMP7001 := EVAL(bCampo,i)
+
+			dbSelectArea(cTRB7002)
+			If (cTRB7002)->(FieldPos(cCAMP7001))>0
+				cCAMPOA700 := "(cTRB7002)->"+cCAMP7001
+				M->&(cCAMP7001) := &(cCAMPOA700)
+			EndIf
+
+		Next i
+		M->TQQ_CODMOT := (cTRB7002)->TQQ_CODMOT
+
+		dbSelectArea("TQQ")
+		nOpca := 0
+		Define MsDialog oDlg700 Title Ccadastro From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel
+
+			aCmpsEdt  := f700VfEdit() // 027181
+			oEnchoice := MsmGet():New("TQQ", nReg, 4,,,,,aPosObj[1],aCmpsEdt,3)
+
+			NGPOPUP(asMenu,@oMenu)
+			oDlg700:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg700)}
+			oEnchoice:oBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg700)}
+
+			//Faz o gatilho correto do combustivel, conforme parametro
+			If !Empty(M->TQQ_CODCOM)
+				M->TQQ_NOMCOM := NGSEEK('TQM',ALLTRIM(M->TQQ_CODCOM),nIndTQM,'TQM->TQM_NOMCOM')
+			Else
+				M->TQQ_NOMCOM := ""
+			EndIf
+
+		Activate MsDialog oDlg700 On Init EnchoiceBar(oDlg700,{||nOpca:=1,IIf( !obrigatorio( aGets, aTela ) .Or. !fValAltera( aGets,aTela ), nOpca := 0,oDlg700:End())},;
+															  {||oDlg700:End()},AlignObject(oDlg700,{oEnchoice:oBox},1))
+
+		If nOPCA == 1
+
+			aPosto   := fInfoposto( M->TQQ_CNPJ )
+			cFlPosto := aPosto[2]
+			cPosto   := aPosto[3]
+			cLoja    := aPosto[4]
+			cCodConv := fCodComb( cFlPosto ) // Código do combustível
+
+			//pergunta se quer gravar novo preco
+			If GetNewPar("MV_NGPRENE","N") = "S"
+
+				If cCODERR == " 08" .Or. cCODERR == " 09" .Or. cCODERR == " 11"
+
+					If Empty(cCodConv)
+						MsgStop(STR0057)
+						Return .F.
+					EndIf
+
+					If cCODERR == " 08" // Devergencia valor negociado
+						If MsgYesNo(STR0058+ALLTRIM(STR(M->TQQ_VALUNI))+STR0059,STR0042)
+
+							dbSelectArea("TQG")
+							dbSetOrder(1) //TQG_FILIAL+TQG_CODPOS+TQG_LOJA+DTOS(TQG_DTNEG)+TQG_HRNEG
+							If !dbSeek(xFilial("TQG", cFlPosto ) + cPosto + cLoja + DTOS(M->TQQ_DTABAS)+M->TQQ_HRABAS )
+								Reclock("TQG",.T.)
+							Else
+								Reclock("TQG",.F.)
+							EndIf
+
+							TQG->TQG_FILIAL := xFilial( "TQG", cFlPosto )
+							TQG->TQG_CODPOS := cPosto
+							TQG->TQG_LOJA   := cLoja
+							TQG->TQG_DTNEG  := M->TQQ_DTABAS
+							TQG->TQG_HRNEG  := M->TQQ_HRABAS
+							TQG->TQG_PRAZO  := 1
+							TQG->TQG_DIAFAT := 1
+							TQG->TQG_DIALIM := 1
+							MsUnlock("TQG")
+
+							dbSelectArea("TQH")
+							dbSetOrder(1)
+							If !dbSeek(xFilial("TQH", cFlPosto )+cPosto+cLoja+cCodConv+DTOS(M->TQQ_DTABAS)+M->TQQ_HRABAS)
+								RecLock("TQH",.T.)
+							Else
+								RecLock("TQH",.F.)
+							EndIf
+							TQH->TQH_FILIAL := xFilial("TQH", cFlPosto )
+							TQH->TQH_CODPOS := cPosto
+							TQH->TQH_LOJA   := cLoja
+							TQH->TQH_CODCOM := cCodConv
+							TQH->TQH_DTNEG  := M->TQQ_DTABAS
+							TQH->TQH_HRNEG  := M->TQQ_HRABAS
+							TQH->TQH_PRENEG := M->TQQ_VALUNI
+							TQH->TQH_PREBOM := M->TQQ_VALUNI
+							TQH->TQH_DESCON := 0
+							TQH->TQH_ORDENA := INVERTE(TQH->TQH_DTNEG)
+							TQH->TQH_USUARI := SUBSTR(cUSUARIO,7,15)
+							MsUnLock("TQH")
+						EndIf
+					Else
+						If M->TQQ_VALUNI <> 0
+							If MsgYesNo(STR0058+ALLTRIM(STR(M->TQQ_VALUNI))+STR0059,STR0042)
+
+								dbSelectArea("TQG")
+								dbSetOrder(1) //TQG_FILIAL+TQG_CODPOS+TQG_LOJA+DTOS(TQG_DTNEG)+TQG_HRNEG
+								If !dbSeek(xFilial("TQG", cFlPosto ) + cPosto + cLoja + DTOS(M->TQQ_DTABAS)+M->TQQ_HRABAS )
+									Reclock("TQG",.T.)
+								Else
+									Reclock("TQG",.F.)
+								EndIf
+
+								TQG->TQG_FILIAL := xFilial("TQG",cFlPosto )
+								TQG->TQG_CODPOS := cPosto
+								TQG->TQG_LOJA   := cLoja
+								TQG->TQG_DTNEG  := M->TQQ_DTABAS
+								TQG->TQG_HRNEG  := M->TQQ_HRABAS
+								TQG->TQG_PRAZO  := 1
+								TQG->TQG_DIAFAT := 1
+								TQG->TQG_DIALIM := 1
+								MsUnlock("TQG")
+
+								dbSelectArea("TQH")
+								dbSetOrder(1)
+								If !dbSeek(xFilial("TQH", cFlPosto )+cPosto+cLoja+cCodConv+DTOS(M->TQQ_DTABAS)+M->TQQ_HRABAS)
+									RecLock("TQH",.T.)
+								Else
+									RecLock("TQH",.F.)
+								EndIf
+								TQH->TQH_FILIAL := xFilial("TQH", cFlPosto )
+								TQH->TQH_CODPOS := cPosto
+								TQH->TQH_LOJA   := cLoja
+								TQH->TQH_CODCOM := cCodConv
+								TQH->TQH_DTNEG  := M->TQQ_DTABAS
+								TQH->TQH_HRNEG  := M->TQQ_HRABAS
+								TQH->TQH_PRENEG := M->TQQ_VALUNI
+								TQH->TQH_PREBOM := M->TQQ_VALUNI
+								TQH->TQH_DESCON := 0
+								TQH->TQH_ORDENA := INVERTE(TQH->TQH_DTNEG)
+								TQH->TQH_USUARI := SUBSTR(cUSUARIO,7,15)
+								MsUnLock("TQH")
+							EndIf
+						EndIF
+					EndIf
+				EndIf
+			EndIf
+
+			lAceita := .T.
+			If cCODERR == " 27" .Or. cCODERR == " 28" .OR. cCODERR == " 38"
+
+				lAceita := .F.
+				dbSelectArea("ST9")
+				dbSetOrder(14)
+				If dbSeek(M->TQQ_PLACA)
+					If cCODERR == " 27"
+						If NGVALIVARD(ST9->T9_CODBEM,M->TQQ_HODOM,M->TQQ_DTABAS,M->TQQ_HRABAS,1,.T.,,ST9->T9_FILIAL)
+							lAceita := .T.
+						EndIf
+					ElseIf cCODERR == " 28"
+						If Empty(cTQQCodCom)
+							cTQQCodCom := M->TQQ_CODCOM
+						EndIf
+
+						cCodConv := fCodComb( cFlPosto, cTQQCodCom )
+
+						aAutonomia := NGAUTONOMIA(ST9->T9_CODBEM,M->TQQ_DTABAS,M->TQQ_HRABAS,M->TQQ_HODOM,.F., cCodConv, 1 )
+						If !aAutonomia[1]
+							If MsgYesNo(aAutonomia[2],STR0042)
+								If NGVALIVARD(ST9->T9_CODBEM,M->TQQ_HODOM,M->TQQ_DTABAS,M->TQQ_HRABAS,1,.T.,,ST9->T9_FILIAL)
+									lAceita := .T.
+								EndIf
+							EndIf
+						EndIf
+						If !Empty(M->TQQ_POSCO2)
+							aAutonomia := NGAUTONOMIA(ST9->T9_CODBEM,M->TQQ_DTABAS,M->TQQ_HRABAS,M->TQQ_POSCO2,.F., cCodConv, 2 )
+							If !aAutonomia[1]
+								If MsgYesNo(aAutonomia[2],STR0042)
+									If NGVALIVARD(ST9->T9_CODBEM,M->TQQ_POSCO2,M->TQQ_DTABAS,M->TQQ_HRABAS,2,.T.,,ST9->T9_FILIAL)
+										lAceita := .T.
+									EndIf
+								EndIf
+							EndIf
+						EndIf
+					Else
+						If NGVALIVARD(ST9->T9_CODBEM,M->TQQ_POSCO2,M->TQQ_DTABAS,M->TQQ_HRABAS,2,.T.,,ST9->T9_FILIAL)
+							lAceita := .T.
+						EndIf
+					EndIf
+				EndIf
+			//----------------------------------------------------------------------------------
+			// Quando o código do erro for 17 (KM menor ou igual ao Km do ultimo abastecimento)
+			// ou 18 (KM maior ou igual ao Km do abastecimento posterior) e o usuário
+			// não efetuou nenhuma alteração para corrigir, pergunta se deseja prosseguir
+			//----------------------------------------------------------------------------------
+			ElseIf lKmMenor
+
+				lAceita := fValCnt( 1, cCODERR ) // Testa contador 1
+
+				If lAceita
+					lAceita := fValCnt( 2, cCODERR ) // Testa contador 2
+				EndIf
+
+			EndIf
+
+			If ExistBlock("MNTA7002")
+				lAceita := ExecBlock("MNTA7002",.F.,.F.,{cCODERR," ",lAceita})
+			EndIf
+
+			//Atualiza os dados alterado no arquivo temporario 1
+			dbSelectArea(cTRB7001)
+			dbSetOrder(01)
+			If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS+cCODERR)
+				(cTRB7001)->CNPJ   := M->TQQ_CNPJ
+				(cTRB7001)->DESCPO := (cTRB7002)->TQQ_DESCPO
+				(cTRB7001)->DTABAS := M->TQQ_DTABAS
+				(cTRB7001)->HRABAS := M->TQQ_HRABAS
+				(cTRB7001)->QUANT  := M->TQQ_QUANT
+				(cTRB7001)->VALTOT := M->TQQ_VALTOT
+				(cTRB7001)->HODOM  := IIf( !lAceita .And. lKmMenor, (cTRB7001)->HODOM, M->TQQ_HODOM )
+
+				If lAceita  //aceita erro de variacao dia ou autonomia
+					(cTRB7001)->ERROVA := If((cTRB7001)->ERROVA == " 27" .Or. (cTRB7001)->ERROVA == " 28","ZZZ",cCODERR)
+					If ExistBlock("MNTA7002")
+						(cTRB7001)->ERROVA := ExecBlock("MNTA7002",.F.,.F.,{"2",cCODERR,.F.})
+					EndIf
+				EndIf
+
+				dbSelectArea("ST9")
+				dbSetOrder(14)
+				If dbSeek(M->TQQ_PLACA)
+					(cTRB7001)->NOMBEM := SubStr(ST9->T9_NOME,1,40)
+					(cTRB7001)->ALTERR := If(lAceita,"S","N")
+				EndIf
+
+				//Atualiza a array que contem dados do TRB 1
+				nPOS700 := Ascan(aVERRABAS2,{|x| x[2]+x[5]+x[14]+x[12] == cFILABAS+cNUMABAS+cCNPJPOS+cCODERR})
+				If nPOS700 > 0
+
+					aVERRABAS2[nPOS700][3]  := (cTRB7001)->CNPJ
+					aVERRABAS2[nPOS700][4]  := (cTRB7001)->DESCPO
+					aVERRABAS2[nPOS700][6]  := (cTRB7001)->DTABAS
+					aVERRABAS2[nPOS700][7]  := (cTRB7001)->HRABAS
+					aVERRABAS2[nPOS700][8]  := (cTRB7001)->QUANT
+					aVERRABAS2[nPOS700][9]  := (cTRB7001)->VALTOT
+					aVERRABAS2[nPOS700][10] := (cTRB7001)->HODOM
+					aVERRABAS2[nPOS700][11] := (cTRB7001)->NOMBEM
+					aVERRABAS2[nPOS700][13] := (cTRB7001)->ALTERR
+
+					If ( nPosRep := aScan( aReprocess, { |x| x[2] + x[5] + x[14] == aVERRABAS2[nPOS700,2] +;
+						aVERRABAS2[nPOS700,5] + aVERRABAS2[nPOS700,14] } ) ) > 0
+
+						aCopy( aVERRABAS2[nPOS700], aReprocess[nPosRep] )
+
+					Else
+						
+						aAdd( aReprocess, aVERRABAS2[nPOS700] )
+
+					EndIf
+
+				EndIf
+
+				dbSelectArea(cTRB7001)
+				dbSetOrder(01)
+				If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+					lPosicTRB := .T.
+					While !Eof().And. (cTRB7001)->FILIAL = cFILABAS  .And. (cTRB7001)->NABAST = cNUMABAS .And. (cTRB7001)->CNPJOL = cCNPJPOS
+
+						(cTRB7001)->CNPJ   := M->TQQ_CNPJ
+						(cTRB7001)->DESCPO := (cTRB7002)->TQQ_DESCPO //M->TQQ_DESCPO
+						(cTRB7001)->DTABAS := M->TQQ_DTABAS
+						(cTRB7001)->HRABAS := M->TQQ_HRABAS
+						(cTRB7001)->QUANT  := M->TQQ_QUANT
+						(cTRB7001)->VALTOT := M->TQQ_VALTOT
+						(cTRB7001)->HODOM  := IIf( !lAceita .And. lKmMenor, (cTRB7001)->HODOM, M->TQQ_HODOM )
+						(cTRB7001)->NOMBEM := SubStr(POSICIONE("ST9",14,M->TQQ_PLACA+"A",'T9_NOME'),1,40)
+						If (cTRB7001)->CODERRO == " 27" .OR. (cTRB7001)->CODERRO == " 28" .OR. (cTRB7001)->CODERRO == " 38"
+							If lAceita  //aceita erro de variacao dia ou autonomia
+								(cTRB7001)->ERROVA := If((cTRB7001)->ERROVA == " 27" .Or. (cTRB7001)->ERROVA == " 28" .Or. (cTRB7001)->ERROVA == " 38","ZZZ",cCODERR)
+							EndIf
+						EndIf
+						If lMNTA7002
+							If lAceita
+								(cTRB7001)->ERROVA := ExecBlock("MNTA7002",.F.,.F.,{"2",(cTRB7001)->CODERRO,.F.})
+							EndIf
+						EndIf
+						dbSelectArea(cTRB7001)
+						dbSkip()
+					End
+				EndIf
+			EndIf
+
+			//Atualiza os dados alterado no arquivo temporario 2
+			dbSelectArea(cTRB7002)
+			If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+
+				If lPosicTRB
+					// Caso execute o while para repassar os valores ao TRB, aqui faz o posicionamento para gravação correta do cTRB7002
+					(cTRB7001)->( dbskip( -1 ) )
+				EndIf
+
+				(cTRB7002)->TQQ_ALTERR := "S"
+				(cTRB7002)->TQQ_CODMOT := M->TQQ_CODMOT
+
+				dbSelectArea("TQQ")
+				For iy := 1 To FCount()
+
+					dbSelectArea("TQQ")
+					cCAMP7001 := Fieldname(iy)
+
+					dbSelectArea(cTRB7002)
+					If (cTRB7002)->(FieldPos(cCAMP7001))>0
+						cCAMPOA700 := "(cTRB7002)->"+cCAMP7001
+						&(cCAMPOA700) := M->&(cCAMP7001)
+					EndIf
+
+				Next iy
+
+				// Realiza retrocesso da posição do contador, caso o usuário tenha escolhido que não deverá utilizar o mesmo contador.
+				If !lAceita .And. lKmMenor
+					(cTRB7002)->TQQ_HODOM := (cTRB7001)->HODOM
+				EndIf
+
+				If cCODERR == " 17" .Or. cCODERR == " 27" .Or. cCODERR == " 28" .Or. cCODERR == " 38"
+					If lAceita  // aceita erro de variacao dia, autonomia ou KM menor ou igual
+						(cTRB7002)->TQQ_ERROVA := If((cTRB7002)->TQQ_ERROVA == " 17" .Or. (cTRB7002)->TQQ_ERROVA == " 27" .Or. (cTRB7002)->TQQ_ERROVA == " 28" .Or. (cTRB7002)->TQQ_ERROVA == " 38", "ZZZ", cCODERR)
+					EndIf
+				EndIf
+
+				If ExistBlock("MNTA7002")
+					If lAceita
+						(cTRB7002)->TQQ_ERROVA := ExecBlock("MNTA7002",.F.,.F.,{"2",cCODERR,.F.})
+					EndIf
+				EndIf
+			EndIf
+
+			//Tela justificativa
+			If ExistBlock("MNT655JUST")
+				If !ExecBlock("MNT655JUST",.F.,.F.,{'2',M->TQQ_FILIAL,M->TQQ_NABAST})
+					Return
+				EndIf
+			EndIf
+
+		EndIf
+
+		//Atualiza Legenda
+		oGetAbas:Refresh()
+		M700LINOk(oGetAbas:nAt)
+		oGetErr:Refresh()
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f700VfEdit()
+
+@author Maicon André Pinheiro
+@since 21/06/2016
+@version 1.0
+@return array
+/*/
+//---------------------------------------------------------------------
+Static Function f700VfEdit()
+
+	Local aCmpsEdt  := {}
+	Local cCNPJPOS  := aVERRABAS2[oGetErr:nAt][14]
+	Local cAbast    := AllTrim(aVERRABAS2[oGetErr:nAt][5])
+	Local nErro08   := aScanX(aVERRABAS1,{|x,y|AllTrim(x[1]) == "08" .And. y > 0 })
+	Local nErro51   := aScanX(aVERRABAS1,{|x,y|AllTrim(x[1]) == "51" .And. y > 0 })
+	Local nErro52   := aScanX(aVERRABAS1,{|x,y|AllTrim(x[1]) == "52" .And. y > 0 })
+	Local nErro53   := aScanX(aVERRABAS1,{|x,y|AllTrim(x[1]) == "53" .And. y > 0 })
+
+	aAdd(aCmpsEdt,"TQQ_PLACA")
+	aAdd(aCmpsEdt,"TQQ_QUANT")
+	aAdd(aCmpsEdt,"TQQ_VALTOT")
+	aAdd(aCmpsEdt,"TQQ_CODCOM")
+	aAdd(aCmpsEdt,"TQQ_HODOM")
+	aAdd(aCmpsEdt,"TQQ_CODMOT")
+	aAdd(aCmpsEdt,"TQQ_TANQUE")
+	aAdd(aCmpsEdt,"TQQ_BOMBA")
+	aAdd(aCmpsEdt,"TQQ_POSTO")
+	aAdd(aCmpsEdt,"TQQ_LOJA")
+	aAdd(aCmpsEdt,"TQQ_OBSERV")
+	aAdd(aCmpsEdt,"TQQ_CNPJ")
+
+	If nErro08 > 0 .And. cAbast $ aVERRABAS1[nErro08][3]
+
+		If cConNeg == 'S' .Or. fInfoposto( cCNPJPOS )[5] == '3'
+			aAdd(aCmpsEdt,"TQQ_VALUNI")
+		EndIf
+
+	EndIf
+
+	If nErro51 > 0 .And. cAbast $ aVERRABAS1[nErro51][3]
+		aAdd(aCmpsEdt,"TQQ_DTABAS")
+	EndIf
+
+	If nErro52 > 0 .And. cAbast $ aVERRABAS1[nErro52][3]
+		aAdd(aCmpsEdt,"TQQ_HRABAS")
+	EndIf
+
+	If nErro53 > 0 .And. cAbast $ aVERRABAS1[nErro53][3]
+		aAdd(aCmpsEdt,"TQQ_DTABAS")
+		aAdd(aCmpsEdt,"TQQ_HRABAS")
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(14)
+	If dbSeek(TQQ->TQQ_PLACA)
+
+		// Verificar se tem Primeiro Contador
+		If ST9->T9_TEMCONT == 'N'
+
+			aAdd( aCmpsEdt, 'TQQ_POSCON' )
+
+		EndIf
+
+		// Verificar se tem Segundo Contador
+		dbSelectArea("TPE")
+		dbSetOrder(1)
+		If dbSeek( ST9->T9_FILIAL + ST9->T9_CODBEM)
+			aAdd(aCmpsEdt,"TQQ_POSCO2") //Adicionado o campo Segundo Contador quando o Bem possuir o campo
+		EndIf
+	EndIf
+
+Return aCmpsEdt
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} M700GRAVA
+Funcao que grava os dados alterados no arquivo original de abastecimentos
+rejeitados
+
+@author Elisangela Costa
+@since 20/01/06
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+Function M700GRAVA()
+
+	Local cCAMP7001 := ''
+	Local xz        := 0
+
+	dbSelectArea(cTRB7002)
+	DbGotop()
+	ProcRegua(LastRec())
+	While !Eof()
+
+		IncProc(STR0028) //"Atualizando as inconsistências lógicas..."
+
+		If (cTRB7002)->TQQ_ALTERR  = "S"
+
+			dbSelectArea("TQQ")
+			dbSetOrder(01)
+			If dbSeek((cTRB7002)->TQQ_FILIAL+(cTRB7002)->TQQ_NABAST+(cTRB7002)->TQQ_CNPJOL)
+
+				RecLock("TQQ",.F.)
+				For xz := 1 To FCount()
+
+					dbSelectArea("TQQ")
+					cCAMP7001 := Fieldname(xz)
+
+					dbSelectArea(cTRB7002)
+					If (cTRB7002)->(FieldPos(cCAMP7001))>0
+						cCAMPOA700 := "(cTRB7002)->"+cCAMP7001
+						TQQ->&(cCAMP7001) := &(cCAMPOA700)
+					EndIf
+
+				Next xz
+
+			EndIf
+
+		EndIf
+
+		dbSelectArea(cTRB7002)
+		dbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT700IMPR
+Impressao de Inconsistencias Logicas
+
+@author Elisangela Costa
+@since 20/01/06
+@version MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNT700IMPR()
+
+	Local cString    := (cTRB7001)
+	Local cDesc1     := STR0029 //"Inconsistências Lógicas"
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTA700"
+
+	Private aReturn  := {STR0030, 1,STR0031, 1, 2, 1," ",1 }  //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "G"     // Tipo de Relatório: M - Retrato, G - Paisagem
+
+	//Envia controle para a funcao SETPRINT
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	EndIf
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| MNA700Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNA700Imp ³ Autor ³Elisangela Costa       ³ Data ³ 20/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Impressao do Relatorio                                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³MNT700IMPR                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNA700Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	Private li       := 80
+	Private m_pag    := 1
+	Private Cabec1   := STR0032 //"CNPJ               Nome do Posto              Abastecimento Data       Hora      Litros          Valor          Km  Veiculo           Frota"
+	Private Cabec2   := " "
+	Private nomeprog := "MNTA700"
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	          1         2         3         4         5         6         7         8         9       100       110       120       130
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	_____________________________________________________________________________________________________________________________________
+	 CNPJ               Nome do Posto              Abastecimento Data       Hora      Litros          Valor          Km  Veiculo         Frota
+	_____________________________________________________________________________________________________________________________________
+
+	 ERRO..: xxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	 99.999.999/9999-99 xxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxx  99/99/9999 99:99 999.999,99 99.999.999,999 999.999.999  xxxxxxxxxxxxxxxx
+	 ------------------------------------------------------------------------------------------------------------------------------------
+
+	 ERRO..: xxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	 99.999.999/9999-99 xxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxx  99/99/9999 99:99 999.999,99 99.999.999,999 999.999.999  xxxxxxxxxxxxxxxx
+	 99.999.999/9999-99 xxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxx  99/99/9999 99:99 999.999,99 99.999.999,999 999.999.999  xxxxxxxxxxxxxxxx
+	 99.999.999/9999-99 xxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxx  99/99/9999 99:99 999.999,99 99.999.999,999 999.999.999  xxxxxxxxxxxxxxxx
+	*/
+
+	lPRI700 := .T.
+	dbSelectArea(cTRB7001)
+	dbSetOrder(02)
+	dbGoTop()
+	SetRegua(LastRec())
+	While !Eof()
+
+		cERRO700 := (cTRB7001)->CODERRO
+
+		If lPRI700
+			NGSOMALI(58)
+			lPRI700 := .F.
+		Else
+			NGSOMALI(58)
+			NGSOMALI(58)
+		EndIf
+		@LI,000 Psay STR0033  Picture "@!" //"ERRO..: "
+		@LI,008 Psay cERRO700 Picture "@!"
+
+   		//nCodER	:= IIf(ValType(cERRO700) == "N",  0, 1)
+		@LI,013 Psay NGSEEK("SX5","ER"+AllTrim(cERRO700),01,"SubStr(X5_DESCRI,1,40)") Picture "@!" //
+		NGSOMALI(58)
+
+		While !Eof() .And. (cTRB7001)->CODERRO = cERRO700
+			IncRegua()
+			NGSOMALI(58)
+			@LI,000 Psay (cTRB7001)->CNPJ Picture "@R 99.999.999/9999-99"
+			@LI,019 Psay SubStr((cTRB7001)->DESCPO,1,26) Picture "@!"
+			@LI,046 Psay (cTRB7001)->NABAST Picture "@!"
+			@LI,062 Psay (cTRB7001)->DTABAS Picture "99/99/9999"//63
+			@LI,073 Psay (cTRB7001)->HRABAS Picture "99:99"        //71
+			@LI,084 Psay (cTRB7001)->QUANT  Picture "@E 99,999.999"      //77
+			@LI,098 Psay (cTRB7001)->VALTOT Picture "@E 999,999,999,999.99"//88
+
+			@LI,118 Psay (cTRB7001)->FILIAL Picture "@!"
+			@LI,123 Psay (cTRB7001)->PLACA  Picture "@!
+			@LI,128 Psay (cTRB7001)->HODOM  Picture "@E 999,999,999"//103
+			@LI,142 Psay (cTRB7001)->NOMBEM Picture "@!"
+			@LI,184 Psay (cTRB7001)->CODFRO Picture "@!"
+
+			dbSelectArea(cTRB7001)
+			dbSkip()
+		End
+		NGSOMALI(58)
+		@LI,000 Psay Replicate("-",220)
+	End
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700EXC³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Exclusao de uma inconsistencia de abastecimento             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700EXC(lForceExc)
+
+	Local aTRB7001 := {}
+	Local aTRB7002 := {}
+	Local lSEMATU  := .F.
+	Local i
+
+	// Defaults
+	Default lForceExc := .F.
+
+	If Len(aVERRABAS2) == 0
+		Help("",1,"ARQVAZIO")
+		Return .F.
+	EndIf
+
+	noGeta   := oGetAbas:nAt
+	nX700    := oGetErr:nAt
+	cNUMABAS := aVERRABAS2[nX700][5]
+	cCODERR  := aVERRABAS2[nX700][12]
+	cCNPJPOS := aVERRABAS2[nX700][14]
+	cFILABAS := aVERRABAS2[nX700][2]
+
+	dbSelectArea(cTRB7002)
+	dbSetOrder(01)
+	If dbSeek(cFILABAS+cNUMABAS+cCNPJPOS)
+
+		dbSelectArea("TQQ")
+		dbSetOrder(01)
+		If dbSeek(cFILABAS+cNumAbas+cCNPJPOS)
+
+			If lForceExc .Or. (!lForceExc .And. MsgYesNo(STR0060,STR0042) )
+
+				dbSelectArea("TQQ")
+				dbSetOrder(01)
+				If dbSeek(cFILABAS+cNumAbas+cCNPJPOS)
+					If !lForceExc
+		    			//chama tela para informar justificativa para exclusão
+						If ExistBlock("MNT655JUST")
+							If !ExecBlock("MNT655JUST",.F.,.F.,{'2',TQQ->TQQ_FILIAL,TQQ->TQQ_NABAST})
+								Return
+							EndIf
+						EndIf
+					EndIf
+
+					//Deleta Abastecimento Rejeitados.
+					RecLock("TQQ",.F.)
+					dbDelete()
+					MsUnLock()
+					aAdd( aTRB7002, { cFILABAS, cNumAbas,cCNPJPOS } )
+
+					dbSelectArea("TQP")
+					dbSetOrder(01)
+					dbSeek(cFILABAS+cNumAbas+cCNPJPOS)
+					While !Eof() .And. TQP->TQP_FILIAL = cFILABAS .And. cNumAbas == TQP->TQP_NABAST .And. cCNPJPOS == TQP->TQP_CNPJ
+
+						//Deleta erros dos abastecimentos.
+						RecLock("TQP",.F.)
+						dbDelete()
+						MsUnLock()
+
+						aAdd(aTRB7001, {cFILABAS,cNumAbas,cCNPJPOS } )
+						dbSkip()
+					End
+				EndIf
+
+				dbSelectArea(cTRB7002)
+				dbSetOrder(01)
+				If dbSeek(aTRB7002[1][1]+aTRB7002[1][2]+aTRB7002[1][3])
+					RecLock((cTRB7002),.F.)
+					dbDelete()
+					(cTRB7002)->(MsUnLock())
+				EndIf
+
+				For i:= 1 To Len(aTRB7001)
+					dbSelectArea(cTRB7001)
+					dbSetOrder(1)
+					If dbSeek(aTRB7001[i][1]+aTRB7001[i][2]+aTRB7001[i][3])
+						RecLock((cTRB7001),.F.)
+						dbDelete()
+						(cTRB7001)->(MsUnLock())
+					EndIf
+				Next i
+
+				Adel (aVERRABAS2,nX700)
+				Asize(aVERRABAS2,Len(aVERRABAS2)-1)
+
+				dbSelectArea(cTRB7001)
+				dbSetOrder(2)
+				Dbgotop()
+				While !Eof()
+					If (cTRB7001)->CODERRO = cCODERR
+						lSEMATU := .T.
+						Exit
+					EndIf
+					Dbskip()
+				End
+
+				If !lSEMATU
+					Adel (aVERRABAS1,noGeta)
+					Asize(aVERRABAS1,Len(aVERRABAS1)-1)
+				EndIf
+
+				IIf(Len(aVERRABAS2) > 0,oGetErr:bLine  := bGetLine1,oGetErr:bLine  := bGetLine2)
+				IIf(Len(aVERRABAS1) > 0,oGetAbas:bLine := bGAbline1,oGetAbas:bLine := bGAbline2)
+
+				If Len(aVERRABAS1) = 0
+					oDlgC:End()
+					Return
+				EndIf
+
+			EndIf
+			oGetAbas:Refresh()
+			If Len(aVERRABAS2) = 0
+				M700LINOk(oGetAbas:nAt)
+			EndIf
+			oGetErr:Refresh()
+		Else
+			MsgInfo(STR0055,STR0042)
+			Return
+		EndIf
+	Else
+		MsgInfo(STR0055,STR0042)
+		Return
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700HOR³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Consistencia da hora do abastecimento                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³MNTA700 - DICIONARIO                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700HOR(dDtAbas,cHAbas)
+
+	If dDtAbas = dDataBase
+		If cHAbas > SubStr(Time(),1,5)
+			MsgInfo(STR0037,STR0036)
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700DTA³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Consistencia da data do abastecimento                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³MNTA700 - DICIONARIO                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700DTA(dDtAbas)
+
+	If dDtAbas > dDataBase
+		MsgInfo(STR0035,STR0036)
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA655QTD
+
+Validacao da quantidade de combustivel abastecida
+Obs: Baseada na funcao MNA655QC
+
+@sample MNTA700
+@author Inacio Luiz Kolling
+@since 11/08/2006
+@version 1.0
+@return Booleano
+
+/*/
+//---------------------------------------------------------------------
+Function MNTA700QTD(nQTD)
+
+	Local aAreaQTD   := GetArea()
+	Local lRet       := .T.
+	Local lTanque	 := .F. //Variavel para verificar se o bem possui tanque.
+	Local nCapMax    := 0
+	Local cCodComb   := fCodComb( fInfoposto( M->TQQ_CNPJ )[2] )
+	Local cChaveTT8	 := ""
+
+	If Empty(cCodComb)
+		MsgInfo(STR0114,STR0036) //"Favor informar o combustivel antes de alterar a quantidade de Litros."
+		lRet := .F.
+	Else
+		dbSelectArea("ST9")
+		dbSetOrder(14)
+		If dbSeek(M->TQQ_PLACA)
+			nCapMax := ST9->T9_CAPMAX
+
+			cChaveTT8	:= xFilial("TT8",ST9->T9_FILIAL) + ST9->T9_CODBEM + "1" + cCodComb
+
+			dbSelectArea("TT8")
+			dbSetOrder(2)
+
+			If dbSeek(cChaveTT8)
+				nCapMax := TT8->TT8_CAPMAX
+				lTanque := .T.
+			EndIf
+		EndIf
+		//Verifica se o bem possui tanque
+		If lTanque
+			If nQTD > nCapMax
+				HELP(" ",1,STR0042,,STR0040,3,1)
+				RestArea(aAreaQTD)
+				lRet := .F.
+			EndIf
+			If lRet
+				M->TQQ_VALTOT := M->TQQ_QUANT * M->TQQ_VALUNI
+			EndIf
+		Else
+			HELP(" ",1,STR0042,,STR0116,3,1)//"O Veículo não possui tanque."
+		EndIf
+
+	EndIf
+
+	RestArea(aAreaQTD)
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700COD³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Validacao do codigo do combustivel                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³OBS       ³Baseada na funcao MNA655HR                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700COD()
+
+	Local aPosto     := {}
+	Local cFlPosto   := ''
+	Local cPosto     := ''
+	Local cLoja      := ''
+	Local cTipoPosto := ''
+	Local nRecno
+	Local cHora
+	Local dData
+	Local aAreaC := GetArea()
+	Local dUltDt := "  /  /  "
+	Local sHora  := SubStr(M->TQQ_HRABAS,1,2)
+	Local sMinu  := SubStr(M->TQQ_HRABAS,4,2)
+
+	If sHora > "23" .Or. sMinu > "59" .Or. sHora < "00" .Or. sMinu < "00"
+		HELP(" ",1,STR0042,,STR0049,3,1)
+		Return .F.
+	EndIf
+
+	cHora := SubStr(Time(),1,5)
+	dData := dDataBase
+
+	If M->TQQ_HRABAS > cHora .And. dData == M->TQQ_DTABAS
+		HELP(" ",1,STR0042,,STR0050,3,1)
+		Return .F.
+	EndIf
+
+	aPosto     := fInfoposto( M->TQQ_CNPJ )
+	cFlPosto   := aPosto[2]
+	cPosto     := aPosto[3]
+	cLoja      := aPosto[4]
+	cTipoPosto := aPosto[5]
+	cCodCom    := fCodComb( cFlPosto ) // Código do combustível
+
+	If cTipoPosto <> "3"
+
+		dbSelectArea("TQH")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQH", cFlPosto )+ cPosto + cLoja + cCodCom )
+
+		dUltDt := TQH->TQH_DTNEG
+		While !EoF() .And. xFilial("TQH", cFlPosto ) == TQH->TQH_FILIAL .And. TQH->TQH_CODPOS == TQF->TQF_CODIGO .And.;
+				           TQH->TQH_LOJA  == TQF->TQF_LOJA   .And. TQH->TQH_CODCOM == cCodCom
+
+			IF dUltDt > TQH->TQH_DTNEG .Or. TQH->TQH_DTNEG > M->TQQ_DTABAS
+				dbSelectArea("TQH")
+				dbSkip()
+				Loop
+			EndIf
+
+			dUltDt := TQH->TQH_DTNEG
+			nRecno := Recno()
+			dbSelectArea("TQH")
+			dbSkip()
+		End
+
+		If !Empty(nRecno)
+			dbGoTo(nRecno)
+			M->TQQ_VALUNI := TQH->TQH_PRENEG
+		Else
+			HELP(" ",1,STR0042,,STR0043,3,1)
+			Return .F.
+		EndIf
+	Else
+		LVALUNI := .T.
+	EndIf
+
+	M->TQQ_VALTOT := M->TQQ_QUANT * M->TQQ_VALUNI
+
+	RestArea(aAreaC)
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700UNP³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Validacao do preco unitario do combustivel                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³OBS       ³Baseada na funcao MNA655VT                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700UNP()
+
+	Local aAreaP   := GetArea()
+	Local dUltDt   := "  /  /  "
+	Local lRet	   := .T.
+	Local nRecno   := 0
+	Local aPosto   := {}
+	Local cFlPosto := ''
+	Local cPosto   := ''
+	Local cLoja    := ''
+	Local cTipo    := ''
+	Local cCodCom  := ''
+
+	aPosto   := fInfoposto( M->TQQ_CNPJ )
+	cFlPosto := aPosto[2]
+	cPosto   := aPosto[3]
+	cLoja    := aPosto[4]
+	cTipo    := aPosto[5]
+	cCodCom  := fCodComb( cFlPosto ) // Código do combustível
+
+	If cTipo <> '3' // se 1 (conveniado) ou 2 (posto interno)
+
+		dbSelectArea('TQH')
+		dbSetOrder(1)
+		If dbSeek( xFilial('TQH', cFlPosto ) + cPosto + cLoja + cCodCom )
+
+			dUltDt := TQH->TQH_DTNEG
+
+			While !EoF() .And. xFilial('TQH', cFlPosto ) == TQH->TQH_FILIAL .And. TQH->TQH_CODPOS == TQF->TQF_CODIGO .And.;
+								TQH->TQH_LOJA == TQF->TQF_LOJA   .And. TQH->TQH_CODCOM == cCodCom
+
+				IF dUltDt > TQH->TQH_DTNEG .Or. TQH->TQH_DTNEG > M->TQQ_DTABAS
+					dbSelectArea("TQH")
+					dbSkip()
+					Loop
+				EndIf
+
+				dUltDt := TQH->TQH_DTNEG
+				nRecno := Recno()
+				dbSelectArea("TQH")
+				dbSkip()
+			End
+
+		EndIf
+
+		If nRecno > 0
+			dbSelectArea("TQH")
+			dbGoTo(nRecno)
+			If M->TQQ_VALUNI <> TQH->TQH_PRENEG
+				HELP(" ",1,"ATENÇÃO",,STR0080+Chr(10)+Chr(13)+STR0081,3,1) //"ATENÇÃO"### //"Valor unitario é diferente do preço nego-"###"ciado."
+				RestArea(aAreaP)
+				lRet :=  .F.
+			ElseIf !Empty(M->TQQ_QUANT) .And. !Empty(M->TQQ_VALUNI)
+				M->TQQ_VALTOT := M->TQQ_QUANT * M->TQQ_VALUNI
+			EndIf
+
+		EndIf
+	EndIf
+
+	If lRet
+		M->TQQ_VALTOT := M->TQQ_QUANT * M->TQQ_VALUNI
+		RestArea(aAreaP)
+	EndIf
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700VTO³ Autor ³Inacio Luiz Kolling    ³ Data ³11/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Validacao do valor total do combustivel abastecido          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³OBS       ³Baseada na funcao MNA655VT                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700VTO(nTotal)
+
+	Local lRETVH := .T.
+	Local nValMx := M->TQQ_VALUNI * M->TQQ_QUANT + GetMv("MV_NGTOLVL")
+	Local nValMn := M->TQQ_VALUNI * M->TQQ_QUANT - GetMv("MV_NGTOLVL")
+
+	If nTotal >= nValMn .And. nTotal <= nValMx
+
+	Else
+		Help(" ",1,STR0042,,STR0041,3,1)
+		lRETVH := .F.
+	EndIf
+
+Return lRETVH
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700MO ³ Autor ³Inacio Luiz Kolling    ³ Data ³14/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Validacao do codigo do motorista                            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³OBS       ³Baseada na funcao MNA655MO                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700MO()
+
+	Local lRETVH    := .T.
+	Local aAreaM    := GetArea()
+	Local dDEMISSAO := Ctod("  /  /  " )
+	Local cTipMot   := GetNewPar("MV_NGMOTAB","1")   //Qual tipo motorista pode abastecer (1/2/3)
+
+	If ExistBlock("MNTA7001")
+		Return ExecBlock("MNTA7001",.F.,.F.)
+	EndIf
+
+	dbSelectArea("DA4")
+	dbSetOrder(3)
+	If dbSeek(xFilial("DA4")+M->TQQ_CODMOT)
+
+		If DA4->DA4_TIPMOT == "1" .And. GetNewPar("MV_NGMNTRH","N") $ "SX"
+
+			dbSelectArea("SRA")
+			dbSetOrder(13)
+			dbSeek(DA4->DA4_MAT)
+			While !Eof() .And. SRA->RA_MAT == DA4->DA4_MAT
+
+				If Empty(SRA->RA_DEMISSA)
+					dDEMISSAO := Ctod("  /  /  ")
+					Exit
+				EndIf
+
+				If SRA->RA_DEMISSA > dDemissao
+					dDEMISSAO := SRA->RA_DEMISSA
+				EndIf
+
+				dbSelectArea("SRA")
+				dbSkip()
+			End
+
+			IF !Empty(dDEMISSAO) .And. dDEMISSAO < M->TQQ_DTABAS
+				HELP(" ",1,STR0042,,STR0045+Chr(13)+STR0044,3,1) //"Data Inválida"###"Atenção"
+				lRETVH := .F.
+			EndIf
+
+			dbSelectArea("SR8")
+			dbSetOrder(1)
+			dbSeek(xFilial("SR8")+DA4->DA4_MAT)
+			If SR8->R8_TIPO = 'F'
+				If M->TQQ_DTABAS > SR8->R8_DATAINI .And. M->TQQ_DTABAS < SR8->R8_DATAFIM
+					HELP(" ",1,STR0042,,STR0047,3,1) //"Funcionário em período de férias!"###"Atenção"
+					lRETVH := .F.
+				EndIf
+			EndIf
+		ElseIf DA4->DA4_TIPMOT == "2" .And. !("2" $ cTipMot)
+			HELP(" ",1,STR0042,,STR0046,3,1) //"Motorista terceirizado, abastecimento não permitido."###"Atenção"
+			lRETVH := .F.
+		ElseIf DA4->DA4_TIPMOT == "3" .And. !("3" $ cTipMot)
+			HELP(" ",1,STR0042,,STR0120,3,1) //"Motorista agregado, abastecimento não permitido."###"Atenção"
+			lRETVH := .F.
+		EndIf
+	Else
+		MsgInfo(STR0048,STR0036) //"Motorista não cadastrado"###"Não Conformidade"
+		lRETVH := .F.
+	EndIf
+
+	RestArea(aAreaM)
+
+Return lRETVH
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA700HIS³ Autor ³Inacio Luiz Kolling    ³ Data ³14/08/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Consistencia em relacao ao contador                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA700HIS()
+
+	Local nHodom     := 0
+	Local nTIPOC     := 1
+	Local lTemCont   := .F.
+	Local aAreaH     := GetArea()
+	Local cTQQCodCom := ""
+	Local lRet       := .T.
+	Local cFlVei     := ''
+	Local cFilHist   := ''
+
+	// Busca o bem pela placa
+	If !Empty( M->TQQ_PLACA )
+
+		dbSelectArea( 'ST9' )
+		dbSetOrder( 14 ) // T9_PLACA + T9_SITBEM
+		If dbSeek( M->TQQ_PLACA + 'A' ) .And. ST9->T9_PLACA == M->TQQ_PLACA
+
+			cFilHist := NgFilTPN( ST9->T9_CODBEM, M->TQQ_DTABAS, M->TQQ_HRABAS )[1]	
+
+			If cFilHist == ST9->T9_FILIAL
+					
+				cFlVei := ST9->T9_FILIAL
+				
+			Else
+
+				cFlVei := cFilHist
+
+			EndIf
+
+			cBemRet  := ST9->T9_CODBEM
+			lTemCont := ( ST9->T9_TEMCONT == 'S' )
+
+		EndIf
+
+	EndIf
+
+	If ReadVar() == 'M->TQQ_HODOM'
+
+		nHodom := M->TQQ_HODOM
+
+	ElseIf ReadVar() == 'M->TQQ_POSCO2'
+
+		nHodom   := M->TQQ_POSCO2
+		nTipoC   := 2
+		lTemCont := Posicione( 'TPE', 1, xFilial( 'TPE' ) + cBemRet, 'TPE_SITUAC' ) == '1'
+
+	EndIf
+
+	If nHodom > 0
+
+		cTQQCodCom := IIf( lConsComb, SubStr( M->TQQ_CODCOM, 1, nTamComTQM ), M->TQQ_CODCOM )
+
+		lRet := NGCHKHISTO( cBemRet, M->TQQ_DTABAS, nHodom, M->TQQ_HRABAS,nTIPOC, , .T., cFlVei, NGSEEK( 'TQM', Alltrim( M->TQQ_CODCOM ), nIndTQM,;
+			'TQM->TQM_CODCOM' ) )
+
+		If lRet
+
+			lRet := NGVALIVARD( cBemRet, nHodom, M->TQQ_DTABAS, M->TQQ_HRABAS, nTIPOC, .T., , cFlVei )
+
+		EndIf
+
+	ElseIf nHodom == 0 .And. !lTemCont
+
+		lRet := .T.
+
+	EndIf
+
+	RestArea(aAreaH)
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT700JUST ³Autor  ³Evaldo Cevinscki Jr.   ³ Data ³20/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Deleta registros das tabelas de contabilizacao provisionados ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700JUST(cAlias)
+
+	Private oMenu
+
+	cJustif := Space(80)
+	cCampoJ := cAlias+'->TQQ_JUSTIF'
+	cCampoU := cAlias+'->TQQ_USUJUS'
+
+	Define Msdialog oDlg2 Title STR0061 From 18,20 To 28,75 Of oMainWnd
+
+		@ 17,8 SAY OEMTOANSI(STR0062) SIZE 130,07 OF oDlg2 PIXEL COLOR CLR_BLUE
+		@ 25,8 MSGET cJustif SIZE 150,08 OF oDlg2 PIXEL
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg2:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg2)}
+
+	Activate Msdialog oDlg2 Centered On Init EnchoiceBar(oDlg2,{||nOpcc:=1,If(!MNT700VALJT(cJustif),nOpcc:=2,oDlg2:End())},{||oDlg2:End()})
+
+	dbSelectArea("TQQ")
+	RecLock('TQQ',.F.)
+	&(cCampoJ) := cJustif
+	&(cCampoU) := SubStr(cUsuario,7,15)
+	MsUnLock('TQQ')
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT700VALJT³Autor  ³Evaldo Cevinscki Jr.   ³ Data ³23/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida campo justificativa para alteracao/exclusao obrigator.³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700VALJT(cJustif)
+
+	If Empty(cJustif)
+		MsgInfo(STR0063,STR0042)
+		Return .F.
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT700BEM   ³ Autor ³ Evaldo Cevinscki Jr.³ Data ³ 11/12/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Chama a rotina de Bens MNTA080                              ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700BEM()
+
+	Local aSMENOLD := aCLONE(aSMENU)
+
+	If FindFunction("MNTA084")
+		MNTA084()
+	Else
+		MNTA080()
+	EndIf
+
+	aSMENU  := aCLONE(aSMENOLD)
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    |MNT700PLA | Autor ³Marcos Wagner Junior   ³ Data ³02/12/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o | Valida De/Ate Placa										  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA700                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700PLA(nOpc,cParDe,cParAte,cTabela)
+
+	If Empty(cParDe) .AND. cParAte = 'ZZZZZZZZ'
+		Return .T.
+	Else
+		If nOpc == 1
+			If Empty(cParDe)
+				Return .T.
+			Else
+				If !Empty(cParDe)
+					dbSelectArea(cTabela)
+					dbSetOrder(14)
+					If !dbSeek(cParDe+'A')
+						MsgStop(STR0064,STR0042)//"Placa digitada é inválida!"###"ATENÇÃO"
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		ElseIf nOpc == 2
+			If cParAte == 'ZZZZZZZZ'
+				Return .T.
+			Else
+				If !Empty(cParAte)
+					dbSelectArea(cTabela)
+					dbSetOrder(14)
+					If !dbSeek(cParAte+'A')
+						MsgStop(STR0064,STR0042) //"Placa digitada é inválida!"###"ATENÇÃO"
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT700MOFU ³Autor  ³Marcos Wagner Junior   ³ Data ³04/05/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Chama o cadastro de funcionarios ou motorista	               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA700                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700MOFU(nPar)
+
+	If nPar == 1
+		If MPUserHasAccess('OMSA040', , , .T.)
+			OMSA040()
+		EndIF
+	Else
+		If MPUserHasAccess('GPEA010', , , .T.)
+			GPEA010()
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValPostoI
+
+Valida se campos de tanque e bomba foram preenchidos
+
+@sample MNTA700
+@author Roger Rodrigues
+@since 01/20/2012
+@version 1.0
+@return Booleano
+
+/*/
+//---------------------------------------------------------------------
+Static Function fValPostoI()
+
+	Local cAutonomia := STR0117 //"Essa posição do contador superou a autonomia do veículo."
+	Local lValTanBoM := .T.
+	Local lRet 		 := .T.
+	Local aRet		 := {}
+	Local cFlVei     := ''
+	Local cFlPosto   := fInfoposto( M->TQQ_CNPJ )[2]
+
+	dbSelectArea('TQF')
+	dbSetOrder(2)
+	If dbSeek( xFilial('TQF', cFlPosto ) + M->TQQ_CNPJ )
+		While !Eof() .And. TQF->TQF_FILIAL == xFilial('TQF', cFlPosto ) .And. TQF->TQF_CNPJ == M->TQQ_CNPJ
+
+			If TQF->TQF_CODIGO == M->TQQ_POSTO .And. TQF->TQF_LOJA == M->TQQ_LOJA .And. TQF->TQF_CONVEN $ "6/2/5/7"
+				lValTanBoM := .F.
+				Exit
+			EndIf
+
+			dbSelectArea('TQF')
+			dbSkip()
+		End
+	EndIf
+
+	If lValTanBoM
+		dbSelectArea('TQF')
+		dbSetOrder(2)
+		If dbSeek( xFilial('TQF', cFlPosto ) + M->TQQ_CNPJ ) .And. TQF->TQF_TIPPOS == '2'
+			If Empty(M->TQQ_TANQUE)
+				Help(" ",1,"OBRIGAT2",,RetTitle("TQQ_TANQUE"),3,0)
+				lRet := .F.
+			ElseIf Empty(M->TQQ_BOMBA)
+				Help(" ",1,"OBRIGAT2",,RetTitle("TQQ_BOMBA"),3,0)
+				lRet := .F.
+			EndIf
+
+			If lRet
+				//Verifica se a bomba existe
+				dbSelectArea("TQJ")
+				dbSetOrder(1) //TQJ_FILIAL+TQJ_CODPOS+TQJ_LOJA+TQJ_TANQUE+TQJ_BOMBA
+				If lRet .And. !dbSeek( xFilial("TQJ", cFlPosto ) + TQF->TQF_CODIGO + TQF->TQF_LOJA + M->TQQ_TANQUE + M->TQQ_BOMBA)
+					MsgStop(STR0115) //"Bomba não cadastrada."
+					lRet := .F.
+				EndIf
+			EndIf
+
+		EndIf
+	EndIf
+
+	If lRet
+
+		//Busca o bem pela placa
+		If !Empty( M->TQQ_PLACA )
+
+			dbSelectArea( 'ST9' )
+			dbSetOrder( 14 ) // T9_PLACA + T9_SITBEM
+			If dbSeek( M->TQQ_PLACA + 'A' )
+
+				cFilHist := NgFilTPN( ST9->T9_CODBEM, M->TQQ_DTABAS, M->TQQ_HRABAS )[1]	
+
+				If cFilHist == ST9->T9_FILIAL
+					
+					cFlVei := ST9->T9_FILIAL
+				
+				Else
+
+					cFlVei := cFilHist
+
+				EndIf
+
+				cBemRet  := ST9->T9_CODBEM
+				lTemCont := ( ST9->T9_TEMCONT == 'S' )
+
+			Else
+
+				MsgStop( STR0118, STR0042 ) // Veículo inexistente ou não ativo
+				lRet := .F.
+
+			EndIf
+
+		EndIf
+
+		If lRet
+
+			If ( lTemCont .And. M->TQQ_HODOM > 0 )
+
+				aRet := NGCHKHISTO(cBemRet,M->TQQ_DTABAS,M->TQQ_HODOM,M->TQQ_HRABAS,1,,.F.,cFlVei,NGSEEK('TQM',M->TQQ_CODCOM,nIndTQM,'TQM->TQM_CODCOM'))
+
+				If !aRet[1]
+
+					If cAutonomia $ aRet[2] //"Essa posição do contador superou a autonomia do veículo."
+						If !MsgYesNo(aRet[2],STR0010) // "Essa posição do contador superou a autonomia do veículo."###"NAO CONFORMIDADE"
+							lRet := .F.
+						EndIf
+					Else
+						MsgStop(aRet[2])
+						lRet := .F.
+					EndIf
+
+				EndIf
+
+			ElseIf ( !lTemCont .And. M->TQQ_HODOM == 0 )
+
+				lRet := .T.
+
+			ElseIf M->TQQ_HODOM > 0
+
+				MsgStop( STR0121, STR0042 ) // Este bem não é controlado por contador. ## Atenção
+				lRet := .F.
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValAbs
+
+Valida Alterações no abastecimento.
+
+@sample MNTA700
+@author Maicon André Pinheiro
+@since 10/10/2016
+@version 1.0
+@return Booleano
+
+/*/
+//---------------------------------------------------------------------
+Static Function fValAbs()
+
+	If !MNTA700DTA(M->TQQ_DTABAS)
+		Return .F.
+	EndIf
+
+	If !MNTA700HOR(M->TQQ_DTABAS,M->TQQ_HRABAS)
+		Return .F.
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³MNT700VL  ºAutor  ³Roger Rodrigues     º Data ³  23/01/12   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Valida campos da tela                                       º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³MNTA700                                                     º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700VL(cCampo)
+
+	Local xValor
+	Local cPosto     := Space(TAMSX3("A2_COD")[1])
+	Local cLoja      := Space(TAMSX3("A2_LOJA")[1])
+	Local lRet       := .T.
+	Local cTQQCodCom := ""
+	Local cCodCombus := ""
+
+	Default cCampo := ReadVar()
+
+	xValor := &(cCampo)
+
+	If cCampo == "M->TQQ_TANQUE" .Or. cCampo == "M->TQQ_BOMBA" .And. !Empty(xValor)
+
+		aPosto   := fInfoposto( M->TQQ_CNPJ )
+		cFlPosto := aPosto[2]
+		cPosto   := aPosto[3]
+		cLoja    := aPosto[4]
+		cCodCom  := fCodComb( cFlPosto )
+
+		M->TQN_POSTO  := cPosto
+		M->TQN_LOJA   := cLoja
+		M->TQN_TANQUE := M->TQQ_TANQUE
+		M->TQN_CNPJ   := M->TQQ_CNPJ
+		M->TQN_CODCOM := cCodCom
+		M->TQN_QUANT  := 0//Inicializa com 0 para nao realizar verificacoes da SB2
+
+		If cCampo == "M->TQQ_BOMBA"
+
+			If !NGIFdbSeek( 'TQJ', cPosto + cLoja + M->TQQ_TANQUE + M->TQQ_BOMBA, 1, , cFlPosto )
+				Help(" ",1,"REGNOIS")
+				lRet := .F.
+			EndIf
+
+		ElseIf cCampo == "M->TQQ_TANQUE"
+			If !NGIFdbSeek( 'TQI', cPosto + cLoja + M->TQQ_TANQUE , 1, , cFlPosto )
+				Help(" ",1,"REGNOIS")
+				lRet := .F.
+			EndIf
+			If lRet
+				lRet := MNTA655TAN()
+			EndIf
+		EndIf
+
+	ElseIf cCampo == "M->TQQ_POSTO" .Or. cCampo == "M->TQQ_LOJA"
+
+		If cCampo == "M->TQQ_POSTO" // Valida Posto
+			lRet := ExistCpo("TQF", M->TQQ_POSTO, 1)
+		ElseIf cCampo == "M->TQQ_LOJA" // Valida Loja
+			lRet := ExistCpo("TQF", M->TQN_POSTO+M->TQN_LOJA, 1)
+		EndIf
+
+		If lRet
+
+			// Carrega novo preço unitário
+			If lConsComb
+				cTQQCodCom := SubStr(M->TQQ_CODCOM,1,nTamComTQM)
+			Else
+				cTQQCodCom := M->TQQ_CODCOM
+			EndIf
+			cCodCombus := NGSEEK("TQM", cTQQCodCom, nIndTQM, "TQM->TQM_CODCOM")
+
+			dbSelectArea("TQH")
+			dbSetOrder(1)
+			dbSeek(xFilial("TQH")+M->TQQ_POSTO+M->TQQ_LOJA+cCodCombus+DTOS(M->TQQ_DTABAS)+M->TQQ_HRABAS, .T.)
+
+			If TQH->TQH_CODPOS <> M->TQQ_POSTO .Or. TQH->TQH_LOJA <> M->TQQ_LOJA .Or. TQH->TQH_CODCOM <> cCodCombus
+				dbSkip(-1)
+			EndIf
+
+			If TQH->TQH_CODPOS == M->TQQ_POSTO .And. TQH->TQH_LOJA == M->TQQ_LOJA .And. TQH->TQH_CODCOM == cCodCombus
+				M->TQQ_VALUNI := TQH->TQH_PRENEG
+
+				If Empty(M->TQQ_VALTOT)
+					M->TQQ_VALTOT := M->TQQ_VALUNI * M->TQQ_QUANT
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³MNT700WHENºAutor  ³Roger Rodrigues     º Data ³  23/01/12   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³When dos campos da tela                                     º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³MNTA700                                                     º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT700WHEN(cCampo)
+
+	Local cFlPosto := ''
+	Local cPosto   := ''
+	Local cLoja    := ''
+	Local cTipo    := ''
+	Local aPosto   := {}
+
+	If cCampo == "TQQ_TANQUE" .Or. cCampo == "TQQ_BOMBA"
+
+		aPosto   := fInfoPosto( M->TQQ_CNPJ )
+		cFlPosto := aPosto[2]
+		cPosto   := aPosto[3]
+		cLoja    := aPosto[4]
+		cTipo    := aPosto[5]
+
+		If cTipo != '2'
+			Return .F.
+		EndIf
+
+		cTanque := M->TQQ_TANQUE
+
+		M->TQN_POSTO  := cPosto
+		M->TQN_LOJA   := cLoja
+		M->TQN_CODCOM := fCodComb( cFlPosto )
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA700VLD
+Valida Data, Hora, Transferência para o mesmo local e transferência com produtos diferentes
+
+@author Felipe Helio dos Santos
+@since 21/06/2013
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA700VLD(aCampos)
+
+	Local nDt  := aSCAN( aCampos, "TUI_DATA"   ) //Data da transferência
+	Local nHr  := aSCAN( aCampos, "TUI_HORA"   ) //Data da Hora da transferência
+
+	Local nEO  := aSCAN( aCampos,  "TUI_EMPORI") //Empresa origem
+	Local nFO  := aSCAN( aCampos,  "TUI_FILORI") //Filial origem
+	Local nPO  := aSCAN( aCampos,  "TUI_POSORI") //Posto origem
+	Local nJO  := aSCAN( aCampos,  "TUI_LOJORI") //Loja origem
+	Local nTO  := aSCAN( aCampos,  "TUI_TANORI") //Tanque origem
+	Local nPDO := aSCAN( aCampos,  "TUI_PROORI") //Produto origem
+
+	Local nED  := aSCAN( aCampos,  "TUI_EMPDES") //Empresa origem
+	Local nFD  := aSCAN( aCampos,  "TUI_FILDES") //Filial origem
+	Local nPD  := aSCAN( aCampos,  "TUI_POSDES") //Posto origem
+	Local nJD  := aSCAN( aCampos,  "TUI_LOJDES") //Loja origem
+	Local nTD  := aSCAN( aCampos,  "TUI_TANDES") //Tanque origem
+	Local nPDD := aSCAN( aCampos,  "TUI_PRODES") //Produto destino
+
+	//Valida data
+	If &("M->"+aCampos[nDt]) > dDataBase
+		ShowHelpDlg(STR0042,{STR0095},2,{STR0096},2) //"Atenção"##"A data da transferência não pode ser maior que a data atual."##"Informe uma data menor que a data atual do sistema."
+		Return .F.
+	EndIf
+
+	//Valida hora
+	If (&("M->"+aCampos[nHr]) > Time()) .And. (&("M->"+aCampos[nDt]) == dDataBase)
+		ShowHelpDlg(STR0042,{STR0097},2,{STR0098},2)	//"Atenção"##"A hora da transferência não pode ser maior que a hora atual."##"Informe uma hora menor que a hora atual do sistema."
+		Return .F.
+	EndIf
+
+	//Valida transferência para o mesmo local
+	If	&("M->"+aCampos[nEO]) == &("M->"+aCampos[nED]) .And. &("M->"+aCampos[nFO]) == &("M->"+aCampos[nFD]) .And. &("M->"+aCampos[nPO]) == &("M->"+aCampos[nPD]) .And.;
+			&("M->"+aCampos[nPO]) == &("M->"+aCampos[nPD]) .And. &("M->"+aCampos[nJO]) == &("M->"+aCampos[nJD]) .And. &("M->"+aCampos[nTO]) == &("M->"+aCampos[nTD])
+
+		ShowHelpDlg(STR0042,{STR0099},2,{STR0100},2)	//"Atenção"##"Não é possível realizar a transferência para o mesmo local."##"Altere a origem ou o destino."
+		Return .F.
+	EndIf
+
+	//Valida produtos diferentes
+	If &("M->"+aCampos[nPDO]) <> &("M->"+aCampos[nPDD])
+		If !MsgYesNo(STR0101+CRLF+CRLF+;							//"O produto de origem que está sendo transferido é diferente do produto de destino."
+			STR0102+&("M->"+aCampos[nPDO])+CRLF+;		//"Produto Origem :  "
+			STR0103+&("M->"+aCampos[nPDD])+CRLF+CRLF+;	//"Produto Destino:  "
+			STR0104,STR0042)								//"Deseja continuar assim mesmo?"##"Atenção"
+			Return .F.
+		EndiF
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT700CONV
+Valida código do convenio informado
+
+@author Tainã Alberto Cardoso
+@since 27/10/2014
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNT700CONV()
+
+	Local nIndBusca := If(lConsComb,1,2)
+
+	If !Existcpo('TQM',AllTrim(M->TQQ_CODCOM),nIndBusca)
+		Return .F.
+	Else
+		M->TQQ_NOMCOM := TQM->TQM_NOMCOM
+	EndIf
+
+
+Return .T.
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} fMontaTela
+
+@author Maicon André Pinheiro
+@since 13/10/2016
+
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function fMontaTela()
+
+	Local nQtdBtn := 9 // Quantidade de botões de cadastros.
+
+	nQtdBtn    += IIf(lAfericao,1,0)
+	oSize      := FwDefSize():New(.T.) // Com enchoicebar
+
+	//Calcula a porcentagem dos panels, considerando 90% da tela, visto que a faixa de ações relacionadas na P12 ocupa em média 10% da tela.
+	nTam003Per := oSize:aWorkArea[4] * 0.03
+	nTam006Per := oSize:aWorkArea[4] * 0.06
+	nTam030Per := oSize:aWorkArea[4] * 0.30
+	nTam045Per := oSize:aWorkArea[4] * 0.45
+	nTamHoriz  := oSize:aWorkArea[3] - 4
+	nLinIniTla := oSize:aWindSize[1] // Linha  inicial da tela
+	nColIniTla := oSize:aWindSize[2] // Coluna inicial da tela
+	nLinFimTla := oSize:aWindSize[3] // Linha  final   da tela
+	nColFimTla := oSize:aWindSize[4] // Coluna final   da tela
+
+	//Calcula o tamanho dos botões de cadastros.
+	//O seu tamanho será o espaço total do Panel em que está configurado dividido pelo numero de botões existente.
+	//É descontado 2 pixels para considerar os espaço dessa forma ocupará todo o espaço do panel não importa a qtd.
+	//de botões nem o tamanho da tela.
+	nSizeXBnt := ((nTamHoriz - 5) / nQtdBtn) - 2
+
+	//Calcula o espaço do inicio de um botão para o outro. Descontando alguns pixels para que o começo e fim dos
+	//botões tenham a mesma distancia dentro da label.
+	nEspaco   := (nTamHoriz - 5) / nQtdBtn
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInfoposto
+Busca informações do posto pelo cnpj
+
+@param cCnpj, string, cnpj
+@author Maria Elisandra de Paula
+@since 06/04/21
+@return array
+	[1] se obteve sucesso ao buscar informações
+	[2] Filial da TQF
+	[3] cPosto
+	[4] cLoja
+	[5] tipo de posto
+/*/
+//---------------------------------------------------------------------
+Static Function fInfoposto( cCnpj )
+
+	Local aAreaTQF   := TQF->( GetArea() )
+	Local nIndice    := Ascan( aInfoPosto,  {|x| x[1] == cCnpj } )
+	Local cFlPosto   := ''
+	Local cPosto     := ''
+	Local cLoja      := ''
+	Local cTipoPosto := ''
+	Local lAchou     := .F.
+	Local cAliasQry  := ''
+
+	If nIndice > 0
+
+		lAchou     := .T.
+		cFlPosto   := aInfoPosto[nIndice,2]
+		cPosto     := aInfoPosto[nIndice,3]
+		cLoja      := aInfoPosto[nIndice,4]
+		cTipoPosto := aInfoPosto[nIndice,5]
+
+	Else
+
+		//----------------------------------------------------------
+		// Busca informações de posto pelo cnpj
+		//----------------------------------------------------------
+		If !Empty( cCnpj )
+
+			/*
+				Como é possivel existir um mesmo CNPJ para filiais distintas, a primeira busca é feita na filial corrente,
+				caso não seja localizada, busca nas demais filiais.
+			*/
+			dbSelectArea( 'TQF' )
+			dbSetOrder( 2 ) // TQF_FILIAL + TQF_CNPJ
+			If msSeek( xFilial( 'TQF' ) + cCNPJ )
+
+				lAchou     := .T.
+				cFlPosto   := TQF->TQF_CODFIL
+				cPosto     := TQF->TQF_CODIGO
+				cLoja      := TQF->TQF_LOJA
+				cTipoPosto := TQF->TQF_TIPPOS
+
+			Else
+
+				cAliasQry := GetNextAlias()
+
+				BeginSql Alias cAliasQry
+					SELECT TQF.TQF_CODFIL, TQF.TQF_CODIGO, TQF.TQF_LOJA, TQF_TIPPOS
+					FROM %Table:TQF% TQF
+					WHERE TQF.%NotDel%
+						AND TQF.TQF_CNPJ = %Exp:cCnpj%
+				EndSql
+
+				If !Eof()
+
+					lAchou     := .T.
+					cFlPosto   := (cAliasQry)->TQF_CODFIL
+					cPosto     := (cAliasQry)->TQF_CODIGO
+					cLoja      := (cAliasQry)->TQF_LOJA
+					cTipoPosto := (cAliasQry)->TQF_TIPPOS
+
+				EndIf
+
+				(cAliasQry)->( dbCloseArea() )
+
+			EndIf
+
+		EndIf
+
+		If lAchou
+
+			aAdd( aInfoPosto, { cCnpj, cFlPosto, cPosto, cLoja, cTipoPosto } )
+
+		EndIf
+
+	EndIf
+
+	RestArea( aAreaTQF )
+
+Return { lAchou, cFlPosto, cPosto, cLoja, cTipoPosto }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCodComb
+Retorna o código do combustível da tabela TQM
+
+@param cFlCons, string, filial para consulta
+@param [cCodCom], string, código do combustível para consulta
+@author Maria Elisandra de Paula
+@since 06/04/21
+@return string
+/*/
+//---------------------------------------------------------------------
+Static Function fCodComb( cFlCons, cCodCom )
+
+	Local cRet := ''
+
+	Default cFlCons := cFilAnt
+	Default cCodCom  := M->TQQ_CODCOM
+
+	If lConsComb
+		cRet := SubStr( cCodCom, 1, nTamComTQM )
+	Else
+		cRet := cCodCom
+	EndIf
+
+	If NGIfDBSEEK( 'TQM', Alltrim( cRet ), nIndTQM, , cFlCons )
+
+		cRet := TQM->TQM_CODCOM
+
+	EndIf
+
+Return cRet
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} fValCnt
+Valida se existe um abastecimento posterior ou anterior com contador igual
+
+@author Wexlei Silveira
+@since 15/04/2021
+
+@param nTpcont, Numérico, Tipo de contador (1 ou 2)
+@param cCODERR, Caracter, Código da inconsistência do abastecimento
+
+@return Lógico, Se o contador é válido/aceito
+/*/
+//---------------------------------------------------------------------
+Static Function fValCnt( nTpcont, cCODERR )
+
+	Local aKmsR     := {}
+	Local aValKM    := {}
+	Local nContador := 0
+	Local lRet      := .T.
+
+	dbSelectArea( 'ST9' )
+	dbSetOrder(14) // T9_PLACA + T9_SITBEM
+	If dbSeek( M->TQQ_PLACA + 'A' )
+		
+		// Determina posição de contador de acordo com o seu tipo
+		nContador := IIf( nTpcont == 1, M->TQQ_HODOM, M->TQQ_POSCO2 )
+
+		// Recupera reportes de contador anterior e posterior
+		aKmsR := NGCONTAP(ST9->T9_CODBEM, DTOS(M->TQQ_DTABAS), M->TQQ_HRABAS, nTpcont)
+
+		// Se o reporte anterior for de um abastecimento
+		// e a posicao do contador for igual à posição atual (M->TQQ_HODOM)
+		If aKmsR[1] == nContador .And. aKmsR[4] == 'A'
+
+			aValKM := {'A', aKmsR[1], aKmsR[10], aKmsR[11], aKmsR[12], aKmsR[13]}
+
+		// Se o reporte posterior for de um abastecimento
+		// e a posicao do contador for igual à posição atual (M->TQQ_HODOM)
+		ElseIf aKmsR[2] == nContador .And. aKmsR[3] == 'A'
+
+			aValKM := {'P', aKmsR[2], aKmsR[8], aKmsR[9], aKmsR[14], aKmsR[15]}
+
+		EndIf
+
+		// Caso haja um reporte de contador anterior/posterior, do tipo 'A' Abastecimento, com a mesma posição de contador atual
+		If !Empty(aValKM)
+
+			lRet := MsgYesNo(IIf(aValKM[1] == 'A' .And. cCODERR == " 17", STR0122, STR0127)+Chr(10)+Chr(10)+; // "Já existe um abastecimento anterior/posterior com o mesmo contador."
+							 IIf(aValKM[1] == 'A' .And. cCODERR == " 17", STR0123, STR0128)+AllTrim(Str(aValKM[2]))+Chr(13)+Chr(10)+; // "Contador Anterior/Posterior: "
+							 STR0018 + ": " +AllTrim(DTOC(aValKM[3]))+Chr(13)+Chr(10)+; // "Data: "
+							 STR0019 + ": " +AllTrim(aValKM[4])+Chr(13)+Chr(10)+; // "Hora: "
+							 IIf(!Empty(aValKM[5]),STR0124+AllTrim(aValKM[5])+Chr(13)+Chr(10)+; // "Posto: "
+							 STR0125+AllTrim(aValKM[6])+Chr(13)+Chr(10)+Chr(10)," ")+Chr(10)+; // "Loja: "
+							 STR0126+AllTrim(Str(nContador))+Chr(13)+Chr(10)+; // "Contador Atual: "
+							 STR0018 + ": " +AllTrim(DTOC(M->TQQ_DTABAS))+Chr(13)+Chr(10)+; // "Data: "
+							 STR0019 + ": " +AllTrim(M->TQQ_HRABAS)+Chr(10)+Chr(13)+Chr(10)+; // "Hora: "
+							 STR0104,; // "Deseja continuar assim mesmo?"
+							 STR0042) // "Atenção"
+
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValAltera
+Validações da tela de alteração
+
+@author Maria Elisandra de Paula
+@since 30/04/21
+@return boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fValAltera()
+
+	Local lRet := fValPostoI() .And. fValAbs() .And. fValCpfMot()
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValCpfMot
+Valida Cpf do motorista
+
+@author Maria Elisandra de Paula
+@since 30/04/21
+@return boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fValCpfMot()
+
+	Local cTipDoc := IIf( Len( Trim( M->TQQ_CODMOT ) ) == 14, 'J', 'F' )
+	Local lRet    := NGCPFCGC( Trim( M->TQQ_CODMOT ), cTipDoc, .T. ) .And. MNTA700MO()
+
+Return lRet
+

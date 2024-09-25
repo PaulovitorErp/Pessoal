@@ -1,0 +1,1077 @@
+#INCLUDE "MNTA510.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510
+Fechamento de ordem de servico em lote (Com restricoes)
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA510()
+
+	//+-------------------------------------------------------------------+
+	//| Guarda conteudo e declara variaveis padroes						  |
+	//+-------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local y := 1
+	Local cESP20 := Space(20), cESP30 := Space(30)
+
+	Local oTmpTbl1
+	Local oTmpTbl2
+	Local oTmpTbl3
+
+	If MNTAmIIn( 19, 95 )
+
+		Private oListN
+		Private oListF
+		Private  n := 1, aORDEG := {},aORDEP := {}
+		Private oDlgx, cCHAVESTP := Space(Len(STJ->TJ_ordem)+Len(STJ->TJ_plano))
+		Private cNGINSPREA := "R" //Indica se o insumo e realizado ou previsto, nao deve ser retirado
+
+		Private cTRBG := GetNextAlias() // Alias Tab. Temp. 1
+		Private cTRBP := GetNextAlias() // Alias Tab. Temp. 2
+		Private cTRBL := GetNextAlias() // Alias Tab. Temp. 2
+
+		lESTNEGA := If(AllTrim(GETMV("MV_ESTNEG")) == 'S',.T.,.F.)
+		cUsaInt3 := AllTrim(GetMv("MV_NGMNTES"))
+		dULFECES := GetMv("MV_ULMES")
+		INCLUI   := .T.
+
+		If !Pergunte("MNT510")
+			Return
+		EndIf
+
+		aDBG := {}
+			Aadd(aDBG,{"PLANOG" ,"C",Len(STJ->TJ_plano)  ,0})
+			Aadd(aDBG,{"ORDEMG" ,"C",Len(STJ->TJ_ordem)  ,0})
+			Aadd(aDBG,{"BEMCOG" ,"C",Len(STJ->TJ_codbem) ,0})
+			Aadd(aDBG,{"SERVIG" ,"C",Len(STJ->TJ_servico),0})
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl1:= FWTemporaryTable():New( cTRBG, aDBG )
+		//Adiciona os Indices
+		oTmpTbl1:AddIndex( "Ind01" , {"ORDEMG","PLANOG"} )
+		//Cria a tabela temporaria
+		oTmpTbl1:Create()
+
+		aDBP := {}
+			Aadd(aDBP,{"PLANOP" ,"C",Len(STJ->TJ_plano)  ,0})
+			Aadd(aDBP,{"ORDEMP" ,"C",Len(STJ->TJ_ordem)  ,0})
+			Aadd(aDBP,{"BEMCOP" ,"C",Len(STJ->TJ_codbem) ,0})
+			Aadd(aDBP,{"SERVIP" ,"C",Len(STJ->TJ_servico),0})
+			Aadd(aDBP,{"MOTIVP" ,"C",120                 ,0})
+
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl2:= FWTemporaryTable():New( cTRBP, aDBP )
+		//Adiciona os Indices
+		oTmpTbl2:AddIndex( "Ind01" , {"ORDEMP","PLANOP"} )
+		//Cria a tabela temporaria
+		oTmpTbl2:Create()
+
+		aDBFL     := STL->(DbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl3:= FWTemporaryTable():New( cTRBL, aDBFL )
+		//Adiciona os Indices
+		oTmpTbl3:AddIndex( "Ind01" , {"TL_ORDEM","TL_PLANO","TL_CODIGO"} )
+		//Cria a tabela temporaria
+		oTmpTbl3:Create()
+
+		Processa({|lEnd| MNTA510PRO() },STR0001) //"Aguarde... Processando.."
+		dbSelectArea(cTRBG)
+		Dbgotop()
+		If Reccount() > 0
+			While !Eof()
+				Aadd(aORDEG,{(cTRBG)->ordemg,(cTRBG)->planog,(cTRBG)->bemcog,(cTRBG)->servig})
+				dbSkip()
+			End
+		EndIf
+
+		dbSelectArea(cTRBP)
+		Dbgotop()
+		If Reccount() > 0
+			While !Eof()
+				Aadd(aORDEP,{(cTRBP)->ordemp,(cTRBP)->planop,(cTRBP)->bemcop,(cTRBP)->servip,(cTRBP)->motivp})
+				dbSkip()
+			End
+		EndIf
+
+		If Len(aORDEG) > 0 .Or. Len(aORDEP) > 0
+			If Len(aORDEG) = 0
+				Aadd(aORDEG,{cESP20,cESP20,cESP30,cESP20})
+			EndIf
+			If Len(aORDEP) = 0
+				Aadd(aORDEP,{cESP20,cESP20,cESP30,cESP20,cESP30})
+			EndIf
+
+			Define Dialog oDlgx from 9,0 to 34,91 title STR0002 COLOR CLR_BLACK,CLR_WHITE //"Resultado da finalizacao de ordem de servico em lote"
+			oDlgx:lMaximized := .T.
+
+				//PANEL PRINCIPAL
+				oPanel:= tPanel():New(0,0,,oDlgx,,.F.)
+				oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+					oPanelT:= tPanel():New(0,0,,oPanel,,.F.,,,,30,30)
+					oPanelT:Align := CONTROL_ALIGN_TOP
+
+						@20,5   say STR0003     SIZE 100,15 OF oPanelT PIXEL //"ORDENS DE SERVICO FINALIZADAS"
+						DEFINE SBUTTON oBtn FROM 5,10 TYPE  6 ENABLE OF oPanelT ACTION MNTA510IM()
+						@20,325 say STR0004 SIZE 200,15 OF oPanelT PIXEL //"ORDENS DE SERVICO NAO FINALIZADAS"
+
+					//PANEL OS FINALIZADAS
+					oPanelD:= tPanel():New(0,0,,oPanel,,.T.,,,,0,0)
+					oPanelD:Align := CONTROL_ALIGN_ALLCLIENT
+
+						@2,0.5 LISTBOX oListF fields aORDEG[n][1],aORDEG[n][2],aORDEG[n][4],aORDEG[n][3];
+						FieldSizes 100,125,130,125;
+						headers STR0005, STR0006,STR0007,STR0008; //"Ordem "###"Plano"###"Bem"###"Servico"
+						Of oPanelD;
+						ON DBLCLICK mnta510box(1,y)
+
+						If len(aORDEG) > 0
+							If !Empty(aORDEG[1,1]+aORDEG[1,2])
+								oListF:cToolTip := OemToAnsi(STR0009) //"Duplo click ou Enter para Visualizar"
+							EndIf
+						EndIf
+
+						oListF:bGotop    	:= { || n := 1 }
+						oListF:bGoBottom 	:= { || n := eval( oListF:bLogicLen ) }
+						oListF:bSkip     	:= { | nwant, nold | nold := n , n += nwant,;
+						n := max( 1, min( n, eval( oListF:bLogicLen ))),;
+						n - nOld }
+						oListF:bLogicLen 	:= { || len(aORDEG) }
+						oListF:cAlias    	:= "Array"
+						oListF:Align := CONTROL_ALIGN_ALLCLIENT
+
+					//PANEL OS NÃO FINALIZADAS
+					oPanelE:= tPanel():New(0,0,,oPanel,,.T.,,,,350,350)
+					oPanelE:Align := CONTROL_ALIGN_RIGHT
+
+						@2,0.5 listbox oListN fields aORDEP[y][1],aORDEP[y][2],aORDEP[y][3],aORDEP[y][4],aORDEP[y][5];
+						headers STR0005, STR0006,STR0007,STR0008,STR0010; //"Ordem "###"Plano"###"Bem"###"Servico"###"Motivo"
+						FieldSizes 25,25,30,25,320 OF oPanelE ON DBLCLICK mnta510box(2,y)
+
+						If len(aORDEP) > 0
+							If !Empty(aORDEP[1,1]+aORDEP[1,2])
+								oListN:cToolTip := OemToAnsi(STR0009) //"Duplo click ou Enter para Visualizar"
+							EndIf
+						EndIf
+
+						oListN:bGotop    := { || y := 1 }
+						oListN:bGoBottom := { || y := eval( oListN:bLogicLen ) }
+						oListN:bSkip     := { | nwant, nold | nold := y , y += nwant,;
+						y := max( 1, min( y, eval( oListN:bLogicLen ))),;
+						y - nOld }
+						oListN:bLogicLen := { || len(aORDEP) }
+						oListN:cAlias    := "Array"
+						oListN:Align := CONTROL_ALIGN_ALLCLIENT
+
+					ACTIVATE DIALOG oDlgx
+
+		Else
+			MsgInfo(STR0011,; //"Segundo especIficacao dos parametros, nao a ordens de servico para serem finalizadas"
+			STR0012) //"ATENCAO"
+		EndIf
+
+		oTmpTbl1:Delete()
+		oTmpTbl2:Delete()
+		oTmpTbl3:Delete()
+
+		dbSelectArea("STI")
+
+		//+-------------------------------------------------------------------+
+		//| Retorna conteudo de variaveis padroes       					  |
+		//+-------------------------------------------------------------------+
+		NGRETURNPRM(aNGBEGINPRM)
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} mnta510box
+Consistencia da visualizacao da ordem de servico
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param nVBOX, numeric
+@param nY, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function mnta510box(nVBOX,nY)
+
+	If nVBOX = 1
+		If Len(aORDEG) > 0
+			cCHAVESTP := If(!Empty(aORDEG[n,1]+aORDEG[n,2]),aORDEG[n,1]+aORDEG[n,2],;
+			Space(Len(STJ->TJ_ordem)+Len(STJ->TJ_plano)))
+		EndIf
+	Else
+		If Len(aORDEP) > 0
+			cCHAVESTP := If(!Empty(aORDEP[n,1]+aORDEP[nY,2]),aORDEP[nY,1]+aORDEP[nY,2],;
+			Space(Len(STJ->TJ_ordem)+Len(STJ->TJ_plano)))
+		EndIf
+	EndIf
+	If !Empty(cCHAVESTP)
+		MNTA510VI(nVBOX)
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------
+/*/{Protheus.doc} MNTA510PRO
+Processamento das ordens/plano
+
+@author Inácio Luiz Kolling
+@since 20/05/2004
+@version MP11
+@return Nil
+/*/
+//----------------------------------------------------------------
+Static Function MNTA510PRO()
+
+	Local cCONDSTJ1 := "STJ->TJ_SITUACA = 'L' .And. STJ->TJ_termino = 'N'"
+
+	Local cCONDSTJ2 := "STJ->TJ_CODBEM >= "+ValToSql( MV_PAR03 )+;
+	" .And. STJ->TJ_CODBEM <= "+ValToSql( MV_PAR04 )
+
+	Local cCONDSTJ3 := "STJ->TJ_SERVICO >= "+ValToSql( MV_PAR05 )+;
+	" .And. STJ->TJ_SERVICO <= "+ValToSql( MV_PAR06 )
+
+	Local cCONDSTJ4 := "STJ->TJ_ORDEM >= "+ValToSql( MV_PAR07 )+;
+	" .And. STJ->TJ_ORDEM <= "+ValToSql( MV_PAR08 )
+
+	Local cCONDSTJ5 := "DTOS(STJ->TJ_DTMPINI) >= "+ValToSql( MV_PAR09 )+;
+	" .And. DTOS(STJ->TJ_DTMPINI) <= "+ValToSql( MV_PAR10 )
+
+	Local cCONDSTJ6 := "STJ->TJ_TIPOOS = 'B'"
+
+	Local cCONDSTJ7 := "Empty(STJ->TJ_BEMPAI)"
+	Local cPlano := MV_PAR02
+
+	//-- Variáveis usadas no P.E
+	Local cCONDPE 	:= ""
+	Local lCONDPE 	:= .F.
+	Local cHelp     := ''
+
+	Private lSemIns	:= .F.
+	//---------------------------
+
+
+	If ExistBlock( "MNTA5102" )
+		cCONDPE := ExecBlock( "MNTA5102", .F., .F. )
+		lCONDPE := .T.
+	EndIf
+
+	If ExistBlock("NGSEMINS")
+		lSemIns := ExecBlock("NGSEMINS",.F.,.F.)
+		lSemIns := If(ValType(lSemIns) == "L",lSemIns,.F.)
+	EndIf
+
+	dbSelectArea("STI")
+	dbSetOrder(1)
+	dbSeek(xFilial("STI")+MV_PAR01,.T.)
+	ProcRegua(Reccount())
+	While !Eof() .And. xFilial("STI") = sti->ti_filial .And. sti->ti_plano <= cPlano
+
+		IncProc()
+
+		If sti->ti_termino <> "S" .And. sti->ti_situaca = "L"
+			dbSelectArea( "STJ" )
+			dbSetOrder( 3 )
+			dbSeek( xFilial( "STJ" ) + sti->ti_plano )
+			While !Eof() .And. xFilial( "STJ" ) == STJ->TJ_filial .And. ;
+			STJ->TJ_plano = sti->ti_plano
+				nRECNOSTJ := Recno()
+				If &(cCONDSTJ1)
+					If &(cCONDSTJ2)
+						If &(cCONDSTJ3)
+							If &(cCONDSTJ4)
+								If &(cCONDSTJ5)
+									If &(cCONDSTJ6)
+										If &(cCONDSTJ7)
+											If FindFunction("NGVLDSTL") .And. !NGVLDSTL(STJ->TJ_ORDEM,"",.F.) // verifica se não existe insumo com data e hora inicial igual a data e hora final
+												MNTA510OSP(STR0055) // "Existem insumos de Mão de Obra executando etapas da OS."
+												dbSelectArea("STJ")
+												dbGoTo(nRECNOSTJ)
+												dbSetOrder(3)
+												dbSkip()
+												Loop
+											EndIf
+
+											//-----------------------------------------------------------
+											// Verifica se não há pneus aguardando aplicação
+											//-----------------------------------------------------------
+											If FindFunction( 'MNTVLDFIN' ) .And. !Empty( cHelp := MNTVLDFIN( STJ->TJ_ORDEM, .F. )[2] )
+												MNTA510OSP( cHelp )
+												dbSelectArea("STJ")
+												dbGoTo(nRECNOSTJ)
+												dbSetOrder(3)
+												dbSkip()
+												Loop
+											EndIf
+
+											If lCONDPE
+												If !(&(cCONDPE))
+													dbSelectArea("STJ")
+													dbGoTo(nRECNOSTJ)
+													dbSetOrder(3)
+													dbSkip()
+													Loop
+												EndIf
+											EndIf
+											If !NG400VALOS(STJ->TJ_CODBEM,STJ->TJ_SERVICO,.T.)
+												If NGFUNCRPO("NGRESPETAEX",.F.)
+													vRetEtE := NGRESPETAEX(STJ->TJ_ordem,.F.)
+													If !vRetEtE[1]
+														MNTA510OSP(vRetEtE[2]) //"Etapas ou executante
+														dbSelectArea("STJ")
+														dbGoto(nRECNOSTJ)
+														dbSetOrder(3)
+														dbSkip()
+														Loop
+													EndIf
+												EndIf
+												// CONSISTENCIA DE RESTRICOES
+												dbSelectArea("ST9")
+												dbSetOrder(1)
+												If dbSeek(xFilial("ST9")+STJ->TJ_codbem)
+													If st9->t9_sitbem = "I"
+														MNTA510OSP(STR0014) //"Bem inativo"
+													ElseIf st9->t9_sitbem = "T"
+														MNTA510OSP(STR0048) //"Bem transferido"
+													ElseIf st9->t9_sitman = "I"
+														MNTA510OSP(STR0015) //"Bem inativo para manutencao"
+													Else
+														If st9->t9_temcont <> "N"
+															If Val(STJ->TJ_plano) > 0
+																dbSelectArea("STF")
+																dbSetOrder(1)
+																dbSeek(xFilial("STF")+STJ->TJ_CODBEM+STJ->TJ_SERVICO+STJ->TJ_SEQRELA)
+																If STF->TF_TIPACOM != "T"
+																	MNTA510OSP(STR0013) //"Ordem preventiva controlado por contador"
+																Else
+																	MNTA510STL()
+																EndIf
+															Else
+																MNTA510STL()
+															EndIf
+														Else
+															MNTA510STL()
+														EndIf
+													EndIf
+												Else
+													MNTA510OSP(STR0016) //"Bem nao cadastrado"
+												EndIf // NG400VALOS
+											Else
+												MNTA510OSP(STR0054) //"O.S. com serviço de Reforma ou Conserto, para finalizar utilizar a rotina O.S. em Lote."
+											EndIf // CONDSTJ7
+										Else
+											MNTA510OSP(STR0017) //"Ordem de servico de reforma"
+										EndIf // CONDSTJ6
+									Else
+										MNTA510OSP(STR0018) //"Ordem de solicitacao de servico"
+									EndIf // CONDSTJ5
+								EndIf // CONDSTJ4
+							EndIf // CONDSTJ3
+						EndIf // CONDSTJ2
+					EndIf // CONDSTJ1
+				EndIf
+				dbSelectArea("STJ")
+				dbGoto(nRECNOSTJ)
+				dbSetOrder(3)
+				dbSkip()
+			EndDo
+		EndIf
+		dbSelectArea("STI")
+		dbSkip()
+	EndDo
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510STL
+Consistencia de insumos e/ou finalizacao da ordem de servico
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510STL()
+
+	Local xx 		:= 0
+	Local aRetSD3   := {}
+	Local aError    := {}
+	Local lMNTA5101	:= ExistBlock("MNTA5101")
+	Local lGravIns  := .F.
+	local lExistSA  := .F.
+
+	Private dDATREI := Ctod('  /  /  '),dDATREF := dDATREI
+	Private cHORAEI := Space(5),cHORAEF := cHORAEI
+
+	dbSelectArea( cTRBL )
+	Zap
+
+	BEGIN TRANSACTION
+
+		dbSelectArea("STL")
+		dbSetOrder(1)
+		If dbSeek(xFilial("STL")+STJ->TJ_ordem+STJ->TJ_plano) .Or. lSemIns
+			lPDR := NGCHKRET(STJ->TJ_ORDEM,STJ->TJ_PLANO)
+			
+			If lPDR
+				
+				dbSelectArea("STL")
+				dbSetOrder(1)
+				If dbSeek(xFilial("STL")+STJ->TJ_ordem+STJ->TJ_plano)
+					
+					While !Eof() .And. xFilial("STL") = stl->tl_filial .And.;
+						stl->tl_ordem = STJ->TJ_ordem .And. stl->tl_plano = STJ->TJ_plano
+						
+						If Val(stl->tl_seqrela) = 0
+
+							Do Case
+
+								Case STL->TL_TIPOREG == 'E'
+
+									aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+										STR0019 } // Insumo especialidade na finalizacao pelo padrao
+									
+									DisarmTransaction()
+
+									Break
+
+								Case STL->TL_TIPOREG == 'T'
+
+									If cUsaInt3 == 'S'
+
+										aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+											STR0019 } // Insumo terceiro na finalizacao pelo padrao
+										
+										DisarmTransaction()
+
+										Break
+
+									EndIf
+
+								Case STL->TL_TIPOREG == 'M'
+
+									If !NGFUNCRH( STL->TL_CODIGO, .F., STL->TL_DTFIM )
+
+										aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+											STR0042 + ' ' + AllTrim( STL->TL_CODIGO ) + ' ' +; //"Mão de obra"#"nao habilitada junto a folha (RH)."#" e/ou "#"indisponível no cadastro de funcionários."
+											STR0044 + ' ' + STR0052 + ' ' + STR0043 }
+										
+										DisarmTransaction()
+
+										Break
+
+									EndIf
+
+									If !NGFRHAFAST( STL->TL_CODIGO, STL->TL_DTINICI, STL->TL_DTFIM, .F. )
+
+										aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+											STR0042 + ' ' + AllTrim( STL->TL_CODIGO ) + ' ' + STR0045 } //"Mao de Obra" # "possui afastamento no RH no periodo de ultilizacao na Ordem de Servico."
+										
+										DisarmTransaction()
+
+										Break
+
+									EndIf
+
+								Case STL->TL_TIPOREG == 'P'
+
+									If cUsaInt3 == "S"
+
+										If !Empty( STL->TL_NUMSA )
+
+											lExistSA := .T.
+
+											STL->( dbSkip() )
+
+											Loop
+
+										EndIf
+
+									EndIf
+
+							End Case
+
+							If STL->TL_TIPOREG != 'P'
+
+								If NG510SOBHR( STL->TL_TIPOREG, STL->TL_CODIGO, STL->TL_DTINICI, STL->TL_HOINICI,;
+									STL->TL_DTFIM, STL->TL_HOFIM )
+
+									aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+											STR0047 } // Existe sobreposição de horas lançadas para o Insumo
+									
+									DisarmTransaction()
+
+									Break
+
+								EndIf
+
+							EndIf
+
+							RecLock((cTRBL),.T.)
+							dbSelectArea("STL")
+							For xx := 1 To FCOUNT()
+								ny   := "(cTRBL)->" + FIELDNAME(xx)
+								nx   := "STL->" + FIELDNAME(xx)
+								&ny. := &nx.
+							Next xx
+
+							MNTA510DH()
+
+							lGravIns := .T.
+						
+						EndIf
+
+						dbSelectArea("STL")
+						dbSkip()
+
+					End
+
+					If !lGravIns .And. lExistSA
+						
+						aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+							STR0056 } // Os insumos desta O.S. estão relacionados a solicitação de armazém. Realizar a aplicação do insumo utilizando a rotina Baixa Pré-Requisição(MATA185).
+						
+						DisarmTransaction()
+
+						Break
+
+					EndIf
+
+					dbSelectArea(cTRBL)
+					Dbgotop()
+					While !Eof()
+						M->TJ_ORDEM := (cTRBL)->TL_ORDEM
+						M->TJ_PLANO := (cTRBL)->TL_PLANO
+						M->TL_ORDEM := (cTRBL)->TL_ORDEM
+						M->TL_PLANO := (cTRBL)->TL_PLANO
+						cSEQSTL := ULTSEQ(RECNO())
+
+						dbSelectArea("STL")
+						RecLock("STL",.T.)
+						dbSelectArea(cTRBL)
+						xx := 0
+						For xx := 1 To FCOUNT()
+							If FIELDNAME(xx) = "TL_SEQRELA"
+								STL->TL_SEQRELA := cSEQSTL
+							Else
+								ny   := "STL->" + FIELDNAME(xx)
+								nx   := "(cTRBL)->" + FIELDNAME(xx)
+								&ny. := &nx.
+							EndIf
+						Next xx
+						STL->TL_USACALE := "N"
+						MsUnLock("STL")
+
+						If cUsaInt3 = "S"
+							If STL->TL_TIPOREG $"PM"
+								//Ponto de Entrada para manipular produtos empenhados
+								If STL->TL_TIPOREG == "P"
+									If lMNTA5101
+										aArea := GetArea()
+										ExecBlock("MNTA5101",.F.,.F.)
+										RestArea(aArea)
+									EndIf
+								EndIf
+
+								aRetSD3 := MNTGERAD3( 'RE0', , , , .F., .T. )
+
+								If aRetSD3[2]
+
+									cNUMSEQ := aRetSD3[1]
+
+									If NGPRODESP(SD3->D3_COD,.F.,"M")
+										NGAtuErp("SD3","INSERT")
+									EndIf
+
+									RecLock( 'STL', .F. )
+									
+										STL->TL_CUSTO  := SD3->D3_CUSTO1
+										STL->TL_NUMSEQ := cNUMSEQ
+
+									STL->( MsUnLock() )
+
+								Else
+
+									aError := { STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM, STJ->TJ_SERVICO,;
+										STR0057 } // Não é possivel realizar a movimentação do produto no estoque, devido alguma inconsitência.
+						
+									DisarmTransaction()
+
+									Break
+
+								EndIf
+
+							EndIf
+
+						EndIf
+
+						dbSelectArea(cTRBL)
+						dbSkip()
+					End
+				EndIf
+			Else
+				dbSelectArea("STL")
+				dbSetOrder(1)
+				dbSeek(xFilial("STL")+STJ->TJ_ordem+STJ->TJ_plano)
+				While !Eof() .And. xFilial("STL") = stl->tl_filial .And.;
+				stl->tl_ordem = STJ->TJ_ordem .And. stl->tl_plano = STJ->TJ_plano
+					If Val(stl->tl_seqrela) > 0
+						MNTA510DH()
+					EndIf
+					dbSkip()
+				End
+			EndIf
+
+			dbSelectArea("STJ")
+			RecLock("STJ",.F.)
+			STJ->TJ_DTPRINI := dDATREI
+			STJ->TJ_HOPRINI := cHORAEI
+			STJ->TJ_DTPRFIM := dDATREF
+			STJ->TJ_HOPRFIM := cHORAEI
+			STJ->TJ_TIPORET := "S"
+			cACODBEM := STJ->TJ_CODBEM
+			MsUnLock("STJ")
+
+			//VERIfICAR SE INCLUI NOVA ORDEM
+			NGFINAL(STJ->TJ_ORDEM,STJ->TJ_PLANO,STJ->TJ_DTPRINI,STJ->TJ_HOPRINI,STJ->TJ_DTPRFIM,;
+			STJ->TJ_HOPRFIM,0,0)
+			//---------------------------------------------------
+			lSTJAchou  := A510STJBUS(cACODBEM)
+
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+
+			If dbSeek(xFilial("ST9")+cACODBEM)
+				RecLock("ST9",.F.)
+
+				If lSTJAchou = .F.
+					ST9->T9_TERCEIR := "1"
+				EndIf
+
+				MsUnlock("ST9")
+			EndIf
+			//---------------------------------------------------
+
+			MNTA510OSG()
+		Else
+			MNTA510OSP(STR0022) //"Ordem sem insumo"
+		EndIf
+
+	END TRANSACTION
+
+	If !Empty( aError )
+
+		MNTA510OSP( , aError )
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510DH
+Calcula as data e horas de inicio e fim
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510DH()
+
+	If Empty(dDATREI)
+		dDATREI := stl->tl_dtinici
+		cHORAEI := stl->tl_hoinici
+	Else
+		If stl->tl_dtinici < dDATREI
+			dDATREI := stl->tl_dtinici
+			cHORAEI := stl->tl_hoinici
+		ElseIf stl->tl_dtinici = dDATREI
+			If stl->tl_hoinici < cHORAEI
+				cHORAEI := stl->tl_hoinici
+			EndIf
+		EndIf
+	EndIf
+
+	If Empty(dDATREF)
+		dDATREF := stl->tl_dtfim
+		cHORAEF := stl->tl_hofim
+	Else
+		If stl->tl_dtfim > dDATREF
+			dDATREF := stl->tl_dtfim
+			cHORAEF := stl->tl_hofim
+		ElseIf stl->tl_dtfim = dDATREF
+			If stl->tl_hofim > cHORAEF
+				cHORAEF := stl->tl_hofim
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510OSP
+Grava no arquivo temporario as ordens nao fechadas
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param cVMOTIVO, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510OSP( cError, aOSErr )
+
+	Default cError := ''
+	Default aOSErr := {}
+
+	dbSelectArea( cTRBP )
+	
+	RecLock( cTRBP, .T. )
+
+		If Empty( aOSErr )
+
+			(cTRBP)->ORDEMP := STJ->TJ_ORDEM
+			(cTRBP)->PLANOP := STJ->TJ_PLANO
+			(cTRBP)->BEMCOP := STJ->TJ_CODBEM
+			(cTRBP)->SERVIP := STJ->TJ_SERVICO
+			(cTRBP)->MOTIVP := cError
+
+		Else
+			
+			(cTRBP)->ORDEMP := aOSErr[1]
+			(cTRBP)->PLANOP := aOSErr[2]
+			(cTRBP)->BEMCOP := aOSErr[3]
+			(cTRBP)->SERVIP := aOSErr[4]
+			(cTRBP)->MOTIVP := aOSErr[5]
+
+		EndIf
+
+	MsUnLock( cTRBP )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510OSG
+Grava no arquivo temporario as ordens fechadas
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510OSG()
+
+	dbSelectArea(cTRBG)
+	RecLock((cTRBG),.T.)
+	(cTRBG)->PLANOG := STJ->TJ_plano
+	(cTRBG)->ORDEMG := STJ->TJ_ordem
+	(cTRBG)->BEMCOG := STJ->TJ_codbem
+	(cTRBG)->SERVIG := STJ->TJ_servico
+	MsUnLock(cTRBG)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510PLA
+Consistencias do parametro de planos
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param nVTIPO, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA510PLA(nVTIPO)
+
+	Local cMENSA := Space(10)
+	Local cPLA00 := Replicate("0",Len(STI->TI_PLANO))
+	Local cPLA01 := Replicate("0",Len(STI->TI_PLANO)-1)+"1"
+	Local cPLAZZ := Replicate("Z",Len(STI->TI_PLANO))
+	dbSelectArea("STI")
+	dbSetOrder(1)
+	If nVTIPO = 1
+		If !Empty(MV_PAR01)
+			If !ExistCpo("STI",MV_PAR01)
+				Return .F.
+			EndIf
+			dbSeek(xFilial("STI")+MV_PAR01)
+			If MV_PAR01 = cPLA00 .Or. MV_PAR01 = cPLA01
+			Else
+				If sti->ti_termino = "S"
+					cMENSA := STR0023 //"Plano ja foi terminado.."
+				ElseIf sti->ti_situaca <> "L"
+					cMENSA := STR0024 //"Plano nao foi liberado e/ou cancelado.."
+				EndIf
+			EndIf
+		EndIf
+	Else
+		If MV_PAR02 <> cPLAZZ
+			If !ExistCpo("STI",MV_PAR02)
+				Return .F.
+			EndIf
+			If MV_PAR02 < MV_PAR01
+				cMENSA := STR0025 //"Ate plano devera ser maior igual a De plano"
+			Else
+				dbSeek(xFilial("STI")+MV_PAR02)
+				If MV_PAR02 = cPLA00 .Or. MV_PAR02 = cPLA01
+				Else
+					If sti->ti_termino = "S"
+						cMENSA := STR0023 //"Plano ja foi terminado.."
+					ElseIf sti->ti_situaca <> "L"
+						cMENSA := STR0024 //"Plano nao foi liberado e/ou cancelado.."
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	If !Empty(cMENSA)
+		MsgInfo(cMENSA,STR0026) //"NAO CONFORMIDADE"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510VI
+Visualizacao da ordem de servico
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param nVBOX, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510VI(nVBOX)
+
+	aRotina:= {{STR0027 , "PesqBrw" , 0 , 1},; //"Pesquisar"
+			   {STR0028 , "NGCAD01" , 0 , 2}} //"Visualizar"
+
+	If nVBOX == 1
+		aNgButton := {{"ng_ico_altssm" ,{||NGFECHASS(aORDEG[n,1],.T.)},STR0051,STR0051}}  //"Fecha SS"
+	EndIf
+
+	cCadastro := STR0029+NGSX2NOME("STJ")+" - "+aRotina[2,1] //"Cadastro - "
+	dbSelectArea("STJ")
+	dbSetOrder(1)
+	dbSeek(xFilial("STJ")+cCHAVESTP)
+	NGCAD01("STJ",Recno(),2)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510IM
+Impressao do resultado do fechamento das ordens de servico
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510IM()
+
+	Local cString    := "STJ"
+	Local cDesc1     := STR0030 //"Relatorio do resultado do fechamento das ordens de servico"
+	Local cDesc2     := " "
+	Local cDesc3     := " "
+	Local wnrel      := "MNTA510"
+
+	Private aReturn  := {STR0031, 1,STR0032, 2, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cPerg    := "MNT510"
+	Private Titulo   := STR0033 //"Resultado do fechamento das ordens de servico"
+	Private Tamanho  := "G"
+
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		DbSelectArea("STJ")
+		Return
+	EndIf
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| MNTA510IR(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA510IR
+Chamada do Relatório
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param lEnd, logical
+@param wnRel,
+@param titulo,
+@param tamanho,
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA510IR(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0, xa := 0
+
+	Private li := 80 ,m_pag := 1
+	Private Cabec1   := STR0003+Space(17)+STR0004 //"ORDENS DE SERVICO FINALIZADAS"###"ORDENS DE SERVICO NAO FINALIZADAS"
+	Private Cabec2   := STR0034 //"Ordem  Plano  Bem              Servico        Ordem  Plano  Bem              Servico Motivo"
+	Private nomeprog := "MNTA510"
+	Private nTipo    := IIf(aReturn[4]==1,15,18)
+
+	//+-------------------------------------------------------------------+
+	//| Monta os Cabecalhos                                          	  |
+	//+-------------------------------------------------------------------+
+	//          1         2         3         4         5         6         7           8         9           10       11
+	//01234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789012345678901234567890123456789012345678
+	//ORDENS DE SERVICO FINALIZADAS                 ORDENS DE SERVICO NAO FINALIZADAS
+	//Ordem  Plano  Bem              Servico   I    Ordem  Plano  Bem              Servico Motivo
+	//xxxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx    I    xxxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	nMARARR := If(Len(aORDEG) > Len(aORDEP),Len(aORDEG),Len(aORDEP))
+
+	SetRegua(nMARARR)
+	For xa := 1 To nMARARR
+		IncRegua()
+		Ngsomali(58)
+		If xa <= Len(aORDEG) .And. !Empty(aORDEG[xa,1])
+			@ Li,000 PSay aORDEG[xa,1] Picture "!@"
+			@ Li,007 PSay aORDEG[xa,2] Picture "!@"
+			@ Li,014 PSay aORDEG[xa,3] Picture "!@"
+			@ Li,031 PSay aORDEG[xa,4] Picture "!@"
+		EndIf
+		@ Li,041 PSay "|"
+		If xa <= Len(aORDEP) .And. !Empty(aORDEP[xa,1])
+			@ Li,046 PSay aORDEP[xa,1] Picture "!@"
+			@ Li,053 PSay aORDEP[xa,2] Picture "!@"
+			@ Li,060 PSay aORDEP[xa,3] Picture "!@"
+			@ Li,077 PSay aORDEP[xa,4] Picture "!@"
+			@ Li,085 PSay aORDEP[xa,5] Picture "!@"
+		EndIf
+	Next xa
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	RetIndex("STJ")
+	Set Filter To
+	Set device to Screen
+	If aReturn[5] = 1
+		Set Printer To
+		DbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A510STJBUS
+Busca Ordens de servico com status de terceiros para um determinado bem
+@author Ricardo Dal Ponte
+@since 03/05/2007
+@version undefined
+@param cBEMSTJ, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function A510STJBUS(cBEMSTJ)
+
+	dbSelectArea("STJ")
+	DbSetOrder(2)
+
+	lSTJAchou  := .F.
+	nRecnoSTJ  := STJ->(Recno())
+
+	dbSeek(xFilial("STJ")+"B"+cBEMSTJ)
+
+	While !Eof() .And. STJ->TJ_FILIAL  = xFilial("STJ");
+	.And. STJ->TJ_TIPOOS  = "B";
+	.And. STJ->TJ_CODBEM  = cBEMSTJ
+
+		If STJ->TJ_SITUACA = "C"
+			dbSkip()
+			Loop
+		EndIf
+
+		If STJ->TJ_TERMINO = "N" .And. STJ->TJ_TERCEIR = "2"
+			lSTJAchou := .T.
+		EndIf
+
+		dbSelectArea("STJ")
+		dbSkip()
+	EndDo
+
+	STJ->(DbGoTo(nRecnoSTJ))
+
+Return lSTJAchou
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG510SOBHR
+Checa sobreposicao de insumo
+@author Evaldo Cevinscki Jr.
+@since 11/02/09
+@version undefined
+@param cTP , characters, Tipo do Insumo
+@param cCod, characters, Codigo do Insumo
+@param dDtI, date	   , Data Inicio
+@param cHrI, characters, Hora Inicio
+@param dDtF, date	   , Data Fim
+@param cHrF, characters, Hora Fim
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function NG510SOBHR(cTP,cCod,dDtI,cHrI,dDtF,cHrF)
+
+	Local lSobrepos := .F.
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT COUNT( TL_CODIGO ) AS QuantSTL"
+	cQuery += " FROM " + RetSqlName("STL")
+	cQuery += " WHERE TL_FILIAL = '"+xFilial("STL")+"'"
+	cQuery += " AND TL_TIPOREG = '"+cTP+"'"
+	cQuery += " AND TL_CODIGO = '"+cCOD+"'"
+	cQuery += " AND TL_SEQRELA <> '0' "
+	cQuery += " AND '"+DtoS(dDTI)+cHRI+"' >= "
+	cQuery += " TL_DTINICI||TL_HOINICI "
+	cQuery += " AND '"+DtoS(dDTI)+cHRI+"' <= "
+	cQuery += " TL_DTFIM||TL_HOFIM "
+	cQuery += " AND D_E_L_E_T_ = ' ' "
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	lSobrepos := (cAliasQry)->QuantSTL > 1
+
+	(cAliasQry)->(DbCloseArea())
+
+	If !lSobrepos
+		cAliasQry := GetNextAlias()
+		cQuery := " SELECT COUNT( TT_CODIGO ) AS QuantSTT"
+		cQuery += " FROM " + RetSqlName( "STT" )
+		cQuery += " WHERE TT_FILIAL = '"+ xFilial( "STT" )+"'"
+		cQuery += " AND TT_TIPOREG = '"+ cTP +"'"
+		cQuery += " AND TT_CODIGO = '"+ cCOD +"'"
+		cQuery += " AND TT_SEQRELA <> '0' "
+		cQuery += " AND '" + DtoS( dDTI ) + cHRI + "' >= "
+		cQuery += " TT_DTINICI||TT_HOINICI "
+		cQuery += " AND '" + DtoS( dDTI ) + cHRI + "' <= "
+		cQuery += " TT_DTFIM||TT_HOFIM "
+		cQuery += " AND D_E_L_E_T_ = ' ' "
+
+		cQuery := ChangeQuery( cQuery )
+		dbUseArea( .T., "TOPCONN", TCGENQRY( ,,cQuery ), cAliasQry, .F., .T. )
+
+		lSobrepos := (cAliasQry)->QuantSTT > 1
+
+		(cAliasQry)->(DbCloseArea())
+		
+	EndIf
+
+Return lSobrepos

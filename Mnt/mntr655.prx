@@ -1,0 +1,259 @@
+#INCLUDE "MNTR655.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTR655
+description
+@author  NG Informatica
+@since   06/97
+@version P12
+/*/
+//-------------------------------------------------------------------
+Function MNTR655()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local cString    := "TQA"
+	Local wnrel      :="MNTR655"
+	Local cDesc1     := STR0001 //"Este programa ira emitir um relatorio com as informacoes referente"
+	Local cDesc2     := STR0002 //"as Ordens de Servico de Acompanhamento pendentes. O usuario podera"
+	Local cDesc3     := STR0003 //"estabelecer o numero de dias de atraso a ser considerado."
+
+	Private Tamanho  := "M"
+	Private aReturn  := { STR0004, 1,STR0005, 2, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cPerg    := "MNT655"
+	Private titulo   := STR0006 //"O.S. de Acompanhamento Pendentes"
+	Private cabec1,cabec2
+	Private ntipo    := 0
+	Private nomeprog := "MNTR655"
+	Private cTRB1	 := GetNextAlias()
+
+	//Variaveis utilizadas para parametros
+	//mv_par01 - Numero do Plano de Acompanhamento
+	//mv_par02 - Dias de atraso a considerar
+	//mv_par03 - De  Centro de Custo
+	//mv_par04 - Ate Centro de Custos
+	//mv_par05 - De  Centro de Trabalho
+	//mv_par06 - Ate Centro de Trabalho
+
+	Pergunte(cPerg,.F.)
+
+	//----------------------------------------------------------------
+	//| Envia controle para a funcao SETPRINT                        |
+	//----------------------------------------------------------------
+	wnrel:=SetPrint(cString,wnrel,cPerg,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+
+	If nLastKey = 27
+		Set Filter To
+		Return
+	EndIf
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| R655Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+	NGRETURNPRM(aNGBEGINPRM)
+Return Nil
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³ R655Imp  ³ Autor ³ NG Informatica Ltda.  ³ Data ³   /06/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³ Chamada do Relat¢rio                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR655                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function R655Imp(lEnd,wnRel,titulo,tamanho)
+
+	//³ Define Variaveis                                             ³
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local lMudaCC  := .F.
+	Local oTempTable	//Tabela Temporaria
+
+	//³ Variaveis para controle do cursor de progressao do relatorio ³
+	Local nTotRegs := 0 ,nMult := 1 ,nPosAnt := 4 ,nPosAtu := 4 ,nPosCnt := 0
+
+
+	//³ Contadores de linha e pagina                                 ³
+	Private li := 80 ,m_pag := 1
+
+	//³ Verifica se deve comprimir ou nao                            ³
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	//³ Monta os Cabecalhos                                          ³
+	cabec1 := STR0007 //"Bem              Descricao                                  Ult.Cont. Ult.Leit.  O.S.    Dt.Prev.  Atraso"
+	cabec2 := " "
+
+	/*
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	_____________________________________________________________________________________________________________________________________
+	Bem              Descricao                                  Ult.Cont.  Ult.Leit.  O.S.    Dt.Prev.    Atraso
+	_____________________________________________________________________________________________________________________________________
+
+	Centro de Custos   - xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Centro de Trabalho - xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999.999.999  xx/xx/xxxx xxxxxx  xx/xx/xxxx     xxx
+	Pai xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	*/
+	aDBF := {{"CTCUSTO" , "C", 20, 0},;
+	{"CTRAB"   , "C", 06, 0},;
+	{"BEMTQA"  , "C", 16, 0},;
+	{"ORDEMTQA", "C", 06, 0},;
+	{"DTREALAC", "D", 08, 0},;
+	{"DIASATRA", "N", 05, 0}}
+
+	//Intancia classe FWTemporaryTable
+	oTempTable  := FWTemporaryTable():New( cTRB1, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"CTCUSTO","CTRAB","BEMTQA"}  )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	Processa({|lEND| MNTR655TQA()},STR0012) //"Processando Arquivo..."
+
+	DbSelectArea(cTRB1)
+	DbGotop()
+	SetRegua(LastRec())
+	While !Eof()
+
+		cCCTRB1 := (cTRB1)->CTCUSTO
+		NGSOMALI(58)
+		@ Li,000 Psay STR0011 //"Centro de Custos"
+		@ Li,018 Psay " - " + cCCTRB1
+		@ Li,043 Psay NGSEEK('SI3',cCCTRB1,1,'I3_DESC')
+
+		DbSelectArea(cTRB1)
+		While !Eof() .And. (cTRB1)->CTCUSTO = cCCTRB1
+
+			cCENTTRB1 := (cTRB1)->CTRAB
+
+			NGSOMALI(58)
+			@ Li,000 Psay STR0009 //"Centro de Trabalho"
+			@ Li,018 Psay " - " + cCENTTRB1
+			@ Li,029 Psay NGSEEK('SHB',cCENTTRB1,1,'HB_NOME')
+			NGSOMALI(58)
+
+			DbSelectArea(cTRB1)
+			While !Eof() .And. (cTRB1)->CTCUSTO = cCCTRB1 .And. (cTRB1)->CTRAB =  cCENTTRB1
+
+				cBEM := (cTRB1)->BEMTQA
+
+				DbSelectArea("ST9")
+				DbSetOrder(01)
+				DbSeek(xFilial('ST9')+cBEM)
+				NGSOMALI(58)
+				@ Li,000 Psay cBEM
+				@ Li,017 Psay Substr(ST9->T9_NOME,1,20)
+				@ Li,058 Psay ST9->T9_POSCONT Picture "@E 999,999,999"
+				@ Li,071 Psay ST9->T9_DTULTAC Picture "99/99/9999"
+
+				DbSelectArea(cTRB1)
+				While !Eof() .And. (cTRB1)->CTCUSTO = cCCTRB1 .And. (cTRB1)->CTRAB =  cCENTTRB1 ;
+				.And. (cTRB1)->BEMTQA = cBEM
+
+					IncRegua()
+					@ Li,082 Psay (cTRB1)->ORDEMTQA
+					@ Li,090 Psay (cTRB1)->DTREALAC Picture "99/99/9999"
+					@ Li,105 Psay (cTRB1)->DIASATRA Picture "99999"
+					NGSOMALI(58)
+
+					DbSelectArea(cTRB1)
+					DbSkip()
+				End
+
+				//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+				//³ Verifica se o Bem tem Bem Pai                            ³
+				//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+				cPAITQA := NGBEMPAI(cBEM)
+
+				//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+				//³ Impressao da Segunda  Linha da O.S. Bem Pai              ³
+				//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+				If !Empty(cPAITQA)
+					@ Li,000 Psay STR0010 //"Pai.:"
+					@ Li,007 Psay cPAITQA //cChave
+					@ Li,024 Psay NGSEEK('ST9',cPAITQA,1,'Substr(T9_NOME,1,20)')
+				EndIf
+			End
+		End
+	End
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Devolve a condicao original do arquivo principal             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	RetIndex("TQA")
+	RetIndex("ST9")
+	RetIndex("SI3")
+	RetIndex("SHB")
+	RetIndex("STO")
+
+	Set Filter To
+	Set device to Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+	oTempTable:Delete()
+
+Return NIL
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTR645TQA³ Autor ³Elisangela Costa       ³ Data ³03/09/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Processa os arquivos                                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTR645                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTR655TQA()
+
+	cCONDTQA := 'TQA->TQA_CCUSTO >= MV_PAR03 .And. TQA->TQA_CCUSTO <= MV_PAR04 .And. '
+	cCONDTQA := cCONDTQA + 'TQA->TQA_CENTRA >= MV_PAR05 .And. TQA->TQA_CENTRA <= MV_PAR06'
+
+	DbSelectArea("TQA")
+	DbSetOrder(03)
+	DbSeek(xFilial('TQA')+MV_PAR01)
+	Procregua(LastRec())
+	While !Eof()                         .And.;
+	TQA->TQA_FILIAL = xFilial('TQA') .And.;
+	TQA->TQA_PLANO  = MV_PAR01
+
+		IncProc()
+		If &(cCONDTQA)
+
+			// seleciona OS por atraso
+			nAtraso := dDataBase - TQA->TQA_DTREAL
+
+			If MV_PAR02 != 0
+				If nAtraso < 0 .Or. nAtraso < MV_PAR02
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+			DbSelectArea(cTRB1)
+			(cTRB1)->(DbAppend())
+			(cTRB1)->CTCUSTO  := TQA->TQA_CCUSTO
+			(cTRB1)->CTRAB    := TQA->TQA_CENTRA
+			(cTRB1)->BEMTQA   := TQA->TQA_CODBEM
+			(cTRB1)->ORDEMTQA := TQA->TQA_ORDEM
+			(cTRB1)->DTREALAC := TQA->TQA_DTREAL
+			(cTRB1)->DIASATRA := nAtraso
+		EndIf
+		DbSelectArea("TQA")
+		DbSkip()
+	End
+Return .T.

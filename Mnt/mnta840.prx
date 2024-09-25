@@ -1,0 +1,247 @@
+#INCLUDE "MNTA840.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA840
+Quebra do Contador do Bem
+
+@param cBem código do bem
+@author Inacio Luiz Kolling
+@since 19/02/1999
+@version P811
+@return .T. 
+/*/
+//---------------------------------------------------------------------
+Function MNTA840(cBem)
+	
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private aIndSTW     := {}
+	Private bFiltraBrw  := {|| Nil}
+	Private aRotina     := MenuDef()
+	Private cCadastro   := OemtoAnsi(STR0004) //"Quebra do Contador"
+	
+	// Variaveis private atribuidas ao Dicionario de Dados SX3!
+	Private lContador1 := .F.
+    Private lContador2 := .F.
+	
+	// Ponto de entrada para executar quebra de contador específica 
+	If ExistBlock("MNTA8401")
+		If ExecBlock("MNTA8401",.F.,.F.)
+			Return
+		EndIf
+	EndIf
+	
+	bNGGRAVA := {||NG840VALC()} 
+	aPos1 := {15,01,78,315}
+	
+	dbSelectArea("ST9")
+	If cBem <> Nil
+		ST9->(dbSeek(xFilial("ST9")+cBem))
+		lRefresh := .t.
+		a840Quebra( Alias(), Recno(), 3)
+	Else
+	
+		cCondicao := 'T9_FILIAL == "' + xFilial("ST9")
+		cCondicao += '".And.  ST9->T9_TEMCONT = "S" '
+		cCondicao += ' .And.  ST9->T9_SITBEM = "A" '
+		
+		bFiltraBrw := {|| FilBrowse("ST9",@aIndSTW,@cCondicao) }
+		Eval(bFiltraBrw)
+	
+		mBrowse( 6, 1,22,75,"ST9")
+		aEval(aIndSTW,{|x| Ferase(x[1]+OrdBagExt())})
+	EndIf	
+	
+	dbSelectArea("ST9")
+	Set Filter To
+	dbSetOrder(1)
+	dbSeek(xFilial("ST9"))
+
+	NGRETURNPRM(aNGBEGINPRM)
+	
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A840Quebra
+Programa de inclusao da quebra do contador
+
+@param cAlias alias do arquivo
+@param nReg numero do registro
+@param nOpcx opcao selecionada
+@author Inacio Luiz Kolling
+@author Felipe Nathan Welter
+@since 19/02/1999
+@version P811
+@return .T. 
+/*/
+//---------------------------------------------------------------------
+Function A840Quebra(cAlias,nReg,nOpcx)
+
+	
+	Local bCampo
+    Local i
+	Local oDlg
+	Local oEnchoice
+    Local aChoice
+	Local lRet      := .T.
+	
+	Local aArea    := GetArea()
+	Local aAreaST9 := ST9->(GetArea())
+	
+	Private aTela[0][0],aGets[0]
+	
+	If ST9->T9_SITBEM = 'I' 
+		Help(" ",1,"NGBEMINATI")
+		lRet := .F.
+	ElseIf ST9->T9_SITBEM = 'T'
+		Help(" ",1,"NGBEMTRANSF",,STR0024,3,1) //"Este Bem foi TRANSFERIDO."
+		lRet := .F.
+	EndIf
+	
+	If lRet
+		
+		aPos1   := {015, 001, 140, 315}
+		
+		dbSelectArea("STW")
+		dbGoBottom() 	
+		dbSkip()
+		
+		SetInclui()
+		
+		bCampo    := { |nCPO| Field(nCPO) }
+		
+		For i := 1 To FCount()
+		
+			M->&(EVAL(bCampo,i)) := FieldGet(i)
+			
+			If ValType(M->&(EVAL(bCampo,i))) == "C"
+				M->&(EVAL(bCampo,i)) := Space(Len(M->&(EVAL(bCampo,i))))
+			ElseIf ValType(M->&(EVAL(bCampo,i))) == "N"
+				M->&(EVAL(bCampo,i)) := 0
+			ElseIf ValType(M->&(EVAL(bCampo,i))) == "D"
+				M->&(EVAL(bCampo,i)) := cTod("  /  /  ")
+			ElseIf ValType(M->&(EVAL(bCampo,i))) == "L"
+				M->&(EVAL(bCampo,i)) := .F.
+			EndIf
+		Next i
+		
+		aChoice := {"TW_CODBEM","TW_POSCONT","TW_DTLEITU","TW_HORAC1",;
+					"TW_POSCON2","TW_DTLEIT","TW_HORAC2"}
+		
+		M->TW_CODBEM := ST9->T9_CODBEM             
+		
+		//Verifica se o Bem Possui contador 1 e 2
+		lContador1 := ( ST9->T9_TEMCONT == "S" ) //Esta condicao e' meio obvia devido ao filtro da rotina ja fazer isto, mas por garantia, verificamos de novo
+		lContador2 := ( NGIFDBSEEK("TPE", M->TW_CODBEM, 1) )
+		
+		//Cria Janela
+		nOpca := 2
+		Define MsDialog oDlg Title cCadastro From 8,0 To 28,80 Of oMainWnd
+			oDlg:lMaximized := .T.
+		
+			oEnchoice := Msmget():New("STW",nReg,nOpcx,,,,aChoice,aPos1,,3)
+			oEnchoice:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+			
+		Activate MsDialog oDlg On Init;
+			EnchoiceBar(oDlg,{||nOpca:=1, If(!obrigatorio(aGets,aTela),nOpca := 0,If(!Eval(bNGGRAVA),nOpca := 0,oDlg:End()))},{||oDlg:End()})
+		
+	EndIf
+	
+	RestArea(aAreaST9)
+	RestArea(aArea)
+	lRefresh := .T.
+	
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG840VALC
+Valida se os campos obrigatorios foram preenchidos
+
+@author Elisangela Costa
+@author Felipe Nathan Welter
+@since 09/05/2003
+@version P10
+@return lRet 
+/*/
+//---------------------------------------------------------------------
+Function NG840VALC()  
+
+	Local lRet := .T.  
+	
+	//Consiste campos obrigatórios
+	If !Empty(M->TW_POSCONT)
+		If Empty(M->TW_DTLEITU)
+			lRet := .F.
+			cError := STR0025 + NGSEEKDIC("SX3","TW_DTLEITU",2,"X3_TITULO") + STR0026 //"Campo "  //" não preenchido."
+		ElseIf Empty(M->TW_HORAC1)
+			lRet := .F.
+			cError := STR0025 + NGSEEKDIC("SX3","TW_HORAC1",2,"X3_TITULO") + STR0026 //"Campo " //" não preenchido."
+		EndIf
+	EndIf
+	
+	If lRet .And. !Empty(M->TW_POSCON2)
+		If Empty(M->TW_DTLEIT)
+			lRet := .F.
+			cError := STR0025 + NGSEEKDIC("SX3","TW_DTLEIT",2,"X3_TITULO") + STR0026 //"Campo " //" não preenchido."
+		ElseIf Empty(M->TW_HORAC2)
+			lRet := .F.
+			cError := STR0025 + NGSEEKDIC("SX3","TW_HORAC2",2,"X3_TITULO") + STR0026 //"Campo " //" não preenchido."
+		EndIf
+	EndIf
+	
+	If lRet
+		oSTP:= MNTCounter():New()
+		oSTP:setOperation(3)
+		
+		oSTP:setValue("TP_CODBEM",M->TW_CODBEM)
+		oSTP:setValue("TP_POSCONT",M->TW_POSCONT)
+		oSTP:setValue("TP_DTLEITU",M->TW_DTLEITU)
+		oSTP:setValue("TP_HORA",M->TW_HORAC1)
+		
+		oSTP:setValue("TPP_CODBEM",M->TW_CODBEM)
+		oSTP:setValue("TPP_POSCON",M->TW_POSCON2)
+		oSTP:setValue("TPP_DTLEIT",M->TW_DTLEIT)
+		oSTP:setValue("TPP_HORA",M->TW_HORAC2)
+		
+		lRet := oSTP:BreakCounter()
+		If !lRet
+			cError := oSTP:getErrorList()[1]
+		EndIf
+	EndIf
+
+	If !lRet
+		Help(,,'HELP',, cError,1,0)
+	EndIf
+	
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Menudef
+Utilização de menu funcional
+
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version P10
+@return aRotina array com menu
+@obs Parametros do array a Rotina:
+         1. Nome a aparecer no cabecalho
+         2. Nome da Rotina associada
+         3. Reservado
+         4. Tipo de Transa‡„o a ser efetuada:
+             1 - Pesquisa e Posiciona em um Banco de Dados
+             2 - Simplesmente Mostra os Campos±
+             3 - Inclui registros no Bancos de Dados±
+             4 - Altera o registro corrente±
+             5 - Remove o registro corrente do Banco de Dados
+         5. Nivel de acesso
+         6. Habilita Menu Funcional 
+/*/
+//---------------------------------------------------------------------
+
+Static Function MenuDef()
+
+    Local aRotina := {{STR0001 ,"PesqBrw"   , 0, 1},;  //"Pesquisar"
+                      {STR0002 ,"NGCAD01"   , 0, 2},;  //"Visualizar"
+                      {STR0003 ,"A840Quebra", 0, 4}}   //"Quebra"
+Return(aRotina)

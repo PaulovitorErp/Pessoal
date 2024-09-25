@@ -1,0 +1,4064 @@
+#INCLUDE "MDTA190.ch"
+#INCLUDE "FWMVCDEF.CH"
+#Include "Protheus.ch"
+
+Static _nRowOne   := 1
+Static _nRowTwo   := 2
+Static _nRowThree := 3
+
+Static _nColOne   := 1
+Static _nColTwo   := 2
+Static _nColThree := 3
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA190
+Programa de Geracao da programacao de exames periodicos.
+Gerar a programacao dos exames para os funcionarios conforme
+os parametros defdNoExameXinifidos pelo usuario.
+O programa considera primeiro os exames definidos em funcao
+dos programas de saude, em segundo os exames definidos com
+base nos riscos ambientais e finalmente os exames definidos
+a nivel de filial, ou seja aquele exames genericos que todos
+devem realizar periodicamente. Com base nesta estrutura de
+necessidade de exames o programa ira calcular a idade do
+funcionario e verificar em que faixa etaria ele se enquadra
+Criara entao na tabela de exames do funcionario registros
+que identificam quais exames e quando que o funcionario
+devera realizar os exames.
+Para os exames definidos com base no ambiente de risco o
+programa leva em consideracao a estrutura de definicao dos
+riscos que e formada por centro de custo, funcao e tarefa.
+
+@obs Funcoes Especif.:
+	NG190IMP  - Inclusao do Registro de Parametros TMW.
+	NG190GERA - Rotina principal para geracao da programacao.
+	NG190FUNC - Obter funcionarios para geracao de exames.
+	NG190PROG - Obter Programas de saudes e exames por programa
+	NG190RISC - Obter Riscos do Ambiente de trabalho.
+	NG190EXRI - Obter Exames por Risco.
+	NG190EXFI - Obter Exames por Filial.
+	NG190GREX - Gravar exames do Funcionario.
+	//???NG190EXC  - Rotina de Exclusao do Parametro TMW.
+	NG190EXPR - Rotina de Exclusao da Programacao dos exames.
+	NG190CTRB - Criar Arquivo de Trabalho.
+	NG190LIER - Lista erros ocorridos durante a programacao.
+	NG190IMP  - Impressao do Relatorio de Erros.
+@obs Funcoes definidas no MDTUTIL:
+	NGUTILPER - Busca a periodicidade do exame.
+	NGUTILFOR - Busca Fornecedor do exame.
+	NGUTILUEX - Busca a data do ultimo exame do mesmo tipo.
+	NGUTILPRX - Calcula a data do proximo exame.
+	NG190FUNC - Obter funcionarios para geracao de exames.
+
+@return .T.
+
+@sample
+MDTA190()
+
+@author Marcio Luiz da Costa
+@since 08/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDTA190( lCallPS , aAuto , nOpcAuto , dReferen )
+
+	Local oBrowse
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private lSigaMdtPS := .F.
+	Private lAuto 		:= !Empty(aAuto) .And. !lSigaMdtPS
+	Private dAutoRefe	:= dReferen
+	Private lMV_NGMDTPS := .F.
+	Private lReprog := .F.  //Indica Reprogramacao
+	//Arrays para os exames que serao gerados
+	Private aProgExam   := {}
+	Private aUnitExam   := {}
+	Private aColsSRA    := {}
+	Private nPosExaAlt  := 0
+	//Declarado tamanho de SA1 como private para executar no __ExecMacro
+	Private nSizeSA1
+	Private nSizeLo1
+	//Variavel de controle que indica se utilizade De/Ate Filial
+	Private lTMW_Filial := .F.
+	Private nIdade    	:= 0
+	Private cExamant  	:= Space(If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1]))
+	Private cPrograma
+
+	Private lMdtCC    	:= lMDT190CC()
+	Private lMdtUmCC  	:= .F.
+	Private nTipoProg 	:= 1
+
+	Private aTabexam  	:= {}
+
+	Private oTempTRB
+	Private oTempTRBK
+
+	//Define aChoice do aCols
+	Private aCHOICE
+
+	Default lCallPS := IsInCallStack( "MDTA190PS" )
+
+	lSigaMdtPS := SuperGetMv("MV_MDTPS",.F.,"N") == "S" // Indica se é o Prestador de Serviço
+	lMV_NGMDTPS := SuperGetMv("MV_NGMDTPS",.F.,"N") == "S" // Indica se o cliente é Prestador de Serviço
+	//Indica se o PCMSO é para varias filiais
+	lTMW_Filial := NGCADICBASE("TMW_FILDE","A","TMW",.F.) .And. NGCADICBASE("TMW_FILATE","A","TMW",.F.) .And. ;
+						Empty(xFilial("TMW")) .And. !Empty(xFilial("SRA"))
+	lMdtCC    	:= lMDT190CC()
+	cExamant  	:= Space(If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1]))
+
+	aCHOICE := fGeraChoice()
+
+	If !lMdtCC .And. !lMV_NGMDTPS
+		lMdtUmCC := lMDT190UMCC()
+	EndIf
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+		If lAuto .And. !lSigaMdtPs
+			aRotina := MenuDef()
+			FWMVCRotAuto( ModelDef() , "TMW" , nOpcAuto , { { "TMWMASTER" , aAuto } } )
+		Else
+			//Caso houver algum inconsistencia será retornado as variaveis.
+			If fValExeRot(lCallPS)
+				//----------------------------------------------
+				// Devolve variaveis armazenadas (NGRIGHTCLICK)
+				//----------------------------------------------
+				NGRETURNPRM(aNGBEGINPRM)
+				Return .F.
+			EndIf
+
+			oBrowse := FWMBrowse():New()
+				oBrowse:SetAlias( "TMW" )			// Alias da tabela utilizada
+				oBrowse:SetMenuDef( "MDTA190" )	// Nome do fonte onde esta a função MenuDef
+				oBrowse:SetDescription( STR0005 )//"Geracao da Programacao de Exames"
+				//Caso for prestador redefine o aChoice e seta um Filtro de Cliente/Loja
+				If lSigaMdtPs
+					nSizeSA1 := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+					nSizeLo1 := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+					cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+					aCHOICE   := fGeraChoice(.T.)
+
+					oBrowse:SetFilterDefault( "SubStr(TMW->TMW_CCDE,1,nSizeSA1+nSizeLo1) == cCliMdtps" )
+				EndIf
+			oBrowse:Activate()
+		EndIf
+
+	EndIf
+
+	//---------------------------------------
+	// Retorna conteudo de variaveis padroes
+	//---------------------------------------
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+
+@author Jackson Machado
+@since 05/09/13
+
+@return oView objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	// Cria um objeto de Modelo de dados baseado no ModelDef() do fonte informado
+	Local oModel := FWLoadModel( "MDTA190" )
+
+	// Cria a estrutura a ser usada na View
+	Local oStructTMW := FWFormStruct( 2 , "TMW" , { | cCampo | MDT190Stru( cCampo ) }/*bAvalCampo*/ , /*lViewUsado*/ )
+
+	// Interface de visualização construída
+	Local oView
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+		// Objeto do model a se associar a view.
+		oView:SetModel( oModel )
+		// Adiciona no View um controle do tipo formulário (antiga Enchoice)
+		// cFormModelID - Representa o ID criado no Model que essa FormField irá representar
+		// oStruct - Objeto do model a se associar a view.
+		// cLinkID - Representa o ID criado no Model ,Só é necessári o caso estamos mundando o ID no View.
+		oView:AddField( "VIEW_TMW" , oStructTMW , "TMWMASTER" )
+			//Adiciona um titulo para o formulário
+			oView:EnableTitleView( "VIEW_TMW" , STR0005 )//"Geracao da Programacao de Exames"
+			// Cria os componentes "box" horizontais para receberem elementos da View
+			// cID		  	Id do Box a ser utilizado
+			// nPercHeight  Valor da Altura do box( caso o lFixPixel seja .T. é a qtd de pixel exato)
+			// cIdOwner 	Id do Box Vertical pai. Podemos fazer diversas criações uma dentro da outra.
+			// lFixPixel	Determina que o valor passado no nPercHeight é na verdade a qtd de pixel a ser usada.
+			// cIDFolder	Id da folder onde queremos criar o o box se passado esse valor, é necessário informar o cIDSheet
+			// cIDSheet     Id da Sheet(Folha de dados) onde queremos criar o o box.
+			oView:CreateHorizontalBox( "TELATMW" , 100,/*cIDOwner*/,/*lFixPixel*/,/*cIDFolder*/,/*cIDSheet*/ )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TMW" , "TELATMW" )
+
+		oView:AddUserButton(STR0057, "HISTORIC", { |oView| MDTA190IND( , oModel ) } ) //"Funcionários"
+
+		//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+   	NGMVCUserBtn( oView )
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+
+@author Jackson Machado
+@since 05/09/13
+
+@return oModel objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	// Cria a estrutura a ser usada no Modelo de Dados
+	Local oStructTMW := FWFormStruct( 1 ,"TMW" , { | cCampo | MDT190Stru( cCampo ) }/*bAvalCampo*/ , /*lViewUsado*/ )
+
+	// Modelo de dados que será construído
+	Local oModel
+
+	// Cria o objeto do Modelo de Dados
+	// cID     Identificador do modelo
+	// bPre    Code-Block de pre-edição do formulário de edição. Indica se a edição esta liberada
+	// bPost   Code-Block de validação do formulário de edição
+	// bCommit Code-Block de persistência do formulário de edição
+	// bCancel Code-Block de cancelamento do formulário de edição
+	oModel := MPFormModel():New( "MDTA190" , { | oModel | fMPosPre( oModel ) }/*bPre*/ , { | oModel | fMPosValid( oModel ) } /*bPost*/ , { | oModel | fMCommit( oModel ) }, /*bCancel*/ )
+		//--------------------------------------------------
+		// Componentes do Modelo
+		//--------------------------------------------------
+
+		// Adiciona ao modelo um componente de Formulário Principal
+		// cId          Identificador do modelo
+		// cOwner       Identificador superior do modelo
+		// oModelStruct Objeto com  a estrutura de dados
+		// bPre         Code-Block de pré-edição do formulário de edição. Indica se a edição esta liberada
+		// bPost        Code-Block de validação do formulário de edição
+		// bLoad        Code-Block de carga dos dados do formulário de edição
+		oModel:AddFields( "TMWMASTER" , Nil , oStructTMW , /*bPre*/ , /*bPost*/ , /*bLoad*/ )
+			// Adiciona a descrição do Modelo de Dados (Geral)
+			oModel:SetDescription( "Programação de Exames" /*cDescricao*/ ) // "Programação de Exames"
+			// Adiciona a descricao do Componente do Modelo de Dados
+			oModel:GetModel( "TMWMASTER" ):SetDescription( "Programação de Exames" ) // "Programação de Exames"
+			//Define a Chave Primaria
+			oModel:SetPrimaryKey( { "TMW_FILIAL", "TMW_PCMSO" } )
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMPosPre
+Pós-validação do modelo de dados.
+
+@author Guilherme Benkenedorf
+@since 05/09/13
+
+@param oModel - Objeto do modelo de dados (Obrigatório)
+
+@return Lígico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fMPosPre( oModel )
+
+	Local nOperation	:= oModel:GetOperation() // Operação de ação sobre o Modelo
+
+	// Opção de Alteração caracteriza Reprogramação
+	If nOperation == MODEL_OPERATION_UPDATE
+		lReprog := .T.
+		// Define que houve modificação, pois na View e no Model não são feito alterações na TMW
+		// Mas é necessario confirmar e executar a geração de exames.
+		oModel:lModify := .T.
+	Else
+		lReprog := .F.
+	EndIf
+	// Exclusão, será variavel dos funcionarios.
+	If nOperation == MODEL_OPERATION_DELETE
+		aColsSRA := {}
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMPosValid
+Pós-validação do modelo de dados.
+
+@author Jackson Machado
+@since 05/09/13
+
+@param oModel - Objeto do modelo de dados (Obrigatório)
+
+@return Lígico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fMPosValid( oModel )
+
+	Local lRet        := .T.
+
+	Local lMsgPos 	:= .T. //Veriavel de controle da mensagem de inconformidade.
+	Local aAreaTMW		:= TMW->( GetArea() )
+	Local nOperation	:= oModel:GetOperation() // Operação de ação sobre o Modelo
+
+	Do Case
+		Case nOperation == MODEL_OPERATION_INSERT // Inserção
+			lRet := MDT190OK( oModel , .T. , @lMsgPos  )
+		Case nOperation == MODEL_OPERATION_UPDATE // Alteração
+			lRet := MDT190OK( oModel , .F. , @lMsgPos )
+		Case nOperation == MODEL_OPERATION_DELETE // Exclusão
+			lRet := CHKDEL190( oModel, .T. )
+			lMsgPos := .F.
+	End Case
+	If !lRet .And. lMsgPos .And. !lAuto
+		Help(" ",1,STR0106,,STR0107,4,5)//"Inconformidade" ## "Não foi possivel efetuar a operação."
+	Endif
+
+	RestArea( aAreaTMW )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMCommit
+Pós-validação do modelo de dados.
+
+@author Jackson Machado
+@since 05/09/13
+
+@param oModel - Objeto do modelo de dados (Obrigatório)
+
+@return Lígico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fMCommit( oModel )
+
+	Local nOperation	:= oModel:GetOperation() // Operação de ação sobre o Modelo
+	// Grava Modelo da TMW
+	FWFormCommit( oModel )
+
+	// E faz a geração de Exames quando for Inclusao ou Reprogramação
+	If nOperation == MODEL_OPERATION_INSERT .Or. nOperation == MODEL_OPERATION_UPDATE
+		If TMW->TMW_DTFIM < TMW->TMW_DTGERA
+			Return .T.
+		EndIf
+
+		If lAuto
+			NG190GERA( If( nOperation == MODEL_OPERATION_INSERT , 1 , 3 ),,,oModel )
+		Else
+			Processa( { | lEnd | NG190GERA( If( nOperation == MODEL_OPERATION_INSERT , 1 , 3 ),,,oModel ) } ) // MONTE TELA PARA ACOMPANHAMENTO DO PROCESSO.
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190GERA
+Rotina principal de controle da geracao da programacao
+Le a tabela de funcionarios (SRA) e para cada funcinario
+executa as rotinas necessarias para gerar a programacao.
+
+@return .T.
+
+@sample NG190GERA(1)
+@obs Chamadas : MDTA190, MDTA110, MDTA114, MDTA115
+
+@author Marcio Costa
+@since 28/01/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function  NG190GERA( nTipo , cMatAlt2 , lRepExt , oModel ) // CONTROLA A GERACAO DOS EXAMES PARA OS FUNCIONARIOS
+
+	Local lRetProg	    := .T.
+	Local nSRA          := 0
+	Local nDiasProg     := SuperGetMv("MV_NG2D190",.F.,0) //Indica a quantidade de dias que o funcionario nao tera exame agendado na reprogramacao por data informada, baseado na dt. do ultimo exame agendado
+	Local cOldFil       := cFilAnt //Guarda filial atual
+	Local cCatFuncVl    := Alltrim(SuperGetMv("MV_NG2CATF",.F.," "))//Indica as Categorias Funcionais que nao receberao exames
+	Local cFilSRA
+	Local cChaveSRA     := xFilial("SRA")
+	Local cFiltrSRA     := 'SRA->RA_FILIAL == xFilial("SRA")'
+	Local lDeletProg    := .F.
+	Local lSelectFunc   := Type("aColsSRA") == "A" .And. Len(aColsSRA) > 0
+	Local lMDT190GetD   := ExistBlock("MDT190GetD")
+	Local nBaseDt       := Val(TMW->TMW_BASEDT)
+	Local nIndicSRA     := 1
+
+	Private nTipoRel    := nTipo
+	Private cMatAlt     := cMatAlt2
+	Private cAliasTRB
+	Private aAltForEx   := {}
+	Private lDtAdmExa   := .F. //Indica se considera a data de admissao como default
+	Private dDtSemExa   := CtoD("//")
+	Private dDtFunRef   := CtoD("//")
+	Private dDtRefFun   := CtoD("//")
+	Private dDataMin
+	Private lNoExameNR7 := .F.
+	Private lNoExameCom := .F.
+	Private lExaNovoFu  := .F.
+	Private lFirstExa   := .T.
+
+	Default lRepExt     := .F.
+	Default oModel      := FWModelActive()
+
+	// Data Base Programacao Exame
+	nBaseDt := If( nBaseDt < 1 .Or. nBaseDt > 6, 1, nBaseDt )
+
+	// CRIA ARQUIVO DE TRABALHO PARA REGISTRAR ERROS.
+	NG190CTRB()
+
+	// Carrega Variaveis
+	If nTipo == 3 .And. ValType(cMatAlt) == "C"
+		cChaveSRA := xFilial("SRA")+cMatAlt
+		nIndicSRA := 1
+		cFiltrSRA := 'SRA->RA_FILIAL == xFilial("SRA") .And. SRA->RA_MAT == cMatAlt'
+
+		If IsInCallStack("MDTA190")
+			oModel:LoadValue( "TMWMASTER" , "TMW_DTINIC", dDataBase  )
+		Else
+			M->TMW_DTINIC := dDataBase
+		EndIf
+
+	ElseIf nTipoProg == 2
+		cChaveSRA := xFilial("SRA")+TMW->TMW_CCDE
+		nIndicSRA := 2
+		cFiltrSRA := 'SRA->RA_FILIAL == xFilial("SRA") .And. SRA->RA_CC <= TMW->TMW_CCATE'
+	ElseIf nTipoProg == 3
+		cChaveSRA := xFilial("SRA")+TMW->TMW_CCDE
+		nIndicSRA := 2
+		cFiltrSRA := 'SRA->RA_FILIAL == xFilial("SRA") .And. SRA->RA_CC == TMW->TMW_CCDE'
+	ElseIf lTMW_Filial
+		cChaveSRA := TMW->TMW_FILDE
+		nIndicSRA := 1
+		cFiltrSRA := 'SRA->RA_FILIAL <= TMW->TMW_FILATE'
+	EndIf
+
+	If !lSelectFunc
+		DbSelectArea("SRA") // LE TABELA DE FUNCINARIOS
+		DbSetOrder(nIndicSRA)
+		DbSeek(cChaveSRA,.T.)
+
+		aColsSRA    := {}
+
+		nRegs01 := RecCount()
+		nCont01 := 1
+		cRegs01 := Alltrim(Str(nRegs01,8))
+		If !lAuto
+			ProcRegua(RecCount()) // MONTA A REGUA DE ACOMPANHAMENTO
+		EndIf
+		While !EOF() .And. &(cFiltrSRA)
+
+			If !lAuto
+				IncProc(STR0045+Alltrim(Str(nCont01,8))+STR0046+cRegs01)  //"Funcionários - "  //" de "
+			EndIF
+			nCont01++
+
+			// Se houver alguma categoria do funcionario
+			If !Empty(SRA->RA_CATFUNC) .And. !Empty( cCatFuncVl )
+				//Verifica conforme o parametro
+				If SRA->RA_CATFUNC $ cCatFuncVl//Indica as Categorias Funcionais que nao receberao exames
+					dbSelectArea("SRA")
+					dbSetOrder(nIndicSRA)
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+			// Discarta funcionarios que esteja demitidos
+			If !Empty(SRA->RA_DEMISSA) .Or. SRA->RA_SITFOLH == "D"
+				dbSelectArea("SRA")
+				dbSetOrder(nIndicSRA)
+				dbSkip()
+				Loop
+			EndIf
+
+			cFilSRA := If( lTMW_Filial , SRA->RA_FILIAL, cFilAnt )
+
+			If aScan( aColsSRA , { | x | x[1] == SRA->RA_MAT .And. x[2] == cFilSRA  } ) == 0
+				aAdd( aColsSRA , { SRA->RA_MAT , cFilSRA } )
+			EndIf
+
+			DbSelectArea("SRA")
+			DbSetOrder(nIndicSRA)
+			DbSkip()
+		EndDo
+	EndIf
+
+	cRegs01 := Alltrim(Str(Len(aColsSRA),8))
+	If !lAuto
+		ProcRegua(Len(aColsSRA))
+	EndIf
+
+	For nSRA := 1 to Len(aColsSRA)
+
+		//--------------------------------------
+	   // Zera variaves a nivel de funcionario
+	   //--------------------------------------
+		lNoExameNR7 := .F.
+		lNoExameCom := .F.
+
+		dDtFunRef := CTOD("//")
+		dDtBackup := CTOD("//")
+		dDtRefFun := CTOD("//")
+
+	   //--------------------------------------
+	   // Zera variaves a nivel de funcionario
+	   //--------------------------------------
+		cExamant  := Space(If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1]))
+		aTabexam  := {}
+		aUnitExam := {}
+		aProgExam := {}
+		nPosExaAlt:= 0
+
+		dbSelectArea("SRA")
+		dbSetOrder(1)
+		dbSeek(xFilial("SRA",aColsSRA[nSRA,2])+aColsSRA[nSRA,1])
+		cFilAnt := aColsSRA[nSRA,2]
+
+		If lTMW_Filial
+			If SRA->RA_FILIAL < TMW->TMW_FILDE .Or. SRA->RA_FILIAL > TMW->TMW_FILATE
+				Loop
+			EndIf
+		EndIf
+
+		//------------------------------
+		// Calcula idade do funcionario
+		//------------------------------
+		nIdade := fCalcIdade( SRA->RA_NASC )
+
+		If !lAuto
+			IncProc(STR0045+Alltrim(Str(nSRA,8))+STR0046+cRegs01)  //"Funcionários - "  //" de "
+		EndIf
+
+		dbSelectArea("TM0")
+		dbSetOrder(3)
+		dbSeek(SRA->RA_FILIAL+SRA->RA_MAT)
+		// Caso for reprogramação, avalia a existencia de exame
+		If nTipoRel == 3
+			dbSelectArea("TM5")
+			dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+			If !dbSeek(xFilial("TM5")+TMW->TMW_PCMSO+TM0->TM0_NUMFIC)
+				If lRepExt
+					Loop
+				EndIf
+				// Verifica se tem exame programado
+				// Caso seja por admissão não verifica porque sempre irá gerar na data de admissão
+				If nBaseDt <> 5 .And. TemExameProg(TM0->TM0_NUMFIC, TMW->TMW_DTINIC, TMW->TMW_DTFIM, nBaseDt , TMW->TMW_PCMSO )
+					Loop
+				EndIf
+
+				If lFirstExa .And. !lAuto
+					lFirstExa := .F.
+					//Funcionario sem exame
+					If !( lExaNovoFu := MsgYesNo(STR0047) )  //"Existem funcionários sem exames programados. Deseja programá-los?"
+						Loop
+					EndIf
+				EndIf
+
+				If !lExaNovoFu //Verifica a opção que foi selecionada anteiormente.
+					Loop
+				Endif
+
+
+			// 6=Data Informada
+			// Indica a quantidade de dias que o funcionario nao tera exame agendado
+			// na reprogramacao por data informada, baseado na dt. do ultimo exame agendado
+			ElseIf nBaseDt == 6 .And. nDiasProg <> 0
+
+				dDataMin := TMW->TMW_DTREFE - nDiasProg
+				// Verifica se tem exame programado
+				If TemExameProg(TM0->TM0_NUMFIC, dDataMin, TMW->TMW_DTREFE, nBaseDt , TMW->TMW_PCMSO )
+					Loop
+				EndIf
+
+			EndIf
+			dbSelectArea("SRA")
+		EndIf
+
+		If nBaseDt == 3 // 3=Data do Ultimo Aso
+			// Caso não houver Exame Clínico, fBuscaData pedirá uma data de referência
+			dbSelectArea("TM5")
+			dbSetOrder( 6 )//TM5_FILIAL+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+			If !dbSeek(xFilial("TM5")+TM0->TM0_NUMFIC+ PADR( "NR7", Len(TM5->TM5_EXAME) ) )
+				dDtFunRef := fBuscaData(1)
+			EndIf
+		//1=Data Programacao de Exame// 2=Data Realizacao de Exame
+		ElseIf nBaseDt == 1 .Or. nBaseDt == 2
+			dbSelectArea("TM5")
+			dbSetOrder( 6 )//TM5_FILIAL+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+         //Analisa se não tem Exame Clinico dentro do periodo da nova programação. Para que se possa tomar como base.
+			lNoExameNR7 := !dbSeek(xFilial("TM5") + TM0->TM0_NUMFIC + PADR( "NR7", Len(TM5->TM5_EXAME) )) .Or. TMW->TMW_DTINIC <= TM5->TM5_DTPROG
+
+			//Analisa se nao Tem Exames Complementares
+			lNoExameCom := .T.
+			dbSelectArea("TM5")
+			dbSetOrder( 6 )//TM5_FILIAL+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+			dbSeek(xFilial("TM5")+TM0->TM0_NUMFIC)
+			While !Eof() .And. xFilial("TM5")+TM0->TM0_NUMFIC == TM5->(TM5_FILIAL+TM5_NUMFIC)
+				If Alltrim(TM5->TM5_EXAME) <> "NR7" .And. TMW->TMW_DTINIC > TM5->TM5_DTPROG
+					lNoExameCom := .F.
+					Exit
+				EndIf
+				dbSkip()
+			End
+			If lNoExameCom .And. lNoExameNR7
+				/*/
+				     Este ponto de entrada será utilizado pela rotina Geração da Programação de Exames.
+				   A partir da criação deste ponto de entrada, caso o funcionário ainda não tenha exames
+				   programados e for utilizada a opção por Data de Programação de Exame na geração, será
+				   considerada a data de admissão como referência para a data dos exames e não mais será
+				   solicitado ao usuário que informe uma data de referência.
+				/*/
+				// 1=Data Programacao de Exame
+				If !lMDT190GetD .Or. nBaseDt <> 1
+					dbSelectArea("TM5")
+					dbSetOrder( 1 )//TM5_FILIAL+TM5_NUMFIC+DTOS(TM5_DTPROG)+TM5_EXAME
+					If !dbSeek(xFilial("TM5")+TM0->TM0_NUMFIC) // Caso não houver um exame e o pedido de data base for 2 Data Realizacao de Exame // Pede uma data de referencia
+						dDtFunRef := fBuscaData(1)
+						lNoExameCom := .F.
+						lNoExameNR7 := .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		dbSelectArea( "SRA" )
+		// Caso seja escolhido a data base com "Datsa do Ultimo Aso", é analisa a existencia de um exame.
+		lDeletProg := nBaseDt <> 3 .Or. TemExaTM5(TM0->TM0_NUMFIC,TM5->TM5_EXAME)
+
+		//Deleta os Exames da programacao que sera sobreposta
+		If lDeletProg
+			DelProgAnt(SRA->RA_MAT,TM0->TM0_NUMFIC,TMW->TMW_DTINIC,TMW->TMW_DTFIM,/*cExame*/,/*aExames*/,SRA->RA_FILIAL)
+		EndIf
+
+		//----------------------------------------------------------------------------
+		// Verifica a existencia de ficha ou data de Nasc preenchida do funcionario.
+		// E se o cliente selecionado esta entre os parametros
+		//----------------------------------------------------------------------------
+		If !NG190FUNC() .Or. !NG190PRCL()
+			Loop
+		EndIf
+
+		//-------------------------------------------
+		// Obter os Exames Gerais a Nivel de Função.
+		//-------------------------------------------
+		If !NG190PSRJ(nTipoRel)
+			Loop
+		EndIf
+
+		//--------------------------------------------
+		// Obter Brigadas que o Funcionário Participa
+		//--------------------------------------------
+		If NGCADICBASE("TKL_BRIGAD","A","TKL",.F.) .And. !NG190BRIG(nTipoRel)
+			Loop
+		EndIf
+
+		//------------------------------------------------------
+		// Obter Programas De Saúde que o Funcionário Participa
+		//------------------------------------------------------
+		If !NG190PROG(nTipoRel)
+			Loop
+		EndIf
+
+		//------------------------------------------
+		// Obter os Exames Gerais a Nivel de Filial
+		//------------------------------------------
+		If !NG190EXFI(nTipoRel)
+			Loop
+		EndIf
+
+		//----------------------------------------------------
+		// Obter os Riscos a que o funcionário esteja exposto
+		//----------------------------------------------------
+		NG190RISC(nTipoRel)
+
+		//-------------------------------
+		// Gera Exames Programados na TM5
+		//-------------------------------
+		NG190GREX()
+
+	Next nSRA
+
+	// Se houve Seleção de funcionarios
+	If lSelectFunc .Or. nTipoRel == 3
+		// Ajusta os exames dos funcionarios que possivelmente possam ser removidos da programação.
+		fChkReprog( cChaveSRA, nIndicSRA, cFiltrSRA )
+	EndIf
+
+	//Chama janela para poder alterar Fornecedor dos Exames
+	If !lAuto
+		MDT190AFOR()
+	EndIf
+
+	DbSelectArea(cAliasTRB) // Le Arquivo de Trabalho
+	Dbgotop()
+	IF (cAliasTRB)->( RecCount() ) >= 1
+		If !lAuto // SE TIVER ERROS CHAMA ROTINA PARA LISTA-LOS
+			IF MsgYesNo(STR0006) //"Deseja Listar os Erros Ocorridos na Geracao da Programacao?"
+				NG190LIER() // LISTA ERROS DA PROGRAMACAO
+			EndIf
+		Else
+			lRetProg := .F.
+		EndIf
+	EndIf
+
+	DbSelectArea("TM0")
+	DbSetOrder(1)
+
+	oTempTRB:Delete()
+	cFilAnt := cOldFil
+
+Return lRetProg
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fChkReprog
+
+Ajusta os exames dos funcionarios que possivelmente possam ser
+removidos da programação.
+
+@return .T.
+
+@sample fChkReprog()
+
+@author Marcio Costa
+@since 09/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fChkReprog( cChaveSRA, nIndicSRA, cFiltrSRA )
+
+	Local cCatFuncVl := Alltrim(SuperGetMv("MV_NG2CATF",.F.," "))//Indica as Categorias Funcionais que nao receberao exames
+
+	DbSelectArea("SRA")
+	DbSetOrder(nIndicSRA)
+	DbSeek(cChaveSRA,.T.)
+	While !EOF() .And. &(cFiltrSRA)
+
+		DbSelectArea("TM0")
+		DbSetOrder(3)
+		DbSeek(SRA->RA_FILIAL+SRA->RA_MAT)
+		If !Empty(SRA->RA_CATFUNC) .And. !Empty( cCatFuncVl )
+			If SRA->RA_CATFUNC $ cCatFuncVl //Indica as Categorias Funcionais que nao receberao exames
+				dbSelectArea("SRA")
+				dbSkip()
+				Loop
+			EndIf
+		EndIf
+
+		lDeletProg := .F.
+		If Empty(SRA->RA_DEMISSA) .And. SRA->RA_SITFOLH != "D"
+			If lTMW_Filial
+				If aSCAN(aColsSRA ,{|x| x[1]+x[2] == SRA->RA_MAT+SRA->RA_FILIAL }) == 0
+					dbSelectArea("TM5")
+					dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+					If dbSeek(xFilial("TM5",SRA->RA_FILIAL)+TMW->TMW_PCMSO+TM0->TM0_NUMFIC)
+						lDeletProg := .T.
+					EndIf
+				EndIf
+			Else
+				If aSCAN( aColsSRA , { | x | x[ 1 ] == SRA->RA_MAT } ) == 0
+					dbSelectArea("TM5")
+					dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+					If dbSeek(xFilial("TM5")+TMW->TMW_PCMSO+TM0->TM0_NUMFIC)
+						//Deleta os Exames da programacao
+						lDeletProg := .T.
+					EndIf
+				EndIf
+			EndIf
+		Else
+			lDeletProg := .T.
+		EndIf
+
+		If lDeletProg
+			//Deleta os Exames da programacao
+			DelProgAnt(SRA->RA_MAT,TM0->TM0_NUMFIC,TMW->TMW_DTINIC,TMW->TMW_DTFIM,/*cExame*/,/*aExames*/,SRA->RA_FILIAL)
+			lDeletProg := .F.
+		EndIf
+
+		DbSelectArea("SRA")
+		DbSetOrder(nIndicSRA)
+		DbSkip()
+	End
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190FUNC
+Obter informacoes dos funcionario cadastrados na tabela
+SRA Funcionarios e a ficha medica correspondente em TM0.
+
+@return .T.
+
+@sample NG190FUNC()
+
+@param lFornec Logico Indica se o problema trata-se da falta de fornecedor
+@param cExame Caracter Indica o exame que está sendo gerado
+
+@author Marcio Costa
+@since 09/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190FUNC( lFornec , cExame )
+
+	Local aAreaTemp := GetArea()
+	Local aAreaTN0  := TN0->( GetArea() )
+	Local lRet := .T.
+
+	Default lFornec := .F.
+   //------------------------------------------------------------
+   // Obter o numero da ficha medica ou cria TRB, se nao Existir.
+   //------------------------------------------------------------
+	If lFornec
+			//-----------------------------------
+			// GRAVA ERRO NO ARQUIVO DE TRABALHO
+			//-----------------------------------
+			DbSelectArea(cAliasTRB)
+			Reclock(cAliasTRB,.T.)
+			(cAliasTRB)->FICHA      := TM0->TM0_NUMFIC
+			(cAliasTRB)->MATRICULA  := SRA->RA_MAT
+			(cAliasTRB)->NOME       := SRA->RA_NOME
+			(cAliasTRB)->EXAME      := cExame
+			(cAliasTRB)->OCORRENCIA := STR0008 //"Exame sem Fornecedor          "
+			MsUnlock(cAliasTRB)
+			lRet := .F.
+	Else
+		DbSelectArea("TM0")
+		DbSetOrder(3)
+		IF !DbSeek(SRA->RA_FILIAL+SRA->RA_MAT)
+			DbSelectArea(cAliasTRB)
+			Reclock(cAliasTRB,.T.)
+			(cAliasTRB)->FICHA      := Space(9)
+			(cAliasTRB)->MATRICULA  := SRA->RA_MAT
+			(cAliasTRB)->NOME       := SRA->RA_NOME
+			(cAliasTRB)->OCORRENCIA := STR0007 //"Funcionario sem Ficha Medica"
+			MsUnlock(cAliasTRB)
+			If Empty( SRA->RA_NASC )
+				DbSelectArea(cAliasTRB)
+				Reclock(cAliasTRB,.T.)
+				(cAliasTRB)->FICHA      := Space(9)
+				(cAliasTRB)->MATRICULA  := SRA->RA_MAT
+				(cAliasTRB)->NOME       := SRA->RA_NOME
+				(cAliasTRB)->OCORRENCIA := STR0020 //"Funcionario sem Data Nascimento"
+				MsUnlock(cAliasTRB)
+			EndIf
+
+			lRet := .F.
+		Else
+			If Empty( SRA->RA_NASC )
+				DbSelectArea(cAliasTRB)
+				Reclock(cAliasTRB,.T.)
+				(cAliasTRB)->FICHA      := TM0->TM0_NUMFIC
+				(cAliasTRB)->MATRICULA  := SRA->RA_MAT
+				(cAliasTRB)->NOME       := SRA->RA_NOME
+				(cAliasTRB)->OCORRENCIA := STR0020 //"Funcionario sem Data Nascimento"
+				MsUnlock(cAliasTRB)
+
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea( aAreaTemp )
+	RestArea( aAreaTN0  )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190PROG
+Obter os Programas de Saude que o funcionario participa
+tabela - TMN e quais exames deve realizara - TN8.
+
+@return .T./.F.
+
+@sample NG190PROG()
+
+@author Marcio Costa
+@since 11/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190PROG(nTipoRel)
+
+	Local nIndTMO     := 1
+	Local nIndTN8     := 1
+	Local cSeekTMO    := "xFilial('TMO') + TMN->TMN_CODPRO"
+	Local cSeekTN8    := "xFilial('TN8') + TMN->TMN_CODPRO"
+	Local cWhileTN8   := "TN8->TN8_FILIAL + TN8->TN8_CODPRO"
+	Local lTMO_PERIOD := TMO->(FieldPos("TMO_PERIOD")) > 0
+	Local aTipoExa    := fExamePer()
+
+	If lSigaMdtPs
+		nIndTMO   := 3
+		nIndTN8   := 4
+		cSeekTMO  := "xFilial('TMO') + TMN->TMN_CLIENT + TMN->TMN_LOJA + TMN->TMN_CODPRO"
+		cSeekTN8  := "xFilial('TN8') + TMN->TMN_CLIENT + TMN->TMN_LOJA + TMN->TMN_CODPRO"
+		cWhileTN8 := "TN8->TN8_FILIAL + TN8->TN8_CLIENT + TN8->TN8_LOJA + TN8->TN8_CODPRO"
+	EndIf
+
+	DbSelectArea("TMN")
+	DbSetOrder(2)
+	IF DbSeek(xFilial("TMN") + TM0->TM0_NUMFIC)
+		Do While !EOF() .And. TM0->TM0_NUMFIC == TMN->TMN_NUMFIC .And. TMN->TMN_FILIAL == xFilial("TMN")
+
+			If Empty(TMN->TMN_DTTERM)
+
+				If lTMO_PERIOD
+					dbSelectArea("TMO")
+					dbSetOrder(nIndTMO)
+					If dbSeek( &(cSeekTMO) )
+						If TMO->TMO_PERIOD == "2"
+							dbSelectArea("TMN")
+							dbSkip()
+							Loop
+						EndIf
+					EndIf
+				EndIf
+
+				DbSelectArea("TN8")
+				DbSetOrder(nIndTN8)
+				IF DbSeek( &(cSeekTN8) )
+					Do While TN8->( !EOF() ) .And. &(cSeekTN8) == &(cWhileTN8)
+
+						nTipoExame := Val(TN8->TN8_TIPOEX)
+						lExamPer := aScan( aTipoExa, { | x | x == nTipoExame } ) > 0
+						If !lExamPer .And. nTipoExame <> 0
+							dbSelectArea("TN8")
+							dbSkip()
+							Loop
+						EndIf
+
+						MDT190GeFE( nTipoRel, TN8->TN8_FAIXA, nIdade, TM0->TM0_SEXO, TN8->TN8_EXAME, 4 )
+						TN8->( dbSkip() )
+					EndDo
+				EndIf
+			EndIf
+			DbSelectArea("TMN")
+			DbSkip()
+		EndDo
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190RISC
+Obter os Riscos que o funcionario Esta exposto e para cada Risco
+executar a rotina EXAMRISC, para obter os exames necessarios para
+controlar cada risco.
+
+@return .T.
+
+@sample NG190RISC()
+
+@author Marcio Costa
+@since 11/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190RISC(nTipoRel)
+
+	MDTRETRIS( , TM0->TM0_NUMFIC , , { | | NG190EXRI( nTipoRel ) } )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190EXRI
+Obter os Exames necessarios para controlar a exposicao do funcionario
+aos riscos existentes na empresa.
+
+@return .T.
+
+@sample NG190EXRI(TN0->TN0_NUMRIS)
+
+@author Marcio Costa
+@since 18/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190EXRI(  nTipoRel )
+
+	Local aTipoExa := fExamePer()
+
+	DbSelectArea("TN2")
+	DbSetOrder(1)
+	IF DbSeek(xFilial("TN2") + TN0->TN0_NUMRIS )
+		Do While TN2->( !EOF() ) .And. TN2->TN2_NUMRIS == TN0->TN0_NUMRIS .And. TN2->TN2_FILIAL == xFilial("TN2")
+
+			nTipoExame := Val(TN2->TN2_TIPOEX)
+			lExamPer := aScan( aTipoExa, { | x | x == nTipoExame } ) > 0
+			If !lExamPer .And. nTipoExame <> 0
+				dbSelectArea("TN2")
+				dbSkip()
+				Loop
+			EndIf
+
+			MDT190GeFE( nTipoRel, TN2->TN2_FAIXA, nIdade, TM0->TM0_SEXO, TN2->TN2_EXAME, 6 )
+			TN2->( DbSkip() )
+		EndDo
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190EXFI
+Obter os Exames que devem ser realizados por todos os func.
+que trabalham na filial. Tabela - TN9.
+
+@return .T.
+
+@sample NG190EXFI()
+
+@author Marcio Costa
+@since 23/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190EXFI(nTipoRel)
+
+	Local aTipoExa  := fExamePer()
+	Local lExistBlk := ExistBlock("MDTA190Fil")
+	Local nIndTN9
+	Local cSeekTN9
+	Local cCondTN9
+
+	If lSigaMdtps
+		nIndTN9 := 3  //TN9_FILIAL+TN9_CLIENT+TN9_LOJA+TN9_EXAME+TN9_FAIXA
+		cSeekTN9 := xFilial("TN9")+cCliMdtps
+		cCondTN9 := "TN9->TN9_FILIAL+TN9->TN9_CLIENT+TN9->TN9_LOJA"
+	Else
+		nIndTN9 := 1  //TN9_FILIAL+TN9_EXAME+TN9_FAIXA
+		cSeekTN9 := xFilial("TN9")
+		cCondTN9 := "TN9->TN9_FILIAL"
+	EndIf
+
+	DbSelectArea("TN9")
+	DbSetOrder(nIndTN9)
+	IF DbSeek(cSeekTN9)
+
+		Do While TN9->( !EOF() ) .And. cSeekTN9 == &(cCondTN9)
+
+			nTipoExame := Val(TN9->TN9_TIPOEX)
+			lExamPer := aScan( aTipoExa, { | x | x == nTipoExame } ) > 0
+			If !lExamPer .And. nTipoExame <> 0
+				dbSelectArea("TN9")
+				dbSkip()
+				Loop
+			EndIf
+
+			If lExistBlk
+				aArea_XXX := GetArea()
+				aArea_TMW := TMW->(GetArea())
+				aArea_SRA := SRA->(GetArea())
+				aArea_TN9 := TN9->(GetArea())
+				/*
+				  Se o campo Centro de Custo existir na tabela de Exames por Filial,
+				  somente será gerado este exame para os funcionários pertencentes ao C.Custo informado.
+				  lRet := SRA->RA_CC != TN9->TN9_CC
+				*/
+				lRet := ExecBlock("MDTA190Fil",.F.,.F.)
+
+				RestArea(aArea_TMW)
+				RestArea(aArea_SRA)
+				RestArea(aArea_TN9)
+				RestArea(aArea_XXX)
+
+				If !lRet
+					dbSelectArea("TN9")
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			MDT190GeFE( nTipoRel, TN9->TN9_FAIXA, nIdade, TM0->TM0_SEXO, TN9->TN9_EXAME, 5 )
+			TN9->( dbSkip() )
+		EndDo
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190SVEX
+Salva exame atual. Controle de Exames programados. Processo definido
+ para possibilitar a analise de todos os exames e suas periodicidades,
+ antes da gravação. Necessario possuir a var. 'aProgExam' como private.
+
+@param lUnit - Caso a chamada seja para salvar o exame programado.
+ Caso contrário, salvara os exames programados, do exame em questão.
+
+@return .T.
+
+@sample NG190SVEX()
+
+@author Marcio Costa
+@since 23/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190SVEX(lUnit, cExame, nMesesPer, dProxExam, aFornec )
+
+	Local aFunc := {}
+	Local nInd, nPosExa := 0
+
+	Default lUnit := .T.
+
+	If lUnit //Tratamento unitário de exame programado
+		If Len(aProgExam) > 0 .And. nPosExaAlt == 0 //Se ja existir alguma programação definida e não existir nenhuma alteração a ser realizada
+
+			For nInd := 1 to Len(aProgExam)
+				If (nPosExa := aScan(aProgExam[nInd][1],{|x| x[1] == cExame })) > 0
+					Exit
+				EndIf
+			Next nInd
+
+			If nPosExa > 0
+				If aProgExam[nInd,2] > nMesesPer //Se o exame possuir periodicidade menor
+					//Limpa posição do registro antigo
+					aProgExam[nInd] := {}
+					nPosExaAlt := nInd
+				Else //Se o exame possuir periodicidade maior ou igual
+					Return
+				EndIf
+			EndIf
+
+		EndIf
+
+		//Insere novo exame programado
+		aFunc := { SRA->RA_FILIAL , SRA->RA_MAT , SRA->RA_CC , SRA->RA_CODFUNC , SRA->RA_POSTO , SRA->RA_TNOTRAB } //Dados do Funcionario
+		aAdd( aUnitExam , { cExame , dProxExam , TM0->TM0_NUMFIC , aFunc , {aFornec[1,1],aFornec[1,2]} , TMW->TMW_PCMSO } ) //Informações gerais do Exame
+
+	ElseIf Len(aUnitExam) > 0
+
+		If nPosExaAlt == 0
+			//Adiciona ao controle geral de exames programados, os exames referente ao exame atual
+			aAdd( aProgExam , { aUnitExam , nMesesPer } )
+		ElseIf nPosExaAlt > 0
+			//Altera exame com menor periodicidade no controle geral de exames programados
+			aProgExam[nPosExaAlt] := {aUnitExam,nMesesPer}
+			nPosExaAlt := 0
+		EndIf
+
+		aUnitExam := {}
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190GREX
+Grava os Exames programados para o Funcionario tabela - TM5 .
+
+@return .T.
+
+@sample NG190GREX()
+
+@author Marcio Costa
+@since 23/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190GREX()
+
+	Local cOLDALI   := Alias()
+	Local nPosExa   := 0
+	Local nPosProg  := 0
+	Local lMDTFeri  := SuperGetMv("MV_MDTFERI",.F.,"N") == "S"
+	Local lNGMDTVa  := SuperGetMv( "MV_NGMDTVA" , .F. , "2" ) == "2"
+	Local lExistAlt := Type("aAltForEx") == "A"
+
+	If Len(aProgExam) > 0
+
+		For nPosExa := 1 to Len(aProgExam)
+			For nPosProg := 1 to Len(aProgExam[nPosExa,1])
+
+				If lMDTFeri .And. MDT190FER(nPosExa,nPosProg)  //-- Verifica se o exame cai no período de férias
+					Loop
+				EndIf
+
+				If lNGMDTVa .And. MDT190VAFA( nPosExa , nPosProg )  //-- Verifica se o exame cai no período de afastamento
+					Loop
+				EndIf
+
+				DbSelectArea("TM5")
+				DbSetOrder( 1 )//TM5_FILIAL+TM5_NUMFIC+DTOS(TM5_DTPROG)+TM5_EXAME
+				If !DbSeek(xFilial("TM5") + aProgExam[nPosExa,1,nPosProg,3] + DTOS(aProgExam[nPosExa,1,nPosProg,2])  + aProgExam[nPosExa,1,nPosProg,1])
+					DbSelectArea("SRJ")
+					DBSetOrder(1)
+					DbSeek(xFilial("SRJ") + aProgExam[nPosExa,1,nPosProg,4,4] )
+					cCBO := SRJ->RJ_CBO
+
+					If !Empty(SRJ->RJ_CODCBO)
+						cCBO := SRJ->RJ_CODCBO
+					EndIf
+
+					RecLock("TM5",.T.)
+					TM5->TM5_FILIAL  := xFilial("TM5")
+					TM5->TM5_NUMFIC  := aProgExam[nPosExa,1,nPosProg,3]       //TM0->TM0_NUMFIC
+					TM5->TM5_EXAME   := aProgExam[nPosExa,1,nPosProg,1]       //cExame
+					TM5->TM5_DTPROG  := aProgExam[nPosExa,1,nPosProg,2]       //dProxExam
+					TM5->TM5_FORNEC  := aProgExam[nPosExa,1,nPosProg,5,1]   //aFornec[1][1]
+					TM5->TM5_LOJA    := aProgExam[nPosExa,1,nPosProg,5,2]   //aFornec[1][2]
+					TM5->TM5_FILFUN  := aProgExam[nPosExa,1,nPosProg,4,1]     //SRA->RA_FILIAL
+					TM5->TM5_MAT     := aProgExam[nPosExa,1,nPosProg,4,2]     //SRA->RA_MAT
+					TM5->TM5_ORIGEX  := "2"//2=Ocupacional
+					TM5->TM5_PCMSO   := aProgExam[nPosExa,1,nPosProg,6]       //TMW->TMW_PCMSO
+					TM5->TM5_INDRES  := "1"//1=Normal
+					TM5->TM5_NATEXA  := "2"//2=Periodico
+					TM5->TM5_CC      := aProgExam[nPosExa,1,nPosProg,4,3]     //SRA->RA_CC
+					TM5->TM5_CODFUN  := aProgExam[nPosExa,1,nPosProg,4,4]     //SRA->RA_CODFUN
+					If TM5->(FieldPos("TM5_CODPOS")) > 0 .And. SRA->(FieldPos("RA_POSTO")) > 0
+						TM5->TM5_CODPOS  := aProgExam[nPosExa,1,nPosProg,4,5]  //SRA->RA_POSTO
+					EndIf
+					TM5->TM5_CBO     := cCBO
+					TM5->TM5_TNOTRA  := aProgExam[nPosExa,1,nPosProg,4,6]     //SRA->RA_TNOTRAB
+					MsUnlock('TM5')
+
+					DbSelectArea(cOLDALI)
+					If lExistAlt
+						If aScan(aAltForEx,{|aArray| aArray[1] == aProgExam[nPosExa,1,nPosProg,1]}) == 0 .And.;
+								Len(NGUTILFOR(aProgExam[nPosExa,1,nPosProg,1],.T.)) > 1
+							aAdd(aAltForEx,{aProgExam[nPosExa,1,nPosProg,1],NGSEEK("TM4",TM5->TM5_EXAME,1,"TM4->TM4_NOMEXA"),aProgExam[nPosExa,1,nPosProg,5,1],aProgExam[nPosExa,1,nPosProg,5,2]})
+						EndIf
+					EndIf
+
+				EndIf
+			Next nPosProg
+		Next nPosExa
+
+		aProgExam := {}
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190EXPR
+Exclui os Exames da tabela Exames do Funcionario relacionados ao numero
+ de sequencia de geracao, PCMSO.
+
+@return .T.
+
+@sample NG190EXPR
+
+@param aFilRelat Array
+@param lTMWeTM5c Boolean
+
+@author Marcio Costa
+@since 28/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190EXPR(aFilRelat,lTMWeTM5c)
+
+	Local nX
+	Local cPCMSO
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		cPCMSO := oModel:GetValue( "TMWMASTER" , "TMW_PCMSO" )
+	Else
+		cPCMSO := M->TMW_PCMSO
+	EndIf
+
+	For nX := 1 To Len(aFilRelat)
+		dbSelectArea("TM5")
+		dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+		dbSeek(xFilial("TM5",aFilRelat[nX]) + cPCMSO)
+		While !EOF() .And. xFilial("TM5",aFilRelat[nX]) == TM5->TM5_FILIAL .And. TM5->TM5_PCMSO == cPCMSO
+
+			If lTMWeTM5c
+				If !Empty(TM5->TM5_FILFUN)
+					If TM5->TM5_FILFUN <> aFilRelat[nX]
+						dbSelectArea("TM5")
+						dbskip()
+						Loop
+					EndIf
+				EndIf
+			EndIf
+
+			If Empty(TM5->TM5_DTRESU)
+				RecLock("TM5",.F.)
+				dbDelete()
+				MSUnLock("TM5")
+			EndIf
+			dbSelectArea("TM5")
+			dbSkip()
+		End
+	Next nX
+
+	dbSetOrder(1)
+	dbSelectArea("TMW")
+	lRefresh := .T.
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190CTRB
+Cria Arquivo "TRB" de trabalho para comter os erros ocorridos durante
+ o processamento e no final permitir list-los.
+
+@return .T.
+
+@sample NG190CTRB
+
+@author Marcio Costa
+@since 23/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190CTRB()
+
+	Local aDBF
+	Local nTamExa := If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1])
+
+	aDBF := {	{ "FICHA"     , "C" , 09     , 0} ,;
+					{ "MATRICULA" , "C" , 06     , 0} ,;
+					{ "NOME"      , "C" , 30     , 0} ,;
+					{ "EXAME"     , "C" , nTamExa, 0} ,;
+					{ "FORNECEDOR", "C" , 06     , 0} ,;
+					{ "LOJA"      , "C" , 02     , 0} ,;
+					{ "OCORRENCIA", "C" , 31     , 0} }
+
+	cAliasTRB := GetNextAlias()
+
+	oTempTRB := FWTemporaryTable():New( cAliasTRB, aDBF )
+	oTempTRB:AddIndex( "1", {"FICHA","MATRICULA"} )
+	oTempTRB:Create()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190LIER
+Lista os errors ocorridos durante o processo de geracao da programacao.
+ Le arquivo de trabalho - TRB.
+
+@return .T.
+
+@sample NG190LIER
+
+@author Marcio Costa
+@since 23/02/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190LIER()
+
+	Local oReport
+
+	oReport := ReportDef(@oReport)
+	oReport:PrintDialog()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Inicia a impressão do Relatório (Definições)
+
+@sample
+ReportDef()
+
+@author Guilherme Benkendorf
+@since 17/07/2014
+/*/
+//---------------------------------------------------------------------
+Static Function ReportDef(oReport)
+
+	Local oSection1
+	Local oSection2
+
+	oReport := TReport():New("MDTA190",OemToAnsi(STR0014),/*uParam*/,{|oReport| ReportPrint(oReport)},STR0010+STR0011, .F.) //"Ocorrencias na Geracao da Programacao de Exames"###"Relatorio de apresentacao dos Erros ocorridos durante o processamento da "###"Geracao da Programacao do Exames Periodicos.                             "
+
+	oSection1 := TRSection():New(oReport,STR0014 ,{" "} )//"Ocorrencias na Geracao da Programacao de Exames"
+	TRCell():New(oSection1,"ERR_OCO_1"," ",STR0012,/*Picture*/,15/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->FICHA }) //"Ficha"
+	TRCell():New(oSection1,"ERR_OCO_2"," ",STR0013,/*Picture*/,10/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->MATRICULA }) //"Matrícula"
+	TRCell():New(oSection1,"ERR_OCO_3"," ",STR0015,/*Picture*/,50/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->NOME }) //"Nome do Funcionário"
+	TRCell():New(oSection1,"ERR_OCO_4"," ",STR0017,/*Picture*/,10/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->EXAME }) //"Exame"
+	TRCell():New(oSection1,"ERR_OCO_5"," ",STR0019,/*Picture*/,10/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->FORNECEDOR }) //"Fornec."
+	TRCell():New(oSection1,"ERR_OCO_6"," ",STR0024,/*Picture*/,10/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->LOJA }) //"Loja"
+	TRCell():New(oSection1,"ERR_OCO_7"," ",STR0025,/*Picture*/,50/*Tamanho*/,.T./*lPixel*/,{|| (cAliasTRB)->OCORRENCIA }) //"Ocorrência"
+
+	oSection2 := TRSection():New(oReport,STR0016 ,{" "} )//"CANCELADO PELO OPERADOR"
+
+Return oReport
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Inicia a impressão do Relatório (Valores)
+
+@param oReport Objeto Indica o objeto do TReport
+
+@sample
+ReportDef( oReport )
+
+@author Guilherme Benkendorf
+@since 17/07/2014
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint( oReport )
+
+	Local lEnd     := .F.
+	Local oSection1:= oReport:Section(1)
+	Local oSection2:= oReport:Section(2)
+
+	oSection1:Init()
+
+	While (cAliasTRB)->( !Eof() )
+
+		If LastKey() == K_ALT_A //ALT_A
+			lEnd := .T.
+			oSection2:Init() //"CANCELADO PELO OPERADOR"
+			Exit
+		EndIf
+
+		oSection1:PrintLine()
+		(cAliasTRB)->( dbSkip() )
+	Enddo
+
+	oSection1:Finish()
+	If lEnd
+		oSection2:Finish()
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} CHKDEL190
+Verifica se existe exames realizados para o PCMSO
+
+@return .T./.F.
+
+@sample CHKDEL190
+
+@author Denis Hyrishi de Souza
+@since 17/10/02
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function CHKDEL190( oModel, lExclusao )
+
+	Local lBreak    := .F.
+	Local lTemExa   := .F.
+	Local lRet      := .T.
+	Local aFilRelat := {}
+	Local nX
+	Local cPCMSO
+	Local cFilDe
+	Local cFilAte
+	Local lTMWComp := !Empty( xFilial("TMW") )
+	Local lTM5Comp := !Empty( xFilial("TM5") )
+	Local lTMWeTM5c:= !lTM5Comp .And. lTMWComp
+
+	Default lExclusao := .F.
+
+	If IsInCallStack("MDTA190")
+		oModel    := FWModelActive()
+		cPCMSO    := oModel:GetValue( "TMWMASTER" , "TMW_PCMSO" )
+		If lTMW_Filial .And. lTM5Comp
+			cFilDe    := oModel:GetValue( "TMWMASTER" , "TMW_FILDE" )
+			cFilAte   := oModel:GetValue( "TMWMASTER" , "TMW_FILATE" )
+		EndIf
+	Else
+		cPCMSO    := M->TMW_PCMSO
+		cFilDe    := M->TMW_FILDE
+		cFilAte   := M->TMW_FILATE
+	EndIf
+
+	If lTMW_Filial .And. lTM5Comp
+		aAreaSM0 := SM0->(GetArea())
+			dbSelectArea("SM0")
+			dbGoTop()
+
+			If Empty(cFilDe)
+				dbSeek(cEmpAnt)
+			Else
+				dbSeek(cEmpAnt+cFilDe)
+			EndIf
+
+			While !Eof() .And. AllTrim(SM0->M0_CODIGO) == cEmpAnt .And. AllTrim(SM0->M0_CODFIL) <= cFilAte
+				aAdd( aFilRelat , AllTrim(SM0->M0_CODFIL) )
+				dbSkip()
+			End
+		RestArea(aAreaSM0)
+	Elseif lTM5Comp .And. !lTMWComp
+		aAreaSM0 := SM0->(GetArea())
+			dbSelectArea("SM0")
+			dbGoTop()
+			dbSeek(cEmpAnt)
+			While !Eof() .And. AllTrim(SM0->M0_CODIGO) == cEmpAnt
+				aAdd( aFilRelat , AllTrim(SM0->M0_CODFIL) )
+				dbSkip()
+			End
+		RestArea(aAreaSM0)
+	Else
+		aAdd( aFilRelat , cFilAnt )
+	EndIf
+
+	If lExclusao
+
+		cPCMSO := TMW->TMW_PCMSO
+		For nX := 1 To Len(aFilRelat)
+			dbSelectArea("TM5")
+			dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+			dbSeek(xFilial("TM5",aFilRelat[nX]) + cPCMSO)
+			While !EOF() .And. xFilial("TM5",aFilRelat[nX]) == TM5->TM5_FILIAL .And.;
+					TM5->TM5_PCMSO == cPCMSO .And. !lBreak
+
+				If lTMWeTM5c
+					If !Empty(TM5->TM5_FILFUN)
+						If TM5->TM5_FILFUN <> aFilRelat[nX]
+							dbSelectArea("TM5")
+							dbskip()
+							Loop
+						EndIf
+					EndIf
+				EndIf
+
+				lBreak := !EMPTY(TM5->TM5_DTRESU)
+				lTemExa := .T.
+
+				DbSelectArea("TM5")
+				dbSkip()
+			EndDo
+		Next nX
+
+		If lAuto
+			If lBreak
+				NG190EXPR(aFilRelat,lTMWeTM5c)
+			Else
+				If lTemExa
+					NG190EXPR(aFilRelat,lTMWeTM5c)
+				EndIf
+			EndIf
+		Else
+			If lBreak
+				//MSGSTOP(STR0030,STR0075)//"Este PCMSO nao pode ser excluido, ja possui exames realizados."###"ATENCAO"
+				IF MSGYESNO(STR0030 + CRLF + STR0031) //"Este PCMSO nao pode ser excluido, ja possui exames realizados."//"Deseja excluir os exames ainda nao realizados?"
+					NG190EXPR(aFilRelat,lTMWeTM5c)
+					Help(" ",1,"PCMSOEXA",,STR0108,4,5)// "Operação de exclusão efetuada com sucesso."
+				Else
+					Help(" ",1,"PCMSOEXA",,STR0030,4,5) //"Este PCMSO nao pode ser excluido, ja possui exames realizados."
+				EndIf
+				lRet := .F.
+			Else
+				If lTemExa
+					lRet := MSGYESNO(STR0081 + CRLF + STR0082) //"Este PCMSO ainda não possui exames realizados." //"Deseja excluir o PCMSO e os exames relacionados?"
+					If lRet
+						NG190EXPR(aFilRelat,lTMWeTM5c)
+					Else
+						Help(" ",1,"PCMSOEXA",,STR0109,4,5) //"Este PCMSO não pode ser excluído, já possui exames vinculados."
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190CC
+Valida o campo 'Ate CC'
+
+@return .T./.F.
+
+@sample NG190CC()
+@obs Utilização: X3_VALID no campo TMW_CCATE
+
+@author Desconhecido
+@since ?
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function NG190CC()
+
+	Local lMdtCC	:= lMDT190CC()
+	Local lMV_NGMDTPS := SuperGetMv("MV_NGMDTPS",.F.,"N") == "S"
+	Local cDeCC, cAteCC
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		cDeCC  := oModel:GetValue( "TMWMASTER" , "TMW_CCDE" )
+		cAteCC := oModel:GetValue( "TMWMASTER" , "TMW_CCATE" )
+	Else
+		cDeCC  := M->TMW_CCDE
+		cAteCC := M->TMW_CCATE
+	EndIf
+
+	If lMV_NGMDTPS
+		If SubStr( cDeCC , 1 , 6 ) <> SubStr( cAteCC , 1 , 6 )
+			If !lAuto
+				MsgStop(STR0021+; //"Essa empresa esta cadastrada como Prestadora de Servico, sendo assim as 6 primeiras "
+				STR0022) //"posicoes do Centro de Custo se referem ao codigo do cliente e devem ser iguais"
+			EndIf
+			Return .F.
+		EndIf
+	EndIf
+
+	If lMdtCC
+		If cDeCC > cAteCC
+			If !lAuto
+				Help(" ",1,"DEATEINVAL")
+			EndIf
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190PRCL
+Verifica se o funcionario trabalha no cliente selecionado
+
+@return .T./.F.
+
+@sample NG190PRCL()
+
+@author Denis Hyroshi de Souza
+@since 28/04/04
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190PRCL()
+
+	// Indica se a programacao de exames sera feita com filtragem dos
+	// funcionarios de acordo com o codigo do cliente informado na sua Ficha Medica. (S / N)
+	If SuperGetMv("MV_NG2PRCL",.F.,"N") == "S"
+		If TMW->(FieldPos("TMW_CLIDE")) > 0 .And. TMW->(FieldPos("TMW_CLIATE")) > 0 .And. TM0->(FieldPos("TM0_CLIENT")) > 0
+			If TM0->TM0_CLIENT < TMW->TMW_CLIDE .Or. TM0->TM0_CLIENT > TMW->TMW_CLIATE
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} lMDT190CC
+Verifica se o cliente usa filtro por C.custo
+
+@return .T./.F.
+
+@sample lMDT190CC()
+@obs Chamadas da função: MDTA190, MDTA115
+
+@author Denis Hyroshi de Souza
+@since 28/04/04
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function lMDT190CC()
+Return "S" $ SuperGetMv("MV_NG2EXCC",.F.,"N")
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} lMDT190UMCC
+Verifica se o cliente usa filtro por C.custo
+
+@return .T./.F.
+
+@sample lMDT190UMCC()
+@obs Chamadas da função: MDTA190, MDTR570, MDTR572, MDTR850, MDTR852, MDTR870
+
+@author Denis Hyroshi de Souza
+@since 28/04/04
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function lMDT190UMCC()
+
+	Local lRet := .F.
+	Local aArea := Getarea()
+
+	If "S" $ SuperGetMv("MV_NG2PCOB",.F.,"N")
+		lRet := .T.
+	EndIf
+
+	Restarea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190PSRJ
+Obter os Exames que devem ser realizados por todos os funcionários
+que trabalham em determinada funcao.
+
+@return .T./.F.
+
+@sample NG190PSRJ()
+
+@author Marcio Costa
+@since 08/08/05
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function  NG190PSRJ(nTipoRel)
+
+	Local lTemPerCusto := .F., lTemPerFunc := .F.
+	Local lRet
+	Local nSizeSA1 := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+	Local nSizeLo1 := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+	Local aFuncExa := {}//Array com os exames definidos pela funcao no perfil
+	Local aTipoExa := fExamePer()
+	Local aAreaTON
+
+	//Variaveis de posicionamento da TON
+	Local cSeekProg
+	Local cLoopProg
+	Local nIndProg
+
+	lRet := If( lSigaMdtps, AliasInDic( "TL2" ), AliasInDic( "TON" ) )
+
+	If !lRet
+		Return .T.
+	EndIf
+
+	// Busca de Exames por Função
+	cSeekProg := 'xFilial("TON")+SRA->RA_CODFUNC'
+	cLoopProg := 'TON->TON_FILIAL+TON->TON_CODFUN == ' + cSeekProg
+	nIndProg  := 3
+	// Caso for Prestador buscara exames, também, por centro de custo
+	If lSigaMdtps
+		cSeekProg := 'xFilial("TON")+SRA->RA_CODFUNC+Substr(SRA->RA_CC,1,nSizeSA1+nSizeLo1)'
+		cLoopProg := 'TON->TON_FILIAL+TON->TON_CODFUN+TON->TON_CLIENT+TON->TON_LOJA == ' + cSeekProg
+		nIndProg  := 1
+
+		DbSelectArea("TL2")
+		DbSetOrder(4)  //TL2_FILIAL+TL2_CUSTO+TL2_CODFUN+TL2_CODEXA
+		lTemPerCusto := DbSeek(xFilial("TL2")+SRA->RA_CC+Space(Len(SRA->RA_CODFUNC))) .Or. DbSeek(xFilial("TL2")+SRA->RA_CC+SRA->RA_CODFUNC)
+	EndIf
+
+	DbSelectArea("TON")
+	DbSetOrder( nIndProg )  //TON_FILIAL+TON_CODFUN+TON_CLIENT+TON_LOJA+TON_CODEXA   //TON_FILIAL+TON_CODFUN+TON_CODEXA
+	lTemPerFunc := DbSeek(&cSeekProg.)
+
+	If lTemPerFunc
+		DbSelectArea("TON")
+		DbSetOrder( nIndProg )
+		DbSeek(&cSeekProg.)
+		While TON->(!EOF()) .And. &cLoopProg.
+
+			nTipoExame := Val(TON->TON_TIPOEX)
+			lExamAdm := nTipoExame == 1 .Or. nTipoExame == 6 .Or. nTipoExame >= 8 // Indica exame admissionais
+			lExamPer := aScan( aTipoExa, { | x | x == nTipoExame } ) > 0 // Indica exame periodicos
+			// Caso não for exames do tipo admissional ou periodicos, não serao gerados os exames
+			If !lExamAdm .And. !lExamPer
+				DbSelectArea("TON")
+				DbSkip()
+				Loop
+			EndIf
+
+			aAreaTON := TON->( GetArea() ) //Salva Area Posicionada
+
+			//Adiciona o exame na lista para nao processar quando for por Centro de Custo
+			aAdd(aFuncExa,TON->TON_CODEXA)
+
+			MDT190GeFE( nTipoRel, TON->TON_FAIXA, nIdade, TM0->TM0_SEXO, TON->TON_CODEXA, 1 )
+
+			RestArea(aAreaTON)
+
+			TON->( dbSkip() )
+		EndDo
+	EndIf
+
+	If lTemPerCusto
+		DbSelectArea("TL2")
+		DbSetOrder(1)  //TL2_FILIAL+TL2_CUSTO+TL2_CODEXA+TL2_CODFUN
+		DbSeek(xFilial("TL2")+SRA->RA_CC)
+		While TL2->(!EOF()) .And. TL2->TL2_FILIAL+TL2->TL2_CUSTO == xFilial("TL2")+SRA->RA_CC
+
+			//Verifica se exame ja foi processado pela funcao x exames
+			If aScan(aFuncExa, {|x| x == TL2->TL2_CODEXA}) > 0
+				dbSelectArea("TL2")
+				dbSkip()
+				Loop
+			EndIf
+			// A funcao devera ser a mesma do funcionario avaliado
+			If !Empty(TL2->TL2_CODFUN) .And. TL2->TL2_CODFUN != SRA->RA_CODFUNC
+				DbSelectArea("TL2")
+				DbSkip()
+				Loop
+			EndIf
+
+			nTipoExame := Val(TL2->TL2_TIPOEX)
+			lExamAdm := nTipoExame == 1 .Or. nTipoExame == 6 .Or. nTipoExame >= 8 // Indica exame admissionais
+			lExamPer := aScan( aTipoExa, { | x | x == nTipoExame } ) > 0 // Indica exame periodicos
+
+			// Caso não for exames do tipo admissional ou periodicos, não serao gerados os exames
+			If !lExamAdm .And. !lExamPer
+				DbSelectArea("TL2")
+				DbSkip()
+				Loop
+			EndIf
+
+			MDT190GeFE( nTipoRel, TL2->TL2_FAIXA, nIdade, TM0->TM0_SEXO, TL2->TL2_CODEXA, 2 )
+			TL2->( dbSkip() )
+		EndDo
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190FDS
+
+@return dDataExa
+
+@sample MDT190FDS()
+
+@author Desconhecido
+@since ?
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190FDS(_dProxExam, cCodUsu )
+
+	Local cAgenda
+	Local dDataExa
+	Local aCalend
+
+	Local lDomingo  := .T.
+	Local lSabado   := .T.
+
+	Default cCodUsu := TMW->TMW_CODUSU
+
+	cAgenda := NGSEEK("TML",TMW->TMW_CODUSU,1,"TML_CALEND")
+	dDataExa:= _dProxExam
+	aCalend := {}
+
+	If !Empty(cAgenda) .And. SuperGetMv("MV_NG2PFDS",.F.,"N") == "S"
+		aCalend := NGCALENDAH(cAgenda)
+		If Len(aCALEND) > 0
+			If aCALEND[1,1] == "00:00"
+				lDomingo := .F.
+			EndIf
+			If aCALEND[7,1] == "00:00"
+				lSabado := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If Dow(dDataExa) == 7 //Sabado
+		If !lSabado
+			dDataExa++
+		EndIf
+	EndIf
+	If Dow(dDataExa) == 1 //Domingo
+		If !lDomingo
+			dDataExa++
+		EndIf
+	EndIf
+
+Return dDataExa
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC).
+
+@author Jackson Machado
+@since 05/09/13
+
+@return aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	ADD	OPTION	aRotina	Title	STR0002	Action	"VIEWDEF.MDTA190"	OPERATION	OP_VISUALIZAR	ACCESS	0 //"Visualizar"
+	ADD	OPTION	aRotina	Title	STR0003	Action	"VIEWDEF.MDTA190"	OPERATION	OP_INCLUIR		ACCESS	0 //"Incluir"
+	ADD	OPTION	aRotina	Title	STR0023	Action	"VIEWDEF.MDTA190"	OPERATION	OP_ALTERAR		ACCESS	0 //"Reprogramar"
+	ADD	OPTION	aRotina	TITLE	STR0004	ACTION	"VIEWDEF.MDTA190"	OPERATION	OP_EXCLUIR		ACCESS	0 //"Excluir"
+	ADD	OPTION	aRotina	TITLE	STR0041	ACTION	"MDT190IMP"			OPERATION	OP_IMPRIMIR	ACCESS	0 //"Imprimir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190C1
+Valida o centro de custo qdo. o par. MV_MDTPS eh = a S
+
+@return .T./.F.
+
+@sample MDT190C1()
+
+@obs Utilização: X3_VALID campo TMW_CCDE
+
+@author Marcio Costa
+@since 28/01/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190C1()
+
+	Local nSizeSA1 := TAMSX3("A1_COD")[1]
+	Local nSizeLo1 := TAMSX3("A1_LOJA")[1]
+	Local cDeCC
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		cDeCC  := oModel:GetValue( "TMWMASTER" , "TMW_CCDE" )
+	Else
+		cDeCC  := M->TMW_CCDE
+	EndIf
+
+	If SubStr( cDeCC , 1 , nSizeSA1 + nSizeLo1 ) <> cCliMdtps
+		If !lAuto
+			MsgStop(STR0043)  //"O centro de custo não pertence ao cliente."
+		EndIf
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190C2
+Valida o centro de custo qdo. o par. MV_MDTPS eh = a S
+
+@return .T./.F.
+
+@sample MDT190C2()
+@obs Utilização: X3_VALID campo TMW_CCATE
+
+@author Andre P. Alvarez
+@since 28/01/00
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190C2()
+
+	Local nSizeSA1 := TAMSX3("A1_COD")[1]
+	Local nSizeLo1 := TAMSX3("A1_LOJA")[1]
+	Local cDeCC, cAteCC
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		cDeCC  := oModel:GetValue( "TMWMASTER" , "TMW_CCDE"  )
+		cAteCC := oModel:GetValue( "TMWMASTER" , "TMW_CCATE" )
+	Else
+		cDeCC  := M->TMW_CCDE
+		cAteCC := M->TMW_CCATE
+	EndIf
+
+	If !NaoVazio(cAteCC)
+		Return .F.
+	EndIf
+
+	If SubStr( cAteCC , 1 , nSizeSA1 + nSizeLo1 ) <> cCliMdtps
+		If !lAuto
+			MsgStop( STR0043 )  //"O centro de custo não pertence ao cliente."
+		EndIf
+		Return .F.
+	EndIf
+
+	If cDeCC > cAteCC
+		If !lAuto
+			Help(" ",1,"DEATEINVAL")
+		EndIf
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190VIS
+Chama rotina de VISUALIZACAO
+
+@return .T./.F.
+
+@sample NG190VIS()
+
+@Obs Utilização: Consulta padrão TMW, para coluna XB_CONTEM
+
+@author Andre E. P. Alvarez
+@since 04/08/08
+@author Guilherme Benkendorf
+@since 06/08/2014
+@version 2.0
+/*/
+//---------------------------------------------------------------------
+Function NG190VIS(cAli, nRecno, nOpcx)
+
+	Local aChoiceOld := If( Type( "aCHOICE" ) == "A" , aClone( aCHOICE ) , Nil )
+	Local bNGGravaOld:= If( Type( "bNGGrava" ) <> "U", bNGGrava, Nil )
+
+	Private lMdtCC := lMDT190CC()
+	Private lMdtUMCC := lMDT190UMCC()
+
+	aChoice := fGeraChoice()
+
+	bNGGRAVA := {}
+
+	NGCAD01("TMW",TMW->(Recno()),2)
+
+	If ValType( aChoiceOld ) == "A"
+		aChoice := aChoiceOld
+	EndIf
+
+	If ValType( bNGGravaOld ) <> "U"
+		bNGGrava := bNGGravaOld
+	EndIf
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DelProgAnt
+Valida o centro de custo qdo. o par. MV_MDTPS eh = a S
+
+@return Nil
+
+@sample DelProgAnt(SRA->RA_MAT,TM0->TM0_NUMFIC,TMW->TMW_DTINIC,
+							TMW->TMW_DTFIM,,,SRA->RA_FILIAL)
+
+@author Denis Hyroshi de Souza
+@since 28/03/07
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function DelProgAnt( cMatric , cNumFic , dDtInic , dDtFim , cCodExame , aCodExames , cFilMat )
+
+	Local aAreaTemp := GetArea()
+	Local aAreaSRA  := SRA->(GetArea())
+	Local aAreaTMW  := TMW->(GetArea())
+	Local cFilTmp   := If( ValType( cFilMat ) == "C" .And. !Empty( cFilMat ) , cFilMat , cFilAnt )
+
+	dbSelectArea("TM5")
+	dbSetOrder( 1 )//TM5_FILIAL+TM5_NUMFIC+DTOS(TM5_DTPROG)+TM5_EXAME
+	dbSeek( xFilial( "TM5" , cFilTmp ) + cNumFic + DTOS( dDtInic ) , .T. )
+	While !Eof() .And. xFilial("TM5",cFilTmp) == TM5->TM5_FILIAL .And. cNumFic == TM5->TM5_NUMFIC .And. TM5->TM5_DTPROG <= dDtFim
+		If cFilTmp <> TM5->TM5_FILFUN
+			dbSelectArea("TM5")
+			dbSkip()
+			Loop
+		EndIf
+
+		If ValType(cCodExame) == "C"
+			If cCodExame <> TM5->TM5_EXAME
+				dbSelectArea("TM5")
+				dbSkip()
+				Loop
+			EndIf
+		ElseIf ValType( aCodExames ) == "A"
+			If aSCAN( aCodExames,{ | x | x == TM5->TM5_EXAME } ) > 0
+				dbSelectArea( "TM5" )
+				dbSkip()
+				Loop
+			EndIf
+		EndIf
+		If Empty( TM5->TM5_DTRESU ) .And. !Empty( TM5->TM5_PCMSO )
+			RecLock( "TM5" , .F. )
+			dbDelete()
+			TM5->( MsUnLock() )
+		EndIf
+
+		dbSelectArea("TM5")
+		dbSkip()
+	End
+
+	RestArea(aAreaSRA)
+	RestArea(aAreaTMW)
+	RestArea(aAreaTemp)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190VLD
+Valida a data informada para gerar exames para cliente novo
+
+@return .T.
+
+@sample MDT190VLD()
+@Obs Utilização: X3_VALID do campo TMW_DTREFE, em Prestador de Serviço.
+
+@author Denis Hyroshi de Souza
+@since 04/04/03
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190VLD()
+
+	Local dDtRefe
+	Local dDtInicio
+	Local dDtFinal
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		dDtRefe  := oModel:GetValue( "TMWMASTER" , "TMW_DTREFE" )
+		dDtInicio:= oModel:GetValue( "TMWMASTER" , "TMW_DTINIC" )
+		dDtFinal := oModel:GetValue( "TMWMASTER" , "TMW_DTFIM"  )
+	Else
+		dDtRefe  := M->TMW_DTREFE
+		dDtInicio:= M->TMW_DTINIC
+		dDtFinal := M->TMW_DTFIM
+	EndIf
+
+	IF dDtRefe < dDtInicio .Or. dDtRefe > dDtFinal
+		If !lAuto
+			MsgStop(STR0044)  //"A Data Informada não está dentro do período da Programação de Exames."
+		EndIf
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaData
+Busca data do exame
+
+@return dDtRefere
+
+@sample fBuscaData(4,d2DtProxi)
+
+@author Denis Hyroshi de Souza
+@since 04/04/03
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaData(nExNr7,dDataTemp,cExame)
+
+	Local dDtRefere := CTOD("//")
+	Local lRet      := .F.
+	Local lUmaVez   := .F.
+
+	Local oDlgData, oCheck
+	Local cTitulo, cDescri, cMsg
+
+	Default cExame := ""
+
+	If lDtAdmExa
+		Return If(!Empty(SRA->RA_EXAMEDI),SRA->RA_EXAMEDI,SRA->RA_ADMISSA)
+	ElseIf !Empty(dDtSemExa)
+		Return dDtSemExa
+	ElseIf !Empty(dDtRefFun)
+		Return dDtRefFun
+	EndIf
+
+	Default nExNR7 := 1
+
+	If lAuto
+		If ValType( dAutoRefe ) == "D"
+			dDtRefere 	:= dAutoRefe
+		EndIf
+		lUmaVez		:= .T.
+	Else
+		If nExNR7 == 2
+			cTitulo := STR0049 //" não possui exame clínico antes da data de inicio da programação para usar como referência."
+			cDescri := STR0050 //"Informe a data em que o primeiro exame clínico dele será programado."
+		ElseIf nExNR7 == 4
+			cTitulo := STR0051 + Alltrim(cExame) + STR0110 //" não realizou exame " 'Codigo do Exame' " periódico previsto na data "
+			cDescri := STR0052 + Alltrim(cExame) + STR0111 //"Informe a data em que novo exame " 'Codigo do Exame' " será programado e esta data passará a ser a data de referência."
+		Else
+			cTitulo := STR0053 //" não possui exame antes da data de inicio da programação para usar como referência."
+			cDescri := STR0054 //"Informe a data em que os primeiros exames dele serão programados."
+		EndIf
+
+		cMsg := STR0048+Alltrim(SRA->RA_NOME) //"O funcionário " 'Nome do funcionário'
+		DEFINE MSDIALOG oDlgData FROM  0,0 TO 180,550 TITLE OemtoAnsi(STR0005)  PIXEL //"Geracao da Programacao de Exames"
+		oDlgData:LESCCLOSE := .F.
+
+		If len(cMsg) < 34 //Soma dos caracteres da STR0048 + 20 caracteres do nome do Funcionário
+			cTitulo1 := SubStr(cTitulo ,  1 , 42)
+			cTitulo2 := Substr(cTitulo , 42 )
+			TSay():New( 10 , 5 , { | | OemToAnsi( cMsg + cTitulo1) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 200 )
+			TSay():New( 19 , 5 , { | | OemtoAnsi( Alltrim( cTitulo2 ) ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 )
+		Else
+			TSay():New( 10 , 5 , { | | PADC( OemToAnsi( cMsg ), len(cMsg) ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 200 )
+			TSay():New( 19 , 5 , { | | OemtoAnsi( Alltrim( cTitulo ) ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 )
+		EndIf
+		TSay():New( 28 , 5 , { | | OemtoAnsi( cDescri ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 )
+		TSay():New( 37 , 5 , { | | OemtoAnsi( STR0083 ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 ) //"Caso a Data de Referência não for preenchida, será considerada a Data de Vencimento do Exame Medico"
+		TSay():New( 46 , 5 , { | | OemtoAnsi( STR0032 ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 ) //"ou Admissão do funcionário."
+
+		TSay():New( 63 , 5 , { | | OemtoAnsi( STR0084 ) } , oDlgData , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 550 , 010 ) //"Data de Referência"
+
+		TGet():New( 62 , 65 , { | u | If( PCount() > 0 , dDtRefere := u , dDtRefere ) } , oDlgData , 50 , 008 , "99/99/9999" , { | | fValBusc(dDtRefere) } , CLR_BLACK , CLR_WHITE , ,;
+				.F. , , .T. /*lPixel*/ , , .F. , /*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "dDtRefere" , , , , .T. /*lHasButton*/ )
+
+		oCheck := TCheckBox():New( 75, 05, STR0055, {|u| If(PCount() > 0, lUmaVez := u,lUmaVez )} , oDlgData, 400, 07, , , , , , , , .T./*lPixel*/, , , )//"Deseja aplicar esta data a todos os funcionários sem exames de referência?"
+
+		DEFINE SBUTTON FROM 75, 250 TYPE 1 ENABLE OF oDlgData ACTION EVAL({|| lRET := .T.,If(!fValBusc(dDtRefere),lRET := .F.,oDlgData:END())})
+
+		ACTIVATE MSDIALOG oDlgData VALID lRet CENTERED
+	EndIf
+
+	If !Empty(dDtRefere)
+		If lUmaVez
+			dDtSemExa := dDtRefere
+		EndIf
+	Else
+		dDtRefere := If(!Empty(SRA->RA_EXAMEDI),SRA->RA_EXAMEDI,SRA->RA_ADMISSA)
+		If lUmaVez
+			lDtAdmExa := .T.
+		EndIf
+	EndIf
+	dDtRefFun := dDtRefere
+
+Return dDtRefere
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190OK
+Validacao final da tela de inclusao de PCMSO.
+
+@return .T./.F.
+
+@sample MDT190OK(.F.)
+
+@author Andre Perez Alvarez
+@since 30/10/07
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190OK( oModel , lProg , lMsgPos )
+
+	Local cAliasO := Alias()
+	Local aFil := {}
+	Local nX,cMsg
+	Local nSizeSA1 := TAMSX3("A1_COD")[1]
+	Local nSizeLo1 := TAMSX3("A1_LOJA")[1]
+
+	Default lProg := .F.
+
+	If lProg
+		If lSigaMdtps
+			If SubStr( oModel:GetValue( "TMWMASTER" , "TMW_CCDE" ),1,nSizeSA1+nSizeLo1 ) <> cCliMdtPs .Or. ;
+				 SubStr( oModel:GetValue( "TMWMASTER" , "TMW_CCATE" ),1,nSizeSA1+nSizeLo1) <> cCliMdtPs
+				If !lAuto
+					MsgStop(STR0058)  //'Os campos "De C.Custo" e "Até C.Custo" devem pertencer ao cliente e loja selecionados.'
+				EndIf
+				Return .F.
+			EndIf
+			If !NaoVazio(oModel:GetValue( "TMWMASTER" , "TMW_CCATE" ))
+				Return .F.
+			EndIf
+			If !NaoVazio(oModel:GetValue( "TMWMASTER" , "TMW_CCDE" ))
+				Return .F.
+			EndIf
+		EndIf
+
+		If nTipoProg == 2
+			If oModel:GetValue( "TMWMASTER" , "TMW_CCDE" ) > oModel:GetValue( "TMWMASTER" , "TMW_CCATE" )
+				If !lAuto
+					Help(" ",1,"DEATEINVAL")
+				EndIf
+				lMsgPos := .F.
+				Return .F.
+			EndIf
+		EndIf
+
+		If lTMW_Filial
+			If oModel:GetValue( "TMWMASTER" , "TMW_FILDE" ) > oModel:GetValue( "TMWMASTER" , "TMW_FILATE" )
+				If !lAuto
+					Help(" ",1,"DEATEINVAL")
+				EndIf
+				lMsgPos := .F.
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	//Verifica se existe Exames por Filial
+	If lTMW_Filial .And. !lSigaMdtps .And. !Empty(xFilial("TN9"))
+
+		//Carrega array com filiais utilizadas na programação
+		aAreaSM0 := SM0->(GetArea())
+			dbSelectArea("SM0")
+			dbGoTop()
+			cSeekSM0 := If( Empty(oModel:GetValue( "TMWMASTER" , "TMW_FILDE" )), cEmpAnt , cEmpAnt+oModel:GetValue( "TMWMASTER" , "TMW_FILDE" ) )
+			dbSeek( cSeekSM0 )
+			While SM0->( !Eof() ) .And. AllTrim(SM0->M0_CODIGO) == cEmpAnt .And. AllTrim(SM0->M0_CODFIL) <= oModel:GetValue( "TMWMASTER" , "TMW_FILATE" )
+				aAdd( aFil , AllTrim(SM0->M0_CODFIL) )
+				SM0->( dbSkip() )
+			End
+		RestArea(aAreaSM0)
+
+		cMsg := ""
+
+		For nX := 1 To Len(aFil)
+			dbSelectArea("TN9")
+			dbSetOrder(1)
+			If !dbSeek( xFilial( "TN9", aFil[nX] ) + "NR7" )
+				If Empty(cMsg)
+					cMsg := aFil[nX]
+				Else
+					cMsg += ", " + aFil[nX]
+				EndIf
+			EndIf
+		Next nX
+
+		//Mostra mensagem com as filiais sem NR7
+		If !Empty(cAliasO)
+			dbSelectArea(cAliasO)
+		EndIf
+
+		If !Empty(cMsg)
+			If !lAuto
+				If !MsgYesNo(STR0085 + cMsg + ". " + Chr(13) + STR0086) //"Não existe exame NR7 para as filiais: " //"Deseja continuar?"
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+
+	ElseIf !lSigaMdtps
+
+		DbSelectArea("TN9")
+		DbSetOrder(1)  //TN9_FILIAL+TN9_EXAME+TN9_FAIXA
+		If !DbSeek( xFilial("TN9") + "NR7")
+			If !lAuto
+				If !MsgYesNo(STR0034)  //"Não existe exame NR7 para esta filial. Deseja continuar?"
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+
+	EndIf
+
+	If Len(aColsSRA) == 0
+		If !lAuto
+			If Aviso( STR0059 , If( lSigaMdtps , STR0060 , STR0063 ), { STR0061 , STR0062 } ) == 2  //"Atenção"//"Deseja gerar exames para todos os funcionários da loja ou selecioná-los manualmente?"###//"Deseja gerar exames para todos os funcionários ou selecioná-los manualmente?"//"Todos"//"Selecionados"
+				Return MDTA190IND( If(lProg,1,2), oModel )
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA190IND
+@description Selecionar funcionarios para a programacao de exames
+
+@return Lógico - Retorna verdadeiro quando houve seleção de funcionários
+
+@param nTipoPrc - Indica o tipo de processo: 1 - Programação; 2 - Reprogramação ( Obrigatório )
+
+@sample MDTA190IND(1)
+@Obs Utilização: Ações relacionadas na Opção de Incluir e Reprogramação.
+
+@author Andre Perez Alvarez Refeito por: Jackson Machado
+@since 30/10/2007 Refeito em: 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Function MDTA190IND( nTipoPrc, oModel )
+
+	//Backups de Area
+	Local aArea := GetArea()
+	Local aSA1Area := SA1->(GetArea())
+
+	Local nOpca := 2
+	Local nOperation
+
+	//Define Objetos
+	Local oDialog
+	Local oPanel, oPnlPesq
+
+	Local cAliTRBK
+	Local cArqTrab
+	Local aTRB1 := {}
+
+	//Variaveis da Pesquisa
+	Private cPesquisar := Space( 200 )//Valor a ser pesquisado
+	Private cCbxPesq   := ""
+	Private aCbxPesq //ComboBox com indices de pesquisa
+	Private oBtnPesq, oPesquisar//Botao de Pesquisa e Campo para Pesquisa
+	Private oCbxPesq //ComboBox de Pesquisa
+	Private oCheckFun
+
+	// Variaveis do Mark
+	Private oMark
+	Private cMarca      := GetMark()
+	Private lInverte    := .F.
+	Private lAllMark := .F.
+
+	Default oModel   := FWModelActive()
+	Default nTipoPrc := If( lReprog, 2, 1 )
+
+	nOpca := 2
+	nOperation := oModel:GetOperation()
+
+	If nOperation <> MODEL_OPERATION_INSERT .And. nOperation <> MODEL_OPERATION_UPDATE
+		Aviso( STR0059, "Funcionalidade apenas para Inclusão e Reprogramação de Exame", {"Ok"} )//"Atenção"###//"Funcionalidade apenas para Inclusão e Reprogramação de Exame"
+		Return .F.
+	EndIf
+
+	If fMontaFunc( nTipoPrc, @cAliTRBK, @cArqTrab, @aTRB1, oModel )
+
+		Define MsDialog oDialog Title OemToAnsi( STR0077 ) From 64,160 To 580,736 OF oMainWnd  Pixel //"Selecione os funcionários para a geração dos exames periódicos"
+
+			//--- PAINEL PAI
+			oPnlPai := TPanel():New( 0 , 0 , , oDialog , , .T. , .F. , , , 0 , 55 , .T. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//--- DESCRICAO ( TOPO )
+			oPanel := TPanel():New( 0 , 0 , , oPnlPai , , .T. , .F. , , , 0 , 55 , .T. , .F. )
+			oPanel:Align := CONTROL_ALIGN_TOP
+
+			@ 8,9.6 TO 45,280 OF oPanel PIXEL
+			TGroup():New( 8 , 9.6 , 45 , 280 , , oPanel, , , .T./*lPixel*/ )
+
+			TSay():New( 19 , 12 , { | | OemtoAnsi( STR0056 ) } , oPanel , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Estes são os funcionários cadastrados."
+			TSay():New( 29 , 12 , { | | OemtoAnsi( STR0058 ) } , oPanel , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Selecione aqueles que devem entrar na programação."
+
+			//--- PESQUISAR
+			//Define as opcoes de Pesquisa
+			aCbxPesq := {}
+			aAdd( aCbxPesq , STR0065 ) //"Nome"
+			aAdd( aCbxPesq , STR0064 ) //"Matrícula"
+			aAdd( aCbxPesq , STR0040 ) //"Marcados"
+			cCbxPesq := aCbxPesq[ 1 ]
+
+			oPnlPesq 		:= TPanel():New( 01 , 01 , , oPnlPai , , , , CLR_BLACK , CLR_WHITE , 50 , 30 , .T. , .T. )
+			oPnlPesq:Align	:= CONTROL_ALIGN_TOP
+
+			oCbxPesq := TComboBox():New( 002 , 002 , { | u | If( PCount() > 0 , cCbxPesq := u , cCbxPesq ) } , ;
+				aCbxPesq , 200 , 08 , oPnlPesq , , { | | } ;
+				, , , , .T. , , , , , , , , , "cCbxPesq" )
+			oCbxPesq:bChange := { | | fSetIndex( cAliTRBK , aCbxPesq , @cPesquisar , oMark , oPesquisar ) }
+
+			oPesquisar := TGet():New( 015 , 002 , { | u | If( PCount() > 0 , cPesquisar := u , cPesquisar ) } , oPnlPesq , 200 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+				.F. , , .T. /*lPixel*/ , , .F. , /*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "cPesquisar" , , , , .F. /*lHasButton*/ )
+
+			oBtnPesq := TButton():New( 002 , 220 , STR0001 , oPnlPesq , { | | fPesqTRB( cAliTRBK , oMark ) } , ;//"Pesquisar" //"Pesquisar"
+			70 , 10 , , , .F. , .T. , .F. , , .F. , , , .F. )
+
+			oCheckFun := TCheckBox():New(015,220,STR0115,{|u| If(PCount() > 0, lAllMark := u,lAllMark )},oPnlPesq,100,210,,{ | | fInverte( cMarca , cAliTRBK , .F. , lAllMark ) },,,,,,.T.,,,)//Marcar Todos.
+
+			//--- MARK
+			oMark := MsSelect():New( cAliTRBK , "OKID" , , aTRB1 , @lInverte , @cMarca , { 05 , 05 , 200 , 452 } , , , oPnlPai )
+			oMark:bMark					:= { | | MDT190Des( oMark , oCheckFun ) }
+			oMark:oBrowse:lHasMark		:= .T.
+			oMark:oBrowse:lCanAllMark	:= .T.
+			oMark:oBrowse:bAllMark		:= { | | fInverte( cMarca , cAliTRBK ) }
+			oMark:oBrowse:Align			:= CONTROL_ALIGN_ALLCLIENT
+			oMark:oBrowse:Refresh()
+
+		Activate MsDialog oDialog On Init ( EnchoiceBar( oDialog , ;
+			{ | | nOpca := 1 , If( fValFunc( 1 , cAliTRBK ) , oDialog:End() , nOpca := 2 ) } , ;//Confirmar
+			{ | | nOpca := 2 , If( fValFunc( 2 , cAliTRBK ) , oDialog:End() , nOpca := 2 ) } ) )//Cancelar
+	EndIf
+
+	If nOpca == 1
+		//Caso confirme, processa gravação do aColsSRA
+		Processa( { | lEnd | fGravaDados( cAliTRBK ) } )
+	Else
+		//Caso cancele a tela, zera o TRB
+		aColsSRA := {}
+	EndIf
+
+	If Len( aColsSRA ) == 0//Força retorno ser .F.
+		nOpca := 2
+	EndIf
+
+	oTempTRBK:Delete()
+
+	lRefresh := .T.
+
+	RestArea( aSA1Area )
+	RestArea( aArea )
+
+Return ( nOpca == 1 )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMontaFunc
+@description Carrega aCOLS dos funcionarios selecionados
+
+@param cAliasTRB 	- Alias do TRB ( Obrigatório )
+@param cArqTrab  - Nome do Arquivo da TRB ( Obrigatório )
+@param nTipoPrc - Indica o tipo de processo: 1 - Programação; 2 - Reprogramação ( Obrigatório )
+
+@return
+
+@sample fMontaFunc( nTipoPrc, @cAliTRBK, @cArqTrab )
+
+@author Guilherme Benkendorf
+@since 04/08/14
+/*/
+//---------------------------------------------------------------------
+Static Function fMontaFunc( nTipoPrc, cAliTRBK, cArqTrab, aTRB1, oModel )
+
+	//Controle de Condições
+	Local cSeekSRA
+	Local cSeek2SRA
+	Local cCondSRA
+	Local cOldFil := cFilAnt
+	Local cCatFuncVl := Alltrim(SuperGetMv("MV_NG2CATF",.F.," "))//Indica as Categorias Funcionais que nao receberao exames
+	Local cDeCC, cAteCC
+	Local bScan
+	Local lIncPro
+	Local nSizeSI3 := If((TAMSX3("I3_CUSTO")[1]) < 1,9,(TAMSX3("I3_CUSTO")[1]))
+	//Variavel de Controle para existencia de registro no TRB
+	Local lRet := .T.
+
+	//Variaveis do mark
+	Local aDBF, aIdx
+
+	//Define após atribuição de variaveis pela utilização do Default
+	lIncPro := If( nTipoPrc == 2 , .F. , .T. )
+
+	If lSigaMdtps
+		cSeekSRA	:= xFilial( "SRA" ) + SA1->A1_COD + SA1->A1_LOJA
+		cSeek2SRA	:= cSeekSRA
+		cCondSRA	:= "SRA->( RA_FILIAL + Substr( RA_CC , 1 , nSizeSA1 + nSizeLo1 ) )"
+	ElseIf lTMW_Filial
+		cSeekSRA	:= oModel:GetValue( "TMWMASTER" , "TMW_FILDE" )
+		cSeek2SRA	:= oModel:GetValue( "TMWMASTER" , "TMW_FILATE" )
+		cCondSRA	:= "SRA->RA_FILIAL"
+	Else
+		cSeekSRA	:= xFilial( "SRA" )
+		cSeek2SRA	:= cSeekSRA
+		cCondSRA	:= "SRA->RA_FILIAL"
+	EndIf
+
+	//--------------- Inicia Montagem do TRB ---------------
+	aDBF := {}
+	aAdd( aDBF , { "OKID"		, "C" , 02			, 0 } )
+	If lTMW_Filial
+		aAdd( aDBF ,{ "FILFUN" , "C" , Len( TMW->TMW_FILIAL ) , 0 } )
+	EndIf
+	aAdd( aDBF , { "MAT"    , "C" , TAMSX3( "RA_MAT" )[1]     , 0 } )
+	aAdd( aDBF , { "NOME"   , "C" , 40	      , 0 } )
+	aAdd( aDBF , { "NUMRG"  , "C" , 15	      , 0 } )
+	aAdd( aDBF , { "DTNASC" , "D" , 08	      , 0 } )
+	aAdd( aDBF , { "FUNCAO" , "C" , 05	      , 0 } )
+	aAdd( aDBF , { "DESFUN" , "C" , 40      , 0 } )
+	aAdd( aDBF , { "CUSTO"  , "C" , nSizeSI3, 0 } )
+	aAdd( aDBF , { "DESCC"  , "C" , 40	      , 0 } )
+
+	aTRB1 := {}
+	aAdd( aTRB1 , { "OKID"		, NIL , " " 									, 								} )
+	If lTMW_Filial
+		aAdd( aTRB1 , { "FILFUN" , NIL , Alltrim( NGRetTitulo( "TMW_FILIAL" ) ) , "@!" } )
+	EndIf
+	aAdd( aTRB1 , { "MAT"   , NIL , STR0064                       , "@!"                   } )  //"Matrícula"
+	aAdd( aTRB1 , { "NOME"  , NIL , STR0065                       , "@!S40"                } ) //"Nome"
+	aAdd( aTRB1 , { "NUMRG" , NIL , STR0066                       ,                        } )  //"R.G."
+	aAdd( aTRB1 , { "DTNASC", NIL , STR0067                       , "99/99/99"             } )  //"Data Nasc."
+	aAdd( aTRB1 , { "FUNCAO", NIL , STR0068                       , X3Picture("RA_CODFUNC")} )  //"Função"
+	aAdd( aTRB1 , { "DESFUN", NIL , STR0069                       , "@!S40"                } )  //"Descrição da Função"
+	aAdd( aTRB1 , { "CUSTO" , NIL , If(lSigaMdtPs,STR0070,STR0072), X3Picture("RA_CC")     } )  //"Setor"###"C. Custo"
+	aAdd( aTRB1 , { "DESCC" , NIL , If(lSigaMdtPs,STR0071,STR0073), "@!S40"                } )  //"Descrição do Setor"###"Descrição do C. Custo"
+
+	//Monta o Arquivo Temporário
+	cAliTRBK := GetNextAlias()
+
+	oTempTRBK := FWTemporaryTable():New( cAliTRBK, aDBF )
+	If lTMW_Filial
+		oTempTRBK:AddIndex( "1", {"FILFUN","NOME"} )
+		oTempTRBK:AddIndex( "2", {"FILFUN","MAT"} )
+		oTempTRBK:AddIndex( "3", {"OKID","FILFUN","NOME","MAT"} )
+	Else
+		oTempTRBK:AddIndex( "1", {"NOME"} )
+		oTempTRBK:AddIndex( "2", {"MAT"} )
+		oTempTRBK:AddIndex( "3", {"OKID","NOME","MAT"} )
+	EndIf
+	oTempTRBK:Create()
+
+	//--------------- Finaliza Montagem do TRB ---------------
+	dbSelectArea( "SRA" )
+	dbSetOrder( 2 )  //RA_FILIAL+RA_CC+RA_MAT
+	dbSeek( cSeekSRA )
+	While SRA->( !Eof() ) .And. &( cCondSRA ) <= cSeek2SRA
+
+		If !Empty( SRA->RA_CATFUNC ) .And. !Empty( cCatFuncVl )
+
+			If SRA->RA_CATFUNC $ cCatFuncVl //Indica as Categorias Funcionais que nao receberao exames
+				dbSelectArea("SRA")
+				dbSkip()
+				Loop
+			EndIf
+
+		EndIf
+
+		If (lMV_NGMDTPS .Or. lMdtCC .Or. lSigaMdtPs) .And. ;
+				oModel:GetModel( "TMWMASTER" ):HasField( "TMW_CCDE" ) .And.;
+				oModel:GetModel( "TMWMASTER" ):HasField( "TMW_CCATE" )
+
+
+			cDeCC := oModel:GetValue( "TMWMASTER" , "TMW_CCDE" )
+			cAteCC := oModel:GetValue( "TMWMASTER" , "TMW_CCATE" )
+
+			If SRA->RA_CC < cDeCC .Or. SRA->RA_CC > cAteCC
+				dbSelectArea("SRA")
+				dbSkip()
+				Loop
+			EndIf
+
+		Elseif lMdtUmCC .And. oModel:GetModel( "TMWMASTER" ):HasField( "TMW_CCDE" )
+
+			cDeCC := oModel:GetValue( "TMWMASTER", "TMW_CCDE" )
+
+			If SRA->RA_CC <> cDeCC
+				dbSelectArea("SRA")
+				dbSkip()
+				Loop
+			EndIf
+
+		EndIf
+
+		If Empty( SRA->RA_DEMISSA ) .And. SRA->RA_SITFOLH != "D"
+			RecLock( cAliTRBK , .T. )
+			(cAliTRBK)->OKID := Space( Len( cMarca ) )
+
+			If lTMW_Filial
+				bScan := { | x | x[ 1 ] + x[ 2 ] == SRA->RA_MAT + SRA->RA_FILIAL }
+				( cAliTRBK )->FILFUN := SRA->RA_FILIAL
+				cFilAnt := SRA->RA_FILIAL
+			Else
+				bScan := { | x | x[ 1 ] == SRA->RA_MAT }
+			EndIf
+
+			// Caso não seja reprogramação
+			If lIncPro
+				//Verifica se funcionário está no aCols de Marcados
+				If aSCAN( aColsSRA , bScan ) > 0
+					( cAliTRBK )->OKID := cMarca
+				EndIf
+			Else
+				//Caso seja reprogramação e aCols não esteja marcado, verifica se já existe um exame realizado para este PCMSO
+				If Len( aColsSRA ) == 0
+					dbSelectArea( "TM0" )
+					dbSetOrder( 3 )
+					If dbSeek( SRA->RA_FILIAL + SRA->RA_MAT )
+						dbSelectArea( "TM5" )
+						dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+						If dbSeek( xFilial( "TM5" , SRA->RA_FILIAL ) + oModel:GetValue( "TMWMASTER" , "TMW_PCMSO" ) + TM0->TM0_NUMFIC )
+							( cAliTRBK )->OKID := cMarca
+						EndIf
+					EndIf
+				ElseIf aSCAN( aColsSRA , bScan ) > 0
+					( cAliTRBK )->OKID := cMarca
+				EndIf
+			EndIf
+
+			//Grava no TRB os valores
+			( cAliTRBK )->MAT  		:= SRA->RA_MAT
+			( cAliTRBK )->NOME 		:= SRA->RA_NOME
+			( cAliTRBK )->NUMRG		:= SRA->RA_RG
+			( cAliTRBK )->DTNASC		:= SRA->RA_NASC
+			( cAliTRBK )->FUNCAO		:= SRA->RA_CODFUNC
+			( cAliTRBK )->DESFUN		:= NGSEEK( "SRJ" , SRA->RA_CODFUNC , 1 , "SRJ->RJ_DESC" )
+			( cAliTRBK )->CUSTO		:= SRA->RA_CC
+			( cAliTRBK )->DESCC		:= NGSEEK( "CTT" , SRA->RA_CC , 1 , "CTT->CTT_DESC01" )
+
+			cFilAnt := cOldFil//Retorna a filial para filial corrente
+
+			( cAliTRBK )->( Msunlock() )
+		EndIf
+
+		dbSelectArea( "SRA" )
+		SRA->( dbSkip() )
+	End
+
+	dbSelectArea( cAliTRBK )
+	dbGoTop()
+	If ( cAliTRBK )->( RecCount() ) <= 0
+
+		MsgStop( If( lSigaMdtps , STR0074 , STR0076 ) , STR0075 )  //"Não existem funcionários nesta unidade."###"Não existem funcionários no sistema."###"ATENÇÃO"
+		lRet := .F.
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravaDados
+@description Carrega aCOLS dos funcionarios selecionados
+
+@param cAliasTRB 	- Alias do TRB ( Obrigatório )
+
+@return
+
+@sample fGravaDados( "TRB" )
+
+@author Andre Perez Alvarez Refeito por: Jackson Machado
+@since 30/10/2007 Refeito em: 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fGravaDados( cAliasTRB )
+
+	aColsSRA := {} //Zera aCols de seleção para impedir que traga valores errados
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	ProcRegua( ( cAliasTRB )->( RecCount() ) )
+	While ( cAliasTRB )->( !Eof() )
+		IncProc()
+
+		If !Empty( ( cAliasTRB )->OKID )//Caso esteja macado salva no aCols
+			aAdd( aColsSRA , { ( cAliasTRB )->MAT , If( lTMW_Filial , ( cAliasTRB )->FILFUN , cFilAnt ) } )
+		EndIf
+
+		( cAliasTRB )->( dbSkip() )
+	End
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValFunc
+@description Função que valida os botões de confirmar e cancela da tela
+
+@param nTipo 		- Indica o botão selecionado: 1 - Confirma; 2 - Cancelar ( Obrigatório )
+@param cAliasTRB 	- Alias do TRB ( Obrigatório )
+
+@return Lógico 	- Indica se deve confirmar ou não a geração/cancelamento
+
+@sample fValFunc( 1 , "TRB" )
+
+@author Denis Hyroshi de Souza Refeito por: Jackson Machado
+@since 28/03/07 Refeito em: 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fValFunc( nTipo , cAliasTRB )
+
+	Local nCnt := 0
+	Local lRet := .T.
+
+	If nTipo == 1
+		//Verifica se algum funcionário foi marcado
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		While ( cAliasTRB )->( !Eof() )
+			If !Empty( ( cAliasTRB )->OKID )
+				nCnt++
+				Exit
+			EndIf
+			( cAliasTRB )->( dbSkip() )
+		End
+
+		//Realiza validação de marcação
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		If nCnt > 0
+			lRet := MsgYesNo( STR0078 )  //"Confirma a seleção dos funcionários para a programação de exames?"
+		Else
+			MsgInfo( STR0087 ) //"Nenhum funcionário foi selecionado."
+			lRet := .F.
+		EndIf
+	Else
+		//Verifica confirmação de cancelamento
+		lRet := MsgYesNo( If( lSigaMdtps , STR0079 , STR0080 ) )  //"Deseja cancelar e gerar a programação para todos os funcionários da loja?"###"Deseja cancelar e gerar a programação para todos os funcionários?"
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInverte
+@description Inverte a marcacao do browse
+
+@param cMarca 		- Indica a marcação a ser realizada ( Obrigatório )
+@param cAliasTRB 	- Alias do TRB ( Obrigatório )
+
+@return Sempre verdadeiro
+
+@sample fInverte( cMarca , "TRB" )
+
+@author Andre Perez Alvarez Refeito por: Jackson Machado
+@since 31/10/07 Refeito em: 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fInverte( cMarca , cAliasTRB , lInvert , lMarkAll )
+
+	Local aArea := GetArea()
+	Local aAreaTRB := ( cAliasTRB )->( GetArea() )
+
+	Default lInvert := .T.
+	Default lMarkAll := .F.
+
+	If lInvert //Caso seja Inversão desmarca CheckBox.
+		lAllMark := .F.
+		oCheckFun:CtrlRefresh()
+	EndIf
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	While ( cAliasTRB )->( !Eof() )
+		( cAliasTRB )->OKID := IF( ( Empty( ( cAliasTRB )->OKID ) .And. lInvert ) .Or. (!lInvert .And. lMarkAll) , cMarca , Space( Len( cMarca ) ) )
+		( cAliasTRB )->( dbSkip() )
+	End
+
+	RestArea( aAreaTRB )
+	RestArea( aArea )
+
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSetIndex
+@description Seta o indice para pesquisa
+
+@return
+
+@param cAliasTRB	- Alias do TRB ( Obrigatório )
+@param aCbxPesq		- Indices de pesquisa do markbrowse. ( Obrigatório )
+@param cPesquisar	- Valor da Pesquisa ( Obrigatório )
+@param oMark		- Objeto do MarkBrowse ( Obrigatório )
+@param oPesquisar	- Objeto do Get de Pesquisa ( Obrigatório )
+
+@sample fSetIndex( "TRB" , { "CODIGO" , "DESCRI"} , "000001" , oObj )
+
+@author Jackson Machado
+@since 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fSetIndex( cAliasTRB , aCbxPesq , cPesquisar , oMark , oPesquisar )
+
+	Local nIndice := fRetInd( aCbxPesq ) // Retorna numero do indice selecionado
+
+	// Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoTop()
+
+	// Se o indice selecionado for o ultimo [Marcados]
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) // Limpa campo de pesquisa
+		oPesquisar:Disable()
+		oBtnPesq:Disable()              // Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus()     // Define foco no markbrowse
+	Else
+		oPesquisar:Enable()
+		oPesquisar:SetFocus()             // Define foco no campo de pesquisa
+		oBtnPesq:Enable()               // Habilita botao de pesquisa
+	EndIf
+
+	oMark:oBrowse:Refresh()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPesqTRB
+@description Funcao de Pesquisar no Browse.
+
+@return Sempre verdadeiro
+
+@param cAliasTRB	- Alias do MarkBrowse ( Obrigatório )
+@param oMark 		- Objeto do MarkBrowse ( Obrigatório )
+
+@sample fPesqTRB( "TRB" , oObj )
+
+@author Jackson Machado
+@since 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fPesqTRB( cAliasTRB , oMark )
+
+	Local nRecNoAtu := 1//Variavel para salvar o recno
+	Local lRet		:= .T.
+
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( cPesquisar ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		ApMsgInfo( STR0042 , STR0059 ) //"Valor não encontrado."###"Atenção"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh(.T.)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetInd
+@description Retorna o indice, em numero, do item selecionado no combobox
+
+@return nIndice - Retorna o valor do Indice
+
+@param aIndMrk - Indices de pesquisa do markbrowse. ( Obrigatório )
+
+@sample fRetInd( { "CODIGO" , "DESCRI" } )
+
+@author Jackson Machado
+@since 04/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fRetInd( aIndMrk )
+
+	Local nIndice := aScan( aIndMrk , { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0059 ,	{ STR0033 } , 1 , ; //"Atenção"###"Índice não encontrado."
+		{ STR0039 } , 1 ) //"Contate o administrador do sistema."
+		nIndice := 1
+	EndIf
+
+Return nIndice
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} TemExaTM5
+Verifica se tem exame
+
+@return lRet := .T./.F.
+
+@sample TemExaTM5("00000001","04")
+
+@author Denis Hyroshi de Souza
+@since 12/03/08
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function TemExaTM5(cNumFic , cExame )
+
+	Local lRet
+	Local aAreaTemp := GetArea()
+	Local aAreaTM5 := TM5->(GetArea())
+
+	dbSelectArea("TM5")
+	dbSetOrder( 6 )//TM5_FILIAL+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+	// Verifica se existe exame para este funcionario
+	lRet := dbSeek(xFilial("TM5") + cNumFic + cExame )
+
+	RestArea(aAreaTM5)
+	RestArea(aAreaTemp)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} TemExameProg
+Verifica se tem exame programado em outro PCMSO
+
+@return lRet := .T./.F.
+
+@param cNumFic - Número da ficha médica.
+@param dDtIniTMW - Data inicio da geração.
+@param dDtFimTMW - Data fim da geração.
+@param nBaseDt - Tipo da data de programação.
+@param cPCMSO - Número do PCMSO.
+
+@author Denis Hyroshi de Souza
+@since 28/03/07
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function TemExameProg( cNumFic, dDtIniTMW, dDtFimTMW, nBaseDt , cPCMSO )
+
+	Local lRet			:= .F.
+	Local aAreaTemp	:= GetArea()
+	Local aAreaTM5	:= TM5->(GetArea())
+
+	dbSelectArea("TM5")
+	dbSetOrder( 1 )//TM5_FILIAL+TM5_NUMFIC+DTOS(TM5_DTPROG)+TM5_EXAME
+	dbSeek(xFilial("TM5")+cNumFic)
+	While !Eof() .And. xFilial("TM5") == TM5->TM5_FILIAL .And. cNumFic == TM5->TM5_NUMFIC
+		If( !Empty(TM5->TM5_PCMSO) .And. ( ( TM5->TM5_DTPROG >= dDtIniTMW .And. TM5->TM5_DTPROG <= dDtFimTMW ) ) )
+			lRet := .T.
+			Exit
+		EndIf
+		dbSkip()
+	End
+
+	RestArea(aAreaTM5)
+	RestArea(aAreaTemp)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190FER
+Verifica se o exame cai no periodo de ferias.
+
+@return lFerias := .T./.F.
+
+@param nPosExa Numerico
+@param nPosProg Numerico
+
+@author Andre E. P. Alvarez
+@since 04/08/08
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190FER( nPosExa , nPosProg)
+
+	Local lFerias		:= .F.
+
+	Default nPosProg:= 0
+	Default nPosExa	:= 0
+
+	dbSelectArea("SRH")
+	dbSetOrder(2)  //RH_FILIAL+RH_MAT+DTOS(RH_DATAINI)
+	dbSeek( xFilial("SRH") + aProgExam[nPosExa,1,nPosProg,4,2] )
+	While !Eof() .And. xFilial("SRH") == SRH->RH_FILIAL .And. aProgExam[nPosExa,1,nPosProg,4,2] == SRH->RH_MAT
+
+		If aProgExam[nPosExa,1,nPosProg,2] >= SRH->RH_DATAINI .And. aProgExam[nPosExa,1,nPosProg,2] <= SRH->RH_DATAFIM
+			lFerias := .T.
+			Exit
+		EndIf
+
+		dbSkip()
+	End
+
+Return lFerias
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190FLVL
+Valida os campos De/Ate Filial
+
+@return lRet := .T./.F.
+
+@param nPosExa Numerico
+@param nPosProg Numerico
+
+@obs Utilização: X3_VALID Nos campos TMW_FILDE e TMW_FILATE
+
+@author Denis Hyroshi de Souza
+@since 04/08/08
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190FLVL( nTipo )
+
+	Local lRet := .T.
+	Local cArea := Alias()
+	Local oModel
+	Local aArea := SM0->(GetArea())
+
+	If IsInCallStack("MDTA190")
+		oModel := FWModelActive()
+		cFilDe := oModel:GetValue( "TMWMASTER" , "TMW_FILDE" )
+		cFilAte:= oModel:GetValue( "TMWMASTER" , "TMW_FILATE" )
+	Else
+		cFilDe := M->TMW_FILDE
+		cFilAte:= M->TMW_FILATE
+	EndIf
+
+	If nTipo == 1
+		If !Empty( cFilDe )
+			dbSelectArea("SM0")
+			If !dbSeek(cEmpAnt+ cFilDe )
+				If !lAuto
+					Help(" ",1,"REGNOIS")
+				EndIf
+				lRet := .F.
+			EndIf
+			If cFilDe > cFilAte
+				cFilAte := cFilDe
+			EndIf
+		EndIf
+	Else
+		If cFilAte <> Replicate("Z",Len( cFilAte ))
+			If cFilDe > cFilAte
+				If !lAuto
+					Help(" ",1,"DEATEINVAL")
+				EndIf
+				lRet := .F.
+			Else
+				dbSelectArea("SM0")
+				If !dbSeek(cEmpAnt+ cFilAte )
+					If !lAuto
+						Help(" ",1,"REGNOIS")
+					EndIf
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+	dbSelectArea(cArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190AFOR
+Abre Dialog apos inclusao na TM5, para que possa ser alterado o
+fornecedor dos exames com mais de um fornecedor cadastrado.
+
+@return lRet := .T./.F.
+
+@author Vitor Emanuel Batista
+@since 04/11/2009
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190AFOR()
+
+	Local oDlg
+	Local aButton := {}
+	Local nOpcao, nX, nExame, nFornec, nLoja
+	Local cLINOK := "AllwaysTrue()"
+	Local cTUDOK := "AllwaysTrue()"
+	Local cKey   := TMW->TMW_PCMSO
+
+	Local aArea     := GetArea()
+	Local bMontCols := {|| fMonColsFo() }
+	Local aYesFields:= {"TM5_EXAME","TM5_NOMEXA","TM5_FORNEC","TM5_LOJA"}
+	Local aAlter    := { "TM5_FORNEC" , "TM5_LOJA" }
+
+	Local aOldCols
+
+	Local lAlterou
+
+	Private aHeader := {}
+	Private aCols   := {}
+
+	//Se nao houver exames para serem alterados
+	If Empty(aAltForEx)
+		Return
+	EndIf
+
+	//Coloca TM5 na memoria
+	dbSelectArea("TM5")
+	dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+	RegToMemory("TM5",.T.)
+	SetAltera()
+
+	//Inicializa aHeader e aCols
+	FillGetDados( 4 , "TM5", , , , , , aYesFields, , ,bMontCols, , , , , , , , , , )
+
+	nExame  := GDFieldPos("TM5_EXAME" , aHeader )
+	nNomEx  := GDFieldPos("TM5_NOMEXA", aHeader )
+	nFornec := GDFieldPos("TM5_FORNEC", aHeader )
+	nLoja   := GDFieldPos("TM5_LOJA"  , aHeader )
+
+	aOldCols := aClone(aCols)
+
+	DEFINE DIALOG oDlg FROM 120,0 To 500,800 TITLE STR0089 COLOR CLR_BLACK,CLR_WHITE PIXEL //"Alteração do Fornecedor de Exames"
+	oDlg:lEscClose := .F.
+
+	oGet := MsNewGetDados():New( 0, 0, 0, 0, GD_UPDATE ,	{|| AllwaysTrue() }, {|| AllwaysTrue() }, ,aAlter , , 9999, , , , oDlg , aHeader, aCols )
+	oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Altera When para somente campo TM5_FORNEC poder ser alterado
+	For nX := 1 To Len(aHeader)
+		If !("TM5_FORNEC/TM5_LOJA" $ AllTrim(aHeader[nX][2])) .And. Len(aHeader[nX]) >= 12
+			oGet:aInfo[nX][4] := ".F."
+		ElseIf AllTrim(aHeader[nX][2]) == "TM5_FORNEC"
+			aHeader[nX][6] := "MDT190VFOR()"
+			oGet:aInfo[nX][4] := "MDT190WFOR()"
+		EndIf
+	Next nX
+
+	ACTIVATE MsDIALOG oDlg ON INIT EnchoiceBar(@oDlg,{||nOpcao :=2,oDlg:End()},;
+		{||nOpcao := 1,If(MsgYesNo(STR0088),oDlg:End(),.F.)},,aButton) CENTERED //"Deseja realmente não alterar o fornecedor dos exames gerados?"
+
+	If nOpcao == 2
+		//Atribuiu ao aCols o valor correto
+		aCols := aClone( oGet:aCols )
+		lAlterou := .F.
+		For nX := 1 to Len(aCols)
+			If aCols[nX][nFornec]  != aOldCols[nX][nFornec] .Or. ;
+					aCols[nX][nLoja]  != aOldCols[nX][nLoja]
+				lAlterou := .T.
+				Exit
+			EndIf
+		Next nX
+		If lAlterou
+			dbSelectArea("TM5")
+			dbSetOrder( 3 )//TM5_FILIAL+TM5_PCMSO+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+			dbSeek(xFilial("TM5")+cKey)
+			While !Eof() .And. xFilial("TM5") == TM5->TM5_FILIAL .And. cKey == TM5->TM5_PCMSO
+				nPos := aScan(aCols,{|aArray| aArray[nExame] == TM5->TM5_EXAME})
+				If nPos > 0 .And. aCols[nPos][nFornec]+aCols[nPos][nLoja] != TM5->TM5_FORNEC+TM5->TM5_LOJA .And. ;
+						!Empty(aCols[nPos][nFornec]) .And. !Empty(aCols[nPos][nLoja])
+					RecLock("TM5",.F.)
+					TM5->TM5_FORNEC := aCols[nPos][nFornec]
+					TM5->TM5_LOJA   := aCols[nPos][nLoja]
+					MsUnLock()
+				EndIf
+				dbSelectArea("TM5")
+				dbSkip()
+			EndDo
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMonColsFo
+Abre Dialog apos inclusao na TM5, para que possa ser alterado o
+fornecedor dos exames com mais de um fornecedor cadastrado.
+
+@return .T.
+
+@author Guilherme Benkendorf
+@since 04/08/2014
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fMonColsFo()
+
+	Local nX
+	Local aColsAux := BLANKGETD(aHeader)
+
+	Local nExame  := GDFieldPos("TM5_EXAME" , aHeader)
+	Local nNomEx  := GDFieldPos("TM5_NOMEXA", aHeader)
+	Local nFornec := GDFieldPos("TM5_FORNEC", aHeader)
+	Local nLoja   := GDFieldPos("TM5_LOJA"  , aHeader)
+
+	//Grava na aCols Exames gerados
+	For nX := 1 to Len(aAltForEx)
+		aAdd(aCols,aClone(aColsAux[1]))
+		aCols[nX][nExame]  := PADR(aAltForEx[nX][1],LEN(TM5->TM5_EXAME))
+		aCols[nX][nNomEx]  := aAltForEx[nX][2]
+		aCols[nX][nFornec] := PADR(aAltForEx[nX][3],LEN(TM5->TM5_FORNEC))
+		aCols[nX][nLoja]   := aAltForEx[nX][4]
+	Next nX
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190VFOR
+Valida campo de Fornecedor no GetDados
+
+@return
+
+@Obs Utilização: X3_VALID do campo TM5_FORNEC
+
+@author Vitor Emanuel Batista
+@since 04/11/2009
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190VFOR()
+
+	If !EXISTCPO("SA2",M->TM5_FORNEC)
+		Return .F.
+	EndIf
+
+	If TMD->(!Eof())
+		M->TM5_LOJA := TMD->TMD_LOJA
+	EndIf
+
+	TMD->(dbGoBottom())
+
+	gdFieldPut("TM5_LOJA",M->TM5_LOJA)
+
+Return CARRELOJA()
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190WFOR
+When do campo de Fornecedor no GetDados
+
+@return .T.
+
+@Obs Utilização: X3_WHEN do campo TM5_FORNEC
+
+@author Vitor Emanuel Batista
+@since 04/11/2009
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190WFOR()
+	M->TM5_EXAME := gdFieldGet("TM5_EXAME")
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190DtIni
+Valida a data inicio para nao ser maior que a data fim.
+
+@return Nil
+
+@obs Utilização: X3_VALID do Campo TMW_DTINIC
+
+@author Taina A. Cardoso
+@since 07/28/11
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT190DtIni()
+
+	Local dDtInicio
+	Local dDtFinal
+
+	If IsInCallStack("MDTA190")
+		oModel    := FWModelActive()
+		dDtInicio := oModel:GetValue( "TMWMASTER" , "TMW_DTINIC" )
+		dDtFinal  := oModel:GetValue( "TMWMASTER" , "TMW_DTFIM" )
+	Else
+		dDtInicio := M->TMW_DTINIC
+		dDtFinal  := M->TMW_DTFIM
+	EndIf
+
+	If !Empty( dDtFinal ) .And. dDtInicio > dDtFinal
+		If !lAuto
+			Help( " " , 1 , "DTINIINVAL" , , STR0035 + " " + STR0036 , 1 , 0 )//"Data inicio não pode ser maior que a data de  termino."###//"Digite uma data menor ou igual a data de termino."
+		EndIf
+  		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190VAFA
+Verifica se o exame cai no periodo de afastamento.
+
+@return lAfast := .T./.F.
+
+@author Jackson Machado
+@since 03/10/2011
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190VAFA(nPosExa,nPosProg)
+
+	Local lAfast := .F.
+
+	Default nPosProg := 0
+	Default nPosExa := 0
+	lAfast :=  MDTChkSR8( "SR8" , 1 , xFilial("SR8")+aProgExam[nPosExa,1,nPosProg,4,2] ,;
+															"xFilial('SR8')+aProgExam[" + cValToChar( nPosExa ) + ",1," + cValToChar( nPosProg ) + ",4,2] == SR8->R8_FILIAL+SR8->R8_MAT" ,;
+															 aProgExam[nPosExa,1,nPosProg,2] ,;
+															 aProgExam[nPosExa,1,nPosProg,2] )
+
+Return lAfast
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValBusc
+Valida a data de referência.
+
+@return .T./.F.
+
+@author Jackson Machado
+@since 03/10/2011
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fValBusc(dDtRefere)
+
+	Local lRet := .T.
+
+	If !Empty(dDtRefere) .And. ( dDtRefere < TMW->TMW_DTINIC .Or. dDtRefere > TMW->TMW_DTFIM )
+		If !lAuto
+			ShowHelpDlg( STR0075 , { STR0037 } , 2 , { STR0038 } , 2 )//"ATENÇÃO"###"Data inválida."###"Informe uma data entre o período de geração ou deixe a data em branco."
+		EndIf
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG190BRIG
+Retorna os exames da brigada
+
+@return .T.
+
+@author Jackson Machado
+@since 14/06/2011
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function NG190BRIG(nTipoRel)
+
+	dbSelectArea("TKM")
+	dbSetOrder(6)
+	If dbSeek(xFilial("TKM")+SRA->RA_MAT)
+		dbSelectArea("TKN")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TKN")+TKM->TKM_BRIGAD)
+			While TKN->( !Eof() ) .And. TKN->TKN_FILIAL == xFilial("TKN") .And. TKN->TKN_BRIGAD == TKM->TKM_BRIGAD
+
+				MDT190GeFE( nTipoRel, TKN->TKN_FAIXA, nIdade, TM0->TM0_SEXO, TKN->TKN_EXAME, 3 )
+
+				TKN->( dbSkip() )
+			End
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGeraChoice
+Gera aChoice padrao para MDTA190
+
+@return aChoice - Array com os campos que devem aparecer em tela.
+
+@sample
+fGeraChoice()
+
+@author Jackson Machado
+@since 20/09/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fGeraChoice( lForce )
+
+	Local aChoice := {}
+	Local lMV_NGMDTPS := SuperGetMv("MV_NGMDTPS",.F.,"N") == "S"
+
+	Default lForce := .F.
+
+	lTMW_Filial:= If(Type("lTMW_Filial") == "L",lTMW_Filial,NGCADICBASE("TMW_FILDE","A","TMW",.F.) .And. ;
+		NGCADICBASE("TMW_FILATE","A","TMW",.F.) .And. ;
+		!Empty(xFilial("TMW")) .And. !Empty(xFilial("SRA")))
+
+
+	aCHOICE := { "TMW_PCMSO","TMW_NOMUSU","TMW_CODUSU","TMW_NOMUSU",;
+		"TMW_DTINIC","TMW_DTFIM","TMW_DTGERA","TMW_DESCRI","TMW_BASEDT","TMW_DTREFE" }
+
+	If lForce
+		aADD(aCHOICE,"TMW_CCDE")
+		aADD(aCHOICE,"TMW_CCATE")
+		nTipoProg := 2
+	Else
+		If lTMW_Filial
+			aADD(aCHOICE,"TMW_FILDE")
+			aADD(aCHOICE,"TMW_FILATE")
+		Else
+			If (lMV_NGMDTPS .Or. lMDT190CC()) .And. ;
+					TMW->(FieldPos("TMW_CCDE")) > 0 .And. TMW->(FieldPos("TMW_CCATE")) > 0
+
+				aADD(aCHOICE,"TMW_CCDE")
+				aADD(aCHOICE,"TMW_CCATE")
+				nTipoProg := 2
+			Elseif lMdtUmCC .And. TMW->(FieldPos("TMW_CCDE")) > 0
+				aADD(aCHOICE,"TMW_CCDE")
+				nTipoProg := 3
+			EndIf
+		EndIf
+	EndIf
+
+	If SuperGetMv("MV_NG2PRCL",.F.,"N") == "S"
+		If TMW->(FieldPos("TMW_CLIDE")) > 0 .And. TMW->(FieldPos("TMW_CLIATE")) > 0
+			aADD(aCHOICE,"TMW_CLIDE")
+			aADD(aCHOICE,"TMW_CLIATE")
+		EndIf
+	EndIf
+
+Return aChoice
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190IMP
+Função para imprimir relatório.
+
+@return
+@sample
+@Obs Utilização: Ações Relacionadas da rotina MDTA190 (Menudef).
+@author Jean Pytter da Costa
+@since 25/03/2014
+/*/
+//---------------------------------------------------------------------
+Function MDT190IMP()
+
+	Local aAreaTM5 := TM5->(GetArea())
+	cPerg := "MDT450"
+
+	MDTR450()
+
+	RestArea(aAreaTM5)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fExamePer
+Função para retornar os tipos de exames que caracterizam Periodicidade
+
+@return Array { 2 , 6 , 7 , 8 , 11 , 12 , 13 , 14 }
+@sample aTipoPer := fExamePer()
+@author Guilherme Benkendrf
+
+@since 30/07/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fExamePer()
+
+	Local aRet 		:= { 2 , 6 , 7 , 8 , 11 , 12 , 13 , 14 }
+	Local aRetPE 	:= {}
+	Local nX		:= 0
+
+	//Verifica PE
+	If ExistBlock( "MDTA1901" )
+		//Recebe opções adicionadas pelo PE
+		aRetPE := ExecBlock( "MDTA1901" , .F. , .F. )
+		If ValType(aRetPE) == "A"
+			//Roda opções adicionadas verificando se todas são númericas, se sim adiciona ao array principal
+			For nX := 1 to len(aRetPE[1])
+				If ValType( aRetPE[1][nX] ) == "N"
+					aAdd( aRet , aRetPE[1][nX] )
+				EndIf
+			Next
+		EndIf
+	EndIf
+
+Return aRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190GeFE
+Função para auxilio na geração de exames. Encontra as datas conforme
+periodo estimado pelas faixas.
+
+@param nTipoRel
+@param cFaixa
+@param nIdade
+@param cSexo
+@param cExame
+@param nIndGer	Numerico Indica a chamado da função, se a geração é por:
+						NG190PSRJ - 1 - Por função
+						NG190PSRJ - 2 - Por Centro de Custo
+						NG190BRIG - 3 - Brigada de Incendio
+						NG190PROG - 4 - Programa de Saude
+						NG190EXFI - 5 - Exame por Filial
+						NG190EXRI - 6 - Exame Por Risco
+
+
+@return Nil
+@sample MDT190GeFE( nTipoRel, TKN->TKN_FAIXA, nIdade, TM0->TM0_SEXO, TKN->TKN_EXAME, 3 )
+@author Guilherme Benkendrf
+
+@since 30/07/2014
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190GeFE( nTipoRel, cFaixa, nIdade, cSexo, cExame, nIndGer )
+
+	Local nX
+	Local nMeses
+	Local nMesesPer
+	Local nPosAdm
+
+	Local cNumFic
+	Local cCondic
+	Local cCondic2
+	Local cCondNR7
+	Local cCond2NR7
+
+	Local lFirst190
+	Local lRefer
+	Local lPriExame
+	Local lJagravou := .F.
+
+	Local dUltExame
+	Local dDtIniExp
+	Local dDtExaAdm
+	Local dDtResuMin
+	Local dDtExaTem
+	Local dNoExame
+	Local dNextExa
+	Local dInicProg
+
+	Local aAreaTemp:= {}
+	Local aAreaTM5 := {}
+
+	//Data Base Programacao Exame
+	Local nBaseDt := Val(TMW->TMW_BASEDT)
+
+	Local lTpaPriod := .F.
+	Local lNGPadAd  := SuperGetMv( "MV_NG2PDAD" , .F. , "1" ) == "2"
+	Local dDtAnt   := CtoD('//')
+
+	Private cExameAux := cExame
+	Private dProxExam
+	Private aPeriodic := { { 0 , 0 , 0 , 0 } }
+	Private aFornec   := { { Space( 5 ) ," " } }
+
+	cCondNR7 := If( nIndGer == 1 .Or. nIndGer == 5, "Alltrim(cExameAux) != 'NR7'", ".T." )//Por função//Exame por Filial
+	nBaseDt  := If( nBaseDt < 1 .Or. nBaseDt > 6, 1, nBaseDt )
+
+	// Funcao NGUTILPER defina no programa  MDTUTIL - busca a periodicidade do exame
+	aPeriodic := NGUTILPER(cFaixa,nIdade,cSexo)
+
+	For nX :=  1 to Len(aTabExam)
+		// Analisa se o exame que será cadastrado ja foi gerado nessa pogramação, nesse periodo
+		If lJagravou := aTabExam[nX][_nColOne] == cExame .And. aTabExam[nX][_nColTwo] <= aPeriodic[_nRowOne][_nColOne]
+			Exit
+		EndIf
+	Next
+
+	If aPeriodic[_nRowOne][_nColThree] == 1 .And. !lJagravou .And. aPeriodic[_nRowOne][_nColOne] > 0
+
+		// Funcao NGUTILFOR defina no programa  MDTUTIL - busca o Fornecedor e a Loja
+		aFornec   := NGUTILFOR(cExame)
+		// Se não for prestador, verifica se há fornecedor para o exame
+		If Empty(aFornec[_nRowOne][_nColOne]) .And. !lSigaMdtps
+			Return NG190FUNC( .T. , cExame )
+		EndIf
+
+	 	cNumFic := TM0->TM0_NUMFIC
+
+		If nIndGer == 3//Brigada de Incendio
+			// Se a geração de exame for por Brigadas, pega data inicio da vigencia como inicio
+			dInicProg := Posicione( "TKL", 1, xFilial( "TKL" ) + TKN->TKN_BRIGAD, "TKL_DTVIIN" )
+		ElseIf nIndGer == 4//Programa de Saude
+			// Se a geração de exame for por Programa de Saude, pega a data inicio e Ficha Medica
+			// da tabela de Programa de Saude
+			dInicProg := TMN->TMN_DTINIC
+			cNumFic   := TMN->TMN_NUMFIC
+		ElseIf nIndGer == 6 .Or. nIndGer == 1 //Exame Por Risco ou Exame Por Função
+			dDtIniExp := MDT190SRE( SRA->RA_MAT, TMW->TMW_DTINIC, TMW->TMW_DTFIM, SRA->RA_ADMISSA , nIndGer )
+			dInicProg := If(!Empty(SRA->RA_EXAMEDI),SRA->RA_EXAMEDI,SRA->RA_ADMISSA)
+			If dInicProg < dDtIniExp //Se a exposição iniciou depois da admissão
+				//Se não gera exames pós admissionais na mudança de função
+				If SuperGetMv( "MV_NG2PMUD" , .F. , "1" ) == "2"
+					//Verifica se já efetuou o exame no período anterior a troca de função
+					dDtAnt  := MonthSub( dDtIniExp, aPeriodic[ _nRowOne ][ _nColOne ] )
+					cFldDt  := If( nBaseDt == 1, "%TM5_DTPROG%", "%TM5_DTRESU%")
+					cAlsTM5 := GetNextAlias()
+					BeginSQL Alias cAlsTM5
+						SELECT COUNT(TM5_EXAME) QTDEXA FROM %table:TM5% TM5
+							WHERE TM5.TM5_FILIAL = %xFilial:TM5% AND
+								TM5.TM5_NUMFIC = %exp:cNumfic% AND
+								TM5.TM5_EXAME = %exp:cExame% AND
+								TM5.%exp:cFldDt% BETWEEN %exp: dDtAnt% AND %exp:dDtIniExp% AND
+								TM5.%notDel%
+					EndSQL
+					If !(( cAlsTM5 )->QTDEXA > 0)
+						dInicProg := dDtIniExp
+					EndIf
+
+					(cAlsTM5)->( dbCloseArea() )
+					
+				Else
+					dInicProg := dDtIniExp
+				EndIf
+			EndIf
+		Else
+			// Senão a data inicio será a Data de Vencimento do Exame Médico do Funcionario,
+			// caso não houver, pega a data de Admissão
+			dInicProg  := If(!Empty(SRA->RA_EXAMEDI),SRA->RA_EXAMEDI,SRA->RA_ADMISSA)
+		EndIf
+
+		dDtExaAdm  := Ctod("//")
+		dDtResuMin := Ctod("//")
+		dDtExaTem  := Ctod("//")
+		lRefer     := .F.
+
+		// Pega data do Ultimo Exame
+		If nBaseDt == 5 //5=Data Admissao;
+			dUltExame := SRA->RA_ADMISSA
+		Elseif nBaseDt == 6 // 6=Data Informada
+			dUltExame := TMW->TMW_DTREFE
+		ElseIf !Empty(dDtFunRef) // Data Especifica
+			dUltExame := dDtFunRef
+		ElseIf ( lNoExameNR7 .And. AllTrim( cExame ) == "NR7" ) .Or. ( lNoExameCom .And. AllTrim( cExame ) <> "NR7" )
+
+			dNoExame := fBuscaData( If( Alltrim( cExame ) == "NR7" , 2 , 3 ) )
+
+			aAreaTemp := GetArea()
+			aAreaTM5 := TM5->(GetArea())
+			If !Empty(dNoExame) .And. nBaseDt == 1 //1=Data Programacao de Exame
+				dbSelectArea("TM5")
+				dbSetOrder( 1 )//TM5_FILIAL+TM5_NUMFIC+DTOS(TM5_DTPROG)+TM5_EXAME
+				dbSeek(xFilial("TM5")+cNumfic+DTOS(dNoExame)+cExame,.T.) // Verifica a existencia de exame com a data informada
+				dbSkip(-1)//Posiciona no exame anterior
+				// Verifica se existe exame anterior a data informada.
+				If !Bof() .And. xFilial("TM5") == TM5->TM5_FILIAL .And. TM5->TM5_NUMFIC == cNumfic .And.;
+						cExame == TM5->TM5_EXAME .And. dNoExame > TM5->TM5_DTPROG
+
+					dDtExaTem := dNoExame
+					dNoExame := STOD(Space(8))
+					lRefer := .T. //Indica referencia
+				EndIf
+			ElseIf !Empty(dNoExame) .And. nBaseDt == 2 //2=Data Realizacao de Exame;
+				dbSelectArea("TM5")
+				dbSetOrder( 6 )//TM5_FILIAL+TM5_NUMFIC+TM5_EXAME+DTOS(TM5_DTPROG)
+				If dbSeek(xFilial("TM5")+cNumfic+cExame)
+					While !Eof() .And. xFilial("TM5")+cNumfic+cExame == TM5->TM5_FILIAL+TM5->TM5_NUMFIC+TM5->TM5_EXAME
+
+						If !Empty(TM5->TM5_DTRESU) .And. (dDtResuMin > TM5->TM5_DTRESU .Or. Empty(dDtResuMin))
+							dDtResuMin := TM5->TM5_DTRESU
+						EndIf
+
+						If TM5->TM5_NATEXA == "1" .And. !Empty(TM5->TM5_DTRESU) .And. dDtExaAdm < TM5->TM5_DTRESU
+							dDtExaAdm := TM5->TM5_DTRESU
+						EndIf
+
+						dbSkip()
+					End
+				EndIf
+				If !Empty(dDtResuMin)
+					dNoExame := STOD(Space(8))
+				EndIf
+			EndIf
+
+			RestArea(aAreaTM5)
+			RestArea(aAreaTemp)
+
+			If Empty(dNoExame)
+				dUltExame := NGUTILUEX( cNumfic , cExame , dInicProg , nBaseDt , , nTipoRel )//Busca a data do ultimo exame do mesmo tipo.
+			Else
+				dUltExame := dNoExame
+			EndIf
+
+			If lRefer
+				dNoExame := dDtExaTem
+			EndIf
+
+		Else
+			dUltExame := NGUTILUEX( cNumfic, cExame, dInicProg , nBaseDt ,     , nTipoRel )
+			dDtExaAdm := NGUTILUEX( cNumfic, cExame, dInicProg , nBaseDt , "1" , nTipoRel )
+		EndIf
+
+		lFirst190 := .T.
+
+		nMesesPer := aPeriodic[ _nRowOne ][ _nColOne ] //Numero de Meses do Periodo
+		nPosAdm   := aPeriodic[ _nRowOne ][ _nColTwo ] // Numero de Meses apos a admissao
+		dProxExam := CtoD( "01/01/2000" ) // Data do Proximo Exame
+		dDtExaAdm := If( Empty( dDtExaAdm ) .Or. nBaseDt == 5 , SRA->RA_ADMISSA , dDtExaAdm ) // Data do Exame de Admissao
+
+		lTpaPriod := Type("aPeriodic[1][4]") == "N"
+
+		While dProxExam < TMW->TMW_DTFIM
+			nMeses  := nMesesPer
+			If &( cCondNR7 )// Se foi indicado uma quantidade de meses apos a admissao
+				If !Empty(dDtExaAdm)
+					IF dUltExame  <=  dDtExaAdm
+						IF nPosAdm > 0
+							nMeses  := nPosAdm
+						EndIf
+					ElseIf lTpaPriod .And. nPosAdm > 0
+						IF dUltExame < NGUTILPRX( dDtExaAdm , nPosAdm + aPeriodic[_nRowOne][4] ) //dDtExaAdm
+							IF aPeriodic[_nRowOne][4] > 0
+								nMeses := aPeriodic[_nRowOne][4]
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			// Funcao NGUTILPRX - definida  no programa  MDTUTIL - busca a proxima data para o exame.
+			If lFirst190 .And. ( ( nBaseDt >= 4 .And. nBaseDt <= 6 ) .Or.	!Empty(dDtFunRef) .Or. (!Empty(dNoExame) ) )
+				dProxExam := dUltExame
+				//Volta condição para sempre considera se não tiver admissional
+				cConsidExAdm := ".And. .T."
+				If nBaseDT == 5//Somente se for com base da data de admissão
+					aAreaTemp := GetArea()
+					aAreaTM5 := TM5->( GetArea() )
+					//Busca se existe um exame admissional já realizado, caso sim, gera a periodicidade
+					dbSelectArea("TM5")
+					dbSetOrder(6)
+					//Busca exames cadastrados a ficha
+					If dbSeek( xFilial("TM5") + cNumFic + cExame )
+						While TM5->( !EoF() ) .And. TM5->TM5_FILIAL == xFilial( "TM5" ) .And. ;
+								TM5->TM5_NUMFIC == cNumFic .And. TM5->TM5_EXAME == cExame
+							//Valida se o exame já foi realizado e se é admissional ocupacional
+							If !Empty(TM5->TM5_DTRESU) .And. TM5->TM5_NATEXA == "1" .And. TM5->TM5_ORIGEX == "2"
+								cConsidExAdm := ".And. .F."
+							EndIf
+							TM5->( dbSkip() )
+						End
+					EndIf
+					RestArea(aAreaTM5)
+					RestArea(aAreaTemp)
+				EndIf
+			Else
+				//------------------------------------------------------------------------------------------
+			   // As verificacoes do else sao para saber se os exames estao sendo realizados corretamente.
+			   //------------------------------------------------------------------------------------------
+				dProxExam := NGUTILPRX(dUltExame,nMeses)
+				lPriExame := TemExaTM5(cNumfic,cExame)
+				//Volta condição para sempre considera após primeiro exame
+				cConsidExAdm := ".And. .T."
+				If lFirst190 .And. nBaseDt <= 3
+
+					If nBaseDt <> 2 //2=Data Realizacao de Exame
+						//Verificar a data do ultimo exame realizado
+						d2DtUltim := NGUTILUEX( cNumfic , cExame , dInicProg , 2 , , nTipoRel)
+						//Busca a proxima data para o exame.
+						d2DtProxi := NGUTILPRX(d2DtUltim,nMeses)
+							d2DtUltim := NGUTILUEX(cNumfic,cExame,dInicProg,2,,nTipoRel)//Verificar a data do ultimo exame realizado
+							// NGUTILPRX altera o valor da variavel dProxExam, então é utilizado dNextExa para backup
+							dNextExa  := dProxExam
+							d2DtProxi := NGUTILPRX(d2DtUltim,nMeses)
+							dProxExam := dNextExa
+					Else
+						d2DtProxi := dProxExam
+					EndIf
+
+					//Se a Data do proximo exame for menor que a Programação ou não tem exame
+					If d2DtProxi < TMW->TMW_DTINIC .Or. !lPriExame
+						If !lPriExame
+							d2DtProxi := dInicProg
+						EndIf
+						dDtBackup := If( !Empty(dDtBackup) , dDtBackup , fBuscaData( 4 , d2DtProxi , cExame ) )
+						dProxExam := If( !Empty(dDtBackup) .And. dProxExam < dDtBackup, dDtBackup , dProxExam )//Incrementada a verificacao para receber apenas se a data da realizacao e superior a data ja calculada.
+					EndIf
+
+				EndIf
+			EndIf
+
+			lFirst190 := .F.
+
+			cCondic  := "dProxExam >= TMW->TMW_DTINIC .And. dProxExam <= TMW->TMW_DTFIM"
+			cCondic  += cConsidExAdm
+			cCondic2 := ".T."
+			cCondic3 := ".T."
+
+			If nIndGer == 3 .Or. nIndGer == 4//Brigada de Incendio//Programa de Saude
+				If nIndGer == 3
+					cCondic += " .And. dProxExam >= TKL->TKL_DTVIIN .And. dProxExam <= TKL->TKL_DTVIFI"
+				EndIf
+				cCondic3 := "cExameAux  <>  cExamant"
+			ElseIf nIndGer <= 2
+				If !( ( nBaseDt == 5 .And. SRA->RA_ADMISSA == dProxExam ) .Or. lExamPer )
+					cCondic2 := ".F."
+				EndIf
+			EndIf
+
+			//Verifica se deve gerar para a data de admissão
+			If lNGPadAd .And. SRA->RA_ADMISSA == dProxExam
+				cCondic2 := ".F."
+			EndIf
+
+			// cCondic é a verificação da data do proximo exame dentro da programação
+			// Caso seja por data da admissão, também valida se já existe o exame admissional
+			// A opção de Brigada também verifica se o proximo exame esta dentro da vigencia
+			If &( cCondic )
+				// cCondic2 geração por Função / Centro de Custo
+				If &( cCondic2 )
+					dProxExam := MDT190FDS(dProxExam) // Verifica se exame pode ser incluido no Fim de semana
+					NG190SVEX( , cExame, nMesesPer, dProxExam, aFornec )
+				EndIf
+				//Na unificação de funções foi analisado que brigada e programa de saude
+				// fazem analise de exame cExame  <>  cExamant, então a atribuição cExamant := cExame
+				// só é valida para essa duas chamadas.
+				If &( cCondic3 )
+					cExamant := cExameAux
+					aADD(aTabExam, { cExame , aPeriodic[_nRowOne][_nColOne] } )   // TABELA COM EXAMES JA GRAVADOS
+				EndIf
+			EndIf
+
+			dUltExame := dProxExam
+		End
+
+		NG190SVEX(.F., cExame, nMesesPer, dProxExam, aFornec )
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190Stru
+Funcao para montar Estrutura da View e Model do MDTA190
+
+@return .T./.F.
+@sample MDT190Stru( cCampo )
+@Obs Utilização: Utilizado em no bloco bAvalCampo da Estrutura MVC. Na
+                    na rotina MDTA190.
+@author Guilherme Benkendrf
+
+@obs Necessario a existencia da variavel Private aChoice. No MDTA190
+ é estruturada da função fGeraChoice
+@since 30/07/2014
+/*/
+//---------------------------------------------------------------------
+Function MDT190Stru( cCampo )
+
+	Local aCampos := If( Type("aChoice") == "A", aClone( aChoice ) , fGeraChoice() )
+
+Return aScan( aCampos, { | x | AllTrim(x) == Alltrim(cCampo) } ) > 0
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCalcIdade
+Calcula a idade conforme data de nascimento, passado por parametro
+
+@return nIdade
+@param dDtNasc Date indica a data de nascimento do funcionário.
+@sample fCalcIdade( "20/12/1990" )
+@author Guilherme Benkendrf
+
+@since 20/08/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fCalcIdade( dDtNasc )
+
+	Local nAnoAtu :=  Year(DATE())
+	Local nAnoNas :=  Year(dDtNasc)
+	Local nDifMes :=  Month(dDtNasc) - Month(DATE())
+
+	Default dDtNasc := SRA->RA_NASC
+
+	If nDifMes > 6
+		nIdade := (nAnoAtu - nAnoNas) - 1
+	ELSE
+		nIdade := (nAnoAtu - nAnoNas)
+	EndIf
+
+Return nIdade
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValExeRot
+Valida execução da rotina MDTA190
+
+@return lIncons Boolean Indica se há inconsistencia na execução.
+@param lCallPS  Boolean Indica se foi feito a chamada pelo MDTA190PS
+@sample fValExeRot(.T.)
+@author Guilherme Benkendrf
+
+@since 01/09/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fValExeRot(lCallPS)
+
+	Local lIncons := .F.
+
+	//Verifica se usuario de acesso tem permissão para a execução.
+	If FindFunction("MDTRESTRI") .And. !MDTRESTRI(cPrograma)
+		lIncons := .T.
+	EndIf
+
+	If !lIncons .And. lSigaMDTPS .And. !lCallPS
+		ShowHelpDlg( 	"NOCALLPS" , ;
+						{ "Função incorreta." } , 1 , ; //"Função incorreta."
+						{ "Faz se necessário a alteração do Menu. A rotina 'Gerar Programação' deverá chamar o programa MDTA190PS." + "Favor contate administrador de sistemas" } , 3 ) //"Para correto funcionamento faz se necessário a alteração do Menu. A rotina 'Gerar Programação' deverá chamar o programa MDTA190PS."###"Favor contate administrador de sistemas"
+		lIncons := .T.
+	EndIf
+
+Return lIncons
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190SRE
+Verifica se ocorreu transferência dentro do período de exposição
+ao risco, assim adicionando a data da transferência como a
+data de início de exposição ao risco.
+
+@type function
+
+@source MDTA190.prx
+
+@author Guilherme Freudenburg
+@since 01/02/2017
+
+@param cMat		, Caracter, Matrícula do funcionário.
+@param dDataIni	, Date	  , Data início da programação de exames.
+@param dDataFim	, Date    , Data fim da programação de exames.
+@param dDataAdm	, Date    , Data de admissão do funcionário.
+@param nIndiceGe, Number  , Tipo da Geração.
+						        1 - Por função
+						        6 - Exame Por Risco
+
+@sample MDT190SRE( '00001' , 01/01/2014 , 01/12/2017 , 01/01/2000 , 1 )
+
+@return dData , Date , Data de início de exposição ao risco.
+/*/
+//---------------------------------------------------------------------
+Function MDT190SRE( cMat , dDataIni , dDataFim , dDataAdm , nIndiceGe )
+
+	Local dData 	:= dDataAdm 	   //Data de Admissão do Funcionário.
+	Local TRBTRANS 	:= GetNextAlias()  //Alias atual.
+	Local cTodos 	:= "*" 			   //Todos.
+	Local cFil1 	:= "" //Filial.
+	Local cFunSRA 	:= "" //Função do Funcionário.
+	Local cFuncao 	:= "" //Função.
+	Local cCFunc  	:= "" //Centro de Custo.
+	Local cDepto 	:= "" //Departamento.
+	Local cDepto2   := ""
+	Local nData		:= 0
+	Local lDepto    := NGCADICBASE( "TN0_DEPTO", "A" , "TN0" , .F. )
+	Local cSQLDepto := "%(" + ValToSQL(cDepto) + " = " + ValToSQL(cDepto2) + ")%"
+
+	If nIndiceGe == 1 //Por função
+
+		cFil1 	:= TON->TON_FILIAL //Filial da Função.
+		cFuncao := TON->TON_CODFUN //Código da Função.
+
+		BeginSql ALIAS TRBTRANS
+			SELECT SR7.R7_DATA
+			FROM %TABLE:SR7% SR7
+			WHERE R7_FILIAL = %exp:cFil1%
+			AND R7_MAT = %exp:cMat%
+			AND R7_FUNCAO = %exp:cFuncao%
+		EndSQL
+
+	ElseIf nIndiceGe == 6 //Exame Por Risco
+
+		cFil1 := TN0->TN0_FILIAL //Filial do Risco.
+		cFunSRA := SRA->RA_CODFUNC //Código da Função do Funcionário.
+		cFunTN0 := TN0->TN0_CODFUN //Código da Função do Risco.
+		cCFunc  := TN0->TN0_CC 	   //Centro de Custo do Risco.
+		If lDepto //Departamento do Risco.
+			cDepto 	:= TN0->TN0_DEPTO
+			cDepto2 := Alltrim(TN0->TN0_DEPTO)
+			cSQLDepto := '%( RE_DEPTOP = ' + ValToSQL(cDepto) + ' OR ' + ValToSQL( cDepto2 ) + ' = ' +  ValToSQL(cTodos)  + ' )%'
+		EndIf
+		BeginSql ALIAS TRBTRANS
+			SELECT SRE.RE_DATA
+			FROM %TABLE:SRE% SRE
+			WHERE RE_FILIALP = %exp:cFil1%
+			AND RE_MATP = %exp:cMat%
+			AND (%exp:cFunSRA% = %exp:cFunTN0%
+				OR %exp:Alltrim(cFunTN0)% = %exp:cTodos%)
+			AND (RE_CCP = %exp:cCFunc%
+				OR %exp:Alltrim(cCFunc)% = %exp:cTodos%)
+			AND %exp:cSQLDepto%
+			AND %exp:DTOS(dDataIni)% <= RE_DATA
+			AND %exp:DTOS(dDataFim)% >= RE_DATA
+			AND %exp:DTOS(dData)% < RE_DATA
+			AND NOT ( RE_MATP = %exp:cMat%
+			AND %exp:cSQLDepto%
+					AND (RE_CCD = %exp:cCFunc%
+							OR %exp:Alltrim(cCFunc)% = %exp:cTodos%)  )
+		EndSQL
+
+	EndIf
+
+	DbSelectArea(TRBTRANS)
+	(TRBTRANS)->(DbGoTop())
+
+	If (TRBTRANS)->(Eof()) //Caso não encontrou nenhum registro.
+		(TRBTRANS)->(DbCloseArea())
+	Else
+		While !Eof()
+			If nIndiceGe == 1 //Por função
+				If !Empty((TRBTRANS)->(R7_DATA)) .And. dData < STOD( (TRBTRANS)->(R7_DATA))
+					If STOD( (TRBTRANS)->(R7_DATA)) <= dData .Or. nData == 0 //Busca a menor data de alteração salárial.
+						dData := STOD( (TRBTRANS)->(R7_DATA))
+						nData += 1
+					EndIf
+				EndIf
+			Else
+				If !Empty((TRBTRANS)->(RE_DATA)) .And. dData < STOD( (TRBTRANS)->(RE_DATA))
+					dData := STOD( (TRBTRANS)->(RE_DATA))
+				EndIf
+			EndIf
+			(TRBTRANS)->(dbSkip())
+		End
+		(TRBTRANS)->(DbCloseArea())
+	Endif
+
+Return dData
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT190Des
+Função responsavel por realizar a atualização da Marcação do MarkBrowser.
+
+@type function
+
+@source MDTA190.prx
+
+@author Guilherme Freudenburg
+@since 12/05/2017
+
+@param oMark	, Objeto, Objeto do MarkBrowser.
+@param oCheckFun, Objeto, Objeto do CheckBox.
+
+@sample MDT190Des( oMark , oCheckFun )
+
+@return Lógico, Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Static Function MDT190Des( oMark , oCheckFun )
+
+	//---------------------------|
+	//| Atualiza MarkBrowser     |
+	//---------------------------|
+	oMark:oBrowse:Refresh()
+
+	//---------------------------|
+	//| Atualiza CheckBox        |
+	//---------------------------|
+	lAllMark := .F.
+	oCheckFun:CtrlRefresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/
+{Protheus.doc} MDTA190WHN()
+Função para não apresentar erro na variável LREPROG
+
+@type  Function
+@author Bruno Lobo de Souza
+@since 16/09/2020
+
+
+@return lWhen, se for chamado pelo MDTA120 recebe .F.
+/*/
+//---------------------------------------------------------------------
+Function MDTA190WHN()
+
+	Local lWhen := .T.
+
+	If Type("lReprog") == "L"
+		lWhen := lReprog
+	Else
+		lWhen := .F.
+	EndIf
+
+Return lWhen

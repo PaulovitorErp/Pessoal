@@ -1,0 +1,1300 @@
+#Include "mdta110.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA110
+Programa de Ocorrencias da fichas medicas
+
+@author  Inacio Luiz Kolling
+@since   17/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MDTA110
+
+	Local aNGBEGINPRM	:= NGBEGINPRM()
+
+	// Dimensionamento das telas Doenças Prog. Saude, Restrições
+	Local nLargura      := 700 // Usado para posicionar os objetos da tela
+	Local nAltura       := 315 // Usado para posicionar os objetos da tela
+
+	Private aSize	    :=	MsAdvSize(,.F.,430) //Usando para o posicionamento dos dialogos.
+	Private aObjects    := {{ 10, 10, .T., .T. }}, aInfo := {aSize[1],aSize[2],nLargura,nAltura, 3, 3}
+	Private aPosObj     :=	MsObjSize( aInfo, aObjects,.T.) //Usado para posicionar a EnChoice
+	Private lAtesAnt    := NGCADICBASE("TNY_ATEANT","A","TNY",.F.)
+	Private aPerAtual   := {}
+	Private lPriCont    := .F.
+	Private lSigaMdtPS	:=	SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+		MDTA110P(cPROGRAMA) //PARA PERMITIR CHAMADA DE OUTROS PROGRAMAS
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM) // Retorna conteudo de variaveis padroes
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA110P
+Função chamada por outras rotinas para mostrar as ocorrências da
+ficha medica
+
+@sample MDTA110P('MDTA160')
+@param  vCPROG, Caracter, Nome da rotina de qual a funcao esta sendo chamada
+
+@return lRet, Lógico, Se a chamada da função é válida
+/*/
+//---------------------------------------------------------------------
+Function MDTA110P(vCPROG)
+
+	// Caso seja executado de pograma diferente, salva oDlg caso exista
+	Local oBkpDlg := If( vCPROG <> "MDTA110" .And. Type( "oDlg" ) == "O" , oDlg , Nil )
+	Local lRet := .T.
+
+	Private aAC := { STR0001,STR0002 },; //"Abandona"###"Confirma"
+			aCRA:= { STR0002,STR0003,STR0001 } //"Confirma"###"Redigita"###"Abandona"
+
+	//---------------------------------------------------------
+	// Define Array contendo as Rotinas a executar do programa
+	// ----------- Elementos contidos por dimensao ------------
+	// 1. Nome a aparecer no cabecalho
+	// 2. Nome da Rotina associada
+	// 3. Usado pela rotina
+	// 4. Tipo de Transa‡„o a ser efetuada
+	//    1 - Pesquisa e Posiciona em um Banco de Dados
+	//    2 - Simplesmente Mostra os Campos
+	//    3 - Inclui registros no Bancos de Dados
+	//    4 - Altera o registro corrente
+	//    5 - Remove o registro corrente do Banco de Dados
+	//-------------------------------------------------------
+	Private aRotina := MenuDef(vCPROG)
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cCadastro := STR0010 //"Ocorrencias Fichas Medicas"
+	Private cAlias    := "TMN"
+	Private cNUMFIC   := space(09)
+	Private cNomeFic  := Space(20)
+	// Variaveis para Inclusão de Diagnóstico
+	Private TMTNUMFIC := .F.         // DESABILITA CAMPO TMT_NUMFIC DO TMT
+	Private TMTDTCONS := .T.         // HABILITA CAMPO TMT_DTCONS DO TMT
+	Private TMTHRCONS := .T.         // HABILITA CAMPO TMT_HRCONS DO TMT
+	Private TMTCODUSU := .T.         // HABILITA CAMPO TMT_CODUSU DO TMT
+
+	// Variaveis para bkp de Empresa e Filial
+	Private cOldEmp := cEmpAnt
+	Private cOldFil := cFilAnt
+
+	cCadastro := OemtoAnsi(cCadastro)
+
+	If FindFunction("MDTRESTRI") .And. !MDTRESTRI("MDTA110")
+		lRet := .F.
+	EndIf
+
+	If vCPROG  == 'MDTA155' .And. Empty(M->TMT_NUMFIC)
+		lRet := .F.
+		ShowHelpDLG( STR0035 , ;//"ATENÇÃO"
+				{ STR0044 } , 1 , ;//"Não é possível incluir uma ocorrência da ficha para um funcionário que não possui ficha médica."
+				{ STR0045 } , 2 )//"Incluir uma ficha médica para o funcionário."
+	EndIf
+
+	If lRet
+
+		#IFNDEF WINDOWS
+				// Recupera o desenho padrao de atualizacoes
+				ScreenDraw("SMT050", 3, 0, 0, 0)
+
+				// Display de dados especificos deste Programa
+				SetColor("b/w,,,")
+				@ 3, 1 Say cCadastro
+		#ENDIF
+
+		// aCHKDEL array que verifica a INTEGRIDADE REFERENCIAL na exclu-
+		// são do registro.
+		//
+		// 1 - Chave de pesquisa
+		// 2 - Alias de pesquisa
+		// 3 - Ordem de pesquisa
+
+		aCHKDEL := { }
+
+		DbSelectArea("TM0")
+		If vCPROG == 'MDTA160' .Or. vCPROG  == 'MDTA155'
+		SET FILTER TO TM0_FILIAL == xFilial('TM0') .And. ;
+						TM0_NUMFIC == M->TMT_NUMFIC
+		EndIf
+
+		// Endereca a funcao de BROWSE
+		mBrowse( 6, 1,22,75,"TM0",,,,,,fCorFunc() )
+
+		IF vCPROG == 'MDTA160' .Or. vCPROG  == 'MDTA155'
+		DbSeek("TM0")
+		Set Filter To
+		EndIf
+
+		If ValType( oBkpDlg ) <> "U"
+			oDlg := oBkpDlg
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fCorFunc
+
+Funcao p/ definir cores p/ as situacoes dos funcionarios.
+
+@author  Taina Aberto Cardoso
+@since   14/04/2010
+
+@return  aCores, Array, Vetor contendo a definicao das cores
+/*/
+//-------------------------------------------------------------------
+Function fCorFunc ()
+
+	Local aCores := { ;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) $ '30/31'"	, 'BR_PINK' 	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == ' '"    	, 'BR_VERDE'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'D'"    	, 'BR_VERMELHO'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'A'"    	, 'BR_AMARELO'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'F'"    	, 'BR_AZUL'		},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'I'"    	, 'BR_LARANJA'	};
+	}
+
+Return aCores
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} INPRG110
+
+Inclusao de ocorrencias da ficha
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@param   cAlias, Caracter, Alias que sera passado como parametro para a
+                           funcao CPRGGRAVA
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Numerico, Operacao sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function INPRG110(cAlias,nReg,nOpcx)
+
+	Local LVar01:=1,nLinhas:=0,cSaveMenuh, bCampo
+	Local GetList:={}, nOpcao:=3
+	Local lGravaOK := .T.
+	Local oGet, i
+	Local oEncPrEsp
+	Local oDlgIncPrg
+	// Salva a integridade dos dados
+	#IFNDEF WINDOWS
+	Local cSavCur5 := SetCursor( 0 ), cSavScr5 := SaveScreen(3,0,24,79),;
+			cSavRow5 := Row(), cSavCol5 := Col(), cSavCor5 := SetColor()
+	#ENDIF
+
+	Private aTELA[0, 0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private nUsado :=0
+
+	//Compatibilidade com MDTA120-------------------------
+	Private aSize := MsAdvSize(,.F.,430), aObjects := {}
+	Aadd(aObjects,{050,050,.T.,.T.})
+	Aadd(aObjects,{100,100,.T.,.T.})
+	aInfo   := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.T.)
+	//----------------------------------------------------
+
+	dbSelectArea("TMN")
+
+	bCampo    := { |nCPO| Field(nCPO) }
+
+	FOR i := 1 TO FCount()
+		M->&(EVAL(bCampo,i)) := FieldGet(i)
+
+		If Inclui
+			IF ValType(M->&(EVAL(bCampo,i))) == "C"
+						M->&(EVAL(bCampo,i)) := SPACE(LEN(M->&(EVAL(bCampo,i))))
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "N"
+				M->&(EVAL(bCampo,i)) := 0
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "D"
+					M->&(EVAL(bCampo,i)) := cTod("  /  /  ")
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "L"
+				M->&(EVAL(bCampo,i)) := .F.
+			ENDIF
+		Else
+			M->&(EVAL(bCampo,i)) := TMN->&(EVAL(bCampo,i))
+		EndIf
+	Next i
+
+
+	M->TMN_NUMFIC  := cNUMFIC
+	M->TMN_DTINIC  := dDataBase
+	If lSigaMdtps
+		M->TMN_CLIENT := SA1->A1_COD
+		M->TMN_LOJA   := SA1->A1_LOJA
+	EndIf
+	lRefresh := .T.
+
+	#IFNDEF WINDOWS
+
+			//Verifica de ha' um MOUSE instalado o sistema.
+			//Adiciona as  HOT AREAS do mouse, Funcoes especificas em MOUSE.LIB
+			//Os valores serao multiplicados por 8 por proporcao de modo grafico
+
+			Private cSavScrVT,cSavScrVP,cSavScrHT,cSavScrHP,CurLen,nPosAtu:=0,nPosAnt:=9999,nColAnt:=9999
+
+			Do While .T.
+
+				// Desenha tela de atualizacoes
+				SetCursor(1)
+				ScreenDraw("SMN330",6,2,-1,1)
+
+				SetColor("W,N/bg,,,")
+				@06,25 SAY cCadastro
+
+				dbSelectArea( "TMN" )
+
+					oEncPrEsp				:= MsMGet():New("TMN",nReg,nOpcx,,,,,aPosObj[1],,,,,,,,,.F.,,,,,,,.T.)
+					oEncPrEsp:oBox:Align	:= CONTROL_ALIGN_ALLCLIENT
+
+				cSaveMenuh := SaveScreen(24,00,24,79)
+				nOpcA:=menuh(aCRA,24,10,"b/bg,w+/n,r/bg","CRA",STR0016,1) //"Quanto … Gravacao?"
+				RestScreen(24,00,24,79,cSaveMenuh)
+
+				if lastkey() = 27
+					return
+				endif
+
+				If nOpcA == Redigita
+					Loop
+				ElseIf nOpcA == Confirma
+						//Begin Transaction
+						lGravaOk := CPRGGRAVA(cAlias,nOpcao)
+						If !lGravaOk
+							Help(" ",1,"A110NAOREG")
+						Else
+						// Processa Gatilhos
+							EvalTrigger()
+							If __lSX8
+								ConfirmSX8()
+							Endif
+							MDTA110REP(nOpcA)
+						EndIf
+						//End Transaction
+						If !lGravaOk
+							Loop
+						EndIf
+				ElseIF __lSX8
+						RollBackSX8()
+				Endif
+				Exit
+			End
+
+	#ELSE
+
+		Continua := .F.
+		dbSelectArea( "TMN" )
+
+		nOpca := 0
+
+		DEFINE MSDIALOG oDlgIncPrg TITLE OemToAnsi(cCadastro)  From aSize[7],0 To aSize[6],aSize[5] PIXEL OF oMainWnd
+
+		oEncPrEsp				:=	MsMGet():New("TMN",nReg,nOpcx,,,,,aPosObj[1],,,,,,,,,.F.,,,,,,,.T.)
+		oEncPrEsp:oBox:Align	:=	CONTROL_ALIGN_ALLCLIENT
+
+		ACTIVATE MSDIALOG oDlgIncPrg ON INIT EnchoiceBar(oDlgIncPrg,{||nOpca:=1,If(!CHCKGRAPG(),nOpca := 0,oDlgIncPrg:End())},{||oDlgIncPrg:End()})
+
+		If nOpcA == 1
+			//Begin Transaction
+			lGravaOk := CPRGGRAVA(cAlias,nOpcao)
+			If !lGravaOk
+				Help(" ",1,"A110NAOREG")
+			Else
+			//Processa Gatilhos
+				EvalTrigger()
+				If __lSX8
+					ConfirmSX8()
+				Endif
+				MDTA110REP(nOpcA)
+			EndIf
+			//End Transaction
+		ElseIf __lSX8
+			RollBackSX8()
+		Endif
+	#ENDIF
+
+	dbSelectArea(cAlias)
+	#IFNDEF WINDOWS
+		// Restaura a integridade da janela
+		SetCursor(cSavCur5)
+		DevPos(cSavRow5,cSavCol5)
+		SetColor(cSavCor5)
+		RestScreen(3,0,24,79,cSavScr5)
+	#ENDIF
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHCKGRAPG
+
+Consistencia antes de gravar programa de saude
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function  CHCKGRAPG()
+
+	Local nIND := IndexOrd()
+
+	If !obrigatorio(aGets,aTela)
+		Return .F.
+	Endif
+	DbSelectArea( "TMN" )
+	DbSetOrder(1)
+	If !ExistChav("TMN",M->TMN_CODPRO+M->TMN_NUMFIC+DTOS(M->TMN_DTINIC))
+		Return .F.
+	EndIf
+	DbSetOrder(nIND)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CPRGGRAVA
+Grava o registro
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@sample  CPRGGRAVA("TMN", 1)
+
+@param   cAlias, Caracter, Alias para a inclusao
+@param   nOpcao, Numerico, Operacao que esta sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function CPRGGRAVA(cAlias,nOpcao)
+
+	Local ny
+	// Grava no arquivo de Ocorrencias   - TMN
+
+	DbSelectArea( "TMN" )
+	RecLock("TMN",.T.)
+	For ny := 1 To TMN->(FCOUNT())
+		nx := "m->" + FieldName(ny)
+		FieldPut(ny, &nx.)
+	Next ny
+	TMN->TMN_FILIAL := xFilial("TMN")
+	MSUNLOCK("TMN")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VIPRG110
+
+Visualiza Ocorrencias da ficha (Chama a NGCAD01)
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@sample  VIPRG110("TMN", nReg, 2)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function VIPRG110(cAlias,nReg,nOpcx)
+
+	nRet :=  NGCAD01("TMN", nReg, 2)
+	//PreRet(NIL,"TMN",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ALPRG110
+Alteracao de ocorrencias da ficha
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  ALPRG110("TMN", nReg, 4)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function ALPRG110(cAlias,nReg,nOpcx)
+
+	Local dDtIni := TMN->TMN_DTINIC
+	Local dDtFim := TMN->TMN_DTTERM
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TMN->TMN_USERGI",.F.))
+		Return .F.
+	Endif
+
+	nRet :=  NGCAD01("TMN", nReg, 4)
+
+	If (TMN->TMN_DTINIC <> dDtIni .Or. TMN->TMN_DTTERM <> dDtFim) .And. nRet == 1
+		MDTA110REP(nRet)
+	Endif
+	//PreRet(NIL,"TMN",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EXPRG110
+Exclusao de ocorrencias da ficha
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  EXPRG110("TMN", nReg, 5)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico Recno do registro
+@param   nOpcx, Numerico, Operacao sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function EXPRG110(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TMN->TMN_USERGI",.F.))
+		Return .F.
+	EndIf
+	If nOpcx == 5 .And. FindFunction("MDTEXCSBI") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTEXCSBI(MDTDATALO("TMN->TMN_USERGI"))
+		Return .F.
+	EndIf
+
+	nRet :=  NGCAD01("TMN", nReg, 5)
+	If nRet == 1
+		MDTA110REP(nRet)
+	EndIf
+
+Return .T.
+
+// INICIO DO CADASTRO DE RESTRICOES DA FICHA
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} INRES110
+Inclusao de Restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@sample  INRES110("TMF", 1, 3)
+
+@param   cAlias, Caracter, Alias para a inclusao
+@param   nReg, Numerico Recno do registro
+@param   nOpcx, Numerico, Operacao sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function INRES110(cAlias,nReg,nOpcx)
+
+	Local LVar01:=1,nLinhas:=0,cSaveMenuh, bCampo
+	Local GetList:={}, nOpcao:=3
+	Local lGravaOK := .T.
+	Local oGet, i
+	Local oEncRestFun
+	Local oDlgIncRes
+
+	// Salva a integridade dos dados
+	#IFNDEF WINDOWS
+	Local cSavCur5 := SetCursor( 0 ), cSavScr5 := SaveScreen(3,0,24,79),;
+			cSavRow5 := Row(), cSavCol5 := Col(), cSavCor5 := SetColor()
+	#ENDIF
+
+	//Dimensionamento das telas Doenças Prog. Saude, Restrições
+	Local nLargura := 700 //usado para posicionar os objetos da tela
+	Local nAltura  := 315 //usado para posicionar os objetos da tela
+
+	Private aSize		:=	MsAdvSize(,.F.,430) //Usando para o posicionamento dos dialogos.
+	Private aObjects   := {{ 10, 10, .T., .T. }}, aInfo := {aSize[1],aSize[2],nLargura,nAltura, 3, 3}
+	Private aPosObj	:=	MsObjSize( aInfo, aObjects,.T.) //Usado para posicionar a EnChoice
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private nUsado :=0
+
+	DbSelectArea("TMF")
+
+	bCampo := { |nCPO| Field(nCPO) }
+
+	FOR i := 1 TO FCount()
+		M->&(EVAL(bCampo,i)) := FieldGet(i)
+
+		If Inclui
+		IF ValType(M->&(EVAL(bCampo,i))) == "C"
+					M->&(EVAL(bCampo,i)) := SPACE(LEN(M->&(EVAL(bCampo,i))))
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "N"
+					M->&(EVAL(bCampo,i)) := 0
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "D"
+					M->&(EVAL(bCampo,i)) := cTod("  /  /  ")
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "L"
+					M->&(EVAL(bCampo,i)) := .F.
+			ENDIF
+		Else
+			M->&(EVAL(bCampo,i)) := TMF->&(EVAL(bCampo,i))
+		Endif
+	Next i
+
+	M->TMF_NUMFIC  := cNUMFIC
+	M->TMF_DTINIC  := dDataBase
+	lRefresh := .T.
+
+	Continua := .F.
+	DbSelectArea( "TMF" )
+
+	_OK := .T.
+	nOpca := 0
+
+	DEFINE MSDIALOG oDlgIncRes TITLE OemToAnsi(cCadastro)  From aSize[7],0 To aSize[6],aSize[5] PIXEL OF oMainWnd
+
+		oEncRestFun				:=	MsMGet():New("TMF",nReg,nOpcx,,,,,aPosObj[1],,,,,,,,,.F.,,,,,,,.T.)
+		oEncRestFun:oBox:Align	:=	CONTROL_ALIGN_ALLCLIENT
+
+	ACTIVATE MSDIALOG oDlgIncRes ON INIT EnchoiceBar(oDlgIncRes,{||nOpca:=1,If(!CHCKGRARE(),nOpca := 0,oDlgIncRes:End())},{||oDlgIncRes:End()})
+
+	If nOpcA == 1
+		lGravaOk := CRESGRAVA(cAlias,nOpcao)
+		If !lGravaOk
+			Help(" ",1,"A110NAOREG")
+		Else
+			EvalTrigger()
+			If __lSX8
+				ConfirmSX8()
+			Endif
+		EndIf
+	ElseIf __lSX8
+		RollBackSX8()
+	Endif
+
+	DbSelectArea(cAlias)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHCKGRARE
+Consistencia antes de gravar restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@return  .T., Logica
+/*/
+//-------------------------------------------------------------------
+Function CHCKGRARE()
+
+	Local aArea := GetArea()
+	If !obrigatorio( aGets, aTela )
+		RestArea( aArea )
+		Return .F.
+	Else
+		DbSelectArea( "TMF" )
+		DbSetOrder( 1 )
+		If !ExistChav( "TMF", M->TMF_NUMFIC+M->TMF_RESTRI+DTOS( M->TMF_DTINIC ) )
+			RestArea( aArea )
+			Return .F.
+		EndIf
+	EndIf
+	RestArea(aArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CRESGRAVA
+Grava o registro Restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  CRESGRAVA("TMF", )
+
+@param   cAlias, Caracter, Alias para a inclusao
+@param   nOpcao, Undefined, Compatibilidade
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function CRESGRAVA(cAlias,nOpcao)
+
+	Local ny
+	// Grava no arquivo de Ocorrencias   - TMF
+	DbSelectArea( "TMF" )
+	RecLock("TMF",.T.)
+
+	For ny := 1 To TMF->(FCOUNT())
+		nx := "m->" + FieldName(ny)
+		FieldPut(ny, &nx.)
+	Next ny
+
+	TMF->TMF_FILIAL := xFilial("TMF")
+	MSUNLOCK("TMF")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VIRES110
+Visualiza Restricoes
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  VIRES110(,nReg,)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, param_type, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  .T., Logica
+/*/
+//-------------------------------------------------------------------
+Function VIRES110(cAlias,nReg,nOpcx)
+
+	nRet :=  NGCAD01("TMF", nReg, 2)
+	//PreRet(NIL,"TMF",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ALRES110
+Altera Restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  ALRES110(,nReg,)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function ALRES110(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TMF->TMF_USERGI",.F.))
+		Return .F.
+	EndIf
+	nRet :=  NGCAD01("TMF", nReg, 4)
+	//PreRet(NIL,"TMF",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EXRES110
+Exclusao de Restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  EXRES110("TMF", nReg, 5)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico Recno do registro
+@param   nOpcx, Numerico, Operacao sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function EXRES110(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TMF->TMF_USERGI",.F.))
+		Return .F.
+	Endif
+	If nOpcx == 5 .And. FindFunction("MDTEXCSBI") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTEXCSBI(MDTDATALO("TMF->TMF_USERGI"))
+		Return .F.
+	Endif
+
+	nRet :=  NGCAD01("TMF", nReg, 5)
+	//PreRet(NIL,"TMF",nIndexP+1)
+
+Return .T.
+
+// INICIO DO CADASTRO DE DOENCAS DA FICHA
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} INDOE110
+
+Inclusao de Restricao
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@sample  sample
+
+@param   cAlias, Caracter, Alias para a inclusao
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Numerico, Operacao sendo executada
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function INDOE110(cAlias,nReg,nOpcx)
+
+	Local LVar01:=1,nLinhas:=0,cSaveMenuh, bCampo
+	Local GetList:={}, nOpcao:=3
+	Local lGravaOK := .T.
+	Local  oGet, i
+	Local oEncDoenca
+	Local oDlgIncDoe
+
+	// Salva a integridade dos dados
+	#IFNDEF WINDOWS
+	Local cSavCur5 := SetCursor( 0 ), cSavScr5 := SaveScreen(3,0,24,79),;
+			cSavRow5 := Row(), cSavCol5 := Col(), cSavCor5 := SetColor()
+	#ENDIF
+
+	//Dimensionamento das telas Doenças Prog. Saude, Restrições
+	Local nLargura := 700 //usado para posicionar os objetos da tela
+	Local nAltura  := 315 //usado para posicionar os objetos da tela
+
+	Private aSize		:=	MsAdvSize(,.F.,430) //Usando para o posicionamento dos dialogos.
+	Private aObjects   := {{ 10, 10, .T., .T. }}, aInfo := {aSize[1],aSize[2],nLargura,nAltura, 3, 3}
+	Private aPosObj	:=	MsObjSize( aInfo, aObjects,.T.) //Usado para posicionar a EnChoice
+
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private nUsado :=0
+
+	DbSelectArea("TNA")
+
+	bCampo := { |nCPO| Field(nCPO) }
+
+	FOR i := 1 TO FCount()
+		M->&(EVAL(bCampo,i)) := FieldGet(i)
+
+		If Inclui
+		IF ValType(M->&(EVAL(bCampo,i))) == "C"
+					M->&(EVAL(bCampo,i)) := SPACE(LEN(M->&(EVAL(bCampo,i))))
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "N"
+					M->&(EVAL(bCampo,i)) := 0
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "D"
+					M->&(EVAL(bCampo,i)) := cTod("  /  /  ")
+
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "L"
+					M->&(EVAL(bCampo,i)) := .F.
+			ENDIF
+		Else
+			M->&(EVAL(bCampo,i)) := TNA->&(EVAL(bCampo,i))
+		Endif
+	Next i
+
+	M->TNA_NUMFIC  := cNUMFIC
+	M->TNA_DTINIC  := dDataBase
+	lRefresh := .T.
+
+	Continua := .F.
+	DbSelectArea( "TNA" )
+
+	_OK := .T.
+	nOpca := 0
+
+	DEFINE MSDIALOG oDlgIncDoe TITLE OemToAnsi(cCadastro) From aSize[7],0 To aSize[6],aSize[5] PIXEL OF oMainWnd
+
+	oEncDoenca				:= MsMGet():New("TNA",nReg,nOpcx,,,,,aPosObj[1],,,,,,,,,.F.,,,,,,,.T.)
+	oEncDoenca:oBox:Align	:= CONTROL_ALIGN_ALLCLIENT
+
+	ACTIVATE MSDIALOG oDlgIncDoe ON INIT EnchoiceBar(oDlgIncDoe,{||nOpca:=1,If(!CHCKGRADO(),nOpca := 0,oDlgIncDoe:End())},{||oDlgIncDoe:End()})
+
+	If nOpcA == 1
+		//Begin Transaction
+		lGravaOk := CDOEGRAVA(cAlias,nOpcao)
+		If !lGravaOk
+			Help(" ",1,"A110NAOREG")
+		Else
+			//Processa Gatilhos
+			EvalTrigger()
+			If __lSX8
+				ConfirmSX8()
+			Endif
+		EndIf
+		//End Transaction
+	ElseIf __lSX8
+		RollBackSX8()
+	Endif
+
+	DbSelectArea(cAlias)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHCKGRADO
+Verifica integridade do registro antes de gravar doencas
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function  CHCKGRADO()
+
+	Local nIND := IndexOrd()
+	If !obrigatorio(aGets,aTela)
+		Return .F.
+	Else
+		DbSelectArea( "TNA" )
+		DbSetOrder(1)
+		If !ExistChav("TNA",M->TNA_NUMFIC+M->TNA_CID+DTOS(M->TNA_DTINIC))
+			Return .F.
+		Endif
+	EndIf
+	dbSetOrder(nIND)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CDOEGRAVA
+Grava o registro da Doenca
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  CDOEGRAVA("TNA",nOpcao)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nOpcao, Undefinede, Compatibilidade
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function CDOEGRAVA(cAlias,nOpcao)
+
+	Local ny
+	// Grava no arquivo de Ocorrencias   - TNA
+	DbSelectArea( "TNA" )
+	RecLock("TNA",.T.)
+	For ny := 1 To TNA->(FCOUNT())
+		nx := "m->" + FieldName(ny)
+		FieldPut(ny, &nx.)
+	Next ny
+	TNA->TNA_FILIAL := xFilial("TNA")
+	MSUNLOCK("TNA")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VIDOE110
+Visualiza Doencas
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  VIDOE110(,nReg,)
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function VIDOE110(cAlias,nReg,nOpcx)
+
+	nRet :=  NGCAD01("TNA", nReg, 2)
+	//PreRet(NIL,"TNA",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ALDOE110
+Altera Doenca
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  sample
+
+@param   cAlias, Undefined, Compatibilidade
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Undefined, Compatibilidade
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function ALDOE110(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TNA->TNA_USERGI",.F.))
+		Return .F.
+	EndIf
+	nRet :=  NGCAD01("TNA", nReg, 4)
+	//PreRet(NIL,"TNA",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EXDOE110
+Exclusao de Doenca
+
+@author  Inacio Luiz Kolling
+@since   19/01/2000
+@sample  EXDOE110("TNA", nReg, 5)
+
+@param   cAlias, Caracter, Alias para a exclusao
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Numerico, Operacao sendo realizada
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function EXDOE110(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTUS") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTRESTUS(MDTDATALO("TNA->TNA_USERGI",.F.))
+		Return .F.
+	EndIf
+	If nOpcx == 5 .And. FindFunction("MDTEXCSBI") .And. NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. !MDTEXCSBI(MDTDATALO("TNA->TNA_USERGI"))
+		Return .F.
+	EndIf
+	//nRet :=  NGCAD01("TNA", nReg, 5)
+	nRet :=  NGCAD01(cAlias,nReg,nOpcx)
+	//PreRet(NIL,"TNA",nIndexP+1)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT110ASO
+Inclui, alterar e exclui os ASOs do funcionario
+
+@author  Denis Hyroshi de Souza
+@since   11/11/2004
+@sample  MDT110ASO
+
+@param   cAlias, Caracter, Alias para a operacao sendo realizada
+@param   nReg, Numerico, Recno do registro
+@param   nOpcx, Numerico, Operacao sendo realizada
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function MDT110ASO(cAlias,nReg,nOpcx)
+
+	If FindFunction("MDTRESTRI") .And. !MDTRESTRI("MDTR465")
+		Return .F.
+	Endif
+	NG200IMP(cAlias,nReg,nOpcx)
+	dbSelectArea("TMY")
+	Set Filter to TMY->TMY_FILIAL == xFilial("TMY") .And. TMY->TMY_NUMFIC == sNUMFIC
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional
+
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@sample  MenuDef('MDTA110')
+
+@param   vCPROG, Caracter, Nome da rotina de qual a funcao esta sendo chamada
+
+@return  aRotina, Array, Array com opcoes da rotina
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef(vCPROG)
+
+	Local cTXT001 := Substr(STR0021,1,1)+"&"+Substr(STR0021,2) //"Atestados"###"Atestados"
+	Local cTX0006 := Substr(STR0006,1,3)+"&"+Substr(STR0006,4)
+
+	Local lPyme := Iif(Type("__lPyme") <> "U",__lPyme,.F.)
+
+	Local aRotina := {;
+		{ STR0004,"AxPesqui", 0, 1, Nil, .F. },; // "Pesquisar"
+		{ STR0005,"NGCAD01", 0, 2, Nil, .F. },; // "Visualizar"
+		{ cTX0006,"MDTA110A", 0, 3, Nil, .F. },; // "Prog.Saude"
+		{ STR0007,"MDTA110B", 0, 4, Nil, .F. },; // "Restricoes"
+		{ STR0008,"MDTA110C", 0, 4, Nil, .F. },; // "Doencas"
+		{ STR0009,"MDTA120a", 0, 5, 3, .F. },; // "Exames"
+		{ STR0017,"MDTA110D", 0, 5, 3, .F. },; // "Consultas"
+		{ STR0033,"MDT110VAC", 0, 4, Nil, .F. }; // "Vacinas"
+	}
+
+	Default vCPROG := "MDTA110"
+
+	If !IsInCallStack("MDTA155")
+
+		aAdd( aRotina, { STR0038, "MDTA156", 0, 4, Nil, .F. } ) // "Diagnósticos"
+
+	EndIf
+
+	If vCPROG == 'MDTA110'
+
+		aAdd( aRotina, { STR0020, "mdta200", 0, 2, Nil, .F. } ) // "Aso"
+		aAdd( aRotina, { cTXT001, "MDTA110F", 0, 2, Nil, .F. } ) // Atestado Médico
+
+		If FindFunction("MDTC990")
+
+			aAdd( aRotina, { STR0032, "MDTC990()", 0, 2, Nil, .F. } ) // "Hist. Pregresso"
+
+		EndIf
+
+	EndIf
+
+	If !lPyme
+
+		AAdd( aRotina, { STR0025, "MsDocument", 0, 4, Nil, .F. } )  // "Conhecimento"
+
+	EndIf
+
+	AAdd( aRotina, { STR0026, "GpLegend", 0, 6, 0, .F. } ) // "legenda
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT110REL
+Coloca o nome da ficha medica ao visualizar/excluir ASO
+
+@author  Andre Perez Alvarez
+@since   30/08/2007
+/*/
+//-------------------------------------------------------------------
+Function MDT110REL()
+
+Return IF(cPROGRAMA=="MDTA200" .Or. cPrograma=="MDTA110" .Or. cPROGRAMA=="MDTC990" .Or. ;
+			((cPrograma=="MDTR990" .Or. cPrograma=="MDTA991") .And. FwTabPref() == "TMY") ,;
+			TM0->(VDISP(TMY->TMY_NUMFIC,"TM0_NOMFIC")),;
+			TM0->(VDISP(TMJ->TMJ_NUMFIC,"TM0_NOMFIC")))
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT110REL2
+Coloca o nome do medico  ao visualizar/excluir ASO
+
+@author  Andre Perez Alvarez
+@since   28/04/2008
+/*/
+//-------------------------------------------------------------------
+Function MDT110REL2()
+
+Return IF(cPROGRAMA=="MDTA200" .Or. cPrograma=="MDTA110" .Or. cPrograma=="MDTA410" .Or. (cPrograma=="MDTR990" .And. FwTabPref() == "TMY"),;
+		IF(INCLUI .And. FindFunction("MDTUSRLOG"),MDTUSRLOG(2),NGSEEK("TMK",TMY->TMY_CODUSU,1,"TMK->TMK_NOMUSU")),;
+		NGSEEK("TMK",TMJ->TMJ_CODUSU,1,"TMK->TMK_NOMUSU"))
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA110REP
+Chamada da função para reprogramacao
+
+@author  Jackson Machado
+@since   16/11/11
+@sample  MDTA110REP(1)
+
+@param   nRet, Numerico, Define se havera reprogramacao de exames
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MDTA110REP(nRet)
+
+	Private nRepPar := SuperGetMv("MV_NGMDTRP",.F.,"2")//Parametro que indica se reprograma exames (1 - Não; 2 - Sim; 3 - Exibe pergunta)
+	Private lTemExa := .F.
+	// Variaveis utilizadas na reprogramacao de exames
+	If FindFunction("MDTVARREP")
+		MDTVARREP()
+	Else
+		Return .T.
+	EndIf
+
+	Default nRet := 0
+
+	dbSelectArea("TN8")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TN8")+TMN->TMN_CODPRO)
+		lTemExa := .T.
+	EndIf
+
+	If nRet == 1 .And. (nRepPar == "2" .Or. nRepPar == "3") .And. lTemExa
+		If nRepPar == "3"
+			If !MsgYesNo(STR0027)//"Deseja reprogramar os exames?"
+				lProcessa := .F.
+			Else
+				lProcessa := .T.
+			EndIf
+		Else
+			lProcessa := .T.
+		EndIf
+		If lProcessa
+			Processa({|lEnd| fRepProg()},STR0028,STR0029)//"Reprogramando"###"Reprogramando exames..."
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fRepProg
+Funcao para reprogramação dos exames
+
+@author  Jackson Machado
+@since   21/11/11
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Static Function fRepProg()
+
+	Local nPCMSO
+	Local aPCMSO := {}
+	Local cMat := ""
+
+	aPCMSO := {}
+	dbSelectArea("SRA")
+	dbSetOrder(1)
+	If dbSeek(xFilial("SRA")+TM0->TM0_MAT)
+		cMat := SRA->RA_MAT
+	Else
+		cMat := ""
+	Endif
+
+	If !Empty(cMat)
+		dbSelectArea("TM5")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TM5")+TM0->TM0_NUMFIC)
+			While !Eof() .And. xFilial("TM5")+TM0->TM0_NUMFIC == TM5->(TM5_FILIAL+TM5_NUMFIC)
+			If !Empty(TM5->TM5_PCMSO) .And. Empty(TM5->TM5_DTRESU)
+				If aScan( aPCMSO, { |x| x == TM5->TM5_PCMSO }) == 0
+					aAdd(aPCMSO,TM5->TM5_PCMSO)
+				Endif
+			EndIf
+				dbSelectArea("TM5")
+				dbSkip()
+			End
+		EndIf
+
+		For nPCMSO := 1 To Len(aPCMSO)
+			dbSelectArea("TMW")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TMW")+aPCMSO[nPCMSO])
+				If TMW->TMW_DTFIM > dDataBase
+					nTottar   := 0
+					aAuto := {}
+					aAdd( aAuto , { "TMW_PCMSO"  , aPCMSO[nPCMSO] , Nil } )
+					MsExecAuto( { |a,x,y| MDTA190(a,x,y)}, , aAuto, 4 , dDataBase)
+				EndIf
+			EndIf
+		Next nPCMSO
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT110VAC
+Abre as Vacinas por ficha médica
+
+@author Pedro Henrique Soares de Souza
+@since 10/04/2013
+
+@return .T., Logico
+/*/
+//---------------------------------------------------------------------
+Function MDT110VAC()
+
+	Local cCadOld := cCadastro
+
+	If FindFunction("MDTRESTRI") .And. !MDTRESTRI("MDTA530")
+		Return .F.
+	Endif
+
+	cCadastro := OemtoAnsi(STR0034) //"Vacinas do Funcionário"
+
+	MDTA350A()
+
+	cCadastro := cCadOld
+	Return
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT110DTA
+Valida campos de data inicial e final
+
+@author Guilherme Freudenburg
+@since 17/01/2014
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT110DTA()
+
+	Local lRet := .T.
+
+	If IsIncallStack("MDTA115")
+		If "TMN_DTINIC" $ ReadVar()
+			dDtInic	:= M->TMN_DTINIC
+			nPosFim	:= aScan( aHeader , { | x | AllTrim(Upper(x[2])) == "TMN_DTTERM" } )
+			dDtFim		:= aCols[N,nPosFim]
+		ElseIf "TMN_DTTERM" $ ReadVar()
+			dDtFim		:= M->TMN_DTTERM
+			nPosIni	:= aScan( aHeader , { | x | AllTrim(Upper(x[2])) == "TMN_DTINIC" } )
+			dDtInic	:= aCols[N,nPosIni]
+		EndIf
+	ElseIf IsIncallStack("MDTA110B")
+		dDtInic := M->TMF_DTINIC
+		dDtFim := M->TMF_DTFIM
+	ElseIf IsIncallStack("MDTA110A")
+		dDtInic := M->TMN_DTINIC
+		dDtFim := M->TMN_DTTERM
+	ElseIf IsIncallStack("MDTA410") //Ficha Médica Mod. 2
+		If "TMN_DTINIC" $ ReadVar() .Or. "TMN_DTTERM" $ ReadVar()
+			dDtInic	:= M->TMN_DTINIC
+			dDtFim	:= M->TMN_DTTERM
+		ElseIf "TMF_DTINIC" $ ReadVar() .Or. "TMF_DTFIM" $ ReadVar()
+			dDtInic	:= M->TMF_DTINIC
+			dDtFim	:= M->TMF_DTFIM
+		ElseIf "TNA_DTINIC" $ ReadVar() .Or. "TNA_DTFIM" $ ReadVar()
+			dDtInic	:= M->TNA_DTINIC
+			dDtFim	:= M->TNA_DTFIM
+		EndIf
+	Else
+		dDtInic := M->TNA_DTINIC
+		dDtFim := M->TNA_DTFIM
+	EndIf
+
+	If Empty(dDtInic) .And. !Empty(dDtFim)
+		ShowHelpDlg(STR0035,{STR0041},3,{STR0042},3)//"ATENÇÃO"##"A Data Inicial está em Branco."##"Informe uma Data Inicial."
+		lRet := .F.
+	ElseIf dDtInic > dDtFim .And. !Empty(dDtFim)
+		ShowHelpDlg(STR0035,{STR0039},3,{STR0040+DtoC(dDtInic)+STR0043+Dtoc(dDtFim)+"."},3)//"ATENÇÃO" "A Data Inicial não pode ser maior que a Final !" "Insira uma Data Final maior, ou uma Inicial menor."
+		lRet := .F.
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT110ATES
+Função responsável por chamar a rotina de Atestado Médico.
+
+@author Guilherme Freudenburg
+@since  17/01/2014
+@param  nOpcao, Numerico, Operacao sendo realizada
+
+@return Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDT110ATES(nOpcao)
+
+	Private oExecView
+	Private lMDT685Con := .F.
+	Private lContinu := .F.
+
+	Default nOpcao := 3
+
+	oExecView := FWViewExec():New()
+		oExecView:SetTitle( "Atestado Médico" )//"Atestado Médico"
+		oExecView:SetSource( "MDTA685" )
+		oExecView:SetModal( .F. )
+		oExecView:SetOperation( nOpcao ) //Inclusão.
+		oExecView:OpenView( .T. )
+
+Return Nil

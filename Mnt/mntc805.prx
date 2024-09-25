@@ -1,0 +1,784 @@
+#INCLUDE "Mntc805.ch"
+#INCLUDE "PROTHEUS.CH"
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTC805   ³ Autor ³ Elisangela Costa      ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consulta de Evolucao dos Precos da Negociacao               ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTC805()
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  	  ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aPesq := {}
+	// [LGPD] Se as funcionalidades, referentes à LGPD, podem ser utilizadas
+	Local lLgpd := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. )
+	Local aOfusc := {}
+	Local aOfuCampos := {}
+
+	Private aRotina := MenuDef()
+	Private cCadastro  := OemtoAnsi(STR0005) //"Evolução dos Preços"
+	Private cPrograma  := "MNTC805" 
+	Private cPERG      := "MNT80C    "
+	Private aVETINR    := {}
+	Private oTmpT805
+	Private cTRBB := GetNextAlias()
+
+	If lLgpd
+		// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+		aOfusc := FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'TQF_NREDUZ', 'TQF_CNPJ'} )
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_NREDUZ' } ) == 0
+			Aadd( aOfuCampos, 'NOMPOS')
+		EndIf
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_CNPJ' } ) == 0
+			Aadd( aOfuCampos, 'CNPJ')
+		EndIf
+			
+	EndIf
+
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Variaveis utilizadas para parametros!                        ³
+	//³ mv_par01     De Data                                         ³
+	//³ mv_par02     Ate Data                                        ³
+	//³ mv_par03     Posto                                           ³
+	//³ mv_par04     Loja                                            ³
+	//³ mv_par05     Tipo de Combustivel                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ 
+
+	If !Pergunte(cPerg,.T.)
+		//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+		//³ Devolve variaveis armazenadas (NGRIGHTCLICK)                          ³
+		//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	EndIf
+
+	aPos1      := {15,1,95,315 }
+	aDBFB := {}
+	Aadd(aDBFB,{"CNPJ"    ,"C", 14,0}) //CNPJ do posto
+	Aadd(aDBFB,{"POSTO"   ,"C", TAMSX3("TQF_CODIGO")[1],0,}) //Codigo do posto
+	Aadd(aDBFB,{"LOJA"    ,"C", TAMSX3("TQF_LOJA")[1],0,}) //Loja 
+	Aadd(aDBFB,{"NOMPOS"  ,"C", 40,0}) //Nome do Posto
+	Aadd(aDBFB,{"DATANEG" ,"D", 08,0}) //Data de negociacao
+	Aadd(aDBFB,{"HORNEG"  ,"C", 05,0}) //Hora da Negociacao
+	Aadd(aDBFB,{"PREBOMB" ,"N", TAMSX3("TQH_PREBOM")[1]/*9*/,TAMSX3("TQH_PREBOM")[2]/*3*/}) //Preco da Bomba
+	Aadd(aDBFB,{"PRENEGO" ,"N", TAMSX3("TQH_PRENEG")[1]/*9*/,TAMSX3("TQH_PRENEG")[2]/*3*/}) //Preco da Negociacao
+	Aadd(aDBFB,{"PERCAUM" ,"N", 07,3}) //Percentual de aumento
+
+	oTmpT805 := FWTemporaryTable():New(cTRBB, aDBFB)
+	oTmpT805:AddIndex("Ind01", {"CNPJ","DATANEG","HORNEG"})
+	oTmpT805:AddIndex("Ind02", {"DATANEG"})
+	oTmpT805:Create()
+
+	aTRBB := {{STR0023 ,"CNPJ"     ,"C",14,0,"@R 99.999.999/9999-99",,,,,, "CNPJ"},; //"CNPJ"
+	{STR0024 ,"POSTO"    ,"C",TAMSX3("TQF_CODIGO")[1],0,"@!"},;   //"Posto"
+	{STR0025 ,"LOJA"     ,"C",TAMSX3("TQF_LOJA")[1],0,"@!"},;     //"Loja"
+	{STR0026 ,"NOMPOS"   ,"C",40,0,"@!",,,,,, "NOMPOS"},;        //"Nome do Posto"
+	{STR0012 ,"DATANEG"  ,"D",08,0,"99/99/9999" },;   		    //"Data" 
+	{STR0013 ,"HORNEG"   ,"C",05,0,"99:99" },;        		    //"Hora"
+	{STR0028 ,"PREBOMB" ,"N",TAMSX3("TQH_PREBOM")[1]/*9*/,TAMSX3("TQH_PREBOM")[2]/*3*/,;
+	'@E 99,999.'+Replicate('9',TAMSX3("TQH_PREBOM")[2])},;  //"Preço Bomba"
+	{STR0014 ,"PRENEGO"  ,"N",TAMSX3("TQH_PRENEG")[1]/*9*/,TAMSX3("TQH_PRENEG")[2]/*3*/,;
+	'@E 99,999.'+Replicate('9',TAMSX3("TQH_PRENEG")[2])},;  //"Preço Negociado"
+	{STR0015 ,"PERCAUM"  ,"N",7,3,"@E 999.999" }} 				//"%Aumento"
+
+	Processa({ |lEnd| MNTC805INI() },STR0016) //"Aguarde ..Processando registros de negociação"
+
+	DbSelectarea(cTRBB)
+	DbSetOrder(01)
+	DbGotop()     
+	//mBrowse(6,1,22,75,"TRBB",aTRBB)
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , { STR0023 + " + " + STR0012 + " + " + STR0013, {{"","C" , 255 , 0 ,"","@!"} }} )
+	aAdd( aPesq , { STR0012 ,{{"", "D", 255, 0, "", "99/99/9999"} }} )
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRBB)
+	oBrowse:SetFields(aTRBB)
+	oBrowse:SetSeek(.T.,aPesq)
+	If lLgpd
+		// SetObfuscFields ofusca os campos do array especificado
+		oBrowse:SetObfuscFields( aOfuCampos )
+	EndIf
+	oBrowse:Activate()
+
+	//Deleta os Arquivos temporarios fisicamente
+	oTmpT805:Delete()  
+
+	DbSelectArea("TQH")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQH"))
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Devolve variaveis armazenadas (NGRIGHTCLICK)                          ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.  
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTC805INI³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Monta o arquivo temporario inicial mostrado no browse       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/  
+Function MNTC805INI()
+
+	//Cosidera CNPJ, quando CNPJ informado ou CNPJ e posto informado
+	If !Empty(MV_PAR05) 
+		DbSelectArea("TQF")
+		DbSetOrder(02)
+		If DbSeek(xFilial("TQF")+MV_PAR05)
+			MV_PAR03 := TQF->TQF_CODIGO
+			MV_PAR04 := TQF->TQF_LOJA
+			cCONDTQH := "TQH->TQH_CODPOS = MV_PAR03 .And. TQH->TQH_LOJA = MV_PAR04"
+		Else
+			MV_PAR03 := Replicate("Z",Len(TQH->TQH_CODPOS))
+			MV_PAR04 := Replicate("Z",Len(TQH->TQH_LOJA))
+			cCONDTQH := "TQH->TQH_CODPOS <= MV_PAR03 .And. TQH->TQH_LOJA <= MV_PAR04"
+		EndIf 
+	ElseIf !Empty(MV_PAR03) .And. !Empty(MV_PAR04)
+		cCONDTQH := "TQH->TQH_CODPOS = MV_PAR03 .And. TQH->TQH_LOJA = MV_PAR04"
+	Else 
+		MV_PAR03 := Replicate("Z",Len(TQH->TQH_CODPOS))
+		MV_PAR04 := Replicate("Z",Len(TQH->TQH_LOJA))
+		cCONDTQH := "TQH->TQH_CODPOS <= MV_PAR03 .And. TQH->TQH_LOJA <= MV_PAR04"
+	EndIf 
+
+	DbSelectArea("TQH")
+	DbSetOrder(02)
+	DbSeek(xFilial("TQH")+MV_PAR06+DTOS(MV_PAR01),.T.)  
+	ProcRegua(LastRec())
+	While !Eof() .And. TQH->TQH_FILIAL = xFilial("TQH") .And. TQH->TQH_CODCOM = MV_PAR06 .And.;
+	TQH->TQH_DTNEG <= MV_PAR02
+
+		IncProc(STR0011) //"Selecionando Registros..."
+
+		If &(cCONDTQH)
+
+			DbSelectArea(cTRBB)
+			(cTRBB)->(DbAppend()) 
+			If !Empty(MV_PAR05)
+				(cTRBB)->CNPJ := MV_PAR05
+			Else
+				DbSelectArea("TQF")
+				DbSetOrder(01)
+				If DbSeek(xFilial("TQF")+TQH->TQH_CODPOS+TQH->TQH_LOJA)
+					(cTRBB)->CNPJ   := TQF->TQF_CNPJ
+					(cTRBB)->NOMPOS := TQF->TQF_NREDUZ
+				EndIf 
+			EndIf    
+			(cTRBB)->POSTO   := TQH->TQH_CODPOS
+			(cTRBB)->LOJA    := TQH->TQH_LOJA
+			(cTRBB)->DATANEG := TQH->TQH_DTNEG 
+			(cTRBB)->HORNEG  := TQH->TQH_HRNEG
+			(cTRBB)->PRENEGO := TQH->TQH_PRENEG 
+			(cTRBB)->PREBOMB := TQH->TQH_PREBOM
+		EndIf       
+		DbSelectArea("TQH")
+		DbSkip()
+	End  
+
+	//Calcula o percentual de aumento
+	DbSelectArea(cTRBB)
+	DbSetOrder(01)
+	DbGotop()
+	While !Eof()
+
+		cCNPJPOS := (cTRBB)->CNPJ
+		While !Eof() .And. (cTRBB)->CNPJ = cCNPJPOS
+			nPRECOAT := (cTRBB)->PRENEGO  //Preco Atual
+			DbSkip()
+			If Eof() .Or. (cTRBB)->CNPJ <> cCNPJPOS
+				//Funcao que retorna o percentual de aumento do ultimo registro
+				//do arquivo temporario
+				DbSkip(-1) 
+				nPERNEG := MNTPERCAUM((cTRBB)->POSTO,(cTRBB)->LOJA,(cTRBB)->DATANEG,(cTRBB)->HORNEG,nPRECOAT)
+			Else
+				nPERNEG := ((nPRECOAT/(cTRBB)->PRENEGO)-1)*100
+				DbSkip(-1)
+			EndIf 
+
+			DbSelectArea(cTRBB) 
+			(cTRBB)->PERCAUM := nPERNEG 
+
+			DbSelectArea(cTRBB)
+			DbSkip() 
+		End   
+	End 
+	DbSelectArea(cTRBB)
+	DbGoTop()
+	If Reccount() = 0 
+		MsgInfo(STR0033,STR0034) //"Não existem dados para montar a tela de consulta."###"ATENÇÃO"
+		Return .F.
+	EndIf
+
+Return .T.  
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT805CGC ³ Autor ³Soraia de Carvalho     ³ Data ³ 27/02/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida o parametro CNPJ                                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/  
+Function  MNT805CGC()
+
+	If !Empty(MV_PAR05)
+		DbSelectArea("TQF")
+		DbSetOrder(02)
+		DbSeek (xFilial("TQF")+MV_PAR05)
+		MV_PAR03 := TQF->TQF_CODIGO
+		MV_PAR04 := TQF->TQF_LOJA   
+	EndIf      
+	If Empty(MV_PAR05)
+		If !ExistCpo("TQF",MV_PAR03+MV_PAR04)
+			Return .F.
+		EndIf 
+	EndIf
+
+Return .T. 
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT805POST³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida o parametro Posto                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/  
+Function  MNT805POST()
+
+	If Empty(MV_PAR04)
+		If !ExistCpo("TQF",MV_PAR03)
+			Return .F.
+		EndIf 
+	Else
+		If !ExistCpo("TQF",MV_PAR03+MV_PAR04)
+			Return .F.
+		EndIf 
+	EndIf
+	If !Empty(MV_PAR03)
+		DbSelectArea("TQF")
+		DbSetOrder(01)
+		DbSeek (xFilial("TQF")+MV_PAR03)
+		MV_PAR05 := TQF->TQF_CNPJ   
+	EndIf
+
+Return .T. 
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT805LOJA³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida o parametro de Loja                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/  
+Function  MNT805LOJA()
+
+	If Empty(MV_PAR03)
+		MsgStop(STR0017) //"Informe o Codigo do Posto"
+		Return .F. 
+		If !Empty(MV_PAR05)
+			DbSelectArea("TQF")
+			DbSetOrder(02)
+			DbSeek (xFilial("TQF")+MV_PAR05)
+			MV_PAR03 := TQF->TQF_CODIGO
+		EndIf 
+	EndIf
+	If !ExistCpo("TQF",MV_PAR03+MV_PAR04)
+		Return .F.
+	EndIf
+
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNC805PAR ³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Reprocessa o browse de acordo com os parametros             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNC805PAR()
+
+	If !Pergunte(cPerg,.T.)
+		Return
+	EndIf 
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNTC805INI() },STR0016)   //"Aguarde ..Processando registros de negociação"
+
+Return .T.
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTC805PE ³ Autor ³Elisangela Costa       ³ Data ³06/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Pesquisa especifica para evolucao de precos negociados      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC080                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTC805PE()
+
+	dDATANEG := dDatabase
+
+	Define MsDialog oDlg5 From 300,120 To 400,363 Title OemToAnsi(STR0018) Pixel //"Pesquisa"
+
+	@ 0.5,1 Say OemtoAnsi(STR0012) //"Data"
+	@ 0.5,5 MsGet dDATANEG  Picture '99/99/99' Size 30,10 
+
+	@ 3.7,20 Button "&OK" Size 30,10 Action MNTC805POS()
+
+	Activate MsDialog oDlg5 Centered  
+
+	DbSelectArea(cTRBB)
+	DbSetOrder(01)
+
+Return .T.
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTC805POS³ Autor ³Elisangela Costa       ³ Data ³06/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Posiciona no registro                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTC805POS()
+
+	DbSelectArea(cTRBB)
+	DbSetOrder(02)
+	DbSeek(Dtos(dDATANEG)) 
+	oDlg5:End()
+
+Return .T.   
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTC805VI ³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Monta a tela para visualizacao da Negociacao                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTC805VI()
+
+	DbSelectArea("TQH")
+	DbSetOrder(01)
+	DbSeek(xFilial("TQH")+(cTRBB)->POSTO+(cTRBB)->LOJA+MV_PAR06+DTOS((cTRBB)->DATANEG)+(cTRBB)->HORNEG)
+	NGCAD01("TQH",Recno(),1)
+
+	DbSelectArea(cTRBB)
+	DbSetOrder(01)
+
+Return .T.    
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTC805IM ³ Autor ³Elisangela Costa       ³ Data ³06/01/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Impressao de Evolucao de Precos                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTC805IM() 
+
+	Local cString    := (cTRBB)
+	Local cDesc1     := STR0005 //"Evolução dos Preços"
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTC805"
+
+	Private aReturn  := {STR0019, 1,STR0020, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "G"
+
+	DbSelectArea(cTRBB)
+	nRegTRBB := Recno()
+	DbGoTop()
+
+	If Reccount() = 0
+		nDel := Help(" ",1,"NGTDADIMP") //"Nao existem dados para imprimir..."###"ATENCAO"
+		Return .T.
+	EndIf
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| C805Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+	DbSelectArea(cTRBB)
+	DbSetOrder(01)
+	DbGoto(nRegTRBB) 
+
+Return Nil       
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³ C805Imp  ³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³ Impressao do Relatorio                                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MNTC805IM                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function C805Imp(lEnd,wnRel,titulo,tamanho)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Define Variaveis                                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	// [LGPD] Se as funcionalidades, referentes à LGPD, podem ser utilizadas
+	Local lLgpd := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. )
+	Local lNomPos := .F.
+	Local lCnpj := .F.
+	Local aOfusc := {}
+
+	Private li := 80
+	Private m_pag := 1
+
+	If lLgpd
+		// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+		aOfusc := FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'TQF_NREDUZ', 'TQF_CNPJ'} )
+		lNomPos := Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_NREDUZ' } ) == 0
+		lCnpj := Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_CNPJ' } ) == 0
+
+	EndIf
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Verifica se deve comprimir ou nao                            ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	If mv_par07 = 1  //Detalhado                                                                                                     
+		Cabec1   := STR0027 //"CNPJ                 Posto    Loja   Nome do Posto                              Data         Hora    Preço Bomba  Preço Negociado      %Aumento"
+		Cabec2   := " "
+	Else
+		Cabec1   := STR0030 //"CNPJ                 Posto    Loja  Nome do Posto                              --------------------Atual--------------------    ------------------Aterior--------------------     %Aumento"
+		Cabec2   := STR0031 //"                                                                               Data         Hora    Preco Bomba   Preco Neg.    Data         Hora    Preco Bomba   Preco Neg."   
+	EndIf   
+	Private nomeprog := "MNTC805"   
+
+	/*
+	mv_par07 = 1  Detalhado
+
+	1         2         3         4         5         6         7         8         9       100       110       120       130       140       150         160      170       180        190       200       210       220       230
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+	________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	CNPJ                 Posto    Loja   Nome do Posto                              Data         Hora    Preço Bomba  Preço Negociado      %Aumento
+	________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+
+
+	99.999.999/9999-99   xxxxxx   xx     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   99/99/9999   99:99   999.999,999       999,999999    999,999999 
+	99/99/9999   99:99   999.999,999       999,999999    999,999999
+	99/99/9999   99:99   999.999,999       999,999999    999,999999
+
+	99.999.999/9999-99   xxxxxx   xx     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   99/99/9999   99:99   999.999,999       999,999999    999,999999 
+	99/99/9999   99:99   999.999,999       999,999999    999,999999
+	99/99/9999   99:99   999.999,999       999,999999    999,999999
+
+
+
+	mv_par07 = 2  Resumido
+	1         2         3         4         5         6         7         8         9       100       110       120       130       140       150         160      170       180        190       200       210       220       230
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+	________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	CNPJ                 Posto    Loja  Nome do Posto                              --------------------Atual--------------------    ------------------Aterior--------------------     %Aumento
+	Data         Hora    Preco Bomba   Preco Neg.    Data         Hora    Preco Bomba   Preco Neg.   
+	________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	99.999.999/9999-99   xxxxxx   xx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   99/99/9999   99:99   999.999,999   999,999999    99/99/9999   99:99   999.999,999   999,999999   999,999999
+	99.999.999/9999-99   xxxxxx   xx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   99/99/9999   99:99   999.999,999   999,999999    99/99/9999   99:99   999.999,999   999,999999   999,999999
+	99.999.999/9999-99   xxxxxx   xx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   99/99/9999   99:99   999.999,999   999,999999    99/99/9999   99:99   999.999,999   999,999999   999,999999
+
+
+	*/
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Define o indice de leitura do arquivo de Bens            ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	DbSelectArea(cTRBB)  
+	DbSetOrder(01)
+	DbGoTop()
+	SetRegua(LastRec())
+	If MV_PAR07 = 1 //Detalhado
+		While !Eof()
+			cCNPJ805 := (cTRBB)->CNPJ 
+			cLOJAPOS := "  "
+			NGSOMALI(58)
+			If lCnpj
+				// ValueAsteriskToAnonymize substitui o valor do campo para ******* 
+				@LI,000 Psay FwProtectedDataUtil():ValueAsteriskToAnonymize( cCNPJ805 ) Picture "@!"
+			Else
+				@LI,000 Psay cCNPJ805 Picture "@R 99.999.999/9999-99"
+			EndIf
+			@LI,021 Psay (cTRBB)->POSTO Picture "@!"
+
+			While !Eof() .And. (cTRBB)->CNPJ = cCNPJ805
+				IncRegua()   
+				If cLOJAPOS <> (cTRBB)->LOJA
+					@LI,030 Psay (cTRBB)->LOJA   Picture "@!"
+					If lNomPos
+						// ValueAsteriskToAnonymize substitui o valor do campo para ******* 
+						@LI,037 Psay FwProtectedDataUtil():ValueAsteriskToAnonymize( SubStr((cTRBB)->NOMPOS,1,40) )
+					Else
+						@LI,037 Psay SubStr((cTRBB)->NOMPOS,1,40)
+					EndIf
+				EndIf 
+
+				@LI,080 Psay (cTRBB)->DATANEG  Picture "99/99/9999"
+				@LI,093 Psay (cTRBB)->HORNEG   Picture "99:99" 
+				@LI,102+2-(TAMSX3("TQH_PREBOM")[2]) Psay (cTRBB)->PREBOMB  Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PREBOM")[2])
+				@LI,118+3-(TAMSX3("TQH_PRENEG")[2]) Psay (cTRBB)->PRENEGO  Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PRENEG")[2])  
+				@LI,133 Psay (cTRBB)->PERCAUM  Picture "@E 999.999999"
+				cLOJAPOS := (cTRBB)->LOJA
+				NGSOMALI(58)  
+				DbSelectArea(cTRBB)
+				DbSkip()
+			End    
+		End
+	Else  //Resumido
+		While !Eof()
+			cCNPJ805 := (cTRBB)->CNPJ 
+			cPOSTOGA := (cTRBB)->POSTO
+			cLOJAPOS := (cTRBB)->LOJA
+			nPERCENT := (cTRBB)->PERCAUM
+			NGSOMALI(58)
+			If lCnpj
+				// ValueAsteriskToAnonymize substitui o valor do campo para *******    
+				@LI,000 Psay FwProtectedDataUtil():ValueAsteriskToAnonymize( cCNPJ805 ) Picture "@!"
+			Else
+				@LI,000 Psay cCNPJ805 Picture "@R 99.999.999/9999-99"
+			EndIf
+			@LI,021 Psay (cTRBB)->POSTO   Picture "@!"
+			@LI,030 Psay (cTRBB)->LOJA    Picture "@!"
+			If lNomPos
+				// ValueAsteriskToAnonymize substitui o valor do campo para ******* 
+				@LI,036 Psay FwProtectedDataUtil():ValueAsteriskToAnonymize( SubStr((cTRBB)->NOMPOS,1,40) ) Picture "@!"
+			Else
+				@LI,036 Psay SubStr((cTRBB)->NOMPOS,1,40) Picture "@!"
+			EndIf
+			@LI,079 Psay (cTRBB)->DATANEG Picture "99/99/9999"
+			@LI,092 Psay (cTRBB)->HORNEG  Picture "99:99" 
+			@LI,101+2-(TAMSX3("TQH_PREBOM")[2]) Psay (cTRBB)->PREBOMB Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PREBOM")[2])
+			@LI,113+3-(TAMSX3("TQH_PRENEG")[2]) Psay (cTRBB)->PRENEGO Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PRENEG")[2])
+
+			DbSkip() 
+			If !Eof() .And. (cTRBB)->CNPJ = cCNPJ805 .And. (cTRBB)->POSTO = cPOSTOGA .And. (cTRBB)->LOJA = cLOJAPOS 
+				@LI,128 Psay (cTRBB)->DATANEG Picture "99/99/9999"
+				@LI,141 Psay (cTRBB)->HORNEG  Picture "99:99" 
+				@LI,150+2-(TAMSX3("TQH_PREBOM")[2]) Psay (cTRBB)->PREBOMB Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PREBOM")[2])
+				@LI,162+3-(TAMSX3("TQH_PRENEG")[2]) Psay (cTRBB)->PRENEGO Picture '@E 999,999.'+Replicate('9',TAMSX3("TQH_PRENEG")[2])
+			EndIf
+			@LI,176 Psay nPERCENT Picture "@E 999.999999"
+
+			While !Eof() .And. (cTRBB)->CNPJ = cCNPJ805 
+				If (cTRBB)->POSTO <> cPOSTOGA .Or. (cTRBB)->LOJA <> cLOJAPOS
+					Exit
+				EndIf            
+				DbSelectArea(cTRBB)
+				DbSkip()
+			End    
+		End
+	EndIf    
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+
+Return Nil     
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTPERCAUM³ Autor ³Elisangela Costa       ³ Data ³ 06/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Calcula o percentual de aumento de um preco negociado       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±± 
+±±³Parametros³cPOSTON  - Posto de Negociacao                              ³±± 
+±±³          ³cLOJAN   - Loja de Negociacao                               ³±± 
+±±³          ³dDATAN   - Data de Negociacao                               ³±± 
+±±³          ³cHORANEG - Hora de Negociacao                               ³±±
+±±³          ³nPRECAT  - Preco Atual                                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³MNTC805IM                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTPERCAUM(cPOSTON,cLOJAN,dDATAN,cHORANEG,nPRECAT)
+
+	Local nPERCENT := 0.00
+
+	DbSelectArea("TQH")
+	DbSetOrder(01)
+	If DbSeek(xFilial("TQH")+cPOSTON+cLOJAN+MV_PAR06+DTOS(dDATAN)+cHORANEG)
+
+		DbSkip(-1)
+		If Eof() .Or. TQH->TQH_FILIAL <> xFilial("TQH") .Or. TQH->TQH_CODPOS <> cPOSTON ;
+		.Or. TQH->TQH_LOJA <> cLOJAN .Or. TQH->TQH_CODCOM <> MV_PAR06
+			DbSkip(-1)
+			nPERCENT := 0.00
+		Else
+			nPERCENT := ((nPRECAT/TQH->TQH_PRENEG)-1)*100
+			DbSkip(-1)
+		EndIf  
+
+	EndIf 
+
+Return nPERCENT 
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNC805VAL ³ Autor ³Soraia de Carvalho     ³ Data ³ 22/03/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNC805VAL()
+
+	If !Empty(MV_PAR03)
+		DbSelectArea("TQF")
+		DbSetOrder(1)
+		If DbSeek(xFilial("TQF")+Mv_Par03)
+			//      Mv_Par04 := TQF->TQF_LOJA
+			Mv_Par05 := SPACE(14) 
+			Mv_Par06 := SPACE(03)
+		EndIf
+	EndIf 
+
+Return .t.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT805DT  ³ Autor ³Soraia de Carvalho     ³ Data ³ 22/03/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTC805                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT805DT()
+
+	If  MV_PAR02 < MV_PAR01
+		MsgStop(STR0035)  //"Data final não pode ser inferior à data inicial!"
+		Return .F.  
+	EndIf
+
+Return .T.      
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MenuDef  ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³12/03/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Utilizacao de Menu Funcional.                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMNT                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³		1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±± 
+±±³         ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                          ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MenuDef()
+	Local aRotina := {{STR0001 ,"MNTC805PE" ,0,1},;    //"Pesquisar"
+	{STR0002 ,"MNTC805VI" ,0,2},;    //"Visualizar"
+	{STR0003 ,"MNC805PAR" ,0,3,0},;  //"Parametros"
+	{STR0029 ,"MNTC805IM" ,0,3,0}}   //"Imprimir"
+
+Return aRotina

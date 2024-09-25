@@ -1,0 +1,684 @@
+#INCLUDE "mntc900.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC900
+Consulta gerencial de horas trabalhadas na manutencao
+@author Inacio Luiz Kolling
+@since 16/03/98
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC900()    
+	//+----------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		 |
+	//+----------------------------------------------------------------------+
+	
+	Local aNGBEGINPRM := NGBEGINPRM()
+	
+	Local oTmpTbl1
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		Private aVETINR     := {}
+		Private lCORRET     := .F.
+		Private Lprimeira   := .T.
+		Private INCLUI      := .F.
+		Private lOutro      := .F.
+		Private cCadastro   := OemToAnsi(STR0001) //"Horas Trabalhadas Na Manutencao"
+		
+		Private cTRB  := GetNextAlias()
+		Private cTRBV := GetNextAlias()
+
+		Private nOPC1, nOPC2, nOPC3, nPER1, nPER2, nPER3, nTOTAL, nPERTOT
+
+		aRotina := {{STR0002 ,"AxPesqui" , 0 , 1},; //"Pesquisar"
+					{STR0003 ,"NGCAD01" , 0 , 2}}   //"Visualizar"
+
+		//+--------------------------------------------------------------+
+		//| Variaveis utilizadas para parametros                         | 
+		//| mv_par01     // De Period Trabalho                           | 
+		//| mv_par02     // Ate Period Trabalho                          | 
+		//| mv_par03     // De Centro Custo                              | 
+		//| mv_par04     // Ate Centro Custo                             | 
+		//| mv_par05     // De Tipo Manutencao                           | 
+		//| mv_par06     // Ate Tipo Manutencao                          | 
+		//| mv_par07     // De Area Manutencao                           |  
+		//| mv_par08     // Ate Area Manutencao                          | 
+		//| mv_par09     // Tipo (Prevent.x Corret.,Corret.x Prevent)    | 
+		//+--------------------------------------------------------------+
+
+		If !Pergunte("MNT900",.T.)
+			Return
+		EndIf
+
+		aDBF := {{"CUSTOTR",  "C", Len(stj->tj_ccusto),0},;
+				{"NOMCUST",  "C", 25, 0},;
+				{"OPCAO1" ,  "N", 12,2},;
+				{"PERCE1" ,  "N", 06,2},;
+				{"OPCAO2" ,  "N", 12,2},;
+				{"PERCE2" ,  "N", 12,2},;
+				{"OPCAO3" ,  "N", 12,2},;  //Outros
+				{"PERCE3" ,  "N", 12,2},;
+				{"TOTAL"  ,  "N", 12,2},;
+				{"PERCETOT", "N", 12,2} }  //Somente para PrevistoXRealizado
+
+
+		//Intancia classe FWTemporaryTable
+		oTmpTbl1 := FWTemporaryTable():New( cTRB, aDBF )
+		//Cria indices 
+		oTmpTbl1:AddIndex( "Ind01" , {"CUSTOTR"} )
+		//Cria a tabela temporaria
+		oTmpTbl1:Create()
+
+		nTOTAL := 0.00
+		nOPC1  := 0.00
+		nOPC2  := 0.00
+		nOPC3  := 0.00
+
+		Processa({|| C900PROC()})
+
+		nPER1 := (nOPC1 * 100) / nTOTAL
+		nPER2 := (nOPC2 * 100) / nTOTAL
+
+		If MV_PAR09 = 1 .And. lOutro
+			nPER3 := (nOPC3 * 100) / nTOTAL
+		EndIf	
+
+		If MV_PAR09 = 2
+			nPERTOT := ((nOPC2 - nOPC1)*100)/nOPC1
+		EndIf
+
+		DbSelectArea(cTRB)
+		DbGoTop()
+		If Reccount() == 0
+			Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico."###"ATENCAO"		
+			oTmpTbl1:Delete()
+			Return .T.
+		EndIf
+		If MV_PAR09 = 1 .And. lOutro
+			DEFINE DIALOG oDlg1 FROM 6,0 TO 34,135 TITLE STR0001
+		Else
+			DEFINE DIALOG oDlg1 FROM 6,0 TO 34,100 TITLE STR0001
+		EndIf		
+
+		@ 04,020 BUTTON STR0011 OF oDlg1 SIZE 40,09 PIXEL ACTION (C900GRAFI()) //"&Grafico"
+		@ 04,060 BUTTON STR0012 OF oDlg1 SIZE 40,09 PIXEL ACTION (C900PRINT()) //"&Imprimir"
+		@ 04,100 BUTTON STR0037 OF oDlg1 SIZE 40,09 PIXEL ACTION oDlg1:End()   //"Sair"
+
+		DbSelectArea(cTRB)
+		If MV_PAR09 = 1 .And. lOutro
+			@ 1,0.3 LISTBOX FIELDS CUSTOTR                               ,;
+			NOMCUST                                      ,;
+			MtoH(OPCAO1*60) ,;
+			PADL(Transform(PERCE1,"@E 99,999.99"),12)    ,;
+			MtoH(OPCAO2*60) ,;
+			PADL(Transform(PERCE2,"@E 99,999.99"),12)    ,;
+			MtoH(OPCAO3*60) ,;
+			PADL(Transform(PERCE3,"@E 99,999.99"),12)    ,;
+			MtoH(TOTAL*60)   ;
+			FieldSizes 65,100,60,35,60,35,60,35,60                ;
+			Size 520,180                                          ;
+			HEADERS STR0013                                      ,; //"C.Custo"
+			STR0014                                      ,; //"Nome   "
+			STR0015         										 ,; //"Preventiva"
+			"%"                                          ,;
+			STR0017         										 ,; //"Corretiva""
+			"%"                                          ,;
+			STR0034                                      ,; //"Outros"
+			"%"                                          ,;
+			STR0019 //"Total"	                
+
+			@ 200,010 say STR0020  SIZE 55,10 OF oDlg1  PIXEL //"TOTAL GERAL"
+			@ 200,164 say MtoH(nOPC1*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,230 say Transform(nPER1, "@E 999,999.99")     SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,260 say MtoH(nOPC2*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,325 say Transform(nPER2, "@E 999,999.99")     SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,365 say MtoH(nOPC3*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,425 say Transform(nPER3, "@E 999,999.99")     SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,460 say MtoH(nTOTAL*60) SIZE 40,10 OF oDlg1  PIXEL  
+
+		ElseIf MV_PAR09 = 1 .And. !lOutro
+
+			@ 1,0.3 LISTBOX FIELDS CUSTOTR                               ,;
+			NOMCUST                                      ,;
+			MtoH(OPCAO1*60) 							 ,;
+			PADL(Transform(PERCE1,"@E 99,999.99"),12)    ,;
+			MtoH(OPCAO2*60)								 ,;
+			PADL(Transform(PERCE2,"@E 99,999.99"),12)    ,;
+			MtoH(TOTAL*60)								  ;
+			FieldSizes 55,90,60,35,60,35,40,35,20                 ;
+			Size 388,180                                          ;
+			HEADERS STR0013                                      ,; //"C.Custo"
+			STR0014                                      ,; //"Nome   "
+			STR0015             								 ,; //"Preventiva"
+			"          %"                                ,;
+			STR0017           								    ,; //"Corretiva"
+			"          %"                                ,;
+			STR0019 //"Total"
+
+			@ 200,010 say STR0020  SIZE 55,10 OF oDlg1  PIXEL //"TOTAL GERAL"
+			@ 200,153 say MtoH(nOPC1*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,212 say Transform(nPER1, "@E 999,999.99")     SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,244 say MtoH(nOPC2*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,308 say Transform(nPER2, "@E 999,999.99")     SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,340 say MtoH(nTOTAL*60) SIZE 40,10 OF oDlg1  PIXEL
+
+		Else  
+
+			@ 1,0.3 LISTBOX FIELDS CUSTOTR                               ,;
+			NOMCUST                                      ,;
+			MtoH(OPCAO1*60) ,;
+			MtoH(OPCAO2*60) ,;
+			MtoH(TOTAL*60)  ,;
+			PADL(Transform(PERCETOT,"@E 999,999.99"),12)  ;
+			FieldSizes 65,100,60,60,57,30                         ;
+			Size 388,180                                          ;
+			HEADERS STR0013                                      ,; //"C.Custo"
+			STR0014                                      ,; //"Nome   "
+			STR0016              								 ,; //"Previsto"
+			STR0018  									          ,; //"Real"
+			STR0036                                      ,;//"Diferenca"   
+			"          %"
+
+			@ 200,010 say STR0020  SIZE 55,10 OF oDlg1  PIXEL //"TOTAL GERAL"
+			@ 200,172 say MtoH(nOPC1*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,231 say MtoH(nOPC2*60)  SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,291 say MtoH(nTOTAL*60) SIZE 40,10 OF oDlg1  PIXEL
+			@ 200,344 say Transform(nPERTOT,"@E 999,999,999.99") SIZE 40,10 OF oDlg1  PIXEL
+		EndIf	
+
+		ACTIVATE DIALOG oDlg1
+
+		oTmpTbl1:Delete()
+
+		DbSelectArea("STL")
+
+	EndIf
+
+	//Devolve variaveis armazenadas
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C900PROC
+Processa OS e gera arquivo de trabalho  
+@author Paulo Pego  
+@since  04/09/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C900PROC()
+
+	cCONDSTJ := 'STJ->TJ_SITUACA = "L"  .And. STJ->TJ_TIPOOS = "B"'                         
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CCUSTO >= mv_par03 .And. STJ->TJ_CCUSTO <= mv_par04)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_TIPO >= mv_par05 .And. STJ->TJ_TIPO <= mv_par06)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CODAREA >= mv_par07 .And. STJ->TJ_CODAREA <= mv_par08)'
+
+	cCONDSTS := 'STS->TS_SITUACA = "L" .And. STS->TS_TIPOOS = "B"'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CCUSTO >= mv_par03 .And. STS->TS_CCUSTO <= mv_par04)'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_TIPO >= mv_par05 .And. STS->TS_TIPO <= mv_par06)'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CODAREA >= mv_par07 .And. STS->TS_CODAREA <= mv_par08)'
+
+	DbselectArea("STL")
+	DbSetOrder(06)
+	DbSeek(xFilial("STL")+DtoS(mv_par01),.T.)
+	nReg := (LastRec() - Recno())
+
+	DbselectArea("STT")
+	DbSetOrder(05)
+	DbSeek(xFilial("STT")+DtoS(mv_par01),.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	DbselectArea("STL")
+	ProcRegua(nReg)
+	While !Eof() .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_DTINICI <= mv_par02
+
+		IncProc()
+
+		DbselectArea("STJ")
+		DbSetOrder(01)
+		If DbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+
+			If &(cCONDSTJ) 
+
+				If STL->TL_TIPOREG != "M" .Or. Empty(STL->TL_DTFIM) .Or. Empty(STL->TL_HOFIM)
+					DbselectArea("STL")
+					DbSkip()
+					Loop
+				EndIf
+				//verifica se tipo de servico eh igual a "Outros"                 
+				lOut := .f.
+				DbselectArea('ST4')
+				DbSetOrder(1)
+				If DbSeek(xFilial("ST4")+STJ->TJ_SERVICO)
+
+					DbselectArea('STE')
+					DbSetOrder(1)
+					DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+					If STE->TE_CARACTE == "O" 
+						lOut := .t.  
+						lOutro := .t.
+					EndIf
+				EndIf	         
+
+				nH01 := 0.00
+				nH02 := 0.00
+				nH03 := 0.00
+
+				vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+				STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+				STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+				nHORA := vVETHORAS[1]
+
+				If mv_par09 == 1
+					If Alltrim(STL->TL_SEQRELA) <> "0"
+						If !lOut              
+							If Val(STL->TL_PLANO) = 0
+								nH02 := nHORA
+							Else
+								nH01 := nHORA
+							EndIf
+						Else
+							nH03 := nHORA            	
+						EndIf   
+					EndIf
+				Else
+					If Alltrim(STL->TL_SEQRELA) <> "0"
+						nH02 := nHORA
+					Else
+						nH01 := nHORA
+					EndIf
+				EndIf
+
+				If !(cTRB)->(DbSeek(STJ->TJ_CCUSTO))
+					(cTRB)->(DbAppend())
+					(cTRB)->CUSTOTR := STJ->TJ_CCUSTO
+					(cTRB)->NOMCUST := NGSEEK("CTT",STJ->TJ_CCUSTO,1,'CTT_DESC01') 
+				EndIf
+				(cTRB)->OPCAO1 := (cTRB)->OPCAO1 + nH01
+				(cTRB)->OPCAO2 := (cTRB)->OPCAO2 + nH02
+				(cTRB)->OPCAO3 := (cTRB)->OPCAO3 + nH03
+			EndIf
+		EndIf
+		DbselectArea("STL")
+		DbSkip()
+	End
+
+	//+-----------------------------------------------------------+
+	//| Movimento OS - HISTORICO                                  |
+	//+-----------------------------------------------------------+
+	DbselectArea("STT")
+	While !Eof() .And. STT->TT_FILIAL == xFilial("STT") .And. STT->TT_DTINICI <= mv_par02
+	
+		IncProc()
+		DbselectArea("STS")
+		DbSetOrder(01)
+		If DbSeek(xFilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+
+			If &(cCONDSTS) 
+
+				If STT->TT_TIPOREG != "M" .Or. Empty(STT->TT_DTFIM) .Or. Empty(STT->TT_HOFIM)
+					DbselectArea("STT")
+					DbSkip()
+					Loop
+				EndIf
+				
+				//Verifica se tipo de servico eh igual a "Outros"                 
+				lOut := .f.
+				DbselectArea('ST4')
+				DbSetOrder(1)
+				If DbSeek(xFilial("ST4")+STJ->TJ_SERVICO)
+
+					DbselectArea('STE')
+					DbSetOrder(1)
+					DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+					If STE->TE_CARACTE == "O" 
+						lOut := .t.
+						lOutro := .t.
+					EndIf
+				EndIf	         
+
+				nH01 := 0.00
+				nH02 := 0.00
+				nH03 := 0.00         
+
+				vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+				STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+				STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+				nHORA := vVETHORAS[1]
+
+				If mv_par09 == 1 
+					If Alltrim(STT->TT_SEQRELA) <> "0"
+						If !lOut              
+							If Val(STT->TT_PLANO) = 0
+								nH02 := nHORA
+							Else
+								nH01 := nHORA
+							EndIf
+						Else
+							nH03 := nHORA            	
+						EndIf   
+					EndIf
+				Else
+					If Alltrim(STT->TT_SEQRELA) <> "0"
+						nH02 := nHORA
+					Else
+						nH01 := nHORA
+					EndIf
+				EndIf
+
+				If !(cTRB)->(DbSeek(STS->TS_CCUSTO))
+					(cTRB)->(DbAppend())
+					(cTRB)->CUSTOTR := STS->TS_CCUSTO
+					(cTRB)->NOMCUST := NGSEEK("CTT",STS->TS_CCUSTO,1,'CTT_DESC01') 
+				EndIf
+				(cTRB)->OPCAO1 := (cTRB)->OPCAO1 + nH01
+				(cTRB)->OPCAO2 := (cTRB)->OPCAO2 + nH02
+				(cTRB)->OPCAO3 := (cTRB)->OPCAO3 + nH03
+			EndIf
+		EndIf
+		DbselectArea("STT")
+		DbSkip()
+	End
+
+	DbselectArea("STL")
+	DbSetOrder(01)
+
+	DbselectArea("STT")
+	DbSetOrder(01)
+
+	DbselectArea(cTRB)
+	DbGoTop()
+
+	//+---------------------------------------------------+
+	//| Pega o Total das Horas                            |
+	//+---------------------------------------------------+
+	While !Eof()
+
+		nOPC1  := nOPC1 + (cTRB)->OPCAO1
+		nOPC2  := nOPC2 + (cTRB)->OPCAO2
+		nOPC3  := nOPC3 + (cTRB)->OPCAO3
+
+		If MV_PAR09 = 2
+			nTOTAL := nTOTAL + ((cTRB)->OPCAO2 - (cTRB)->OPCAO1)
+			(cTRB)->TOTAL  := ((cTRB)->OPCAO2 - (cTRB)->OPCAO1)  //Calcula a diferenca entre REALIZADO e PREVISTO
+			(cTRB)->PERCETOT := (((cTRB)->OPCAO2 - (cTRB)->OPCAO1) * 100 ) / (cTRB)->OPCAO1
+		Else
+			nTOTAL := nOPC1 + nOPC2 + nOPC3
+			(cTRB)->TOTAL  := (cTRB)->OPCAO1 + (cTRB)->OPCAO2 + (cTRB)->OPCAO3
+			(cTRB)->PERCE1 := ((cTRB)->OPCAO1 * 100) / ((cTRB)->OPCAO1 + (cTRB)->OPCAO2 + (cTRB)->OPCAO3)
+			(cTRB)->PERCE2 := ((cTRB)->OPCAO2 * 100) / ((cTRB)->OPCAO1 + (cTRB)->OPCAO2 + (cTRB)->OPCAO3)
+			(cTRB)->PERCE3 := ((cTRB)->OPCAO3 * 100) / ((cTRB)->OPCAO1 + (cTRB)->OPCAO2 + (cTRB)->OPCAO3)
+		EndIf
+
+		DbSkip()
+	End
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} c900GRAFI
+Grafico das O.S Trabalhadas
+@author Inacio Luiz Kolling
+@since -
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function c900GRAFI()
+
+	Local oTmpTbl2
+	
+	cSERIE1 := If(mv_par09 = 1,STR0015,STR0016)
+	cSERIE2 := If(mv_par09 = 1,STR0017,STR0023)
+
+	If mv_par09 = 1 .And. lOutro
+	
+		cSERIE3 := STR0034    //"Outros"
+		aDBF3 := {{"CODIGO" , "C", 20,0},;
+				  {"NOMECOD", "C", 30,0},;
+				  {"VALOR1" , "N", 12,2},;
+				  {"VALOR2" , "N", 12,2},;
+				  {"VALOR3" , "N", 12,2}}
+	Else
+		// ARQUIVO DE DADOS
+		aDBF3 := {{"CODIGO" , "C", 20,0},;
+				  {"NOMECOD", "C", 30,0},;
+				  {"VALOR1" , "N", 12,2},;
+				  {"VALOR2" , "N", 12,2}}
+	EndIf
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Index
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbselectArea(cTRB)
+	Dbgotop()
+	While !eof()
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->CUSTOTR
+		(cTRBV)->NOMECOD := (cTRB)->NOMCUST
+		(cTRBV)->VALOR1  := (cTRB)->OPCAO1
+		(cTRBV)->VALOR2  := (cTRB)->OPCAO2
+		If MV_PAR09 = 1 .And. lOutro
+			(cTRBV)->VALOR3  := (cTRB)->OPCAO3
+		EndIf	
+		DbselectArea(cTRB)
+		Dbskip()
+	End
+
+	// 1- linha titulo do grafico (janela)
+	// 2- linha titulo da direita do grafico
+	// 3- linha titulo superior do grafico
+	// 4- linha titulo da direita do grafico
+	// 5- linha titulo da inferior do grafico
+	// 6- linha series do grafico
+	// 7- leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8- alias doa arquivo temporario com os dados /ou
+	// 9- matriz com os dados
+
+	If MV_PAR09 = 1 .And. lOutro
+		vCRIGTXT := NGGRAFICO(" "+STR0001," ",STR0001,STR0021,STR0022,;
+		{cSERIE1,cSERIE2,cSERIE3},"A",(cTRBV))
+	Else
+		vCRIGTXT := NGGRAFICO(" "+STR0001," ",STR0001,STR0021,STR0022,;
+		{cSERIE1,cSERIE2},"A",(cTRBV))             
+	EndIf	                             
+	
+	oTmpTbl2:Delete()
+ 
+	DbselectArea(cTRB)
+	DbGoTop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C900PRINT
+Impressao das Horas Trabalhadas    
+@author Inacio Luiz Kolling
+@since -
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C900PRINT()
+
+	Local cString    := (cTRB)
+	Local cDesc1     := STR0026 //"Horas Trabalhados Por Centro de Custo"
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTC900"
+
+	Private aReturn  := { STR0027, 1,STR0028, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "M"
+	Private cPerg    := "MNT900"
+
+	If MV_PAR09 = 1 .And. lOutro
+		Tamanho := "G"
+	EndIf	       
+	        	
+	//+--------------------------------------------------------------+
+	//| Envia controle para a funcao SETPRINT                        |
+	//+--------------------------------------------------------------+
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| C900Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C900Imp
+Chamada do Relatório  
+@author Inacio Luiz Kolling
+@since 26/06/97
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param titulo, , descricao
+@param tamanho, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function C900Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	Private li     := 80
+	Private m_pag  := 1
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	Private Cabec1   := " " 
+	Private Cabec2   := " "
+	Private nomeprog := "MNTC900"
+
+	If mv_par09 = 1 .And. lOutro
+		Cabec1 := STR0035 //"C.Custo                Nome                               Preventiva      Percen.        Corretiva      Percen.          Outros      Percen.               Total"
+	ElseIf mv_par09 = 1	
+		Cabec1 := STR0030 //"C.Custo                Nome                               Preventiva      Percen.        Corretiva      Percen.               Total"
+	ElseIf mv_par09 = 2
+		Cabec1 := STR0031 //"C.Custo                Nome                                 Previsto         Realizado           Diferenca      Percen."
+	EndIf
+
+	/* MV_PAR09 = 1
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8   
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234
+	_________________________________________________________________________________________________________________________________________________________________________________________
+	Horas Trabalhados Por Centro de Custo
+	_________________________________________________________________________________________________________________________________________________________________________________________
+	C.Custo               Nome                                Preventiva      Percen.        Corretiva      Percen.          Outros      Percen.               Total
+	_________________________________________________________________________________________________________________________________________________________________________________________          
+
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    99,999.99   999,999,999.99    99,999.99  999,999,999.99    99,999.99    9,999,999,999.99
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    99,999.99   999,999,999.99    99,999.99  999,999,999.99    99,999.99    9,999,999,999.99
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    99,999.99   999,999,999.99    99,999.99  999,999,999.99    99,999.99    9,999,999,999.99
+	*/ 
+	/* 
+	MV_PAR09 = 2
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8   
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234
+	_________________________________________________________________________________________________________________________________________________________________________________________
+	Horas Trabalhados Por Centro de Custo
+	_________________________________________________________________________________________________________________________________________________________________________________________
+	C.Custo               Nome                                  Previsto         Realizado           Diferenca      Percen.
+	_________________________________________________________________________________________________________________________________________________________________________________________          
+
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    999,999,999.99    9,999,999,999.99   99,999.99%
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    999,999,999.99    9,999,999,999.99   99,999.99%
+	xxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999.99    999,999,999.99    9,999,999,999.99   99,999.99%
+	*/ 
+	//+--------------------------------------------------------------+
+	//| Define o indice de leitura do arquivo de Bens                | 
+	//+--------------------------------------------------------------+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+	While !(cTRB)->(Eof())
+
+		IncRegua()
+		If MV_PAR09 = 1 .And. lOutro
+			NGSOMALI(58)
+			@LI,000 Psay (cTRB)->CUSTOTR
+			@li,022 Psay Substr((cTRB)->NOMCUST,1,30)
+			@li,058 Psay MtoH((cTRB)->OPCAO1*60)
+			@li,071 Psay Transform((cTRB)->PERCE1,"@E 99,999.99")+"%"
+			@li,089 Psay MtoH((cTRB)->OPCAO2*60)
+			@li,101 Psay Transform((cTRB)->PERCE2,"@E 99,999.99")+"%"
+			@li,121 Psay MtoH((cTRB)->OPCAO3*60)
+			@li,130 Psay Transform((cTRB)->PERCE3,"@E 99,999.99")+"%"
+			@li,155 Psay MtoH((cTRB)->TOTAL*60)
+		ElseIf MV_PAR09 = 1 .And. !lOutro
+			NGSOMALI(58)
+			@LI,000 Psay (cTRB)->CUSTOTR
+			@li,022 Psay Substr((cTRB)->NOMCUST,1,30)
+			@li,058 Psay MtoH((cTRB)->OPCAO1*60)
+			@li,071 Psay Transform((cTRB)->PERCE1, "@E 99,999.99%")
+			@li,089 Psay MtoH((cTRB)->OPCAO2*60)
+			@li,101 Psay Transform((cTRB)->PERCE2, "@E 99,999.99%")
+			@li,121 Psay MtoH((cTRB)->TOTAL*60)
+		Else
+			NGSOMALI(58)
+			@LI,000 Psay (cTRB)->CUSTOTR
+			@li,022 Psay Substr((cTRB)->NOMCUST,1,30)
+			@li,060 Psay MtoH((cTRB)->OPCAO1*60)
+			@li,077 Psay MtoH((cTRB)->OPCAO2*60)
+			@li,097 Psay MtoH((cTRB)->TOTAL*60)
+			@li,109 Psay Transform((cTRB)->PERCETOT, "@E 99,999.99%")
+		EndIf
+
+		(cTRB)->(DbSkip())
+
+	End
+
+	NGSOMALI(58)
+	NGSOMALI(58)
+	
+	If MV_PAR09 = 1 .And. lOutro
+		@li,022 Psay STR0020 //"TOTAL GERAL"
+		@li,058 Psay MtoH(nOPC1*60) //Transform(nOPC1, "@E 999,999,999.99")
+		@li,071 Psay Transform(nPER1, "@E 99,999.99")+'%'
+		@li,089 Psay MtoH(nOPC2*60)
+		@li,101 Psay Transform(nPER2, "@E 99,999.99")+'%'
+		@li,121 Psay MtoH(nOPC3*60)
+		@li,130 Psay Transform(nPER3, "@E 99,999.99")+'%'
+		@li,155 Psay MtoH(nTOTAL*60)
+	ElseIf MV_PAR09 = 1 .And. !lOutro
+		@li,022 Psay STR0020 //"TOTAL GERAL"
+		@li,058 Psay MtoH(nOPC1*60)
+		@li,071 Psay Transform(nPER1, "@E 99,999.99")+'%'
+		@li,089 Psay MtoH(nOPC2*60)
+		@li,101 Psay Transform(nPER2, "@E 99,999.99")+'%'
+		@li,121 Psay MtoH(nTOTAL*60)
+	Else
+		@li,022 Psay STR0020 //"TOTAL GERAL"
+		@li,060 Psay MtoH(nOPC1*60)
+		@li,077 Psay MtoH(nOPC2*60)
+		@li,097 Psay MtoH(nTOTAL*60)
+		@li,109 Psay Transform(nPERTOT, "@E 99,999.99")+'%'
+	EndIf
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+	DbSelectArea(cTRB)
+	DbGoTop()
+
+Return Nil

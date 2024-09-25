@@ -1,0 +1,2508 @@
+#INCLUDE 'mnta635.ch'
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "TOPCONN.CH"
+#INCLUDE "RWMAKE.CH"
+#INCLUDE "Fileio.ch"
+#INCLUDE "tbiconn.ch"
+
+Static aInfoPosto := {} //  { CNPJ, Filial, Posto, Loja, Tipo, Convenio }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA635()
+
+Consistencia dos registros de abastecimento
+
+@author Evaldo Cevinscki Jr.
+@since 27/01/2006
+@version 1.0
+@sample Generico
+@return True
+
+/*/
+//---------------------------------------------------------------------
+Function MNTA635()
+
+	Local aNGBeginPrm := {}
+	Local nCont       := 0
+	Local cTipCom     := ''
+	Local cMotGer     := ''
+	Local cGenMot     := ''
+	Local lRPORel17   := .F.
+	Local cAliasQry1  := ''
+	Local aPE         := {}
+	Local nTamComTQM  := 0
+	Local lConsComb   := .F.
+	Local aProcess    := {}
+	Local aAux        := {}
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 95 )
+
+		aNGBeginPrm :=  NGBeginPrm()
+		lRPORel17   := GetRPORelease() <= '12.1.017'
+		cMotGer     := GetNewPar("MV_NGMOTGE","")
+		cAliasQry1  := GetNextAlias()
+		nTamComTQM  := IIf((TAMSX3("TQM_CODCOM")[1]) < 1,3,(TAMSX3("TQM_CODCOM")[1]))
+		lConsComb   := SuperGetMv("MV_NGIMPOR",.F.,"1") == "2"
+
+		cQuery := " SELECT TR6_NUMABA, TR6_PLACA,  TR6_TIPCOM, TR6_CNPJ,   TR6_CPFMOT, TR6_KMABAS,"
+		cQuery += "        TR6_QTDCOM, TR6_VLCOMB, TR6_VLTOT,  TR6_DTABAS, TR6_HRABAS,"
+		cQuery += "        TR6_NABANT, TR6_DTPROC, TR6_HRPROC "
+
+		cQuery += ",TR6_TANQUE, TR6_BOMBA"
+		cQuery += ",TR6_POSCO2"
+		cQuery += ",TR6_EMPORI, TR6_FILORI, TR6_EMPDES, TR6_FILDES, TR6_POSDES, TR6_LOJDES, TR6_TANDES, TR6_MOTTRA, TR6_POSTO, TR6_LOJA, TR6_CODOBS, TR6_CONVEN"
+
+		If ExistBlock("MNTA6353")
+
+			aPE := ExecBlock("MNTA6353",.F.,.F.)
+			If Len(aPE) > 0
+				For nCont := 1 To Len(aPE)
+					cQuery += ","+aPE[nCont]
+				Next nCont
+			EndIf
+
+		EndIf
+		cQuery += "  FROM " + RetSqlName("TR6")
+		cQuery += " WHERE TR6_DTPROC = ' ' AND D_E_L_E_T_ <> '*' "
+
+		//--------------------------------------------
+		// Adiciona na Query mais validações no WHERE
+		//--------------------------------------------
+		If ExistBlock("MNTA6354")
+			cQuery += ExecBlock("MNTA6354",.F.,.F.)
+		EndIf
+
+		cQuery += " ORDER BY TR6_PLACA,TR6_DTABAS,TR6_HRABAS "
+
+		cQuery := ChangeQuery(cQuery)
+
+		dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry1, .F., .T.)
+
+		While !Eof()
+
+			If Empty((cAliasQry1)->TR6_CPFMOT)
+				cGenMot := cMotGer
+			Else
+				cGenMot := (cAliasQry1)->TR6_CPFMOT
+			EndIf
+
+			If lConsComb
+				cTipCom := SubStr((cAliasQry1)->TR6_TIPCOM,1,nTamComTQM)
+			Else
+				cTipCom := (cAliasQry1)->TR6_TIPCOM
+			EndIf
+
+			aAdd(aProcess,{(cAliasQry1)->TR6_NUMABA,		; // 01 - Número do Abastecimento
+					SubStr((cAliasQry1)->TR6_PLACA,1,8),	; // 02 - Placa do Bem
+					cTipCom,                          		; // 03 - Tipo de Comustível
+					(cAliasQry1)->TR6_CNPJ,                 ; // 04 - CNPJ do Posto
+					cGenMot,                          		; // 05 - Motorista
+					(cAliasQry1)->TR6_KMABAS,               ; // 06 - Contador
+					(cAliasQry1)->TR6_QTDCOM,               ; // 07 - Quantidade de Combustível
+					(cAliasQry1)->TR6_VLCOMB,               ; // 08 - Valor Unitário do Combustível
+					(cAliasQry1)->TR6_VLTOT,                ; // 09 - Valor Total do Combustível
+					StoD((cAliasQry1)->TR6_DTABAS),			; // 10 - Data
+					(cAliasQry1)->TR6_HRABAS,               ; // 11 - Hora
+					AllTrim((cAliasQry1)->TR6_NABANT),      ; // 12 - Número do Abastecimento Anterior
+					'',                                  	; // 13 - Erro
+					(cAliasQry1)->TR6_TANQUE ,				; // 14 - Tanque
+					(cAliasQry1)->TR6_BOMBA  ,				; // 15 - Bomba
+					(cAliasQry1)->TR6_POSCO2 ,				; // 16 - Contador 2
+					(cAliasQry1)->TR6_EMPORI ,				; // 17 - Empresa Origem
+					(cAliasQry1)->TR6_FILORI ,				; // 18 - Filial Origem
+					(cAliasQry1)->TR6_EMPDES ,				; // 19 - Empresa Destino
+					(cAliasQry1)->TR6_FILDES ,				; // 20 - Filial Destino
+					(cAliasQry1)->TR6_POSDES ,				; // 21 - Posto Destino
+					(cAliasQry1)->TR6_LOJDES ,				; // 22 - Loja Destino
+					(cAliasQry1)->TR6_TANDES ,				; // 23 - Tanque Destino
+					(cAliasQry1)->TR6_MOTTRA ,				; // 24 - Motivo da Transferência
+					(cAliasQry1)->TR6_POSTO  ,				; // 25 - Posto
+					(cAliasQry1)->TR6_LOJA   ,				; // 26 - Loja
+					IIf(lRPORel17,(cAliasQry1)->TR6_CODOBS, ; // 27 - observação
+					Posicione( 'TR6', 1, (cAliasQry1)->TR6_NUMABA, 'TR6_OBSERV')),;
+					(cAliasQry1)->TR6_CONVEN,				; // 28 - Convênio
+					Nil })									  // 29 - reservado para filial
+
+			//------------------------------------------------------------
+			// Adiciona o conteúdo dos campos na última posição do array 
+			//------------------------------------------------------------
+			If Len(aPE) > 0
+				aAux := {}
+				For nCont := 1 To Len(aPE)
+					aAdd(aAux , { aPE[nCont],  &("(cAliasQry1)->"+aPE[nCont]) } )
+				Next nCont
+				aAdd( aProcess[ Len(aProcess) ], aAux )
+			EndIf
+
+			dbSkip()
+		End
+
+		//---------------------------------------------------
+		// Consistência de abastecimento
+		//---------------------------------------------------
+		Processa({|| MNT635CONS( aProcess ) })
+
+		MsgInfo(STR0004,STR0005) // Consistência Concluída
+
+		(cAliasQry1)->( dbCloseArea() )
+
+		NGReturnPrm( aNGBeginPrm )
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT635CONS
+Comsistência de abastecimento
+
+@author Evaldo Cevinscki Jr.
+@since 27/01/2006
+@version MP11
+@sample Generico
+@Return Nill
+/*/
+//---------------------------------------------------------------------
+Function MNT635CONS( aProcess, lReproc )
+
+	Local lMNTA6603 := ExistBlock("MNTA6603")
+	Local aValid    := {} 
+	Local i         := 0
+	Local nGravados := 0
+	Local nIncon    := 0
+	Local nLen      := Len( aProcess )
+	Local cFlTQQ    := ''
+	Local cAliasQry := ''
+	Local cMensagem := ''
+
+	Default lReproc := .F. // Se é Reprocessamento
+
+	//--------------------------------------------
+	// Variáveis private usadas no processamento 
+	//--------------------------------------------
+	Private aRep       := aProcess
+	Private cFrota
+	Private cCCusto    := ' '
+	Private cCODMOT    := ' '
+	Private cMatMot    := ' '
+	Private aKms       := {}
+	Private nInd       := 0
+	Private cGeraPrev  := AllTrim(GETMv("MV_NGGERPR"))
+	Private lIntRH     := GetNewPar("MV_NGMNTRH","N") $ "SX" //Integracao com RH
+	Private lConsComb  := SuperGetMv("MV_NGIMPOR",.F.,"1") == "2"
+	Private cCampoTQM  := IIf(lConsComb,"TQM_CODCOM","TQM_CODCON")
+	Private nIndTQM    := IIf(lConsComb,1,2)
+	Private nTamComTQM := IIf((TAMSX3("TQM_CODCOM")[1]) < 1,3,(TAMSX3("TQM_CODCOM")[1]))
+	Private lPrSB2     := SuperGetMv("MV_NGPRSB2") == "S"  //Parametro que indica se busca custo da SB2
+	Private cConNeg    := GetNewPar("MV_NGCONEG","S")
+	Private lAfericao  := SuperGetMv("MV_NGMNTAF",.F.,"2") == "1" //Verifica parametro que indica se deve validar com afericao
+	Private lNgMntEs   := SuperGetMV("MV_NGMNTES", .F., "N") == "S" // Usa Integração com Estoque?
+	Private cEstHome   := AllTrim(GetMv("MV_ESTHOME"))  //Momento em que o estoque sera debitado (S/C/N)
+	Private lEstNeg    := SuperGetMV("MV_ESTNEG") == 'S'  // Variavel usada para identificar se usuario permite que o estoque fique negativo. Se permitir, a variavel vale .T.
+
+	If lReproc
+		cMensagem := STR0021 // "Reprocessando Abastecimentos Rejeitados"
+	Else
+		cMensagem := STR0001 // "Registro "
+	EndIf
+
+	ProcRegua(Len(aRep))
+
+   	MNTA651VAR() // Inicia variáveis do cadastro da Transferências (MNTA651)
+
+	For i := 1 To Len(aRep)
+
+		IncProc( cMensagem + '....:' + AllTrim(aRep[i][1])+ STR0002+ AllTrim(aRep[i][2]) ) //"Registro : "###" da placa : "
+
+		If lReproc
+
+			//--------------------------------------------------
+			// Ajuste do tamanho de campo combustível
+			//--------------------------------------------------
+			If lConsComb
+				aRep[i][3] := SubStr(aRep[i][3],1,nTamComTQM)
+			EndIf
+
+			//-----------------------------------------------------------------------------------------------------------------------
+			// As inconsistências serão gravadas com o campo filial onde está sendo processada, por isso 
+			// a filial TQQ é passada no REPROCESSAMENTO para que não haja duplicidade de registros em filiais diferentes
+			//-----------------------------------------------------------------------------------------------------------------------
+			cFlTQQ := aRep[ i, 29]
+
+			dbSelectArea("TQP")
+			dbSetOrder(1)
+			If dbSeek( cFlTQQ + aRep[i][1] + aRep[i][4] )
+				While !Eof() .And. cFlTQQ == TQP->TQP_FILIAL .And. TQP->TQP_NABAST == aRep[i][1] .And. TQP->TQP_CNPJ   == aRep[i][4]
+
+					RecLock("TQP",.F.)
+					dbDelete()
+					MsUnLock("TQP")
+					dbSkip()
+				EndDo
+			EndIf
+
+		EndIf
+
+		//----------------------------------------------------------------
+		// Realiza validações e se tiver problemas grava inconsistências
+		//----------------------------------------------------------------
+		aValid := fMnt635Val( i ) // Realiza validações
+
+		If aValid[1]
+
+			nGravados++
+
+			If !Empty(aRep[i][21]) .Or. !Empty(aRep[i][22]) .Or. !Empty(aRep[i][23]) // 21/22/23 - Posto/Loja/Tanque destino
+
+				//------------------------------------------
+				// Realiza gravação da transferência - TUI
+				//------------------------------------------
+				fTransfere( i)
+
+			Else
+
+				//------------------------------------------
+				// Realiza gravação do abastecimento - TQN
+				//------------------------------------------
+				fAbastece( i, aValid[2], aValid[3], aValid[4] ) // Realiza gravação do abastecimento
+
+			EndIf
+
+
+			If lReproc
+
+				If lMNTA6603 //Ponto de entrada para gravações após o reprocessamento de abastecimentos.
+					ExecBlock("MNTA6603",.F.,.F.)
+				EndIf
+				
+				//------------------------------------------------------------------------------------------
+				// Trecho abaixo deleta inconsistências de abastecimento caso registro tenha sido gravado
+				//------------------------------------------------------------------------------------------
+				cAliasQry := GetNextAlias()
+				cQuery := " SELECT * "
+				cQuery += " FROM " + RetSQLName("TQQ")
+				cQuery += " WHERE TQQ_PLACA='"+TQN->TQN_PLACA+"' AND TQQ_DTABAS='"+DTOS(TQN->TQN_DTABAS)+"'"
+				cQuery += " AND TQQ_HRABAS='"+TQN->TQN_HRABAS+"' AND TQQ_CNPJ='"+TQN->TQN_CNPJ+"' AND D_E_L_E_T_<>'*' "
+
+				cQuery := ChangeQuery(cQuery)
+				dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+				While !(cAliasQry)->( Eof() )
+
+					dbSelectArea('TQQ')
+					TQQ->( dbGoTo((cAliasQry)->R_E_C_N_O_) )
+
+					RecLock("TQQ",.F.)
+					Dbdelete()
+					MsUnLock("TQQ")
+
+					(cAliasQry)->( dbSkip() )
+
+				EndDo
+
+				(cAliasQry)->( dbCloseArea() )
+
+			EndIf
+
+		EndIf
+
+		If !lReproc			
+			//-----------------------------------------------------------------------------
+			// Define data do processo - Indica que o registro já foi verificado/consistido
+			//-----------------------------------------------------------------------------
+			dbSelectArea('TR6')
+			dbSetOrder(01)
+			If dbSeek(AllTrim(aRep[i][1])) // Num  abastecimento
+				Reclock("TR6",.F.)
+				TR6->TR6_DTPROC := dDataBase
+				TR6->TR6_HRPROC := SUBSTR(Time(),1,2)+":"+SUBSTR(Time(),4,2)
+				MsUnLock("TR6")
+			EndIf
+
+		EndIf
+
+	Next i
+
+	If lReproc
+
+		cAliasQry := GetNextAlias()
+
+		cQuery := " SELECT TQP_FILIAL "
+		cQuery += " FROM " + RetSQLName("TQP")
+		cQuery += " WHERE D_E_L_E_T_<>'*' "
+
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+		nIncon := (cAliasQry)->( RecCount() )
+		nLen   := nLen - nGravados
+
+		(cAliasQry)->( dbCloseArea() )
+
+		MsgInfo(STR0018 + '....: ' +AllTrim(Str(nLen))+chr(10)+Chr(13)+;  			// "Registros de Abastec. Inconsistentes"
+		STR0019 + '.................: ' + AllTrim(Str(nIncon))+chr(10)+Chr(13)+;	// "Inconsistências encontradas"
+		STR0020 + '...............................: '  + AllTrim(Str(nGravados)) )	// "Registros Gravados"
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTransfere
+Gravação de  transferencia de combustíveis
+
+@param aRep, array, registros processamento
+@param i, numeric, índice array
+@author Maria Elisandra de Paula
+@since 06/04/21
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fTransfere( aRep, i )
+
+	Local cOldEmp   := cEmpAnt
+	Local cOldFil   := cFilAnt
+	Local cCodUser	:= RetCodUsr()
+	Local aTabelas  := { {"TQF"}, {"TQI"}, {"TQJ"}, {"TQM"} }
+	Local lRPORel17 := GetRPORelease() <= '12.1.017'
+	Local oModel    := FWLoadModel("MNTA651") // Tenta receber o Modelo de Dados
+
+	If ValType(oModel) == "O"
+		oModel:SetOperation(MODEL_OPERATION_INSERT) // Define inclusão
+		oModel:Activate() // Ativa o Modelo de Dados
+
+		// Dados Gerais
+		oModel:SetValue("TUIMASTER", "TUI_FILIAL", xFilial("TUI")   )
+		oModel:SetValue("TUIMASTER", "TUI_DATA"  , aRep[i][10]      )
+		oModel:SetValue("TUIMASTER", "TUI_HORA"  , aRep[i][11]      )
+		oModel:SetValue("TUIMASTER", "TUI_MOTIVO", aRep[i][24]      )
+		oModel:SetValue("TUIMASTER", "TUI_RESPON", cCodUser	        )
+		If lRPORel17
+			oModel:SetValue("TUIMASTER", "TUI_OBSERV", NGMEMOSYP(aRep[i][27]))
+		Else
+			oModel:SetValue("TUIMASTER", "TUI_OBSERV", aRep[i][27]      )
+		Endif
+
+		If NGIfDBSEEK("TTX", aRep[i][24], 1) .And. ( lNgMntEs .And. TTX->TTX_ATUEST == "1" )
+			oModel:SetValue("TUIMASTER", "TUI_STATUS", "1") // 1 - Normal
+		Else
+			oModel:SetValue("TUIMASTER", "TUI_STATUS", "3") // 3 - Sem Estoque
+		EndIf
+
+		// Origem
+		If !Empty(aRep[i][17]) .And. NGSX2MODO("TQF", aRep[i][17]) <> Nil
+			NGPrepTbl(aTabelas, aRep[i][17], aRep[i][18] )
+		EndIf
+
+		oModel:SetValue("TUIMASTER", "TUI_EMPORI", aRep[i][17]   )
+		oModel:SetValue("TUIMASTER", "TUI_FILORI", aRep[i][18]   )
+		oModel:SetValue("TUIMASTER", "TUI_POSORI", cPOSTO        )
+		oModel:SetValue("TUIMASTER", "TUI_LOJORI", cLOJA         )
+		oModel:SetValue("TUIMASTER", "TUI_TANORI", aRep[i][14]   )
+		oModel:SetValue("TUIMASTER", "TUI_COMORI", NGSEEK("TQI", cPOSTO + cLOJA + aRep[i][14], 1, "TQI->TQI_CODCOM"))
+		oModel:SetValue("TUIMASTER", "TUI_PROORI", NGSEEK("TQI", cPOSTO + cLOJA + aRep[i][14], 1, "TQI->TQI_PRODUT"))
+		oModel:SetValue("TUIMASTER", "TUI_SAIORI", If(!Empty(aRep[i][15]), "1", "2"))
+		oModel:SetValue("TUIMASTER", "TUI_BOMORI", aRep[i][15]   )
+		oModel:SetValue("TUIMASTER", "TUI_QUANTI", aRep[i][7] )
+
+		// Destino
+		If !Empty(aRep[i][17]) .And. NGSX2MODO("TQF", aRep[i][19]) <> Nil
+			NGPrepTbl(aTabelas, aRep[i][19], aRep[i][20])
+		EndIf
+
+		oModel:SetValue("TUIMASTER", "TUI_EMPDES", aRep[i][19])
+		oModel:SetValue("TUIMASTER", "TUI_FILDES", aRep[i][20])
+		oModel:SetValue("TUIMASTER", "TUI_POSDES", aRep[i][21])
+		oModel:SetValue("TUIMASTER", "TUI_LOJDES", aRep[i][22])
+		oModel:SetValue("TUIMASTER", "TUI_TANDES", aRep[i][23])
+		oModel:SetValue("TUIMASTER", "TUI_COMDES",NGSEEK("TQI", aRep[i][21] + aRep[i][22] + aRep[i][23], 1, "TQI->TQI_CODCOM"))
+		oModel:SetValue("TUIMASTER", "TUI_PRODES",NGSEEK("TQI", aRep[i][21] + aRep[i][22] + aRep[i][23], 1, "TQI->TQI_PRODUT"))
+
+		// Devolve tabelas
+		NGPrepTbl(aTabelas, cOldEmp, cOldFil )
+
+		// Valida
+		If oModel:VldData()
+			// Grava
+			oModel:CommitData()
+		Else
+			aError := oModel:GetErrorMessage()
+			ShowHelpDlg(aError[5],{aError[6],""},2,{aError[7],""},2)
+		EndIf
+
+		// Desativa o Modelo
+		oModel:DeActivate()
+	EndIf
+
+Return 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAbastece
+Gravação de abastecimento
+
+@param i, numéric, índice do array 
+@param lVirada, boolean, se é virada de contador do bem
+@param cCodmod, string, código do motorista
+@param cCodCom, string, código do combustível
+@author Maria Elisandra de Paula
+@since 06/04/21
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fAbastece( i, lVirada, cCodMot, cCodCom )
+
+	Local aPosto      := {}
+	Local aInfoAbast  := {}
+	Local aRetTPN     := {}
+	Local cFrota      := ''
+	Local cCusto      := ''
+	Local cCentrab    := ''
+	Local lModoTab    := Len( AllTrim( xFilial( "TQI" ) ) ) > Len( AllTrim( xFilial( "TQF" ) ) ) //Verifica se a tabela TQI é mais exclusiva que a tabela TQF
+	Local cRet        := ""
+	Local cCodFil     := ''
+	Local cTexto      := ""
+	Local cCabec      := ""
+	Local cTexErro    := ""
+	Local cProduto    := ""
+	Local aTanque     := {}
+	Local lTem2Cnt    := .F.
+	Local lMNTA6351	  := ExistBlock("MNTA6351")
+	Local lMNT655D3CC := ExistBlock("MNT655D3CC")
+	Local aAreaTQN    := {}
+	Local cAbast      := ''
+	Local cTemCont    := ''
+	Local cPosto      := ''
+	Local cLoja       := ''
+	Local cFlAbast    := ''
+	Local cFlPosto    := ''
+
+	//--------------------------------------
+	// busca informações de posto
+	//--------------------------------------
+	aPosto     := fInfoposto( i ) // { CNPJ, Filial, Posto, Loja, Tipo, Convênio }
+	cFlPosto   := aPosto[2]
+	cPosto     := aPosto[3]
+	cLoja      := aPosto[4]
+	cTipoPosto := aPosto[5]
+
+	//-------------------------------------------------------------
+	// busca informações de filial para gravação de abastecimento
+	//-------------------------------------------------------------
+	aInfoAbast := fFilAbast( i, cFlPosto, cPosto, cLoja, cTipoPosto )
+	cFlAbast   := aInfoAbast[1]
+	cCusto     := aInfoAbast[2]
+	cCentrab   := aInfoAbast[3]
+
+	dbSelectAre( 'ST9' )
+	dbSetOrder( 14 )
+	If msSeek( aRep[i,2] ) // PLACA
+
+		aRetTPN := NgFilTPN( ST9->T9_CODBEM, aRep[i,10], aRep[i,11], aRep[i,2] )
+
+		If !Empty( aRetTPN[1] )
+
+			cFlVei := aRetTPN[1]
+
+		Else
+
+			cFlVei := ST9->T9_FILIAL
+
+		EndIf
+
+		cTemCont := ST9->T9_TEMCONT
+		cFrota   := ST9->T9_CODBEM
+
+		dbSelectArea('TPE')
+		dbSetOrder(1)
+		If dbSeek( xFilial('TPE', cFlVei ) + cFrota ) .And. TPE->TPE_SITUAC == '1'
+			lTem2Cnt := .T.
+		EndIf
+
+	EndIf
+
+	//------------------------------------------
+	// Tratativa para não repetir abastecimento
+	//------------------------------------------
+	dbSelectArea('TQN')
+	dbSetOrder(1)
+	If dbSeek( xFilial('TQN', cFlAbast) + cFrota + DTOS( aRep[ i, 10 ])+ aRep[ i, 11 ] )
+		Return
+	EndIf
+
+	//---------------------------------------------
+	// Inicia gravação
+	//---------------------------------------------
+	cAbast := GETSXENUM( 'TQN','TQN_NABAST' )
+	ConfirmSX8()
+
+	RecLock("TQN",.T.)
+	TQN->TQN_FILIAL := xFilial( 'TQN', cFlAbast )
+	TQN->TQN_PLACA  := aRep[i][2]
+	TQN->TQN_FROTA  := cFrota
+	TQN->TQN_CNPJ   := aRep[i][4]
+	TQN->TQN_POSTO  := cPosto
+	TQN->TQN_LOJA   := cLoja
+	TQN->TQN_NOTFIS := ' '
+	TQN->TQN_DTABAS := aRep[i][10]
+	TQN->TQN_HRABAS := aRep[i][11]
+	TQN->TQN_QUANT  := aRep[i][7]
+	TQN->TQN_VALTOT := aRep[i][9]
+	TQN->TQN_VALUNI := TQN->TQN_VALTOT / TQN->TQN_QUANT
+	TQN->TQN_CODCOM := cCodCom
+	TQN->TQN_HODOM  := If(cTemCont != "N", aRep[i][6], 0)
+	TQN->TQN_CODVIA := " "
+	TQN->TQN_ESCALA := " "
+	TQN->TQN_TANQUE := aRep[i][14]
+	TQN->TQN_BOMBA  := aRep[i][15]
+	TQN->TQN_NUMCON := PadL(aRep[i][1],15,"0")
+	TQN->TQN_NABAST := cAbast
+	TQN->TQN_NABAAN := PadL(aRep[i][12],15,"0")
+	TQN->TQN_CODMOT := cCodMot
+	TQN->TQN_USUARI := cUserName
+	TQN->TQN_AUTO   := "1"
+	TQN->TQN_NUMSEQ := " "
+	TQN->TQN_DTEMIS := aRep[i][10]
+	TQN->TQN_DTPGMT := MNT635DTPG(TQN->TQN_POSTO,TQN->TQN_LOJA,TQN->TQN_DTABAS,TQN->TQN_HRABAS)
+	TQN->TQN_CCUSTO := cCusto
+	TQN->TQN_CENTRA := cCentrab
+	TQN->TQN_ORDENA := INVERTE(TQN->TQN_DTABAS)
+	TQN->TQN_NUMSGC := MN655NUMSGC()
+	TQN->TQN_POSCO2 := aRep[i][16]
+	TQN->TQN_FILORI := cFilAnt
+	MsUnLock("TQN")
+
+	//------------------------------------------------------------------
+	// Ponto de entrada para ações adicionais após gravação
+	//------------------------------------------------------------------
+	If lMNTA6351
+		ExecBlock("MNTA6351",.F.,.F., { TQN->( Recno() ), cFlAbast, cFlVei, aRep[i] } )
+	EndIf
+
+	//-------------------------------------
+	//Grava TTV - Inclui historico do contador da Bomba
+	//-------------------------------------
+	NGIncTTV(TQN->TQN_POSTO,TQN->TQN_LOJA,TQN->TQN_TANQUE,TQN->TQN_BOMBA,TQN->TQN_DTABAS,TQN->TQN_HRABAS,"1",,TQN->TQN_QUANT,TQN->TQN_NABAST)
+
+	//---------------------------------------
+	// Movimentação de Estoque
+	//---------------------------------------
+	If cEstHome == "S" .And. aRep[i][7] > 0 .And. lNgMntEs
+
+		If cTipoPosto == '2' // Posto Interno
+
+			If !Empty( aRep[i,20] ) // Usa Filial destino caso foi informada
+
+				cCodFil := xFilial( 'SD3', aRep[i,20] )
+
+			Else
+
+				cCodFil := xFilial( 'SD3', cFlPosto )
+
+			EndIf
+
+			//Busca o codigo e a unidade de medida na tabela de tipo de combustiveis
+			If NGIfDBSEEK( 'TQM', aRep[i][3], nIndTQM, , cFlPosto )
+
+				//Para os casos onde a TQI for mais exclusiva que a TQF, deve-se verificar
+				//se o código de tanque, repassado no txt, existe nas filiais abaixo da TQF.
+				If lModoTab
+
+					aTanque := MNT635QTAN( aRep[i] )
+
+					cProduto := aTanque[2]
+
+				ElseIf NGIfDBSEEK( 'TQI', TQN->TQN_POSTO+TQN->TQN_LOJA+TQN->TQN_TANQUE+TQM->TQM_CODCOM,1,, cFlPosto )
+
+					cProduto := TQI->TQI_PRODUT 
+
+				EndIf
+
+				If !Empty( cProduto )
+
+					aAreaTQN := TQN->( GetArea() )
+
+					cRet := MntMovEst( 'RE0', aRep[i,14], cProduto, aRep[i,7], aRep[i,10], NextNumero( 'SD3',;
+						2, 'D3_DOC', .T. ), cCodFil, cCusto, , TQN->TQN_NUMSEQ, , cFrota, cCodFil )
+
+					RestArea( aAreaTQN )
+
+				EndIf
+
+				If !( Empty( cRet ) )
+					// Validar pra ver se está posicionado no registro que foi gravado anteriormente...
+					RecLock("TQN", .F.)
+					TQN->TQN_NUMSEQ := cRet // cRet terá o D3_NUMSEQ
+					TQN->TQN_DTCON  := aRep[i][10]
+					TQN->(MsUnLock())
+				Else
+					MsgInfo( STR0006 ) //"O abastecimento foi gravado, porém para realizar sua baixa será necessário utilizar a rotina de Conciliação."
+				EndIf
+				If lMNT655D3CC //Ponto de Entrada para altecoes finais no SD3
+					ExecBlock("MNT655D3CC", .F. , .F. , {'RE0', cFROTA, cCusto, Nil })
+				EndIf //Fim - Ponto de Entrada
+			EndIf //Fim - Dbseek TQM
+
+		EndIf
+
+	EndIf //Fim Verificação de Estoque
+	//---------------------------------------
+	// Fim da Movimentação de Estoque
+	//---------------------------------------
+
+	If Empty(cRet)
+
+		If !lNgMntEs
+			If Empty(cCabec)
+				cCabec := CHR(10) + CHR(13) + STR0007 +DtoC(dDataBase)+ " " + SubStr(Time(),1,5) + CHR(10) + CHR(13) //"Data do Reprocessamento: "
+			EndIf
+			cTexErro := STR0008 + CHR(10) + CHR(13) //"Erro: Parametro incorreto MV_NGMNTES = 'N' ."
+		ElseIf cEstHome == "N"
+
+			If Empty(cCabec)
+				cCabec := CHR(10) + CHR(13) + STR0007 +DtoC(dDataBase)+ " " + SubStr(Time(),1,5) + CHR(10) + CHR(13) //"Data do Reprocessamento: "
+			EndIf
+
+			cTexErro := STR0009 + CHR(10) + CHR(13) //"Erro: Parametro incorreto MV_ESTHOME = 'N' ."
+
+		ElseIf TQN->TQN_QUANT == 0
+
+			If Empty(cCabec)
+				cCabec := CHR(10) + CHR(13) + STR0007 +DtoC(dDataBase)+ " " + SubStr(Time(),1,5) + CHR(10) + CHR(13) //"Data do Reprocessamento: "
+			EndIf
+
+			cTexErro := STR0010 + CHR(10) + CHR(13) //"Erro: Quantidade do Abastecimento igual a 0."
+
+		EndIf
+
+		If !Empty(ccabec)
+			cTexto := cCabec
+			cTexto += STR0011 + TQN->TQN_FILIAL + CHR(10) + CHR(13) //"Filial: "
+			cTexto += STR0012 + TQN->TQN_NABAST + CHR(10) + CHR(13) //"Abastecimento: "
+			cTexto += STR0013 + TQN->TQN_PLACA + CHR(10) + CHR(13) //"Placa: "
+			cTexto += STR0014 + TQN->TQN_FROTA + CHR(10) + CHR(13) //"Bem: "
+			cTexto += STR0015 + TQN->TQN_POSTO + "/" + TQN->TQN_LOJA + CHR(10) + CHR(13) //"Posto/Loja: "
+			cTexto += STR0016 + TQN->TQN_CNPJ + CHR(10) + CHR(13) //"CNPJ: "
+			cTexto += STR0017 + DtoC(TQN->TQN_DTABAS) + Space(1) + TQN->TQN_HRABAS + CHR(10) + CHR(13) //"Data do Abastecimento: "
+			cTexto += cTexErro
+
+			cBARRAS := If(isSRVunix(),"/","\")
+			cRootPath := Alltrim(GetSrvProfString("RootPath",cBARRAS))
+			cStartPath := AllTrim(GetSrvProfString("StartPath",cBARRAS))
+			cArquivo := cRootPath+cStartPath+"reprocessamento.txt"
+
+			If File(cArquivo)
+				nHdlArq := FOPEN(cArquivo,0)
+				FT_FUSE(cArquivo)
+				FWRITE(nHdlArq, cTexto)
+				FCLOSE(nHdlArq)
+			Else
+				If (nHandle := FCREATE("reprocessamento.txt",FC_NORMAL)) != -1
+					FWRITE(nHandle, cTexto)
+					FCLOSE(nHandle)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	/*
+		CRIAR O TXT PARA GRAVAR HISTÓRICO DE BAIXAS NÃO FEITAS, LEVAR EM CONSIDERAÇÃO
+		O PORQUÊ QUE NÃO FOI BAIXADO ( Se o parâmetro ESTHOME está diferente de S colocar no TXT o conteúdo dele,
+										Se a quantidade do abastecimento for zero, também deve constar no TXT
+										Se não estiver integrado ao ESTOQUE, também deve constar no TXT )
+		Além dessas informações colocar também dados relevantes ao abastecimento, para que o histórico
+		seja consistente( Deve constar a filia, o numero do abastecimento, a placa, o bem, o cnpj, o
+		posto, data e a hora do abastecimento.)
+
+		OBS: Mesmo procedimento na rotina MNTA660.
+	*/
+
+	If !lVirada
+		NGTRETCON(TQN->TQN_FROTA,TQN->TQN_DTABAS,TQN->TQN_HODOM,TQN->TQN_HRABAS,1,,,"A", cFlVei )
+		If TQN->TQN_POSCO2 != 0 .And. lTem2Cnt
+			NGTRETCON(TQN->TQN_FROTA,TQN->TQN_DTABAS,TQN->TQN_POSCO2,TQN->TQN_HRABAS,2,,,"A", cFlVei )
+		EndIf
+	Else
+		dbSelectArea("STP")
+		dbSetOrder(5)
+		dbSeek(xFilial("STP", cFlVei )+cFROTA+DTOS(aRep[i][10])+aRep[i][11])
+		If STP->TP_POSCONT == aRep[i][6]  .And. (STP->TP_TIPOLAN == 'M' .Or. STP->TP_TIPOLAN == 'C')
+			RecLock("STP",.F.)
+			STP->TP_TIPOLAN := "A"
+			MsUnLock("STP")
+		EndIf
+		If TQN->TQN_POSCO2 != 0 .And. lTem2Cnt
+			dbSelectArea("TPP")
+			dbSetOrder(5)
+			dbSeek(xFilial("TPP", cFlVei )+cFROTA+DTOS(aRep[i][10])+aRep[i][11])
+			If TPP->TPP_POSCON == aRep[i][6]  .And. (TPP->TPP_TIPOLA == 'M' .Or. TPP->TPP_TIPOLA == 'C')
+				RecLock("TPP",.F.)
+				TPP->TPP_TIPOLA := "A"
+				MsUnLock("TPP")
+			EndIf
+		EndIf
+	EndIf
+
+	//GERAR O.S AUTOMATICA POR CONTADOR
+	dbSelectArea("TQN")
+	If (cGeraPrev = "S" .Or. cGeraPrev = "C" .Or. cGeraPrev = "A") .And. !Empty(TQN->TQN_HODOM)
+		If cGeraPrev = "C"
+			NGGEROSAUT(TQN->TQN_FROTA,TQN->TQN_HODOM,TQN->TQN_FILIAL)
+		Else
+			NGGEROSAUT(TQN->TQN_FROTA,TQN->TQN_HODOM,TQN->TQN_FILIAL)
+		EndIf
+	EndIf
+
+	dbSelectArea("TQN")
+	dbSetOrder(1)
+
+	FwFreeArray( aRetTPN )
+
+Return
+
+/*
+Função obsoleta, função substituta: fMnt635Val
+*/
+Function MNT635VAL()
+
+	ShowHelpDlg(  STR0022 ,;      // ATENÇÃO
+				{ STR0023 }, 2,; // Essa rotina passou recentemente por uma atualização importante.
+				{ STR0024 }, 2 ) // "Favor verificar a documentação MP - MNT - Definição da filial nas inconsistências de abastecimento"
+
+Return .F.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMnt635Val
+Valida os erros encontrados na importacao
+
+@param i, numeric, índice do array de processamento
+@author Evaldo Cevinscki Jr.
+@since 27/01/2006
+@version MP11
+@sample Generico
+@Return array 
+	[1] se registro está consistente
+	[2] se é virada de contador do veículo
+	[3] código do motorista
+	[4] código do combustível
+/*/
+//---------------------------------------------------------------------
+Static Function fMnt635Val( i )
+
+	Local lRet     := .T.
+	Local aReturn  := { .F., .F., '', '' } // { lOk, lVirada, cCodMot, cCodCom}
+	Local aTanque  := {}
+	Local lModoTab := .F.
+	Local lInfComb := .T.
+
+	Private aErro     := {}
+	Private aKms      := {}
+	Private nCAPMAX   := 0
+
+	//Verifica se a tabela TQI é mais exclusiva que a tabela TQF
+	lModoTab := Len( AllTrim( xFilial( "TQI" ) ) ) > Len( AllTrim( xFilial( "TQF" ) ) )
+
+	//-----------------------------------------------------------
+	// Início validações genéricas (abastecimento/transferencia)
+	//-----------------------------------------------------------
+	If Empty(aRep[i][10]) .And. ;//Se não informou a data de abastecimento (TR6_DTABAS)
+		Mnt635Gra(,i," 51") // "Não foi informada data para o abastecimento."
+		lRet     := .F.
+		aAdd(aERRO,{"51"})
+	EndIf
+
+	If Empty(aRep[i][11]) .And.; //Se não informou a hora de abastecimento (TR6_HRABAS)
+		Mnt635Gra(,i," 52") // "Não foi informada hora para o abastecimento."
+		lRet     := .F.
+		aAdd(aERRO,{"52"})
+	EndIf
+
+	If !Empty(aRep[i][10]) .And. aRep[i][10] > dDataBase .And. ;
+		Mnt635Gra(,i," 53") // "Data/Hora de abastecimento maior que a data atual"
+		lRet     := .F.
+		aAdd(aERRO,{"53"})
+	EndIf
+
+	If !Empty(aRep[i][10]) .And. !Empty(aRep[i][11]) .And. (aRep[i][10] == dDataBase .And. ;
+		aRep[i][11] > SubStr(Time(),1,5)) .And. Mnt635Gra(,i," 53") // "Data/Hora de abastecimento maior que a data atual"
+		lRet     := .F.
+		aAdd(aERRO,{"53"})
+	EndIf
+
+	If Empty(aRep[i][3]) .And. Mnt635Gra(,i," 55") //Combustível não informado.
+		lRet    := .F.
+		aAdd(aERRO,{"55"})
+		lInfComb := .F.
+	Else
+		lInfComb := .T.
+	EndIf
+
+	If Empty(aRep[i][5]) .And. Mnt635Gra(,i," 13") //Motorista nao informado
+		lRet := .F.
+		aAdd(aERRO,{"13"})
+	EndIf
+
+	//Para os casos onde a TQI for mais exclusiva que a TQF, deve-se verificar
+	//se o código de tanque, repassado no txt, existe nas filiais abaixo da TQF.
+	//Verifica se tem Tanque, e se Posto e loja estão preenchidos
+	If lModoTab .And. !Empty(aRep[i][25]) .And. !Empty(aRep[i][26])
+
+		aTanque := MNT635QTAN( aRep[i] )
+
+		//Se possuir mais de um Tanque com mesmo código
+		If aTanque[3] > 1
+			If Mnt635Gra(,i," 58") //"LOCAL DE ESTOQUE DO TANQUE ENCONTRADO EM VÁRIAS FILIAIS"
+				lRet := .F.
+				aAdd(aERRO,{"58"})
+			EndIf
+		EndIf
+	EndIf
+
+	// Se possuir preenchido qualquer dado de Destino (exemplo: Posto, ou Loja), processa como Transferência de Combustível
+	If !Empty(aRep[i][21]) .Or. !Empty(aRep[i][22]) .Or. !Empty(aRep[i][23])
+	
+		aReturn := fValTransf( i ) // Retorno { lOk }
+
+	Else
+
+		aReturn := fValAbast( i, lInfComb ) // Retorno { lOk, lVirada, cCodMot, cCodCom }
+
+	EndIf
+
+	aReturn[1] := lRet .And. aReturn[1]
+
+Return aReturn
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValTransf
+Validação de transferencia
+
+@param i, numeric, índice do array 
+@author Maria Elisadra de Paula
+@since 06/04/21
+@return array [1] se registro está consistente
+/*/
+//---------------------------------------------------------------------
+Static Function fValTransf( i )
+
+	Local oModel
+	Local lRPORel17  := GetRPORelease() <= '12.1.017'
+	Local lRet       := .F.
+	Local cOldEmpAnt := cEmpAnt
+	Local cOldFilAnt := cFilAnt
+	Local cProOri    := ""
+	Local cProDes    := ""
+	Local cComOri    := ""
+	Local cComDes    := ""
+	Local aTabelas   := { {"SB1"}, {"SB2"}, {"SD3"}, {"SD4"}, {"TQF"}, {"TQG"}, {"TQH"}, {"TQI"}, {"TQJ"}, {"TQM"}, {"TTV"}, {"TTX"} }
+	Local aPosto     := {}
+
+   	/* Observações da Transferência (dados necessários):
+	Posto de Origem/Destino
+	Loja de Origem/Destino
+	Tanque de Origem/Destino
+	Quantidade Transferida
+	Motivo da Transferência
+	*/
+
+	//-------------------------------------
+	// Busca posto por CNPJ
+	//-------------------------------------
+	aPosto := fInfoposto( i )
+	cPosto := aPosto[3]
+	cLoja  := aPosto[4]
+
+	// Inicia variáveis do cadastro da Transferências (MNTA651)
+	MNTA651VAR()
+
+	oModel := FWLoadModel("MNTA651") // Tenta receber o Modelo de Dados
+	If ValType(oModel) == "O"
+
+		oModel:SetOperation(MODEL_OPERATION_INSERT) // Define inclusão
+		oModel:Activate() // Ativa o Modelo de Dados
+
+		// Dados Gerais
+		oModel:SetValue("TUIMASTER", "TUI_FILIAL", xFilial("TUI"))
+		oModel:SetValue("TUIMASTER", "TUI_DATA"  , aRep[i][10])
+		oModel:SetValue("TUIMASTER", "TUI_HORA"  , aRep[i][11])
+		oModel:SetValue("TUIMASTER", "TUI_MOTIVO", aRep[i][24])
+		oModel:SetValue("TUIMASTER", "TUI_RESPON", RetCodUsr())
+		If lRPORel17
+			oModel:SetValue("TUIMASTER", "TUI_OBSERV", NGMEMOSYP(aRep[i][27]))
+		Else
+			oModel:SetValue("TUIMASTER", "TUI_OBSERV", aRep[i][27])
+		EndIf
+		If NGIfDBSEEK("TTX", aRep[i][24], 1) .And. ( lNgMntEs .And. TTX->TTX_ATUEST == "1" )
+			oModel:SetValue("TUIMASTER", "TUI_STATUS", "1") // 1 - Normal
+		Else
+			oModel:SetValue("TUIMASTER", "TUI_STATUS", "3") // 3 - Sem Estoque
+		EndIf
+
+		// Origem
+		If !Empty(aRep[i][17]) .And. NGSX2MODO("TQF", aRep[i][17]) <> Nil
+			NGPrepTbl(aTabelas, aRep[i][17], aRep[i][18])
+		EndIf
+		oModel:SetValue("TUIMASTER", "TUI_EMPORI", aRep[i][17])
+		oModel:SetValue("TUIMASTER", "TUI_FILORI", aRep[i][18])
+		oModel:SetValue("TUIMASTER", "TUI_POSORI", cPOSTO)
+		oModel:SetValue("TUIMASTER", "TUI_LOJORI", cLOJA)
+		oModel:SetValue("TUIMASTER", "TUI_TANORI", aRep[i][14])
+
+		cComOri := NGSEEK("TQI", cPOSTO + cLOJA + aRep[i][14], 1, "TQI->TQI_CODCOM")
+		cProOri := NGSEEK("TQI", cPOSTO + cLOJA + aRep[i][14], 1, "TQI->TQI_PRODUT")
+
+		oModel:SetValue("TUIMASTER", "TUI_COMORI", cComOri)
+		oModel:SetValue("TUIMASTER", "TUI_PROORI", cProOri)
+		oModel:SetValue("TUIMASTER", "TUI_SAIORI", If(!Empty(aRep[i][15]), "1", "2"))
+		oModel:SetValue("TUIMASTER", "TUI_BOMORI", aRep[i][15])
+		oModel:SetValue("TUIMASTER", "TUI_QUANTI", aRep[i][7])
+
+		// Destino
+		If !Empty(aRep[i][17]) .And. NGSX2MODO("TQF", aRep[i][19]) <> Nil
+			NGPrepTbl(aTabelas, aRep[i][19], aRep[i][20])
+		EndIf
+
+		oModel:SetValue("TUIMASTER", "TUI_EMPDES", aRep[i][19])
+		oModel:SetValue("TUIMASTER", "TUI_FILDES", aRep[i][20])
+		oModel:SetValue("TUIMASTER", "TUI_POSDES", aRep[i][21])
+		oModel:SetValue("TUIMASTER", "TUI_LOJDES", aRep[i][22])
+		oModel:SetValue("TUIMASTER", "TUI_TANDES", aRep[i][23])
+
+		cComDes := NGSEEK("TQI", aRep[i][21] + aRep[i][22] + aRep[i][23], 1, "TQI->TQI_CODCOM")
+		cProDes := NGSEEK("TQI", aRep[i][21] + aRep[i][22] + aRep[i][23], 1, "TQI->TQI_PRODUT")
+
+		oModel:SetValue("TUIMASTER", "TUI_COMDES", cComDes)
+		oModel:SetValue("TUIMASTER", "TUI_PRODES", cProDes)
+
+		// Devolve tabelas
+		NGPrepTbl(aTabelas, cOldEmpAnt, cOldFilAnt )
+
+		// Valida
+		If oModel:VldData()
+			lRet := .T.
+		Else
+			aError := oModel:GetErrorMessage()
+		EndIf
+
+		// Desativa o Modelo
+		oModel:DeActivate()
+	EndIf
+
+	If aRep[i][18] == aRep[i][20] .And. cPOSTO == aRep[i][21] .And. cLOJA == aRep[i][22] .And.  aRep[i][14] == aRep[i][23] //Se a transferência for para o mesmo local
+		If Mnt635Gra( , i," 41" ) // "TRANSFERENCIA PARA O MESMO ARMAZEM"
+			lRet     := .F.
+			aAdd(aERRO,{"41"})
+		EndIf
+	EndIf
+
+	If cProOri <> cProDes
+		If Mnt635Gra(, i," 42" ) // "PRODUTOS DIfERENTES"
+			lRet := .F.
+			aAdd(aERRO,{"42"})
+		EndIf
+	EndIf
+
+	If !lRet
+		If Mnt635Gra(, i," 99" ) // "TRANSFERÊNCIA INVÁLIDA"
+			aAdd(aERRO,{"99"})
+		EndIf
+	EndIf
+	RollBackSx8()
+
+Return { lRet }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValAbast
+Validação de abastecimento
+
+@param i, numeric, índice do array 
+@author Maria Elisadra de Paula
+@since 06/04/21
+@return array [1] se registro está consistente
+/*/
+//---------------------------------------------------------------------
+Static Function fValAbast( i, lInfComb )
+
+	Local aRetTPN    := {}
+	Local lBlqmot    := .T.
+	Local lRet       := .T.
+	Local lKmAnt     := .T.
+	Local cCodCom    := ''
+	Local dDEMISSAO  := cTod("  /  /  ")
+	Local aVard      := {}
+	Local aAutonomia := {}
+	Local vSTPouTPP  := {}
+	Local nLimCon    := 0
+	Local nHodom     := 0
+	Local nLimCo2    := 0
+	Local nI         := 0
+	Local nY         := 0
+	Local aValAbast  := {}
+	Local lTem2Cnt   := .F.
+	Local cFrota     := ''
+	Local cTemcont   := ''
+	Local nNumConta  := 0
+	Local lErro27    := .T.
+	Local lErro28    := .T.
+	Local lErro38    := .T.
+	Local nTipoC     := 0
+	Local lVirada    := .F.
+	Local aChkHist   := {}
+	Local cFlVei     := ''
+	Local cPosto     := '' 
+	Local cLoja      := ''
+	Local nCapMax    := 0
+	Local cTipoPosto := ''
+	Local lAchPosto  := .F.
+	Local lAchVeic   := .F.
+	Local cCodMot    := ''
+	Local aPosto  := {}
+	Local cFlPosto   := Nil
+	Local lVldPosto  := .F.
+	Local cTipMot    := ''
+	Local cFlMot     := ''
+
+	//---------------------------------------------
+	// Busca posto pelo cnpj ou código + loja 
+	//---------------------------------------------
+	aPosto := fInfoposto( i, .T. ) // { Cnpj, Filial, Posto, Loja, Tipo, Convenio  }
+
+	If !Empty( aPosto[3] )
+
+		lAchPosto  := .T.
+		cFlPosto   := aPosto[2]
+		cPosto     := aPosto[3]
+		cLoja      := aPosto[4]
+		cTipoPosto := aPosto[5]
+		
+		aRep[i,4]  := aPosto[1] // cnpj
+		aRep[i,25] := cPosto      
+		aRep[i,26] := cLoja
+
+		dbSelectArea( 'TQM' )
+		dbSetOrder( nIndTQM )
+		If dbSeek( xFilial("TQM", cFlPosto) + aRep[i][3] )
+			cCodCom := TQM->TQM_CODCOM
+		EndIf
+	
+		dbSelectArea( 'SX5' )
+		dbSetOrder( 1 ) // X5_FILIAL+X5_TABELA+X5_CHAVE
+		If !msSeek( FWxFilial( 'SX5' ) + 'ER' + '45' )
+			FwPutSX5( , 'ER', '45', STR0025, STR0025, STR0025 ) // BOMBA INFORMADA NÃO EXISTE.
+		EndIf
+
+		dbSelectArea( 'TQJ' )
+		dbSetOrder( 1 ) // TQJ_FILIAL+TQJ_CODPOS+TQJ_LOJA+TQJ_TANQUE+TQJ_BOMBA
+		If aPosto[5] == '2' .And. !msSeek( FWxFilial( 'TQJ' ) + aRep[i, 25] + aRep[i, 26] + aRep[i, 14] + aRep[i, 15] )
+
+			If Mnt635Gra(,i,' 45') //BOMBA INFORMADA NÃO EXISTE.
+			
+				lRet := .F.
+				aAdd(aERRO,{'45'})
+
+			EndIf
+			
+		EndIf
+
+	EndIf
+	
+	If aRep[i][9] == 0
+		If Mnt635Gra(,i," 03") //valor abastecimento zerado
+			lRet := .F.
+			aAdd(aERRO,{"03"})
+		EndIf
+	EndIf
+
+	If Empty(aRep[i][2]) // Placa do veículo
+		If Mnt635Gra(,i," 04") //placa do veiculo nao informada
+			lRet := .F.
+			aAdd(aERRO,{"04"})
+		EndIf
+	Else
+
+		dbSelectArea( 'ST9' )
+		dbSetOrder( 14 )
+		If dbSeek( aRep[i,2] ) // Placa
+
+			aRetTPN := NgFilTPN( ST9->T9_CODBEM, aRep[i,10], aRep[i,11], aRep[i,2] )
+
+			If !Empty( aRetTPN[1] )
+
+				cFlVei := aRetTPN[1]
+
+			Else
+
+				cFlVei := ST9->T9_FILIAL
+
+			EndIf
+
+			nCapMax  := ST9->T9_CAPMAX
+			cTemcont := ST9->T9_TEMCONT
+			cFrota   := ST9->T9_CODBEM
+			nLimCon  := ST9->T9_LIMICON
+			nLimCo2  := 0
+			lTem2Cnt := .F.
+			lAchVeic := .T.
+
+		ElseIf Mnt635Gra(,i," 05") //veiculo nao cadastrado
+			lRet := .F.
+			aAdd(aERRO,{"05"})
+		EndIf
+
+	EndIf
+
+	//-------------------------------------------------
+	//  validações veículo
+	//-------------------------------------------------
+	If lAchVeic
+
+		/*
+		MNT659VAL - Função que valida abastecimento de acordo com parâmetro MV_NGABAVL
+		Se tiver algum retorno falso no segundo vetor mostra divergencia/erro.
+		ex.:Retorno:
+		{{"Mensagem"}- Mensagem que será apresentada no abastecimento manual
+		{{.F.," 47"} - Validação de Esquema Padrão	 - código da inconsistencia pela importação
+		{.F.," 48"}  - Validação de Estrutura Padrão - código da inconsistencia pela importação
+		{.F.," 49"}  - Validação de Manutenção Padrão- código da inconsistencia pela importação
+		{.F.," 50"}}}- Validação de Manutenção		 - código da inconsistencia pela importação
+		*/
+
+		If FindFunction("MNT659VAL")
+			aValAbast := {}
+			aValAbast:= MNT659VAL(cFROTA,cFlVei,aRep[i][10],aRep[i][11])
+			If aScan(aValAbast[2], {|x| x[1] == .F. }) > 0
+				For nY:= 1 to Len(aValAbast[2])
+					If !aValAbast[2][nY][1]
+						If Mnt635Gra(,i,aValAbast[2][nY][2])
+							aAdd(aERRO,{Alltrim(aValAbast[2][nY][2])})
+						EndIf
+					EndIf
+				Next
+				lRet := .F.
+			EndIf
+		EndIf
+
+		//----------------------------------
+		//  validações de contador
+		//----------------------------------
+		dbSelectArea('TPE')
+		dbSetOrder(1)
+		If dbSeek( xFilial( 'TPE', cFlVei ) + cFrota) .And. TPE->TPE_SITUAC == '1'
+			lTem2Cnt := .T.
+			nLimCo2 := TPE->TPE_LIMICO
+		EndIf
+
+		If aRep[i][6] == 0 .And. cTemCont == 'S' // Contador
+			If Mnt635Gra(,i," 01")  //km igual a zero
+				lRet := .F.
+				aAdd(aERRO,{"01"})
+			EndIf
+		ElseIf cTemCont != 'N'
+
+			If aRep[i][16] != 0
+				nNumConta := 2
+			Else
+				nNumConta := 1
+			EndIf
+
+			For nI := 1 to nNumConta
+				nTIPOC    := nI
+				vSTPouTPP := If(nTIPOC = 1,{'STP','STP->TP_FILIAL','STP->TP_CODBEM','STP->TP_DTLEITU','STP->TP_HORA','STP->TP_TIPOLAN',;
+													'STP->TP_POSCONT','STP->TP_VIRACON'},;
+											{'TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM','TPP->TPP_DTLEIT','TPP->TPP_HORA','TPP->TPP_TIPOLA',;
+													'TPP->TPP_POSCON','TPP->TPP_VIRACO'})
+
+				// Checa contador informado em relacao ao anterior e posterior
+				aKms   := NGCONTAP( cFrota, DToS( aREP[i,10] ), aREP[i,11], nTIPOC, NGFILTPN( cFrota, aRep[i,10],;
+					aRep[i,11], aRep[i,2] )[1] )
+
+				nHodom := IIf(nTIPOC==1,aRep[i][6],aRep[i][16])
+				cRepi6 := IIf(nTIPOC==1,aRep[i][6],aRep[i][16])
+
+				If nHodom <= aKms[1]
+
+					dbSelectArea(vSTPouTPP[1])
+					dbSetOrder(5)
+					dbSeek(xFilial(vSTPouTPP[1], cFlVei )+cFROTA+DTOS(aRep[i][10]))
+					While !Eof() .And. &(vSTPouTPP[2]) == xFilial(vSTPouTPP[1], cFlVei ) .And. AllTrim(&(vSTPouTPP[3])) == AllTrim(cFROTA) .And. &(vSTPouTPP[4]) == aRep[i][10]
+						If &(vSTPouTPP[7]) == cRepi6 .And. &(vSTPouTPP[6]) <> 'A'
+							lKmAnt := .F.
+							If &(vSTPouTPP[5]) == aRep[i][11]
+								If &(vSTPouTPP[6]) $ "IQV"   //I=Implantacao;Q=Quebra;V=Virada diminui 1 minuto
+									nRecno := Recno()
+									If !NGSTPALT(&(vSTPouTPP[2]),&(vSTPouTPP[3]),&(vSTPouTPP[4]),&(vSTPouTPP[5]))
+										If nTIPOC == 1
+											DbGoTo(nRecno)
+											If Mnt635Gra(,i," 29") //Data,hora e cont. menor/igual ao historico de contador
+												lRet := .F.
+												aAdd(aERRO,{"29"})
+											EndIf
+										ElseIf lTem2Cnt
+											DbGoTo(nRecno)
+											If Mnt635Gra(,i," 34") //CONTADOR 2 - DATA,HORA E CONT. MENOR/IGUAL AO HISTORICO
+												lRet := .F.
+												aAdd(aERRO,{"34"})
+											EndIf
+										EndIf
+									EndIf
+									DbGoTo(nRecno)
+								Else
+									lVirada := .T.
+								EndIf
+							EndIf
+						EndIf
+						If &(vSTPouTPP[7]) > cRepi6 .And. &(vSTPouTPP[6]) <> 'A'
+							lKmAnt := .T.
+						EndIf
+						dbSelectArea(vSTPouTPP[1])
+						dbSkip()
+					End
+
+					/*
+						Permissão para quando a posição de contador importado for igual ao anterior, verifica-se
+						a data, caso sejam iguais, verifica-se o horario de reporte. De forma que o novo
+						lançamento de contador não poderá ser inferior ao seu anterior. Condição para lançamentos
+						anteriores com tipo	A - Abastecimento ou V - Virada.
+					*/
+					If ( nHODOM == aKms[1] .And. aKms[4] $ 'A%V' ) .And. ( ( aKms[10] < aRep[i,10] ) .Or.;
+						( aKms[10] == aRep[i,10] .And. aKms[11] < aRep[i,11] ) )
+
+						lKmAnt := .F.
+
+					/*
+						Permissão para posição do contador importado igual ao ultimo reporte, sendo que, tipo de
+						lançamento do reporte anterior é diferente de A - Abastecimento.
+					*/
+					ElseIf nHodom == aKms[1] .And. aKms[4] <> 'A'
+
+						lKmAnt := .F.
+
+					EndIf
+
+					If lKmAnt
+						If nTIPOC == 1
+							If Mnt635Gra(,i," 17") //km menor ou igual ao km do ultimo abastecimento
+								lRet := .F.
+								aAdd(aERRO,{"17"})
+							EndIf
+						ElseIf lTem2Cnt
+							If Mnt635Gra(,i," 35") //CONTADOR 2 - KM MENOR OU IGUAL AO KM DO ULTIMO ABASTECI
+								lRet := .F.
+								aAdd(aERRO,{"35"})
+							EndIf
+						EndIf
+					EndIf
+
+				ElseIf aKms[2] <> 0 .And. nHodom >= aKms[2]
+
+					lKmPos := .T.
+					dbSelectArea(vSTPouTPP[1])
+					dbSetOrder(5)
+					dbSeek(xFilial(vSTPouTPP[1], cFlVei )+cFROTA+DTOS(aRep[i][10]))
+
+					While !Eof() .And. &(vSTPouTPP[2]) == xFilial(vSTPouTPP[1], cFlVei ) .And. AllTrim(&(vSTPouTPP[3])) == AllTrim(cFROTA) .And. &(vSTPouTPP[4]) == aRep[i][10]
+
+						If &(vSTPouTPP[7]) == cRepi6 .And. &(vSTPouTPP[6]) == 'C' .And. &(vSTPouTPP[5]) <> aRep[i][11]
+							lKmPos := .F.
+						EndIf
+
+						If &(vSTPouTPP[7]) == cRepi6 .And. (&(vSTPouTPP[6]) == 'M' .Or. &(vSTPouTPP[6]) == 'C')
+							lKmPos := .F.
+							If &(vSTPouTPP[5]) == aRep[i][11]
+								lVirada := .T.
+							EndIf
+						EndIf
+
+						dbSelectArea(vSTPouTPP[1])
+						dbSkip()
+					End
+
+					If nHodom = aKms[2] .And. aKms[3] == 'A'
+						lKmPos := .T.
+					ElseIf nHodom = aKms[2] .And. aKms[3] <> 'A'
+						lKmPos := .F.
+					EndIf
+
+					/*
+						Verifica ontador importado seja maior que o contador posterior, considerando:
+						- Valido para lançamento posteriores do tipo C - Contador
+						- Se a data do contador posterior é maior que a data do contador importado ou se a
+						data do contador posterior é igual a de importação, porém o horario de importação é menor
+					*/
+					If nHODOM > aKms[2] .And. ( aKms[8] > aRep[i,10] .Or. ( aKms[8] == aRep[i,10] .And.;
+						aKms[9] > aRep[i,11] ) )
+
+						lKmPos := IIf( aKms[3] == 'C', .T., IIf( aKms[3] == 'V', .F., lKmPos ) )
+
+					EndIf
+
+					If nHODOM <= aKms[2] .And. aKms[3] == 'Q' .And. ((aKms[8] > aRep[i][10]) .Or. (aKms[8] == aRep[i][10] .And. aKms[9] > aRep[i][11]))
+						If nTIPOC == 1
+							If Mnt635Gra(,i," 29") //Data,hora e cont. menor/igual ao historico de contador
+								lRet := .F.
+								aAdd(aERRO,{"29"})
+							EndIf
+						ElseIf lTem2Cnt
+							If Mnt635Gra(,i," 34") //CONTADOR 2 - DATA,HORA E CONT. MENOR/IGUAL AO HISTORICO
+								lRet := .F.
+								aAdd(aERRO,{"34"})
+							EndIf
+						EndIf
+					EndIf
+
+					If lKmPos
+						If aScan(aErro,{|x|x[1] = '51'}) == 0 .And. aScan(aErro,{|x|x[1] = '52'}) == 0 .And. aScan(aErro,{|x|x[1] = '53'}) == 0
+							If nTIPOC == 1
+								If Mnt635Gra(,i," 18") //km maior ou igual ao km do abastecimento posterior
+									lRet := .F.
+									aAdd(aERRO,{"18"})
+								EndIf
+							ElseIf lTem2Cnt
+								If Mnt635Gra(,i," 36") //CONTADOR 2 - KM MAIOR OU IGUAL AO KM DO ABAST. POST.
+									lRet := .F.
+									aAdd(aERRO,{"36"})
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+
+				lErro27 := .T.
+				lErro28 := .T.
+				lErro38 := .T.
+
+				If Len(aRep[i]) > 12
+					If aRep[i][13] == " 27"
+						lErro27 := .F. //nao valida no reprocessamento erro variacao dia se foi aceito
+					ElseIf aRep[i][13] == " 28"
+						lErro28 := .F.  //nao valida no reprocessamento erro autonomia se foi aceito
+					ElseIf aRep[i][13] == " 38"
+						lErro38 := .F. //nao valida no reprocessamento erro variacao dia se foi aceito (contador 2)
+					ElseIf !Empty(aRep[i][13]) .Or. aRep[i][13] == "ZZZ" //quando sao os dois erros ou erro especifico
+						lErro27 := .F.
+						lErro28 := .F.
+						lErro38 := .F.
+					EndIf
+				EndIf
+
+				aChkHist := NGCHKHISTO(cFROTA,aRep[i][10],cRepi6,aRep[i][11],nTIPOC,,.F.,cFlVei,cCODCOM)
+
+				If !aChkHist[1]
+					If "Ja existe um lancamento para o contador" $ aChkHist[2]
+						If !lVirada
+							If nTIPOC == 1
+								If Mnt635Gra(,i," 30") //Abast.c/ mesma Data e hora que historico de contador
+									lRet := .F.
+									aAdd(aERRO,{"30"})
+								EndIf
+							ElseIf lTem2Cnt
+								If Mnt635Gra(,i," 39") //CONTADOR 2 - ABAST.C/ MESMA DATA E HORA QUE HISTORICO D
+									lRet := .F.
+									aAdd(aERRO,{"39"})
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+
+				If (nTIPOC == 1 .And. lErro27) .OR. (nTIPOC == 2 .And. lErro38)
+					dbSelectArea(vSTPouTPP[1])
+					dbSetOrder(2)
+					If dbSeek(xFilial(vSTPouTPP[1], cFlVei )+cFrota)
+
+						If aScan(aErro,{|x|x[1] = '51'}) == 0 .And. aScan(aErro,{|x|x[1] = '52'}) == 0 .And. aScan(aErro,{|x|x[1] = '53'}) == 0
+							aVard := NGVALIVARD(cFROTA,cRepi6,aRep[i][10],aREp[i][11],nTIPOC,.F.,, cFlVei )
+							If cTemCont != 'N' .And. !aVard[1]
+								If nTIPOC == 1
+									If Mnt635Gra(,i," 27") //Problema com a variacao dia
+										lRet := .F.
+										aAdd(aERRO,{"27"})
+									EndIf
+								ElseIf lTem2Cnt
+									If Mnt635Gra(,i," 38") //CONTADOR 2 - PROBLEMA VARIACAO DIA
+										lRet := .F.
+										aAdd(aERRO,{"38"})
+									EndIf
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+
+				If lErro28
+					aAutonomia := NGAUTONOMIA(cFROTA,aRep[i][10],aREp[i][11],aRep[i][6],.F.,cCODCOM,1)
+					If !aAutonomia[1]
+						If Mnt635Gra(,i," 28") //Abastecimento superou a autonomia do veículo
+							lRet := .F.
+							aAdd(aERRO,{"28"})
+						EndIf
+					EndIf
+
+					//valida autonomia do segundo contador
+					If !Empty(aRep[i][16]) .And. lTem2Cnt
+						aAutonomia := NGAUTONOMIA(cFROTA,aRep[i][10],aREp[i][11],aRep[i][16],.F.,cCODCOM,2)
+						If !aAutonomia[1]
+							If Mnt635Gra(,i," 28") //Abastecimento superou a autonomia do veículo
+								lRet := .F.
+								aAdd(aERRO,{"28"})
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+
+				If nTIPOC == 1
+					If cTemCont != 'N' .And. cRepi6 > nLimCon // limite contador
+
+						If Mnt635Gra(,i," 02") //km maior que limite do contador
+							lRet := .F.
+							aAdd(aERRO,{"02"})
+						EndIf
+					EndIf
+				ElseIf cRepi6 > nLimCo2 .And. lTem2Cnt .And. Mnt635Gra(,i," 37") //CONTADOR 2 - KM MAIOR QUE LIMITE CONTADOR
+						lRet := .F.
+						aAdd(aERRO,{"37"})
+				EndIf
+
+			Next //FIM
+
+			If ExistBlock("MNTA6352")
+				Private nx := i
+				Private aRep2 := aClone(aRep)
+				lRet2 := ExecBlock("MNTA6352", .F. , .F. )
+				If !lRet2
+					lRet := .F.
+				Else
+					dbSelectArea("TQP")
+					dbSetOrder(1)
+					If !dbSeek(xFilial("TQP")+PadL(aRep[i][1],15,"0")+aRep[i][4]) // Buscar filial da TQP logada
+						lRet := .T.
+					EndIf
+				EndIf
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	//----------------------------------------------------------------
+	// Validações de posto, combustível etc
+	//----------------------------------------------------------------
+	If lAchPosto
+
+		lVldPosto := fVldPosto( i, lAchVeic, cFlVei, cFrota, aPosto, lInfComb )
+
+		lRet := lRet .And. lVldPosto
+
+	EndIf
+
+	//------------------------------------------------------------
+	// Validações motorista
+	//------------------------------------------------------------
+	If Empty(aRep[i][5])
+		If Mnt635Gra(,i," 13") //Motorista nao informado
+			lRet := .F.
+			aAdd(aERRO,{"13"})
+		EndIf
+	Else
+
+		If NGCHKCOMP({'TQF', 'ST9'}, .F.)
+			cFlMot := cFlVei
+		Else
+			cFlMot := cFlPosto
+		EndIf
+
+		dbSelectArea("DA4")
+		dbSetOrder(3)
+		If dbSeek(xFilial("DA4", cFlMot ) + aRep[i][5])
+
+			cCodMot := DA4->DA4_COD
+			cMatMot := DA4->DA4_MAT
+			cTipMot := DA4->DA4_TIPMOT
+
+			If DA4->DA4_BLQMOT = "1"
+				
+				lBlqmot := .T.
+				
+				While !Eof() .And. xFilial("DA4", cFlPosto ) == DA4->DA4_FILIAL .And. AllTrim(DA4->DA4_CGC) == AllTrim(aRep[i][5])
+					If DA4->DA4_BLQMOT = "2"
+						cCodMot := DA4->DA4_COD
+						cTipMot := DA4->DA4_TIPMOT
+						lBlqmot := .F.
+					EndIf
+					dbSkip()
+				End
+				If lBlqmot
+					If Mnt635Gra(,i," 31") //Motorista Bloqueado
+						lRet := .F.
+						aAdd(aERRO,{"31"})
+					EndIf
+				EndIf
+			EndIf
+
+			If cTipMot == "1" .And. lIntRH
+				dbSelectArea("SRA")
+				dbSetOrder(13)
+				If !dbSeek(cMatMot)
+					If Mnt635Gra(,i," 12") //CPF motorista nao existe no cadastro de funcionarios
+						lRet := .F.
+						aAdd(aERRO,{"12"})
+					EndIf
+				EndIf
+
+				dbSelectArea("SR8")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SR8", cFlPosto )+cMatMot)
+					If SR8->R8_DATAINI <= aRep[i][10] .And. SR8->R8_DATAFIM >= aRep[i][10]
+						If Mnt635Gra(,i," 21") //Motorista afastado
+							lRet := .F.
+							aAdd(aERRO,{"21"})
+						EndIf
+					EndIf
+				EndIf
+
+				dbSelectArea("SRA")
+				dbSetOrder(15)
+				dbSeek(AllTrim(aRep[i][5]))
+				While !Eof() .And. SRA->RA_CIC == AllTrim(aRep[i][5])
+
+					If Empty(SRA->RA_DEMISSA)
+						dDEMISSAO := Ctod("  /  /  ")
+						Exit
+					EndIf
+					If SRA->RA_DEMISSA > dDemissao
+						dDEMISSAO := SRA->RA_DEMISSA
+					EndIf
+
+					dbSelectArea("SRA")
+					dbSkip()
+				End
+
+				If !Empty(dDEMISSAO) .And. dDEMISSAO < aRep[i][10]
+					If Mnt635Gra(,i," 22") //Abastecimento apos a demissao
+						lRet := .F.
+						aAdd(aERRO,{"22"})
+					EndIf
+
+					If Mnt635Gra(,i," 26") //Motorista demitido
+						lRet := .F.
+						aAdd(aERRO,{"26"})
+					EndIf
+				EndIf
+
+			EndIf
+
+		Else
+			If Mnt635Gra(,i," 25") // Motorista não Cadastrado
+				lRet := .F.
+				aAdd(aERRO,{"25"})
+			EndIf
+		EndIf
+
+	EndIf
+
+	//---------------------------------------
+	// Consistencia com Estoque
+	//---------------------------------------
+	If cEstHome == 'S' .And. !lEstNeg .And. aRep[i][7] > 0 .And. lNgMntEs .And.;
+		cTipoPosto == '2' .And. ; // Verifica se o posto eh interno
+		NGIfDBSEEK( 'TQM', aRep[i][3], nIndTQM, , cFlPosto ) .And.; //Busca o codigo do combustivel
+		NGIfDBSEEK( 'TQI', aRep[i][25] + aRep[i][26] + aRep[i][14] + TQM->TQM_CODCOM, 1,, cFlPosto ) .And.;//Busca o codigo do produto na tabela de tanques
+		NGIfDBSEEK( 'SB2', TQI->TQI_PRODUT + aRep[i][14], 1,, cFlPosto ) //Posicina na tabela de saldo
+
+		SetInclui()
+		If !NGSALSB2( TQI->TQI_PRODUT, aRep[i][14], aRep[i][7], .F.,,aRep[i][10],.T.,, cFlPosto )//Verifica saldo do produto em estoque
+			If Mnt635Gra(,i," 43")
+				lRet := .F.
+				aAdd(aERRO,{"43"}) //Saldo insuficiente na data do abastecimento.
+			EndIf
+		EndIf
+	
+	EndIf
+
+	FwFreeArray( aRetTPN )
+
+Return { lRet, lVirada, cCodMot, cCodCom }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldPosto
+Validações de Posto, combustível, etc
+
+@param i, numeric, índice do array de inconsistências
+@param aPosto, array, informações de posto
+@param lAchVeic, boolean, se veículo foi localizado
+@param cFlVei, string, filial do veículo
+@param cFrota, string, código do veículo
+
+@author Maria Elisandra de Paula
+@since 09/04/21
+@return boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fVldPosto( i, lAchVeic, cFlVei, cFrota, aPosto, lInfComb )
+
+	Local lRet       := .T.
+	Local cCodCom    := ''
+	Local nVALNEG    := 0
+	Local lErro40    := .T.
+	Local lErro54    := .T.
+	Local lAchComb   := .F.
+	Local aCodCom    := {}
+	Local nIndice    := 0
+	Local nCapTan    := 0
+	Local nCapMax    := 0
+	Local lComb      := .F.
+	Local cFlPosto   := aPosto[2]
+	Local cPosto     := aPosto[3]
+	Local cLoja      := aPosto[4]
+	Local cTipoPosto := aPosto[5]
+	Local cConvenio  := aPosto[6]
+
+	If cTipoPosto == "3"
+		If Mnt635Gra(,i," 15") //posto nao conveniado
+			lRet := .F.
+			aAdd(aERRO,{"15"})
+		EndIf
+	EndIf
+
+	If NGSEEK( 'TQF', cPosto + cLoja, 1, 'TQF->TQF_ATIVO', cFlPosto) == '2'
+		If Mnt635Gra(,i," 16") //posto de combustivel esta desativado
+			lRet := .F.
+			aAdd(aERRO,{"16"})
+		EndIf
+	EndIf
+
+	//------------------------------------
+	// Trecho abaixo valida combustível
+	//------------------------------------
+	If lInfComb
+
+		dbSelectArea('TQM')
+		dbSetOrder(nIndTQM)
+		If !dbSeek( xFilial('TQM', cFlPosto) + aRep[i][3] )
+			If Mnt635Gra(,i," 56") //Combustível não cadastrado.
+				lAchComb := .F.
+				lRet     := .F.
+				aAdd(aERRO,{"56"})
+			EndIf
+		
+		Else
+
+			lAchComb := .T.
+		
+			If lAchVeic
+
+				aCodCom := {}
+				cCodCom := TQM->TQM_CODCOM
+				While !Eof() .And. xFilial("TQM", cFlPosto ) == TQM->TQM_FILIAL .And. &(cCampoTQM) == aRep[i][3]
+					aAdd(aCodCom,TQM->TQM_CODCOM)
+					dbSkip()
+				End
+			
+				dbSelectArea("TT8")
+				dbSetOrder(2)
+				If dbSeek( xFilial("TT8",cFlVei)+cFrota+"1" )
+					While !Eof() .And. TT8->TT8_FILIAL == xFilial('TT8',cFlVei) .And. TT8->TT8_CODBEM == cFrota .And. TT8->TT8_TIPO == '1'
+						For nIndice := 1 To Len(aCodCom)
+							If Alltrim(aCodCom[nIndice]) == Alltrim(TT8->TT8_CODCOM)
+								lComb   := .T.
+								nCapTan := TT8->TT8_CAPMAX
+								cCodCom := aCodCom[nIndice]
+								Exit
+							EndIf
+						Next nIndice
+						dbSkip()
+					End
+
+				EndIf
+
+				If !lComb .And. Mnt635Gra(,i," 32") //Combustível incompatível com tanque do bem.
+					lRet := .F.
+					aAdd(aERRO,{"32"})
+				EndIf
+
+				If nCapTan > 0
+					nCapMax := nCapTan
+				EndIf
+
+				If nCapMax > 0 .And. aRep[i][7] > nCapMax
+					If Mnt635Gra(,i," 19") //litragem maior que a maxima permitida
+						lRet := .F.
+						aAdd(aERRO,{"19"})
+					EndIf
+				EndIf
+			
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	//--------------------------------------------------------------------
+	// Verifica se tanque/bomba foram informados para posto interno
+	//--------------------------------------------------------------------
+	If !Empty(aRep[i,14]) .And. !Empty(aRep[i,15])
+		dbSelectArea('TQJ') 
+		dbSetOrder(1) //TQJ_FILIAL+TQJ_CODPOS+TQJ_LOJA+TQJ_TANQUE+TQJ_BOMBA
+		If dbSeek( xFilial('TQJ', cFlPosto ) + cPosto + cLoja + aRep[i][14] + aRep[i][15] ) .And.;
+			dToS( aRep[i][10]) + aRep[i][11] < dToS(TQJ->TQJ_DTCONT) + TQJ->TQJ_HRCONT .And.;
+			Mnt635Gra(,i," 57") // "Data/Hora de abastecimento menor que a data de inclusão da bomba"
+
+			lRet := .F.
+			aAdd(aERRO,{"57"})
+
+		EndIf
+
+	ElseIf cTipoPosto == '2' // Posto interno
+
+		If Mnt635Gra(,i," 33") // Tanque/Bomba não informado
+			lRet := .F.
+			aAdd(aERRO,{"33"})
+		EndIf
+
+	EndIf
+
+	//--------------------------------------------------------------
+	// Trecho abaixo verifica se o TQF_CONVEN é igual ao TQM_CONVEN
+	//--------------------------------------------------------------
+	If lAchComb //Só irá validar caso o combustivel esteja cadastrado no sistema.
+
+		lErro54 := .T.
+
+		If nIndTQM == 1
+			dbSelectArea('TQM')
+			dbSetOrder(1) // 'TQM_FILIAL+TQM_CODCOM+TQM_CONVEN 
+			If dbSeek( xFilial('TQM', cFlPosto) + aRep[i][3] + cConvenio ) .And. !Empty( TQM->TQM_CONVEN )
+				lErro54 := .F.
+			EndIf
+		Else
+			dbSelectArea('TQM')
+			dbSetOrder(2)
+			If dbSeek(xFilial('TQM', cFlPosto ) + aRep[i][3]) // TQM_FILIAL+TQM_CODCON
+				While !Eof() .And. xFilial('TQM', cFlPosto) == TQM->TQM_FILIAL .And. AllTrim(TQM->TQM_CODCON) == AllTrim(aRep[i][3])
+					If AllTrim(TQM->TQM_CONVEN) == AllTrim(cConvenio)
+						lErro54 := .F.
+						Exit
+					EndIf
+					dbSelectArea("TQM")
+					dbSkip()
+				End
+			EndIf
+		EndIf
+
+		If lErro54
+			If Mnt635Gra(,i," 54") // "Tipo combustível/convênio incompatível com o tipo de convênio do posto."
+				lRet := .F.
+				aAdd(aERRO,{"54"})
+			EndIf
+		EndIf
+	EndIf
+
+	//----------------------------------------------
+	// Trecho abaixo valida aferição de bomba
+	//----------------------------------------------
+	If lAfericao .And. cTipoPosto == '2' // Posto interno
+
+		dbSelectArea("TQL")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQL", cFlPosto)+cPOSTO+cLOJA+aRep[i][14]+aRep[i][15]+DTOS(aRep[i][10]))
+			While !Eof() .And. ;
+					TQL->TQL_FILIAL+TQL->TQL_POSTO+TQL->TQL_LOJA+TQL->TQL_TANQUE+TQL->TQL_BOMBA+DTOS(TQL->TQL_DTCOLE) == xFilial( "TQL", cFlPosto )+cPOSTO+cLOJA+aRep[i][14]+aRep[i][15]+DTOS(aRep[i][10])
+				If aRep[i][11] > TQL->TQL_HRINIC .And. Empty(TQL->TQL_HRFIM)
+					lErro40 := .F.
+				Elseif aRep[i][11] > TQL->TQL_HRINIC .And. !Empty(TQL->TQL_HRFIM) .And. aRep[i][11] < TQL->TQL_HRFIM
+					lErro40 := .F.
+				EndIf
+				TQL->(dbSkip())
+			End
+		EndIf
+
+		If lErro40
+			If Mnt635Gra(,i," 40") //Sem aferição para a data
+				lRet := .F.
+				aAdd(aERRO,{"40"})
+			EndIf
+		EndIf
+
+	EndIf
+
+	//---------------------------------------------
+	// Trecho abaixo valida negociação
+	//---------------------------------------------
+	If cConNeg == 'S' .And. lAchComb
+
+		dbSelectArea("TQH")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQH", cFlPosto)+cPOSTO+cLOJA+cCODCOM)
+			While !Eof() .And. TQH->TQH_FILIAL == xFILIAL("TQH", cFlPosto ) .And. TQH->TQH_CODPOS == cPOSTO;
+				.And. TQH->TQH_LOJA   == cLOJA .And. TQH->TQH_CODCOM == cCODCOM
+
+				If DTOS(TQH->TQH_DTNEG)+TQH->TQH_HRNEG <= DTOS(aRep[i][10])+aRep[i][11]
+					nVALNEG := TQH->TQH_PRENEG
+				EndIf
+				dbSelectArea("TQH")
+				dbSkip()
+			End
+
+			If nVALNEG <> aRep[i][8] .And. nVALNEG <> 0
+
+				If !lPrSB2 //Se o parametro MV_NGPRSB2 estiver habilitado o valor unitário vem da SB2 e não deve verificar se há divergência de valor negociado
+					If Mnt635Gra(,i," 08") //divirgencia valor negociado
+						lRet := .F.
+						aAdd(aERRO,{"08"})
+					EndIf
+				EndIf
+			ElseIf nVALNEG == 0
+				If aScan(aErro,{|x|x[1] = '51'}) == 0 .And. aScan(aErro,{|x|x[1] = '52'}) == 0 .And. aScan(aErro,{|x|x[1] = '53'}) == 0
+					If Mnt635Gra(,i," 09") //valor negociado igual a zero
+						lRet := .F.
+						aAdd(aERRO,{"09"})
+					EndIf
+				EndIf
+			EndIf
+
+		Else
+			If Mnt635Gra(,i," 11") //nao ha valor negociado para esse posto
+				lRet := .F.
+				aAdd(aERRO,{"11"})
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA635GRA
+Grava os erros encontrados na importacao
+
+@author  Evaldo Cevinscki Jr.
+@since   27/01/2006
+@version MP11
+@param   i    , Numérico, Linha posicionada
+@param   cErro, Caracter, Numero do erro
+
+@sample Generico
+@Return Lógico, define se deverá gravar erro
+/*/
+//---------------------------------------------------------------------
+Function MNT635GRA( aAux, i, cErro )
+
+	Local cFlTQP     := xFilial("TQP") // Usar xfilial da filal logada
+	Local cFlTQQ     := xFilial("TQQ")
+	Local lRPORel17  := GetRPORelease() <= '12.1.017'
+	Local lGravaErro := .T.
+	Local nTamCnpj   := TamSx3( 'TQP_CNPJ' )[1]
+
+	Default aAux := aRep
+
+	If Len( aAux[i] ) >= 29 .And. ValType( aAux[i,29] ) == 'C' .And. cFlTQP != aAux[i,29]
+		cFlTQQ := aAux[i,29] // campo filial 
+		cFlTQP := aAux[i,29] // campo filial
+	EndIf
+
+	If ExistBlock("MNTA6356")
+		lGravaErro := ExecBlock("MNTA6356", .F. , .F. , {aAux[i], cErro })
+	EndIf
+
+	If lGravaErro
+		dbSelectArea("TQP")
+		dbSetOrder(1)
+		If !dbSeek( cFlTQP+PadL(aAux[i][1],15,"0") + Padr( aAux[i,4], nTamCnpj ) + cERRO )
+
+			RecLock("TQP",.T.)
+			TQP->TQP_FILIAL := cFlTQP
+			TQP->TQP_NABAST := PadL(aAux[i][1],15,"0")
+			TQP->TQP_CNPJ   := aAux[i][4]
+			TQP->TQP_CODERR := cERRO
+			TQP->TQP_DTABAS := aAux[i][10]
+			TQP->( MsUnLock() )
+
+		EndIf
+
+		dbSelectArea("TQQ")
+		dbSetOrder(1)
+		If !dbSeek(cFlTQQ+PadL(aAux[i][1],15,"0")+ Padr( aAux[i,4], nTamCnpj ) +DTOS(aAux[i][10])+SubStr(aAux[i][11],1,5))
+
+			RecLock("TQQ",.T.)
+			TQQ->TQQ_FILIAL := cFlTQQ
+			TQQ->TQQ_PLACA  := aAux[i][2]
+			TQQ->TQQ_CNPJ   := aAux[i][4]
+			TQQ->TQQ_DTABAS := aAux[i][10]
+			TQQ->TQQ_HRABAS := aAux[i][11]
+			TQQ->TQQ_QUANT  := aAux[i][7]
+			TQQ->TQQ_VALTOT := aAux[i][9]
+			TQQ->TQQ_VALUNI := aAux[i][8]
+			TQQ->TQQ_CODCOM := aAux[i][3]
+			TQQ->TQQ_HODOM  := aAux[i][6]
+			TQQ->TQQ_NABAST := PadL(aAux[i][1],15,"0")
+			TQQ->TQQ_NABAAN := PadL(aAux[i][12],15,"0")
+			TQQ->TQQ_CODMOT := aAux[i][5]
+			TQQ->TQQ_USUARI := cUserName
+			TQQ->TQQ_ERROVA := " "
+			TQQ->TQQ_TANQUE := aAux[i][14]
+			TQQ->TQQ_BOMBA  := aAux[i][15]
+			TQQ->TQQ_POSCO2 := aAux[i][16]
+			TQQ->TQQ_EMPORI := aAux[i][17]
+			TQQ->TQQ_FILORI := aAux[i][18]
+			TQQ->TQQ_EMPDES := aAux[i][19]
+			TQQ->TQQ_FILDES := aAux[i][20]
+			TQQ->TQQ_POSDES := aAux[i][21]
+			TQQ->TQQ_LOJDES := aAux[i][22]
+			TQQ->TQQ_TANDES := aAux[i][23]
+			TQQ->TQQ_MOTTRA := aAux[i][24]
+			TQQ->TQQ_POSTO  := aAux[i][25]
+			TQQ->TQQ_LOJA   := aAux[i][26]
+			If !lRPORel17
+				TQQ->TQQ_OBSERV := aAux[i][27]
+			EndIf
+			TQQ->TQQ_CONVEN := aAux[i][28]
+
+			TQQ->( MsUnLock() )
+
+			If lRPORel17
+	         	//grava observacoes
+				MsMM(TQQ->TQQ_CODOBS,80,,aAux[i][27],1,,,"TQQ","TQQ_CODOBS")
+			EndIf
+
+			If ExistBlock("MNTA6355")
+				ExecBlock("MNTA6355",.F.,.F.,{aAux[i]})
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return lGravaErro
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³CNPJ      ³ Autor ³ Evaldo Cevinscki Jr   ³ Data ³27/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Valida CNPJ                                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Objetivo  ³                                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function CNPJ(Num)
+
+	Local lCNPJ := .F.
+
+	If Len(AllTrim(NUM)) < 14
+		lCNPJ := .F.
+	Else
+		D1  := Val(SubStr(NUM,1,1)) * 5
+		D2  := Val(SubStr(NUM,2,1)) * 4
+		D3  := Val(SubStr(NUM,3,1)) * 3
+		D4  := Val(SubStr(NUM,4,1)) * 2
+		D5  := Val(SubStr(NUM,5,1)) * 9
+		D6  := Val(SubStr(NUM,6,1)) * 8
+		D7  := Val(SubStr(NUM,7,1)) * 7
+		D8  := Val(SubStr(NUM,8,1)) * 6
+		D9  := Val(SubStr(NUM,9,1)) * 5
+		D10 := Val(SubStr(NUM,10,1)) * 4
+		D11 := Val(SubStr(NUM,11,1)) * 3
+		D12 := Val(SubStr(NUM,12,1)) * 2
+
+		nTotD := D1+D2+D3+D4+D5+D6+D7+D8+D9+D10+D11+D12
+
+		nRESTO := MOD(nTotD,11)
+
+		If nRESTO < 2
+			nDV1 := 0
+		else
+			nDV1 := 11 - nRESTO
+		EndIf
+
+   		//segundo digito verificador
+		D1  := Val(SubStr(NUM,1,1)) * 6
+		D2  := Val(SubStr(NUM,2,1)) * 5
+		D3  := Val(SubStr(NUM,3,1)) * 4
+		D4  := Val(SubStr(NUM,4,1)) * 3
+		D5  := Val(SubStr(NUM,5,1)) * 2
+		D6  := Val(SubStr(NUM,6,1)) * 9
+		D7  := Val(SubStr(NUM,7,1)) * 8
+		D8  := Val(SubStr(NUM,8,1)) * 7
+		D9  := Val(SubStr(NUM,9,1)) * 6
+		D10 := Val(SubStr(NUM,10,1)) * 5
+		D11 := Val(SubStr(NUM,11,1)) * 4
+		D12 := Val(SubStr(NUM,12,1)) * 3
+		D13 := nDV1 * 2
+
+		nTotD := D1+D2+D3+D4+D5+D6+D7+D8+D9+D10+D11+D12+D13
+
+		nRESTO := MOD(nTotD,11)
+
+		If nRESTO < 2
+			nDV2 := 0
+		else
+			nDV2 := 11 - nRESTO
+		EndIf
+
+   		//CNPJ Valido
+		cCNPJ := SubStr(NUM,1,12)+AllTrim(Str(nDV1))+AllTrim(Str(nDV2))
+
+		If cCNPJ == NUM
+			lCNPJ := .T.
+		EndIf
+	EndIf
+
+Return lCNPJ
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT635DTPG³ Autor ³ Evaldo Cevinscki Jr   ³ Data ³28/03/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Calcula data de vencimento do abastecimento com relacao a   ³±±
+±±³          ³negociacao.                                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Objetivo  ³                                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT635DTPG(cVPOSTO,cVLOJA,DTABAS,HRABAS)
+
+	Local aArea  := GetArea()
+	Local dVENCT := Ctod('  /  /  ')
+	Local dNEG
+	Local cNEG
+
+	dbSelectArea("TQG")//Data_Vencimento
+	dbSetOrder(01)
+	If dbSeek(xFilial("TQG")+cVPOSTO+cVLOJA)
+		dNeg := TQG->TQG_DTNEG
+		cNEG := TQG->TQG_HRNEG
+		While !EOF().And. TQG->TQG_CODPOS == cVPOSTO .And. TQG->TQG_LOJA == cVLOJA
+			If (TQG->TQG_DTNEG < DTABAS)
+				dNeg := TQG->TQG_DTNEG
+				cNEG := TQG->TQG_HRNEG
+			ElseIf (TQG->TQG_DTNEG = DTABAS)
+				If (TQG->TQG_HRNEG <= HRABAS)
+					dNeg := TQG->TQG_DTNEG
+					cNEG := TQG->TQG_HRNEG
+				EndIf
+			EndIf
+			dbSkip()
+		End
+
+		dbSelectArea("TQG")//Data_Vencimento
+		dbSetOrder(01)
+		If dbSeek(xFilial("TQG")+cVPOSTO+cVLOJA+DTOS(dNeg)+cNEG)
+			dVENCT := MNT635DTVE(cVPOSTO,cVLOJA,DTABAS,HRABAS,TQG->TQG_DIAFAT,TQG->TQG_PRAZO)
+		EndIf
+	EndIf
+	RestArea(aArea)
+
+Return dVENCT
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT635PERC³ Autor ³ Evaldo Cevinscki Jr   ³ Data ³28/03/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Calcula data de vencimento do abastecimento com relacao a   ³±±
+±±³          ³negociacao.                                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Objetivo  ³                                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT635DTVE(cVPOSTO,cVLOJA,DTABAS,HRABAS,nDIASFAT,nPRAZO)
+
+	Local cDTVENC := CtoD("  /  /  ")
+
+	cDTABAST := Dtos(DTABAS)
+	cDTINIC  := VAL(SubStr(cDTABAST,1,6) + "01")
+
+	If nDIASFAT <> 0
+
+		cDTINTERV := (AllTrim(Str(cDTINIC + (nDIASFAT - 1))))
+		nProxMes  := VAL(SubStr(cDTABAST,5,2)) + 1
+
+		If nProxMes > 12
+			nProxMes := nProxMes - 12
+		EndIf
+
+		If nProxMes < 10
+			dData      := SubStr(cDTINTERV,1,4) + StrZero(nProxMes,2) + "01"
+			cULTDIAMES := Dtos(Ctod(SubStr(dData,7,2) + "/" + SubStr(dData,5,2) + "/" + SubStr(dData,1,4)) -1)
+		Else
+			dData      := SubStr(cDTINTERV,1,4) + AllTrim(Str(nProxMes)) + "01"
+			cULTDIAMES := Dtos(Ctod(SubStr(dData,7,2) + "/" + SubStr(dData,5,2) + "/" + SubStr(dData,1,4)) -1)
+		EndIf
+
+		dData      := SubStr(cDTINTERV,1,4) + SubStr(cDTINTERV,5,2) + "01"
+		cULTDIAMES := Dtos(Ctod(SubStr(dData,7,2) + "/" + SubStr(dData,5,2) + "/" + SubStr(dData,1,4)) -1)
+
+		While (cDTINTERV < cDTABAST) .And. (cDTINTERV <> cULTDIAMES)
+
+			nDIf := Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) - Ctod(SubStr(cULTDIAMES,7,2)+"/"+SubStr(cULTDIAMES,5,2)+"/"+SubStr(cULTDIAMES,1,4))
+			If nDIf < 0
+				nDIf := nDIf * (-1)
+			EndIf
+
+			cDTINIC := DTOS(Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) + 1)
+			If (cDTINTERV < cDTABAST)
+				cDTINTERV := DTOS(Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) + nDIASFAT)
+			EndIf
+		End
+
+		nDIf := Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) - Ctod(SubStr(cULTDIAMES,7,2)+"/"+SubStr(cULTDIAMES,5,2)+"/"+SubStr(cULTDIAMES,1,4))
+		If nDIf < 0
+			nDIf = nDIf * (-1)
+		EndIf
+
+		cDTVENC   := Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) + nPRAZO
+		cDTINTERV := Ctod(SubStr(cDTINTERV,7,2)+"/"+SubStr(cDTINTERV,5,2)+"/"+SubStr(cDTINTERV,1,4)) + nPRAZO
+
+	EndIf
+
+	If nDIASFAT == 0 .And. nPRAZO == 0
+		cDTVENC := Ctod(SubStr(cDTABAST,7,2)+"/"+SubStr(cDTABAST,5,2)+"/"+SubStr(cDTABAST,1,4)) + 1
+	EndIf
+
+Return cDTVENC
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT635QTAN
+Função para consultar a quantidade de tanques com o mesmo código.
+Irá retornar a filial, produto e quantidade para ser realizado as devidas validações.
+
+@type Static function
+
+@source MNTA635.prx
+
+@author Jean Pytter da costa
+@since 19/02/2019
+
+@param aRep	, array	, Contém os abastecimentos.
+
+@sample MNT635QTAN( array )
+
+@return array, retorna com os tanques.
+	aRetQry[1] - Filial
+	aRetQry[2] - Código do produto
+	aRetQry[3] - Quantidade de tanque
+
+@Obs - Função é utilizada pelas rotinas MNTA635 e MNTA660.
+/*/
+//---------------------------------------------------------------------
+Function MNT635QTAN( aRep )
+
+	Local aArea 	:= GetArea()
+	Local aRetQry   := {}
+	Local cQryTQI   := GetNextAlias()
+	Local cSQLQry   := "% TQI.TQI_CODPOS, TQI.TQI_LOJA, TQI.TQI_TANQUE, TQI.TQI_FILIAL, TQI.TQI_PRODUT, TQF.TQF_CNPJ %"
+	Local cModComp  := '% ' + NGMODCOMP("TQI","TQF")
+
+	//Se possuir CNPJ
+	If !Empty( aRep[4] )
+		cModComp +=  ' AND TQF.TQF_CNPJ = ' + valToSQL(aRep[4])
+	EndIf
+	cModComp +=  ' %'
+
+	//Consulta para buscar Tanques com mesmo código
+	//Também foi criado uma subconsulta para realizar a contagem do dados encontrados
+	BeginSql Alias cQryTQI
+		SELECT TQI_FILIAL AS FILIAL,TQI_CODPOS AS CODPOS,TQI_LOJA AS LOJA,TQI_TANQUE AS TANQUE,
+		TQI_PRODUT AS PRODUT, TQF_CNPJ AS CNPJ,
+
+		( SELECT Count(TQI_FILIAL) CONTADOR FROM %Table:TQI% TQI
+		INNER JOIN %table:TQF% TQF ON
+				TQF.TQF_CODIGO = TQI.TQI_CODPOS AND TQF.TQF_LOJA = TQI.TQI_LOJA
+
+			WHERE TQI.%NotDel%  AND TQI.TQI_CODPOS =  %exp:aRep[25]%
+				AND TQI.TQI_LOJA =  %exp:aRep[26]% AND TQI.TQI_TANQUE =  %exp:aRep[14]%
+				AND %exp:cModComp% ) AS CONTADOR
+
+		FROM %Table:TQI% TQI INNER JOIN %table:TQF% TQF ON
+				TQF.TQF_CODIGO = TQI.TQI_CODPOS AND TQF.TQF_LOJA = TQI.TQI_LOJA
+			WHERE TQI.%NotDel% AND TQF.%NotDel% AND
+			TQI.TQI_CODPOS   = %exp:aRep[25]%      AND
+			TQI.TQI_LOJA     = %exp:aRep[26]%      AND
+			TQI.TQI_TANQUE   = %exp:aRep[14]%      AND
+			%exp:cModComp%
+		GROUP BY %exp:cSQLQry%
+	EndSql
+
+	aAdd( aRetQry, { (cQryTQI)->FILIAL, (cQryTQI)->PRODUT, (cQryTQI)->CONTADOR } )
+
+	( cQryTQI )->( dbCloseArea() )
+
+	RestArea( aArea )
+
+Return aRetQry[1]
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fFilAbast
+Retorna a filial utilizada para abastecimento - TQN
+
+@param i, numeric, índice do array 
+@param cFlPosto, string, filial do posto
+@param cPosto, string, posto
+@param cloja, string, loja 
+@param cTipoPosto, string, tipo de posto
+
+@author Maria Elisandra de Paula
+@since 06/04/21
+@return string
+/*/
+//---------------------------------------------------------------------
+Static Function fFilAbast( i, cFlPosto, cPosto, cLoja, cTipoPosto )
+
+	Local cFlRet     := ''
+	Local cCusto     := ''
+	Local cCentrab   := ''
+	Local aRetTPN    := {}
+	Local lIgualTQI  := Len( AllTrim( xFilial( 'TQI' ) ) ) == Len( AllTrim( xFilial( 'TQN' ) ) )
+	Local lIgualST9  := Len( AllTrim( xFilial( 'ST9' ) ) ) == Len( AllTrim( xFilial( 'TQN' ) ) )
+	Local lAchFilial := .F.
+
+	dbSelectArea('ST9')
+	dbSetOrder(14)
+	If dbSeek( aRep[i,2] + 'A' )
+
+		cFlRet  := ST9->T9_FILIAL
+		cCusto   := ST9->T9_CCUSTO
+		cCentrab := ST9->T9_CENTRAB
+
+		// Compartilhamento igual entre ST9 e TQN.
+		If lIgualST9
+
+			aRetTPN := NGFILTPN(ST9->T9_CODBEM,aRep[i][10],aRep[i][11],aRep[i][2])
+			
+			If !Empty(aRetTPN[1])
+
+				lAchFilial := .T.
+				cFlRet     := aRetTPN[1]
+				cCusto     := aRetTPN[2]
+				cCentrab   := aRetTPN[3]
+
+			EndIf
+
+		ElseIf cTipoPosto == '2' .And. ;// Se for posto interno 
+			!Empty( aRep[i,14] ) .And.; // com tanque preenchido
+			lIgualTQI // Compartilhamento igual do abastecimento e TANQUE
+
+			lAchFilial := .T.
+
+			// Para posto interno, quando informado o tanque e o compatilhamento entre TQI e TQN for igual utiliza a filial do tanque.
+			cFlRet := Posicione( 'TQI', 1, xFilial( 'TQI', cFlPosto ) + cPosto + cLoja + aRep[i,14], 'TQI_FILIAL' )
+
+		EndIf
+
+	EndIf
+
+	If !lAchFilial
+		cFlRet := cFlPosto
+	EndIf
+
+Return { cFlRet, cCusto, cCentrab }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInfoposto
+Validação de Posto por cnpj ou código+loja
+Carrega array de busca aInfoposto
+
+@param i, numeric, índice do array 
+@author Maria Elisandra de Paula
+@since 07/04/21
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fInfoposto( i, lValidar )
+
+	Local aAreaTQF   := TQF->( GetArea() )
+	Local lRet       := .T.
+	Local cCnpj      := ''
+	Local cFlRet     := ''
+	Local cPosto     := ''
+	Local cLoja      := ''
+	Local cTipoPosto := ''
+	Local cConvenio  := ''
+	Local lAchou     := .F.
+	Local cAliasQry  := ''
+	Local aErroAux   := {}
+	Local nInfo      := 0
+	Local nIndice    := 0
+
+	Default lValidar := .F.
+
+	If Empty(aRep[i][4]) .And. Empty(aRep[i][25])
+		aAdd( aErroAux, " 06" ) // CNPJ nao informado
+		lRet := .F.
+	ElseIf Empty(aRep[i][25]) .And. !CNPJ(aRep[i][4])
+		aAdd( aErroAux, " 24" )//CNPJ invalido
+		lRet := .F.
+	EndIf
+
+	If lRet
+
+		//----------------------------------------------
+		// busca posto por cnpj ou posto+loja
+		//----------------------------------------------
+		nInfo := Ascan( aInfoPosto, {|x| ( !Empty( aRep[i,4] ) .And. x[1] == aRep[i,4] ) .Or. ; // cnpj
+			( !Empty( aRep[i,25] ) .And. !Empty( aRep[i,26] ) .And. x[3] + x[4] == aRep[i,25] + aRep[i,26] ) } ) // posto + loja 
+
+		If nInfo > 0
+
+			lRet       := .T.
+			cCnpj      := aInfoPosto[nInfo,1]
+			cFlRet     := aInfoPosto[nInfo,2]
+			cPosto     := aInfoPosto[nInfo,3]
+			cLoja      := aInfoPosto[nInfo,4]
+			cTipoPosto := aInfoPosto[nInfo,5]
+			cConvenio  := aInfoPosto[nInfo,6]
+
+		Else
+
+			//------------------------------------------------------
+			// Busca Posto pelo Cnpj
+			//------------------------------------------------------
+			If !Empty( aRep[i,4] )
+
+				/*
+					Como é possivel existir um mesmo CNPJ para filiais distintas, a primeira busca é feita na filial corrente,
+					caso não seja localizada, busca nas demais filiais.
+				*/
+				dbSelectArea( 'TQF' )
+				dbSetOrder( 2 ) // TQF_FILIAL + TQF_CNPJ
+				If msSeek( xFilial( 'TQF' ) + aRep[i,4] )
+
+					lAchou     := .T.
+					cCNPJ      := TQF->TQF_CNPJ
+					cFlRet     := TQF->TQF_CODFIL
+					cPosto     := TQF->TQF_CODIGO
+					cLoja      := TQF->TQF_LOJA
+					cTipoPosto := TQF->TQF_TIPPOS
+					cConvenio  := TQF->TQF_CONVEN
+
+				Else
+
+					cAliasQry := GetNextAlias()
+
+					BeginSql Alias cAliasQry
+						
+						SELECT TQF.TQF_CODFIL, TQF.TQF_CNPJ, TQF.TQF_CODIGO, TQF.TQF_LOJA, TQF.TQF_TIPPOS, TQF_CONVEN
+						FROM %Table:TQF% TQF 
+						WHERE TQF.%NotDel%
+							AND TQF.TQF_CNPJ = %Exp:aRep[i,4]%
+
+					EndSql
+
+					If !Eof()
+
+						lAchou   := .T.
+						
+						cCnpj      := (cAliasQry)->TQF_CNPJ
+						cFlRet     := (cAliasQry)->TQF_CODFIL
+						cPosto     := (cAliasQry)->TQF_CODIGO
+						cLoja      := (cAliasQry)->TQF_LOJA
+						cTipoPosto := (cAliasQry)->TQF_TIPPOS
+						cConvenio  := (cAliasQry)->TQF_CONVEN
+
+					EndIf
+
+					(cAliasQry)->( dbCloseArea() )
+
+				
+				EndIf
+
+			EndIf
+
+			If !lAchou 
+				If Empty( aRep[i,25] )
+					aAdd( aErroAux, " 07" ) // Posto não cadastrado
+					lRet := .F.
+				ElseIf !Empty( aRep[i,25] )
+
+					/*
+						Como é possivel existir um mesmo Código e Loja para filiais distintas, a primeira busca é feita na filial corrente,
+						caso não seja localizada, busca nas demais filiais.
+					*/
+					dbSelectArea( 'TQF' )
+					dbSetOrder( 1 ) // TQF_FILIAL + TQF_CODIGO + TQF_LOJA
+					If msSeek( xFilial( 'TQF' ) + aRep[i,25] + aRep[i,26] )
+
+						lAchou     := .T.
+						cCNPJ      := TQF->TQF_CNPJ
+						cFlRet     := TQF->TQF_CODFIL
+						cPosto     := TQF->TQF_CODIGO
+						cLoja      := TQF->TQF_LOJA
+						cTipoPosto := TQF->TQF_TIPPOS
+						cConvenio  := TQF->TQF_CONVEN
+
+					Else
+						
+						//--------------------------------
+						// Busca por código e loja
+						//--------------------------------
+						cAliasQry := GetNextAlias()
+
+						BeginSql Alias cAliasQry
+							SELECT TQF.TQF_CODFIL, TQF.TQF_CNPJ, TQF.TQF_CODIGO, TQF.TQF_LOJA, TQF.TQF_TIPPOS
+							FROM %Table:TQF% TQF 
+							WHERE TQF.%NotDel%
+								AND TQF.TQF_CODIGO = %Exp:aRep[i,25]%
+								AND TQF.TQF_LOJA = %Exp:aRep[i,26]%
+
+						EndSql
+
+						If !Eof()
+
+							lAchou     := .T.
+							cCnpj      := (cAliasQry)->TQF_CNPJ
+							cFlRet     := (cAliasQry)->TQF_CODFIL
+							cPosto     := (cAliasQry)->TQF_CODIGO
+							cLoja      := (cAliasQry)->TQF_LOJA
+							cTipoPosto := (cAliasQry)->TQF_TIPPOS
+
+						EndIf
+
+						(cAliasQry)->( dbCloseArea() )
+
+					EndIf
+
+					If !lAchou
+
+						aAdd( aErroAux, " 07" ) // Posto não cadastrado
+						lRet := .F.
+
+					EndIf
+
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If lValidar // Verifica se é processo de validar ou somente para buscar informações
+
+		For nIndice := 1 To Len( aErroAux )
+
+			If Mnt635Gra(,i, aErroAux[nIndice] ) 
+				aAdd( aERRO, { Alltrim( aErroAux[nIndice] ) })
+			EndIf
+
+		Next nIndice
+
+	EndIf
+
+	If lAchou .And. nInfo == 0 
+
+		//-----------------------------------------------------------------------------
+		// Armazena informações do posto para ser reutilizado na próxima consulta
+		//-----------------------------------------------------------------------------
+		aAdd( aInfoPosto, { cCnpj, cFlRet, cPosto, cLoja, cTipoPosto, cConvenio } )
+
+	EndIf
+
+	RestArea( aAreaTQF )
+
+Return { cCnpj, cFlRet, cPosto, cLoja, cTipoPosto, cConvenio }
+

@@ -1,0 +1,741 @@
+#INCLUDE "MNTR555.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR555
+Relatório de Pneus por veiculo
+
+@author Soraia de Carvalho
+@since 11/09/06
+@version P12
+@source MNTR555
+/*/
+//---------------------------------------------------------------------
+Function MNTR555()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aPerg		  := {}
+	Local cTamanho	  := "G"
+	Local cPerg		  := "MNR555"
+	Local cTitulo	  := STR0018 //"Relatorio de Pneus por Veículo"
+
+	WnRel   := "MNTR555"
+	cDesc1  := STR0013 //"Relatorio de Pneus por Veículo"
+	cDesc2  := STR0014 //"permitindo classificacao por familia"
+	cDesc3  := STR0015 //"e por modelo"
+	cSTRING := "TQF"
+
+	Private nLastKey := 0
+	Private aReturn  := { STR0016, 1, STR0017, 1, 2, 1, "", 1 } //"Zebrado"###"Administracao"
+	Private lGera    := .F.
+
+	//Vetor utilizado para armazenar retorno da função MNT045TRB,
+	//criada de acordo com o item 18 (RoadMap 2013/14)
+	Private vFilTRB := MNT045TRB()
+
+	SetKey(VK_F4, {|| MNT045FIL( vFilTRB[2] )})
+
+	/*---------------------------
+	Parâmetros:
+
+	MV_PAR01 -> De Filial
+	MV_PAR02 -> Até Filial
+	MV_PAR03 -> De Familia
+	MV_PAR04 -> Até Familia
+	MV_PAR05 -> De Veiculo
+	MV_PAR06 -> Até Veículo
+	MV_PAR07 -> Veículos
+	---------------------------*/
+
+	Pergunte(cPerg, .F.)
+
+	//Envia controle para a funcao SETPRINT
+	WnRel := SetPrint(cSTRING, WNREL, cPerg, cTitulo, cDesc1, cDesc2, cDesc3, .F., "")
+
+	SetKey(VK_F4, {|| })
+
+	If nLastKey == 27
+		Set Filter To
+		dbSelectArea("ST9")
+		MNT045TRB( .T., vFilTRB[1], vFilTRB[2])
+		Return
+	EndIf
+
+	SetDefault(aReturn,cSTRING)
+	RptStatus({|lEND| R555IMP(@lEND,WNREL,cTitulo,cTamanho)},cTitulo)
+
+	dbSelectArea("ST9")
+
+	MNT045TRB( .T., vFilTRB[1], vFilTRB[2])
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R555IMP
+Chamada do Relatorio.
+
+@author Soraia de Carvalho
+@since 11/09/06
+@version P12
+@source SigaMNT
+/*/
+//---------------------------------------------------------------------
+Static Function R555Imp(lEnd, WnRel, cTitulo, cTamanho)
+
+	Local cCabec1  := ""
+	Local cCabec2  := ""
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local nTipo    := 0
+
+	Private li    := 80
+	Private m_pag := 1
+
+	//Verifica se deve comprimir ou nao
+	nTipo := IIf( aReturn[4] == 1, 15, 18)
+
+	/*/
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	***************************************************************************************************************
+	Eixo        Tipo Eixo               Posicao   Pneu               Tipo Modelo        Medida                 Banda       Sulco(mm)         KM Total
+	***************************************************************************************************************
+
+	Filial: XXXXXXXXXXXXXXX
+	---------------------------------------------------------------------------------------------------------------
+	Veículo: XXXXXXXXXXXXXXXX - XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  Operacao: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  Tipo Modelo: XXXXXXXXXX - XXXXXXXXXXXXXXXXXXXX
+	---------------------------------------------------------------------------------------------------------------
+
+	XXXXXXXXXX  XXXXXXXXXXXXXXXXXXXXXX  XXXXXX    XXXXXXXXXXXXXXXX   XXXXXXXXXXXXXXXX   XXXXXXXXXXXXXXXXXXXX     X           999.99   999,999,999,999
+
+	/*/
+
+	cCabec1 := STR0019 //"Eixo        Tipo Eixo               Posição   Pneu               Tipo Modelo        Medida                 Banda       Sulco(mm)         KM Total"
+
+	Processa({ |lEnd| MNR555PROC()}, STR0021, STR0012)  //"Aguarde..."###"Processando Registros..."
+
+	If lGera
+		Roda(nCntImpr, cRodaTxt, cTamanho)
+
+		Set Filter To
+		Set Device To Screen
+
+		If aReturn[5] == 1
+			Set Printer To
+			dbCommitAll()
+			OurSpool(WNREL)
+		EndIf
+
+		MS_FLUSH()
+
+		dbSelectArea("ST9")
+	Else
+		MsgInfo(STR0045,STR0046) //"Não existem dados para montar o relatório."###"ATENÇÃO"
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR555PROC
+Processa Registros
+
+@author Soraia de Carvalho
+@since 11/09/06
+@version P12
+@source MNTR555
+/*/
+//---------------------------------------------------------------------
+Function MNR555PROC()
+
+	Local cVei     	:= ""
+	Local cEixo    	:= ""
+	Local cMedida  	:= ""
+	Local cDesc     := ""
+	Local cCodFil  	:= ""
+	Local cPneusApl := GetNextAlias()
+	Local cContab  	:= GetMv("MV_MCONTAB")
+	Local aPneus   	:= {}
+	Local aCampoCC 	:= {}
+	Local aEixo		:= {}
+	Local lOper    	:= Alltrim( GetMv("MV_NGOPER") ) == "S"
+	Local lImprime 	:= .F.
+	Local i        	:= 0
+	Local j      	:= 0
+	Local nX		:= 0
+	Local nI		:= 0
+
+	If cContab == "CTB"
+		aCampoCC := {"CTT","CTT->CTT_CUSTO","CTT->CTT_OPERAC"}
+	ElseIf cContab == "CON"
+		aCampoCC := {"SI3","SI3->I3_CUSTO","SI3->I3_OPERAC"}
+	EndIf
+
+	cAliasQry := GetNextAlias()
+
+	cQuery := " SELECT DISTINCT ST9.T9_FILIAL,ST9.T9_CODBEM,ST9.T9_NOME,ST9.T9_CODFAMI,ST9.T9_TIPMOD,ST9.T9_CONTACU, "
+	cQuery += "   STC.TC_FILIAL, STC.TC_LOCALIZ,STC.TC_CODBEM,STC.TC_COMPONE,ST6.T6_NOME,TQS.TQS_MEDIDA,TQS.TQS_BANDAA, "
+	cQuery += "   TQS.TQS_SULCAT,TQR.TQR_DESMOD,TQT.TQT_DESMED, ST9.T9_CCUSTO, TQS.TQS_EIXO,TQS.TQS_TIPEIX, "
+	cQuery += "     (SELECT T9_CONTACU FROM " + RetSqlName("ST9")+ " WHERE T9_FILIAL = STC.TC_FILIAL AND T9_CODBEM = STC.TC_COMPONE AND D_E_L_E_T_ <> '*') CONTACU "
+	cQuery += " FROM " + RetSqlName("TQS")+" TQS, " + RetSqlName("STC") + " STC, " + RetSqlName("ST9") + " ST9," +;
+		                 RetSqlName("ST6")+" ST6, " + RetSqlName("TQR") + " TQR, " + RetSqlName("TQT") + " TQT," +;
+						 RetSqlName("TQ1")+" TQ1 "
+
+	cQuery += " WHERE ST9.T9_CODBEM = STC.TC_CODBEM   "
+	cQuery +=   " AND ST9.T9_FILIAL = STC.TC_FILIAL "
+	cQuery +=   " AND ST9.T9_CODFAMI = ST6.T6_CODFAMI "
+	cQuery +=   " AND TQS.TQS_CODBEM = STC.TC_COMPONE "
+	cQuery +=   " AND STC.TC_TIPMOD = TQR.TQR_TIPMOD  "
+	cQuery +=   " AND TQS.TQS_MEDIDA = TQT.TQT_MEDIDA "
+	cQuery +=   " AND ST9.T9_FILIAL >= " + ValToSQL(xFilial("ST9", MV_PAR01))
+	cQuery +=   " AND ST9.T9_FILIAL <= " + ValToSQL(xFilial("ST9", MV_PAR02))
+
+	cQuery += "  AND " + NGMODCOMP("ST9","TQS")
+
+    If FWModeAccess("ST6",3) == "C"
+		cQuery += "  AND " + NGMODCOMP("ST6","ST9")
+	Else
+		cQuery += "  AND " + NGMODCOMP("ST9","ST6")
+	EndIf
+
+	If FWModeAccess("TQR",3)  == "C"
+		cQuery += "  AND " + NGMODCOMP("TQR","STC")
+	Else
+		cQuery += "  AND " + NGMODCOMP("STC","TQR")
+	EndIf
+
+	If FWModeAccess("TQT",3)  == "C"
+		cQuery += "  AND " + NGMODCOMP("TQT","TQS")
+	Else
+		cQuery += "  AND " + NGMODCOMP("TQS","TQT")
+	EndIf
+
+	cQuery += " AND ST6.T6_CODFAMI >= " + ValToSQL(MV_PAR03)
+	cQuery += " AND ST6.T6_CODFAMI <= " + ValToSQL(MV_PAR04)
+	cQuery += " AND ST9.T9_CODBEM  >= " + ValToSQL(MV_PAR05)
+	cQuery += " AND ST9.T9_CODBEM  <= " + ValToSQL(MV_PAR06)
+
+	If MV_PAR07 == '01'
+		cQuery += " AND TQS.TQS_BANDAA <> '1' AND (TQS.TQS_TIPEIX = '3' OR TQS.TQS_TIPEIX = '4')"
+	ElseIf MV_PAR07 == '02'
+		cQuery += " AND TQS.TQS_BANDAA = '1' AND (TQS.TQS_TIPEIX <> '3' AND TQS.TQS_TIPEIX <> '4')"
+	EndIf
+
+	cQuery += " AND ST9.T9_SITBEM   = 'A'  "
+	cQuery += " AND ST9.T9_TIPMOD = TQ1.TQ1_TIPMOD "
+	cQuery += " AND ST9.T9_CODFAMI = TQ1.TQ1_DESENH "
+	cQuery += " AND ST9.D_E_L_E_T_ <> '*' "
+	cQuery += " AND STC.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TQS.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TQT.D_E_L_E_T_ <> '*' "
+	cQuery += " AND TQR.D_E_L_E_T_ <> '*' "
+	cQuery += " AND ST6.D_E_L_E_T_ <> '*' "
+	cQuery += " ORDER BY ST9.T9_FILIAL,ST9.T9_CODBEM,STC.TC_LOCALIZ,TQS.TQS_EIXO,STC.TC_COMPONE"
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	//Considerar posições sem pneu
+	If MV_PAR08 == 2
+
+		aSVei	  := {} //Armazena Localizacoes do Esquema Padrao SEM Pneus
+		aCVei	  := {} //Armazena Localizacoes do Esquema Padrao COM Pneus
+		aPN		  := { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }
+		cVei	  := (cAliasQry)->T9_CODBEM
+		lContinua := .T.
+
+		While lContinua
+
+			If MNT045STB( (cAliasQry)->T9_CODBEM, vFilTRB[2] )
+				lContinua := !((cAliasQry)->(EoF()))
+				Loop
+			EndIf
+
+			If cVei == (cAliasQry)->T9_CODBEM .And. !Empty(cVei)
+
+				aAdd(aCVei, (cAliasQry)->&("TC_LOCALIZ") )
+
+				cVei	:= (cAliasQry)->T9_CODBEM
+				cFil	:= (cAliasQry)->T9_FILIAL
+				cFami	:= (cAliasQry)->T9_CODFAMI
+				cTipM	:= (cAliasQry)->T9_TIPMOD
+
+				dbSelectArea(cAliasQry)
+				dbSkip()
+			Else
+				If !Empty(cVei)
+
+					dbSelectArea("TQ1")
+					dbSetOrder(01)
+					If dbSeek(xFilial("TQ1") + cFami + cTipM)
+						While !EoF() .And. TQ1->TQ1_FILIAL == xFilial("TQ1") .And. cFami == TQ1->TQ1_DESENH .And. cTipM == TQ1->TQ1_TIPMOD
+
+							For i := 1 To TQ1->TQ1_QTDPNE
+								If aScan(aCVei, &("TQ1->TQ1_LOCPN" + aPn[i])) == 0
+									aAdd(aSVei, {cFil, cVei, &("TQ1->TQ1_LOCPN" + aPn[i]), TQ1->TQ1_EIXO, TQ1->TQ1_TIPEIX})
+								EndIf
+							Next i
+
+							dbSelectArea("TQ1")
+							dbSkip()
+
+						EndDo
+					EndIf
+
+					aCVei := {}
+					cVei  := (cAliasQry)->T9_CODBEM
+					cFil  := (cAliasQry)->T9_FILIAL
+				EndIf
+
+				lContinua := (cAliasQry)->( !EoF() )
+			EndIf
+			dbSelectArea(cAliasQry)
+		EndDo
+	EndIf
+
+	dbSelectArea(cAliasQry)
+	dbGoTop()
+	cVei	:= ""
+	lContinua := .T.
+	While lContinua
+		If MNT045STB( (cAliasQry)->T9_CODBEM, vFilTRB[2] )
+			lContinua := !((cAliasQry)->(EoF()))
+			Loop
+		EndIf
+		If cVei != (cAliasQry)->T9_CODBEM
+			cVei	:= (cAliasQry)->T9_CODBEM
+			cFil	:= (cAliasQry)->T9_FILIAL
+			cFami	:= (cAliasQry)->T9_CODFAMI
+			cTipM	:= (cAliasQry)->T9_TIPMOD
+			dbSelectArea("TQ1")
+			dbSetOrder(01)
+			If dbSeek(xFilial("TQ1") + cFami + cTipM)
+				While TQ1->(!EoF()) .And. TQ1->TQ1_FILIAL == xFilial("TQ1") .And. cFami == TQ1->TQ1_DESENH .And. cTipM == TQ1->TQ1_TIPMOD
+					For i := 1 To TQ1->TQ1_QTDPNE
+						aAdd(aEixo, {TQ1->TQ1_EIXO, TQ1->TQ1_TIPEIX})
+					Next i
+					dbSelectArea("TQ1")
+					TQ1->(dbSkip())
+				EndDo
+			EndIf
+		Else
+			dbSelectArea(cAliasQry)
+			dbSkip()
+			lContinua := (cAliasQry)->( !EoF() )
+		EndIf
+	EndDo
+
+	If MV_PAR07 == '03'
+
+		dbSelectArea(cAliasQry)
+		dbGoTop()
+		cBemPai := (cAliasQry)->T9_CODBEM
+		cMedida := (cAliasQry)->TQS_MEDIDA
+		cEixo   := (cAliasQry)->TQS_EIXO
+
+		While !EoF()
+
+			If MNT045STB( (cAliasQry)->T9_CODBEM, vFilTRB[2] )
+				dbSelectArea(cAliasQry)
+				dbSkip()
+				Loop
+			EndIf
+
+			If (cAliasQry)->T9_CODBEM <> cBemPai
+				cBemPai := (cAliasQry)->T9_CODBEM
+				cEixo   := (cAliasQry)->TQS_EIXO
+				cMedida := (cAliasQry)->TQS_MEDIDA
+			EndIf
+
+			If (cAliasQry)->TQS_EIXO <> cEixo
+				cEixo   := (cAliasQry)->TQS_EIXO
+				cMedida := (cAliasQry)->TQS_MEDIDA
+			EndIf
+
+			If (cAliasQry)->TQS_MEDIDA <> cMedida
+				lImprime := .T.
+				cMedida  := (cAliasQry)->TQS_MEDIDA
+			Else
+				lImprime := .F.
+			EndIf
+
+			(cAliasQry)->( aAdd(aPneus, { T9_FILIAL, T9_NOME, TQS_EIXO, TQS_TIPEIX, TQS_MEDIDA, T9_CODBEM, T9_CCUSTO, T9_CODFAMI,;
+										  T9_TIPMOD, TQR_DESMOD, TC_LOCALIZ, TC_COMPONE, TQT_DESMED, TQS_BANDAA,TQS_SULCAT, CONTACU,;
+										  TQS_MEDIDA, NGSEEK("ST9", (cAliasQry)->TC_COMPONE, 1, "T9_TIPMOD"), lImprime}) )
+
+			dbSelectArea(cAliasQry)
+			dbSkip()
+		EndDo
+
+		lCont := .F.
+
+		For i := 1 To Len(aPneus)
+
+			nPos := aScan(aPneus, {|x| x[19] == .T.})
+			If nPos > 0
+				lGera := .T.
+				nPos2 := aScan(aPneus, {|x| x[6] == aPneus[nPos][6]})
+
+				aPneus[nPos][19] := .F.
+
+				If lCont == .T. .And. aPneus[nPos][6] == aPneus[nPos - 1][6]
+					lCont := .F.
+				Else
+					For j := nPos2 To Len(aPneus)
+
+						If aPneus[j][6] <> cVEI  //Imprime por operacao
+							If MV_PAR08 == 2 //Considera Pneus sem Estrutura
+								nPosic := aSCAN(aSVei, {|x| x[1]+x[2] == cCodFil + cVei})
+
+								While nPosic > 0 .And. nPosic <= Len(aSVei)
+									If aSVei[nPosic][1]+aSVei[nPosic][2] == cCodFil + cVEI
+
+										MNR555EIXO(AllTrim(aSVei[nPosic][4]),AllTrim(aSVei[nPosic][5]))
+										@ Li,036 PSay aSVei[nPosic][3]
+										@ Li,046 PSay STR0048 //"Sem Pneu"
+										SomaLinha()
+										nPosic++
+									Else
+										nPosic := 0
+									EndIf
+								EndDo
+							EndIf
+						EndIf
+
+						If aPneus[j][6] <> aPneus[nPos2][6]
+							Exit
+						EndIf
+
+						If aPneus[j][1] <> cCodFil
+
+							SomaLinha()
+							@ Li,000 PSay STR0022 //"Filial:"
+							@ Li,008 PSay aPneus[j][1] + " - " + aPneus[j][2]
+
+							cCodFil := aPneus[j][1]
+							SomaLinha()
+						EndIf
+
+						If aPneus[j][6] <> cVei  //Imprime por operacao
+
+							SomaLinha()
+							@ Li,000 Psay Replicate( Chr(45), 220 )
+
+							SomaLinha()
+							@ Li,000 PSay STR0023 //"Veículo:"
+
+							dbSelectArea("ST9")
+							dbSetOrder(01)
+							If dbSeek(aPneus[j][1] + aPneus[j][6])
+								cDesc := AllTrim(ST9->T9_NOME)
+							EndIf
+
+							@ Li,009 PSay AllTrim(aPneus[j][6]) + ' - ' + cDesc
+
+							If lOper
+								@ Li,070 PSay STR0024 //"Operação:"
+								dbSelectArea(aCampoCC[1])
+								dbSetOrder(01)
+								If dbSeek(xFilial(aCampoCC[1]) + aPneus[j][7])
+
+									dbSelectArea("TSZ")
+									dbSetOrder(01)
+									If dbSeek(xFilial("TSZ") + &(aCampoCC[3]))
+										@ Li,080 PSay TSZ->TSZ_DESSER
+									EndIf
+
+								EndIf
+							EndIf
+
+							@ Li,IIf(lOper, 122, 70) PSay STR0025 //"Tipo Modelo:"
+							@ Li,IIf(lOper, 135, 83) PSay AllTrim(aPneus[j][9]) + " - " + AllTrim(aPneus[j][10])
+
+							SomaLinha()
+							@ Li,000 Psay Replicate( Chr(45), 220 )
+
+							cVei := aPneus[j][6]
+
+							SomaLinha()
+						EndIf
+
+						MNR555EIXO(aPneus[j][3],aPneus[j][4])
+
+						@ Li,036 PSay aPneus[j][11]
+						@ Li,046 PSay aPneus[j][12]
+						@ Li,065 PSay aPneus[j][18]
+						@ Li,084 PSay aPneus[j][13]
+
+						If aPneus[j][14] == '1'
+							@ Li,107		 PSay STR0040 //"OR"
+						ElseIf aPneus[j][14] == '2'
+							@ Li,107		 PSay STR0041 //"R1"
+						ElseIf aPneus[j][14] == '3'
+							@ Li,107		 PSay STR0042 //"R2"
+						ElseIf aPneus[j][14] == '4'
+							@ Li,107		 PSay STR0043 //"R3"
+						ElseIf aPneus[j][14] == '5'
+							@ Li,107		 PSay STR0044 //"R4"
+						EndIf
+
+						@ Li,122 PSay aPneus[j][15] Picture "@E 999.99"
+						@ Li,130 Psay aPneus[j][16] Picture "@E 999,999,999,999"
+
+						SomaLinha()
+					Next j
+
+					lCont := .T.
+				EndIf
+			EndIf
+		Next i
+
+	Else
+		ProcRegua( LastRec() )
+
+		dbSelectArea(cAliasQry)
+		dbGoTop()
+		lContinua := .T.
+		While lContinua
+
+			IncProc()
+
+			If MNT045STB( (cAliasQry)->T9_CODBEM, vFilTRB[2] )
+				lContinua := !((cAliasQry)->(EoF()))
+				dbSkip()
+				Loop
+			EndIf
+
+			If MV_PAR07 $ '03/04' .And. MV_PAR08 == 2 //Considera Pneus sem Estrutura
+
+				If (cAliasQry)->T9_CODBEM <> cVei  //Imprime por operacao
+
+					nPosic := aScan(aSVei, {|x| x[1] + x[2] == cCodFil + cVei})
+					While nPosic > 0 .And. nPosic <= Len(aSVei)
+
+						If aSVei[nPosic][1] + aSVei[nPosic][2] == cCodFil + cVEI
+
+							MNR555EIXO(AllTrim(aSVei[nPosic][4]),AllTrim(aSVei[nPosic][5]))
+							@ Li,036 PSay aSVei[nPosic][3]
+							@ Li,046 PSay STR0048 //"Sem Pneu"
+
+							SomaLinha()
+							nPosic++
+						Else
+							nPosic := 0
+						EndIf
+					EndDo
+				EndIf
+			EndIf
+
+			/*
+			O loop só poderá ser encerrado neste ponto, realizando a verificação se está em fim de arquivo
+			definido este ponto pois mesmo o proximo registro sendo o ultimo, ainda será impresso as posições
+			que não possuem pneus, para então sair do loop.
+			*/
+			lContinua := (cAliasQry)->( !EoF() )
+
+			If !lContinua
+				Exit
+			EndIf
+
+			lGera := .T.
+
+			If (cAliasQry)->T9_FILIAL <> cCodFil
+				SomaLinha()
+
+				@ Li,000 PSay STR0022 //"Filial:"
+				dbSelectArea("SM0")
+				dbSetOrder(1)
+				If MsSeek(SM0->M0_CODIGO + (cAliasQry)->T9_FILIAL)
+					@ Li,008 PSay SM0->M0_FILIAL
+				EndIf
+
+				SomaLinha()
+			EndIf
+
+			If (cAliasQry)->T9_CODBEM <> cVEI .Or. (cAliasQry)->T9_FILIAL <> cCodFil //Imprime por operacao
+
+				cCodFil := (cAliasQry)->T9_FILIAL
+
+				SomaLinha()
+				@ Li,000 Psay Replicate( Chr(45), 220 )
+
+				SomaLinha()
+				@ Li,000 PSay STR0023 //"Veículo:"
+
+				dbSelectArea("ST9")
+				dbSetOrder(01)
+				If dbSeek((cAliasQry)->T9_FILIAL + (cAliasQry)->T9_CODBEM)
+					cDesc := AllTrim(ST9->T9_NOME)
+				EndIf
+
+				@ Li,009 PSay AllTrim((cAliasQry)->T9_CODBEM)+' - '+cDesc
+
+				If lOper
+					@ Li,070 PSay STR0024 //"Operação:"
+
+					dbSelectArea(aCampoCC[1])
+					dbSetOrder(01)
+					If dbSeek(xFilial(aCampoCC[1])+(cAliasQry)->T9_CCUSTO)
+						dbSelectArea("TSZ")
+						dbSetOrder(01)
+						If dbSeek(xFilial("TSZ")+&(aCampoCC[3]))
+							@ Li,080 PSay TSZ->TSZ_DESSER
+						EndIf
+					EndIf
+				EndIf
+
+				@ Li,IIf(lOper,122,70) PSay STR0025 //"Tipo Modelo:"
+				@ Li,IIf(lOper,135,83) PSay AllTrim((cAliasQry)->T9_TIPMOD)+" - "+AllTrim((cAliasQry)->TQR_DESMOD)
+
+				SomaLinha()
+
+				@ Li,000 Psay Replicate( Chr(45), 220 )
+
+				cVei := (cAliasQry)->T9_CODBEM
+				SomaLinha()
+
+			EndIf
+
+			//Query para identificar eixo e tipo conforme a localização do pneu.
+			BeginSql Alias cPneusApl
+			SELECT TQ1_EIXO,
+			       TQ1_TIPEIX
+			FROM %Table:TQ1%
+			WHERE %NotDel%
+			      AND TQ1_FILIAL = %xFilial:TQ1%
+				  AND TQ1_TIPMOD = %exp:(cAliasQry)->T9_TIPMOD%
+				  AND TQ1_DESENH = %exp:(cAliasQry)->T9_CODFAMI%
+				  AND %exp:(cAliasQry)->TC_LOCALIZ% IN (TQ1_LOCPN1, TQ1_LOCPN2, TQ1_LOCPN3,
+					                                    TQ1_LOCPN4, TQ1_LOCPN5, TQ1_LOCPN6,
+													    TQ1_LOCPN7, TQ1_LOCPN8, TQ1_LOCPN9,
+													    TQ1_LOCPN0)
+
+			EndSql
+
+			//Realiza a impressao do Eixo e Tipo de Eixo
+			MNR555EIXO(SubStr(AllTrim((cPneusApl)->TQ1_EIXO),1,1),(cPneusApl)->TQ1_TIPEIX)
+			(cPneusApl)->(dbCloseArea())
+
+			@ Li,036 PSay (cAliasQry)->TC_LOCALIZ
+			@ Li,046 PSay (cAliasQry)->TC_COMPONE
+			@ Li,065 PSay NGSEEK("ST9",(cAliasQry)->TC_COMPONE,1,"T9_TIPMOD")
+			@ Li,084 PSay (cAliasQry)->TQT_DESMED
+
+			If (cAliasQry)->TQS_BANDAA == '1'                                                       `
+				@ Li,107		 PSay STR0040 //"OR"
+			ElseIf (cAliasQry)->TQS_BANDAA == '2'
+				@ Li,107		 PSay STR0041 //"R1"
+			ElseIf (cAliasQry)->TQS_BANDAA == '3'
+				@ Li,107		 PSay STR0042 //"R2"
+			ElseIf (cAliasQry)->TQS_BANDAA == '4'
+				@ Li,107		 PSay STR0043 //"R3"
+			ElseIf (cAliasQry)->TQS_BANDAA == '5'
+				@ Li,107		 PSay STR0044 //"R4"
+			EndIf
+
+			@ Li,122 PSay (cAliasQry)->TQS_SULCAT Picture "@E 999.99"
+			@ Li,130 Psay (cAliasQry)->CONTACU Picture "@E 999,999,999,999"
+
+			SomaLinha()
+
+			dbSelectArea(cAliasQry)
+			dbSkip()
+		EndDo
+	EndIf
+
+	(cAliasQry)->(dbCloseArea())
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR555CC
+Valida todos codigos De... , Ate..., com excessao da Filial
+
+@author Marcos Wagner Junior
+@since 13/08/06
+@version P12
+@source MNTR555
+/*/
+//---------------------------------------------------------------------
+Function MNR555CC(nOpc,cParDe,cParAte,cTabela)
+
+	Local lRet
+
+	If nOpc == 1
+		lRet := IIf( Empty(cParDe), .T., ExistCpo( cTabela, cParDe ) )
+	ElseIf nOpc == 2
+		lRet := AteCodigo( cTabela, cParDe, cParAte )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR555EIXO
+Faz a impressao do Eixo e Tipo de Eixo
+
+@author Felipe N. Welter
+@since 16/02/09
+
+@param cEixo  , Caracter, Código da posição de eixo.
+       cTipEix, Caracter, Código do tipo de eixo.
+
+@source MNTR555
+/*/
+//---------------------------------------------------------------------
+Static Function MNR555EIXO(cEixo,cTipEix)
+
+	If cEixo == '1'
+		@ Li,000 PSay STR0026 //"Primeiro"
+	ElseIf cEixo == '2'
+		@ Li,000 PSay STR0027 //"Segundo"
+	ElseIf cEixo == '3'
+		@ Li,000 PSay STR0028 //"Terceiro"
+	ElseIf cEixo == '4'
+		@ Li,000 PSay STR0029 //"Quarto"
+	ElseIf cEixo == '5'
+		@ Li,000 PSay STR0030 //"Quinto"
+	ElseIf cEixo == '6'
+		@ Li,000 PSay STR0031 //"Sexto"
+	ElseIf cEixo == '7'
+		@ Li,000 PSay STR0032 //"Sétimo"
+	ElseIf cEixo == '8'
+		@ Li,000 PSay STR0033 //"Oitavo"
+	ElseIf cEixo == '9'
+		@ Li,000 PSay STR0034 //"Nono"
+	ElseIf cEixo == '10'
+		@ Li,000 PSay STR0049 //"Décimo"
+	ElseIf cEixo == 'R'
+		@ Li,000 PSay STR0035 //"Reserva"
+	EndIf
+
+	If cTipEix == '1'
+		@ Li,012 PSay STR0036 //"Livre"
+	ElseIf cTipEix == '2'
+		@ Li,012 PSay STR0037 //"Tracionador"
+	ElseIf cTipEix == '3'
+		@ Li,012 PSay STR0038 //"Direcional"
+	ElseIf cTipEix == '4'
+		@ Li,012 PSay STR0039 //"Direcional/Tracionador"
+	EndIf
+
+Return
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} SomaLinha()
+Função utilizada para incrementar linha no relatório
+
+@author Pedro Henrique Soares de Souza
+@since	26/01/15
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function SomaLinha()
+
+	Li++
+	If Li > 58
+		Cabec(STR0018, STR0019, "", "MNTR555", "G", IIf(aReturn[4] == 1, 15, 18),, .T.)
+		Li := PRow() + 1
+	EndIf
+
+Return Nil

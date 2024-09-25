@@ -1,0 +1,252 @@
+#INCLUDE "Mntc210.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC210
+Programa Check-list de Manuten‡ao preventiva corretiva
+@author Thiago Olis Machado
+@since 10/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC210()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Private lOutro 	  := .F.
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Variaveis utilizadas para Parametros!                        ³
+	//³ mv_par01     // De periodo                                   ³
+	//³ mv_par02     // Ate periodo                                  ³
+	//³ mv_par03     // De bem                                       ³
+	//³ mv_par04     // Ate bem                                      ³
+	//³ mv_par05     // De familia de bem                            ³
+	//³ mv_par06     // Ate familia de bem                           ³
+	//³ mv_par07     // De area manutencao                           ³
+	//³ mv_par08     // Ate area manutencao                          ³
+	//³ mv_par09     // De centro custo                              ³
+	//³ mv_par10     // Ate centro custo                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	If Pergunte("MNT21G",.T.)
+		Processa({|lEnd| MNTC210GRA()})
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC210GRA
+Processa as O.S.     
+@author Thiago Olis Machado 
+@since 10/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC210GRA()
+
+	Local oTmpTbl1
+	Local oTmpTbl2 
+
+	Private cTRB  := GetNextAlias()
+	Private cTRBV := GetNextAlias()
+
+	MV01 := MV_PAR01
+	MV02 := MV_PAR02
+	MV03 := MV_PAR03
+	MV04 := MV_PAR04
+	MV05 := MV_PAR05
+	MV06 := MV_PAR06
+	MV07 := MV_PAR07
+	MV08 := MV_PAR08
+
+	cCONDSTJ := 'stj->tj_situaca = "L" .And. stj->tj_termino = "S" .And. '
+	cCONDSTJ := cCONDSTJ + '(stj->tj_dtmrfim >= MV_PAR01 .And. stj->tj_dtmrfim <= MV_PAR02) .And.'
+	cCONDSTJ := cCONDSTJ + '(stj->tj_ccusto >= mv_par09 .And. stj->tj_ccusto <= mv_par10)'
+	cCONDSTJ := cCONDSTJ + ' .And. (stj->tj_codarea >= MV07 .And. stj->tj_codarea <= MV08)'
+
+	cCONDST9 := 'st9->t9_codfami >= MV05 .And. st9->t9_codfami <= MV06'
+
+	aCampos := {}
+	Aadd(aCAMPOS,{"ANO"     ,"C",07,0})
+	Aadd(aCAMPOS,{"MES"     ,"C",18,0})
+	Aadd(aCAMPOS,{"CUSTPRE" ,"N",14,2})
+	Aadd(aCAMPOS,{"CUSTCOR" ,"N",14,2})
+	Aadd(aCAMPOS,{"CUSTOUT" ,"N",14,2})
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices 
+	oTmpTbl1:AddIndex( "Ind01" , {"ANO","MES"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	dDTPAR1 := MV_PAR01
+	nLopINI := val(SubStr(dtos(dDTPAR1), 1, 6))
+	nLopFIM := val(SubStr(dtos(MV_PAR02), 1, 6))
+
+	nDIA    := day(dDTPAR1)
+	nMES    := Month(dDTPAR1) 
+	nANO    := year(dDTPAR1)
+
+	While nLopINI <= nLopFIM
+		dData := dDTPAR1
+
+		cAno := StrZero(nAno,4)
+		cMES := StrZero(nMES,2)
+
+		cANOMES := STR(nANO,4)+Strzero(nMES,2)
+
+		DbSelectArea(cTRB)
+		If !(cTRB)->(DbSeek(cANOMES))
+			(cTRB)->(DbAppend())
+			(cTRB)->ANO     := cANOMES
+			(cTRB)->MES     := MESEXTENSO(nMES)+"/"+ STR(nANO,4) //cMES
+			(cTRB)->CUSTPRE := 0
+			(cTRB)->CUSTCOR := 0
+			(cTRB)->CUSTOUT := 0
+		EndIf
+
+		nMES  += 1
+
+		If nMES > 12
+			nMES := nMES -12
+			nANO := nANO + 1
+		EndIf 
+
+		nDIA1   := NGDIASMES(nMES,nANO)
+		nDIA1   := If(nDIA <= nDIA1,nDIA,nDIA1)
+		dDTPAR1 := cTod(Str(nDIA1)+Str(nMes)+Str(nAno))
+
+		nLopINI := val(SubStr(dtos(dDTPAR1), 1, 6))
+	End
+
+	DbSelectArea("STJ")
+	DbSetOrder(2)
+	DbSeek(xFilial("STJ")+"B"+MV03,.T.)
+	Procregua(LASTREC())
+	While !Eof() .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And. STJ->TJ_CODBEM <= MV04
+		Incproc()
+		If &(cCONDSTJ)
+			DbSelectArea("ST9")
+			DbSetOrder(1)
+			DbSeek(xfilial()+STJ->TJ_CODBEM)
+
+			If &(cCONDST9)
+
+				//Recalcula o Custo da O.S
+				MNTA901OS("STJ")
+				nCUSTO := STJ->TJ_CUSTMDO + STJ->TJ_CUSTMAT  + STJ->TJ_CUSTMAA + STJ->TJ_CUSTMAS + STJ->TJ_CUSTTER
+
+				If nCUSTO > 0.00
+
+					nMES := Month(STJ->TJ_DTMRFIM)
+					nAno := Year(STJ->TJ_DTMRFIM)
+					DbSelectArea("ST4")
+					DbSeek(xFilial("ST4")+STJ->TJ_SERVICO)
+
+					DbSelectArea("STE")
+					DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+					If STE->TE_CARACTE == "C"
+						cPlano := "C"
+					ElseIf STE->TE_CARACTE == "P"
+						cPlano := "P"
+					Else
+						cPlano := "O"
+						lOutro := .t.
+					EndIf
+
+					cANOMES := STR(nANO,4)+Strzero(nMES,2)
+
+					DbSelectArea(cTRB)
+					If !DbSeek(cANOMES)
+						DbAppend()
+						(cTRB)->MES := cANOMES
+						(cTRB)->ANO := MESEXTENSO(nMES)+"/"+ STR(nANO,4)
+					EndIf
+					(cTRB)->CUSTPRE := (cTRB)->CUSTPRE + If(cPlano = "P",nCUSTO,0.00)
+					(cTRB)->CUSTCOR := (cTRB)->CUSTCOR + If(cPlano = "C",nCUSTO,0.00)
+					(cTRB)->CUSTOUT := (cTRB)->CUSTOUT + If(cPlano = "O",nCUSTO,0.00)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STJ")
+		DbSkip()
+	End
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	If Reccount() == 0
+		Help(" ",1,"NGTDADGRAF")
+
+		oTmpTbl1:Delete()
+
+		Return .T.
+	Endif
+
+	If lOutro      
+		aDBF3 := {{"CODIGO" , "C", 10,0}  ,;
+				  {"NOMECOD", "C", 100,0} ,;
+				  {"VALOR1" , "N", 12,2}  ,;
+				  {"VALOR2" , "N", 12,2}  ,;
+				  {"VALOR3" , "N", 12,2}}
+	Else
+		aDBF3 := {{"CODIGO" , "C", 10,0}  ,;
+		 		  {"NOMECOD", "C", 100,0} ,;
+		 		  {"VALOR1" , "N", 12,2}  ,;
+		 		  {"VALOR2" , "N", 12,2}}
+	Endif
+
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Index
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbselectArea(cTRB)
+	Dbgotop()
+	While !Eof()
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->ANO
+		(cTRBV)->NOMECOD := (cTRB)->MES
+		(cTRBV)->VALOR1  := (cTRB)->CUSTPRE
+		(cTRBV)->VALOR2  := (cTRB)->CUSTCOR
+		If lOutro
+			(cTRBV)->VALOR3  := (cTRB)->CUSTOUT
+		Endif
+		DbSelectArea(cTRB)
+		DbSkip()
+	End
+
+	// 1- linha titulo do grafico (janela)
+	// 2- linha titulo da direita do grafico
+	// 3- linha titulo superior do grafico
+	// 4- linha titulo da direita do grafico
+	// 5- linha titulo da inferior do grafico
+	// 6- linha series do grafico
+	// 7- leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8- alias doa arquivo temporario com os dados /ou
+	// 9- matriz com os dados
+	If lOutro
+		cTITUD := STR0008+dtoc(MV_PAR01)+" a "+dtoc(MV_PAR02) //"Custo Manutenção Preventiva X Corretiva x Outros Periodo "
+	Else
+		cTITUD := STR0002+dtoc(MV_PAR01)+" a "+dtoc(MV_PAR02) //"Custo Manutenção Preventiva X Corretiva Periodo "
+	Endif
+	aServicos:={}
+	Aadd(aServicos,STR0003) //"Preventiva"
+	Aadd(aServicos,STR0004) //"Corretiva"
+	If lOutro
+		Aadd(aServicos,STR0007) //"Outros"
+	Endif
+
+	vCRIGTXT := NGGRAFICO(" "+STR0001," "," ",cTITUD,STR0005,;
+	aServicos,"A",(cTRBV))
+
+	oTmpTbl1:Delete()
+	oTmpTbl2:Delete()
+
+Return Nil

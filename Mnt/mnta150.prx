@@ -1,0 +1,401 @@
+#Include 'Protheus.ch'
+#Include 'mnta150.ch'
+#Include 'FWMVCDef.ch'
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA150
+Programa de Bloqueio de Recursos
+@author Inacio luiz Kolling  
+@since  25/06/97
+@version P12
+@obs Reescrito para MVC - Douglas Constancio
+/*/
+//-------------------------------------------------------------------
+Function MNTA150(cBem)
+
+    Local aNGBEGINPRM := NGBEGINPRM()
+
+    Local aArea   := GetArea()
+    Local cFunBkp := FunName()
+    Local oBrowse
+
+    Private aRotina := {}
+    Private _cBem   := cBem
+    
+    //Variavel nao pode ser deletada pois faz parte do X3_INIBRW usado no MNTA470 entre outras consultas,
+    //a mesma indica se usado arquivo da base STL ou STT para mostrar no browse ou arquivo auxiliar.
+    Private lTLTTIPINS := .F.
+     
+    SetFunName("MNTA150")
+     
+    If Type("cBem") <> "U"   
+        FWExecView(STR0006, 'MNTA150', MODEL_OPERATION_INSERT)
+    Else  
+        //Instânciando FWMBrowse - Somente com dicionário de dados
+        oBrowse := FWMBrowse():New()
+        
+        //Setando a tabela de cadastro de Autor/Interprete
+        oBrowse:SetAlias("ST3")
+    
+        //Setando a descrição da rotina
+        oBrowse:SetDescription(STR0009)
+
+        // Menu Funcional relacionado ao Browse
+        oBrowse:SetMenuDef("MNTA150")
+
+        //Ativa a Browse
+        oBrowse:Activate()
+    EndIf
+     
+    SetFunName(cFunBkp)
+    RestArea(aArea)
+
+	//Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC).
+@author Douglas Constancio 
+@since 27/12/2017
+@return aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+    aRotina := {}
+     
+    //Adicionando opções
+    ADD OPTION aRotina TITLE STR0005 ACTION 'VIEWDEF.MNTA150' OPERATION MODEL_OPERATION_VIEW   ACCESS 0 //OPERATION 1
+    ADD OPTION aRotina TITLE STR0006 ACTION 'VIEWDEF.MNTA150' OPERATION MODEL_OPERATION_INSERT ACCESS 0 //OPERATION 3
+    ADD OPTION aRotina TITLE STR0007 ACTION 'VIEWDEF.MNTA150' OPERATION MODEL_OPERATION_UPDATE ACCESS 0 //OPERATION 4
+    ADD OPTION aRotina TITLE STR0008 ACTION 'VIEWDEF.MNTA150' OPERATION MODEL_OPERATION_DELETE ACCESS 3 //OPERATION 5
+ 
+Return aRotina /*FWMVCMenu( 'MNTA150' )*/
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+@author Douglas Constancio
+@since 27/12/2017
+@return oModel objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+    //Criação do objeto do modelo de dados
+    Local oModel := Nil
+     
+    //Criação da estrutura de dados utilizada na interface
+    Local oStST3 := FWFormStruct(1, "ST3")
+
+    // Inicializa o campo do Codigo do Bem se chamado por Click da Direita
+    oStST3:SetProperty("T3_CODBEM", MODEL_FIELD_INIT, IIf(Type("_cBem") <> "U",{|| _cBem },))
+
+    //Instanciando o modelo
+    oModel := MPFormModel():New("MNTA150",/*bPre*/, {|oModel| ValidInfo(oModel)},/*bCommit*/,/*bCancel*/)
+     
+    //Atribuindo formulários para o modelo
+    oModel:AddFields("FORMST3",/*cOwner*/,oStST3)
+     
+    //Setando a chave primária da rotina
+    oModel:SetPrimaryKey({'T3_FILIAL', 'T3_CODBEM', 'DTOS(T3_DTINI)', 'T3_HRINI'})
+     
+    //Adicionando descrição ao modelo
+    oModel:SetDescription(STR0009) // Bloqueio Bens
+     
+    //Setando a descrição do formulário
+    oModel:GetModel("FORMST3"):SetDescription("Formulário do Cadastro " + STR0009)
+ 
+Return oModel
+ 
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+@author Douglas Constancio
+@since 27/12/2017
+@return oView objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+    Local aStruST3 := ST3->(DbStruct())
+     
+    //Criação do objeto do modelo de dados da Interface do Cadastro de Autor/Interprete
+    Local oModel := FWLoadModel("MNTA150")
+     
+    //Criação da estrutura de dados utilizada na interface
+    Local oStST3 := FWFormStruct(2, "ST3") 
+     
+    //Criando oView como nulo
+    Local oView := Nil
+ 
+    //Criando a view que será o retorno da função e setando o modelo da rotina
+    oView := FWFormView():New()
+    oView:SetModel(oModel)
+     
+    //Atribuindo formulários para interface
+    oView:AddField("MNTA150", oStST3, "FORMST3")
+     
+    //Criando um container com nome tela com 100%
+    oView:CreateHorizontalBox("TELA", 100)
+     
+    //O formulário da interface será colocado dentro do container
+    oView:SetOwnerView("MNTA150", "TELA")
+
+    // Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn( oView )
+     
+Return oView
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ValidInfo
+Validação ao confirmar tela
+
+@author Douglas Constancio
+@since 27/12/2017
+@version P12
+@return lRet Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function ValidInfo(oModel)
+
+    Local aArea := GetArea()
+    Local aRet  := {}
+    Local lRet  := .T.
+
+	// Esturutra do Modelo
+	Local oModelST3 := oModel:GetModel("FORMST3")
+
+	// Variáveis com os valores dos campos do Modelo
+	Local cCodBemST3 := oModelST3:GetValue("T3_CODBEM")
+    Local dDtaIniST3 := oModelST3:GetValue("T3_DTINI")
+    Local cHraIniST3 := oModelST3:GetValue("T3_HRINI")
+    Local dDtaFimST3 := oModelST3:GetValue("T3_DTFIM")
+    Local cHraFimST3 := oModelST3:GetValue("T3_HRFIM")
+
+    // Aplica validações de Inclusão e Alteração
+    If oModel:GetOperation() == MODEL_OPERATION_INSERT .Or. oModel:GetOperation() == MODEL_OPERATION_UPDATE
+        aRet := MNT150CKDA(cCodBemST3, dDtaIniST3, cHraIniST3, dDtaFimST3, cHraFimST3,IIf(oModel:GetOperation() == 4, Recno(), ), .T.)
+        If !aRet[1]
+            lRet := .F.
+        EndIf
+    EndIf 
+
+    RestArea(aArea)
+
+Return lRet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT150CKDA
+Valida o intervalo de data/hora do bloqueio do bem
+@author  Elisangela Costa
+@since   09/11/06
+@version P12
+@paramenters - cCodBemST3- Codigo do Bem - Obrigatorio 
+               dDtIniST3 - Data inicio bloqueio do bem       - Obrigatorio
+               cHrIniST3 - Hora inicio bloqueio do bem       - Obrigatorio
+               dDtFimST3 - Data fim bloqueio do bem          - Obrigatorio
+               cHrFimST3 - Hora fim bloqueio do bem          - Obrigatorio
+               nRegLog   - N° Recno, Lógico quando 'Altera'  - Obrigatorio                             
+               lTipSai   - Indica se a saída de erro na tela - Obrigatorio
+/*/
+//-------------------------------------------------------------------
+Function MNT150CKDA(cCodBemST3, dDtIniST3, cHrIniST3, dDtFimST3, cHrFimST3, nRegLog, lTipSai)
+
+    Local nPos 		  := 0
+    Local cHoraIni	  := ""
+    Local cMinutoIni  := ""
+    Local cHoraFim	  := ""
+    Local cMinutoFim  := ""
+    Local cALIOLD     := Alias()
+    Local nORDOLD     := IndexOrd()
+    Local lREGLOG     := IIf(nRegLog <> Nil,.T., .F.)
+    Local lMENS       := IIf(lTipSai == NIL, .T., lTipSai)
+    Local cMENS       := Space(1)            
+    Local aRet        := {}
+
+    Private lMensBloq := .F.  //Variavel logica do controle do While    
+
+    If (nPos := At(":",cHrIniST3)) == 0 .Or. ((nPos := At(":",cHrFimST3)) == 0)
+        lRet := .F.
+    Else
+        cHoraIni	:= SubStr(cHrIniST3, 1, (nPos-1))
+        cMinutoIni	:= SubStr(cHrIniST3, (nPos+1), 2)
+        cHoraFim	:= SubStr(cHrFimST3, 1 ,(nPos-1))
+        cMinutoFim	:= SubStr(cHrFimST3, (nPos+1), 2)
+    EndIf
+
+    If !Empty(dDtIniST3) .And. !Empty(dDtFimST3)
+        If dDtFimST3 < dDtIniST3
+            cMENS := STR0011 //"Data fim devera ser maior ou igual a data inicial."
+        ElseIf dDtFimST3 = dDtIniST3 .And. cHrFimST3 <= cHrIniST3
+            cMENS := STR0012 //"Hora fim devera ser maior que a hora inicial."
+        ElseIf Len(Alltrim(cHoraIni)) < 2 .Or. Len(Alltrim(cMinutoIni)) < 2
+            cMENS := STR0016  //"Hora inicio inválida."  
+        ElseIf Len(Alltrim(cHoraFim)) < 2 .Or. Len(Alltrim(cMinutoFim)) < 2
+            cMENS := STR0017  //"Hora fim inválida."  
+        ElseIf !NGVALHORA(M->T3_HRINI,.T.) 
+            Return .F.
+        ElseIf !NGVALHORA(M->T3_HRFIM,.T.) 
+            Return .F.
+        EndIf
+    EndIf
+
+    If !Empty(cMENS)
+        aRet := {.F., cMENS}
+    Else
+        aRet := {.T., STR0013} //"Data e hora de bloqueio sao validas."
+        dbSelectArea("ST3")
+        dbSetOrder(03)
+        If dbSeek(xFilial("ST3") + cCodBemST3)
+            While !Eof() .And. ST3->T3_FILIAL == xFilial("ST3") .And.;
+                ST3->T3_CODBEM == cCodBemST3 .And. !lMensBloq    
+                If lREGLOG  
+                    If nRegLog = Recno()
+                        dbSelectArea("ST3")
+                        dbSkip()
+                        Loop
+                    EndIf 
+                EndIf 
+                        
+                If dDtFimST3 < ST3->T3_DTFIM
+                    If dDtFimST3 = ST3->T3_DTINI
+                        If cHrFimST3 >= ST3->T3_HRINI
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf  
+                    ElseIf dDtIniST3 > ST3->T3_DTINI
+                        lMensBloq := .T.
+                        aRet := {.F., STR0014}//"Ja existe registro dentro do periodo informado."
+                    ElseIf dDtFimST3 > ST3->T3_DTINI
+                        lMensBloq := .T.
+                        aRet := {.F., STR0014}//"Ja existe registro dentro do periodo informado." 
+                    EndIf   
+                Else   
+                    If dDtFimST3 > ST3->T3_DTFIM
+                        If dDtIniST3 = ST3->T3_DTFIM
+                            If cHrIniST3 <= ST3->T3_HRFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf  
+                        Else
+                            If dDtIniST3 < ST3->T3_DTFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf   
+                    Else
+                        If dDtIniST3 > ST3->T3_DTINI 
+                            If dDtFimST3 = ST3->T3_DTFIM
+                                If dDtIniST3 = ST3->T3_DTFIM
+                                    If cHrIniST3 <= ST3->T3_HRFIM
+                                        lMensBloq := .T.
+                                        aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                                    EndIf   
+                                EndIf
+                            EndIf   
+                        EndIf   
+                    EndIf
+                EndIf
+                        
+                If dDtIniST3 < ST3->T3_DTINI
+                    If dDtFimST3 = ST3->T3_DTINI
+                        If cHrFimST3 >= ST3->T3_HRINI
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf  
+                    Else   
+                        If dDtFimST3 = ST3->T3_DTFIM
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf   
+                    EndIf   
+                Else
+                    If dDtIniST3 > ST3->T3_DTINI
+                        If dDtIniST3 <> ST3->T3_DTFIM
+                            If dDtFimST3 = ST3->T3_DTFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf
+                    Else
+                        If dDtIniST3 = ST3->T3_DTINI
+                            If dDtFimST3 < ST3->T3_DTFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf   
+                    EndIf 
+                EndIf   
+                        
+                If dDtIniST3 = ST3->T3_DTINI .And. dDtFimST3 = ST3->T3_DTFIM
+                    If ST3->T3_DTINI = ST3->T3_DTFIM 
+                        If cHrFimST3 >= ST3->T3_HRINI 
+                            If cHrIniST3 < ST3->T3_HRINI
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf
+
+                        If cHrIniST3 <= ST3->T3_HRFIM   
+                            If cHrFimST3 > ST3->T3_HRFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf 
+
+                        If cHrIniST3 >= ST3->T3_HRINI 
+                            If cHrFimST3 <= ST3->T3_HRFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                            EndIf   
+                        EndIf  
+                    Else 
+                        If cHrIniST3 >= ST3->T3_HRINI
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        ElseIf cHrFimST3 <= ST3->T3_HRFIM
+                                lMensBloq := .T.
+                                aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf 
+                       
+                        If cHrIniST3 <= ST3->T3_HRINI.And. cHrFimST3 >= ST3->T3_HRFIM
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf
+                    EndIf  
+                Else 
+                    If dDtIniST3 = ST3->T3_DTINI .And. dDtFimST3 = ST3->T3_DTINI
+                        If cHrFimST3 >= ST3->T3_HRINI
+                            lMensBloq := .T.
+                            aRet := {.F., STR0014} //"Ja existe registro dentro do periodo informado."
+                        EndIf 
+                    EndIf   
+                EndIf 
+                dbSelectArea("ST3")
+                dbSkip()
+            EndDo
+        EndIf 	  
+    EndIf  
+
+    If lMENS
+        If !aRet[1]
+            //MsgInfo(aRet[2],STR0015) //"NAO CONFORMIDADE"
+            Help(Nil, Nil, STR0015, Nil, aRet[2], 1, 0)
+            dbSelectArea(cALIOLD)
+            dbSetOrder(nORDOLD)
+            If lREGLOG        
+                dbGoto(nRegLog)
+            EndIf
+            Return aRet
+        EndIf
+    Endif
+
+    dbSelectArea(cALIOLD)
+    dbSetOrder(nORDOLD)
+    If lREGLOG        
+        dbGoto(nRegLog)
+    EndIf
+    
+Return aRet
+

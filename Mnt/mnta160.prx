@@ -1,0 +1,347 @@
+#Include 'MNTA160.CH'
+#INCLUDE 'TOTVS.CH'
+#INCLUDE 'FWMVCDEF.CH'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA160
+Programa de Bloqueio de Funcionario
+
+@type function
+@author cristiano.kair
+@since 26/06/2020
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA160()
+	
+	// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+	Local lOfuscaCpo := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. ) .And. ;
+						Len( FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'T1_NOME' } ) ) == 0
+
+	// Define se o bloco de código do campo receberá o valor ofuscado ou não
+	Local cNomeFun := IIf( lOfuscaCpo, "FwProtectedDataUtil():ValueAsteriskToAnonymize( Space( TamSX3('T1_NOME')[1] ) )", ;
+				"Posicione( 'ST1', 1, xFilial('ST1') + STK->TK_CODFUNC, 'ST1->T1_NOME' )" )
+
+	Local aField := {}
+
+	Local bCodeFun := {|| STK->TK_CODFUNC }
+	Local bNomeFun := &( "{|| Left( " + cNomeFun + ", 20 ) }" )
+
+	aAdd(aField, {STR0011, bCodeFun}) //'Cód'
+	aAdd(aField, {STR0012, bNomeFun}) //'Nome'
+
+    // Instanciamento da Classe de Browse
+    oBrowse := FWMBrowse():New()
+    oBrowse:SetAlias( 'STK' )
+    oBrowse:SetDescription( STR0009 ) //'Bloqueio de Funcionario'
+	oBrowse:SetFields( aField )
+	oBrowse:Activate()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu
+
+@type function
+@author cristiano.kair
+@since 26/06/2020
+
+@return objeto, objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+//Inicializa MenuDef com todas as opções
+Return FWMVCMenu( 'MNTA160' )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Modelo de dados da rotina
+
+@type function
+@author cristiano.kair
+@since 26/06/2020
+
+@return objeto, objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+    Local oModel
+    Local oStruSTK := FWFormStruct( 1, 'STK' )
+	Local bPost := { | oModel | fMPosValid( oModel ) }
+
+    oModel := MPFormModel():New( 'MNTA160', /*bPre*/, bPost, /*bCommit*/, /*bCancel*/)
+    oModel:SetDescription( STR0009 ) //'Bloqueio de Funcionario'
+    oModel:AddFields( 'MNTA160_STK', /*cOwner*/, oStruSTK )
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Interface da rotina
+
+@type function
+@author cristiano.kair
+@since 26/06/2020
+
+@return objeto, objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+    Local oModel := FWLoadModel( 'MNTA160' )
+    Local oView
+    Local oStrSTK := FWFormStruct( 2, 'STK' )
+
+    oView := FWFormView():New()
+    oView:SetModel( oModel )
+
+    oView:AddField( 'MNTA160_STK', oStrSTK, /*cLinkID*/ )
+    oView:CreateHorizontalBox( 'BOX_MNTA160_STK', 100 )
+    oView:SetOwnerView( 'MNTA160_STK', 'BOX_MNTA160_STK' )
+
+	//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMPosValid
+Pós-validação do modelo de dados.
+
+@type function
+@author cristiano.kair
+@since 26/06/2020
+
+@param oModel - Objeto do modelo de dados (Obrigatório)
+@return Lógico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fMPosValid( oModel )
+
+	Local aCheckRet, lRet := .T.
+	Local nOperation := oModel:GetOperation()    
+	Local cCodF160 := oModel:GetValue( 'MNTA160_STK', 'TK_CODFUNC' )
+	Local dDtIn160 := oModel:GetValue( 'MNTA160_STK', 'TK_DATAINI' )
+	Local cHrIn160 := oModel:GetValue( 'MNTA160_STK', 'TK_HORAINI' )
+	Local dDtFi160 := oModel:GetValue( 'MNTA160_STK', 'TK_DATAFIM' )
+	Local cHrFI160 := oModel:GetValue( 'MNTA160_STK', 'TK_HORAFIM' )
+
+	If nOperation == MODEL_OPERATION_INSERT .Or. nOperation == MODEL_OPERATION_UPDATE
+
+		//Se integrado com RH verifica se o funcionario possui afastamentos
+		If ( lRet := NGFrHAfast( cCodF160, dDtIn160, dDtFi160, .T. ) )
+
+			//Verifica bloqueios do bem
+			aCheckRet := MNT160CKDA( cCodF160, dDtIn160, cHrIN160, dDtFi160, cHRFi160 , IIf( nOperation == MODEL_OPERATION_UPDATE, Recno(), Nil ), .T. )
+
+			lRet := aCheckRet[1]
+
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT160CKDA
+Ajusta posicionamento do registro da STK conforme validações.
+
+@author cristiano.kair
+@since 26/06/2020
+
+@param cCodFunc, Caraceter, Código do Funcionário.
+@param dDtIniSTK, Data, Data início bloqueio funcionário
+@param cHrIniSTK, Caraceter, Hora início bloqueio funcionário
+@param dDtFimSTK, Data, Data fim bloqueio funcionário
+@param cHrFimSTK, Caraceter, Hora fim bloqueio funcionário
+@param nRegLog, Numérico, Recno do registro a ser verificado
+@param lShowErro, Lógico, Indica se exibe ou não o erro, caso tenha.
+
+@return aRet	[1]Lógico - Indica os dados estão corretos.
+				[2]Caractere - Mensagem indicando o problema, caso tenha.
+/*/
+//---------------------------------------------------------------------
+Function MNT160CKDA( cCodFunc, dDtIniSTK, cHrIniSTK, dDtFimSTK, cHrFimSTK, nRegLog, lShowErro )
+
+	Local aAreaSTJ      := STJ->( GetArea() )
+	Local cAliasOld 	:= Alias()
+	Local nIndexOld 	:= IndexOrd()
+
+	Local cMsg, aRet	:= {}
+
+	Local lRegLog		:= ( ValType( nRegLog ) <> 'U' )
+	Local lMensBloq		:= .F.
+
+	Local nPos 			:= 0
+	Local cHoraIni		:= ''
+	Local cMinutoIni	:= ''
+	Local cHoraFim		:= ''
+	Local cMinutoFim	:= ''
+
+	Default dDtFimSTK	:= CtoD('  /  /    ')
+	Default dDTINISTK 	:= CtoD('  /  /    ')
+	Default cHrFimSTK	:= '  :  '
+	Default cHRINISTK 	:= '  :  '
+
+	Default lShowErro	:= .T.
+
+	If ( nPos := At( ':', cHRINISTK ) ) == 0 .Or. ( ( nPos := At( ':',cHRFIMSTK ) ) == 0 )
+		lRet := .F.
+	Else
+		cHoraIni	:= SubStr( cHRINISTK, 1,( nPos-1 ) )
+		cMinutoIni	:= SubStr( cHRINISTK, ( nPos+1 ), 2 )
+		cHoraFim	:= SubStr( cHRFIMSTK, 1,( nPos-1 ) )
+		cMinutoFim	:= SubStr( cHRFIMSTK, ( nPos+1 ), 2 )
+	EndIf
+
+	If !Empty( dDtIniSTK ) .And. !Empty( dDtFimSTK )
+
+		If dDtFimSTK < dDtIniSTK
+
+			cMsg := STR0013 //'Data fim devera ser maior ou igual a data inicio.'
+
+		ElseIf dDtFimSTK = dDtIniSTK .And. cHrFimSTK <= cHrIniSTK
+
+			cMsg := STR0014 //'Hora fim devera ser maior que a hora inicio.'
+
+		ElseIf Len( Alltrim( cHoraIni ) ) < 2 .Or. Len( Alltrim( cMinutoIni ) ) < 2
+
+   			cMsg := STR0016  // Hora inicio inválida.
+
+		ElseIf Len( Alltrim( cHoraFim ) ) < 2 .Or. Len( Alltrim( cMinutoFim ) ) < 2
+
+   			cMsg := STR0017  // Hora fim inválida.
+
+		ElseIf !NGVALHORA( cHrIniSTK, .F. )
+
+			cMsg := STR0016  // Hora inicio inválida.
+
+		ElseIf !NGVALHORA( cHrFimSTK, .F. )
+
+			cMsg := STR0017  // Hora fim inválida.
+
+		EndIf
+
+	EndIf
+
+	If !Empty( cMsg )
+
+		aRet := { .F., cMsg }
+
+	Else
+
+		dbSelectArea( 'STK' )
+		dbSetOrder( 02 )
+
+		If dbSeek( xFilial( 'STK' ) + cCodFunc + DToS( dDtIniSTK ), .T. )
+
+			//Ajusta posicionamento do registro da STK conforme validações
+			fAjustaPos( cCodFunc, dDtIniSTK )
+
+			While !EoF() .And. STK->TK_FILIAL == xFILIAL( 'STK' ) .And.;
+					STK->TK_CODFUNC == cCodFunc .And. STK->TK_DATAINI <= dDtFimSTK .And. !lMensBloq
+
+				If lRegLog .And. nRegLog == STK->( Recno() )
+					dbSelectArea( 'STK' )
+					STK->( dbSkip() )
+					Loop
+				EndIf
+
+				//Valida apenas O.S. aberta e não cancelada
+				dbSelectArea( 'STJ' )
+				dbSetOrder( 1 ) //TJ_ORDEM + TJ_PLANO
+				If dbSeek( xFilial( 'STJ' ) + STK->TK_ORDEM + STK->TK_PLANO ) .And. ( STJ->TJ_TERMINO == 'S' .Or. STJ->TJ_SITUACA == 'C' )
+					dbSelectArea( 'STK' )
+					STK->( dbSkip() )
+					Loop
+				EndIf
+
+				If ( lMensBloq := DToS( dDtIniSTK ) + cHrIniSTK < DToS( STK->TK_DATAFIM ) + STK->TK_HORAFIM .And.;
+										DToS( dDtFimSTK ) + cHrFimSTK > DToS( STK->TK_DATAINI ) + STK->TK_HORAINI )
+
+					aRet := { .F., STR0016 } //'Ja existe registro dentro do periodo informado'
+				EndIf
+
+				dbSelectArea( 'STK' )
+				STK->( dbSkip())
+
+			EndDo
+
+		EndIf
+
+	EndIf
+
+	If !Empty( aRet )
+
+		If lShowErro		
+			Help( NIL, NIL, STR0017, NIL, aRet[2], 1, 0 )// 'NAO CONFORMIDADE'
+		Endif
+
+	Else
+		aRet := { .T., STR0015 } //'Data e hora de bloqueio sao validas.'
+	EndIf
+
+	dbSelectArea( cAliasOld )
+	dbSetOrder( nIndexOld )
+
+	If lRegLog
+		dbGoTo( nRegLog )
+	EndIf
+
+	RestArea( aAreaSTJ )
+
+Return aRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fAjustaPos
+Ajusta posicionamento do registro da STK conforme validações.
+
+@author cristiano.kair
+@since 26/06/2020
+
+@param cCodFunc, Código do funcionário
+@param dDtIniSTK, Data início do bloqueio do funcionário
+
+@return Nil Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fAjustaPos( cCodFunc, dDtIniSTK )
+
+	//Caso seja fim de arquivo:
+	If STK->( Eof() )
+
+		//Caso seja fim de arquivo posiciona no registro anterior ao atual
+		STK->( dbSkip(-1) )
+
+	//Caso NÃO seja fim de arquivo:
+	Else
+		//Verifica se está posicionado num funcionário ou numa filial diferente.
+		If ( STK->TK_FILIAL == xFilial( 'STK' ) .And. STK->TK_CODFUNC <> cCodFunc ) .Or.;
+				( STK->TK_FILIAL <> xFilial( 'STK' ) )
+
+			//Posiciona no registro anterior ao atual
+			STK->( dbSkip(-1) )
+
+		//Verifica se está posicionado num registro com data inicio superior a solicitada, caso esteja:
+		ElseIf STK->TK_DATAINI > dDtIniSTK
+
+			//Posiciona no registro anterior ao atual
+			STK->( dbSkip(-1) )
+
+			//Verifica se está posicionado no começo da tabela ou num funcionário ou filial diferente.
+			If STK->( Bof() ) .Or. ( STK->TK_FILIAL <> xFilial( 'STK' ) ) .Or.;
+					STK->TK_FILIAL == xFilial( 'STK' ) .And. STK->TK_CODFUNC <> cCodFunc
+
+				//Posiciona no registro posterior ao atual
+				STK->( dbSkip() )
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return Nil

@@ -1,0 +1,94 @@
+#Include "Protheus.CH"
+#Include "FWADAPTEREAI.CH" // Integração via Mensagem Única
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGATFMNT  ³ Autor ³ Inacio Luiz Kolling   ³ Data ³18/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Gera um lancamento de movimentacao do bem (historico da mo- ³±±
+±±³          ³vimentacao do centro de custo do bem)                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³ cCODIM - Codigo do imobilizado + item (N1_CBASE + N1_ITEM) ³±±
+±±³          ³ nQTDN1 - Quantidade do bem (N1_QUANTID)                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³GENERICO                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGATFMNT(cCODIM,nQTDN1)
+Local aAreang := GetArea()
+
+Private lMuEquip := .F.
+
+// Caso a função da integração da NG esteja na pilha, quer dizer 
+// que já gravou a movimentação de C.C. não tendo necessidade de gravar
+// novamente
+If IsInCallStack( "NGATUATF" ) .Or.  IsInCallStack( "MNTA470GRA" )
+	Return .T.
+EndIf
+
+If GETMV("MV_NGMNTAT") $"1#3"
+   If nQTDN1 == 1
+      DbSelectArea("ST9")
+      DbSetOrder(8)
+      If DbSeek(xFILIAL("ST9")+cCODIM)
+         If ST9->T9_MOVIBEM = 'S'
+            DbSelectArea("SN3")
+            DbSetOrder(1)
+            If DbSeek(xFILIAL("SN3")+cCODIM)
+
+               DbSelectArea("TPE")
+               DbSetOrder(1)
+               DbSeek(xFILIAL("TPE")+ST9->T9_CODBEM)
+
+               DbSelectArea("TPN")
+               DbSetOrder(1)
+               RecLock("TPN",.T.)
+               TPN->TPN_FILIAL := xFILIAL("TPN")
+               TPN->TPN_CODBEM := ST9->T9_CODBEM
+               TPN->TPN_DTINIC := dDataBase
+               TPN->TPN_HRINIC := Time()
+               TPN->TPN_CCUSTO := SN3->N3_CCUSTO
+               TPN->TPN_CTRAB  := ST9->T9_CENTRAB
+               TPN->TPN_UTILIZ := "U"
+               TPN->TPN_POSCON := ST9->T9_POSCONT
+               TPN->TPN_POSCO2 := TPE->TPE_POSCON
+               MsUnLock("TPN")
+               
+               //Funcao de integracao com o PIMS atraves do EAI
+               If SuperGetMV("MV_PIMSINT",.F.,.F.) .And. FindFunction("NGIntPIMS")
+               	NGIntPIMS("TPN",TPN->(RecNo()),3)
+               EndIf
+               
+               //----------------------------------------------------
+				// Integração via mensagem única do cadastro de Bem
+				//----------------------------------------------------
+				If FindFunction("MN080INTMB") .And. MN080INTMB(ST9->T9_CODFAMI)
+
+					DbSelectArea( "ST9" )
+
+					// Define array private que será usado dentro da integração
+					aParamMensUn    := Array( 4 )
+					aParamMensUn[1] := Recno() // Indica numero do registro
+					aParamMensUn[2] := 4       // Indica tipo de operação que esta invocando a mensagem unica
+					aParamMensUn[3] := .F.     // Indica que se deve recuperar dados da memória
+					aParamMensUn[4] := 1       // Indica se deve inativar o bem (1 ativo,2 - inativo)
+
+					lMuEquip := .F.
+					bBlock := { || FWIntegDef( "MNTA080",EAI_MESSAGE_BUSINESS,TRANS_SEND,Nil ) }
+
+					If Type( "oMainWnd" ) == "O"
+						MsgRun( "Aguarde integração com backoffice...","Equipment",bBlock )
+					Else
+						Eval( bBlock )
+					EndIf
+				EndIf
+            Endif
+         EndIf
+      EndIf
+   EndIf
+EndIf   
+RestArea(aAreang)
+Return .T.

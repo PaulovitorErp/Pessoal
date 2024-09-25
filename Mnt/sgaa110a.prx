@@ -1,0 +1,2165 @@
+#Include "SGAA110.ch"
+#Include "Protheus.ch"
+#Include "DbTree.ch"
+
+#Define FLD_ASPECTO   1
+#Define FLD_IMPACTO   2
+#Define FLD_LOCALIZA  3
+#Define FLD_PLN_ACAO  4
+#Define FLD_PLN_EMER  5
+#Define FLD_OBJETIVO  6
+#Define NFOLDERS      6
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA110A
+Programa para Avaliar Aspectos e Impactos Ambientais.
+
+@type    function
+@author  Thiago Olis Machado
+@since   05/12/2003
+@sample  SGAA110A()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SGAA110A()
+
+	// Salva area de trabalho.
+	Local aOldArea := GetArea()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aCores      := {}
+
+	Sg110AVPrv()
+
+	//Verifica se foi rodado update para criação dos MSBLQL
+	//nas tabelas TA6 e TA7 e se foi criado TAD_OK
+	If !NGCADICBASE("TA6_MSBLQL","A","TA6",.F.)
+		If !NGINCOMPDIC("UPDSGA34","THXTCJ",.F.)
+			Return .F.
+		EndIf
+	EndIf
+
+	dbSelectArea("TAB")
+	dbSetOrder(1)
+	If NGCADICBASE("TAB_SITUAC","A","TAB",.F.)
+		aCores := {	{"TAB->TAB_SITUAC == '1' .Or. Empty(TAB->TAB_SITUAC)", "BR_AMARELO"},;
+					{"TAB->TAB_SITUAC == '2'","BR_VERDE"} }
+
+		If NGCADICBASE("TA8_PLANAC", "A", "TA8", .F.)
+			aAdd(aCores, {"TAB->TAB_SITUAC == '3'", "BR_LARANJA"})
+			aAdd(aCores, {"TAB->TAB_SITUAC == '4'", "BR_MARROM"})
+			aAdd(aCores, {"TAB->TAB_SITUAC == '5'", "BR_VERMELHO"})
+		EndIf
+
+		If NGCADICBASE("TA8_OBJETI","A","TA8",.F.)
+			aAdd(aCores,{"TAB->TAB_SITUAC == '6'"	,"BR_BRANCO"})
+		EndIf
+
+	EndIf
+
+	mBrowse( 6, 1, 22, 75, "TAB",,,,,, aCores )
+
+	dbSelectArea("TAB")
+	dbSetOrder(1)
+
+	// Restaura Area de trabalho.
+	RestArea(aOldArea)
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110APro
+Programa para Avaliar Aspectos e Impactos.
+
+@type    function
+@author  Thiago Olis Machado
+@since   05/12/2003
+@sample  Sg110APro()
+/*/
+//-------------------------------------------------------------------
+Function Sg110APro( cAlias, nRecno, nOpcx, cCodAsp, xPar01, lLocTemp )
+
+	Local aNGBEGINPRM := If(IsInCallStack("SGAA110"),{},NGBEGINPRM())//Armazena Varíaveis para devolução
+	Local oMainWnd	 // Objeto para montar a janela de cadastro
+
+	Local cTitulo  := If(Type("cCadastro") == "C", cCadastro, STR0081)  // Titulo da janela ## "Desempenho Ambiental dos Aspectos e Impactos"
+	Local nControl := 0
+	Local nOK      := 0
+	Local nOpca    := 0
+	Local aPages   := {}
+	Local aTitles  := {}
+	Local oFont    := TFont():New("Arial",,-13,,.T.)
+	Local nA
+	Local cLocAsp
+	Local nIdx := 0
+
+	Default cCodAsp := ""
+
+	Private lCpy     := IsInCallStack("SG110CPY") .Or. ( Type("lSg110Cpy") == "L" .And. lSg110Cpy )
+	Private lVisual  := .F.
+	Private aTrocaF3 := {}
+
+	Private cLabel  := ''
+	Private cLabel1 := ''
+	Private cLabel2 := ''
+	Private cLabel3 := ''
+	Private cLabel4 := ''
+
+	Private cOrdem
+
+	Private oGet,aHeader,nItens,oMark,oGet1,oMark1,oGet2,oMark2, oFolderDes
+	Private oTotal1, oTotal2, oTotal3, oTotal4, oTotal5
+	Private oDlg, oPnlLeft, oPnlRight, oPnlBLeft, oPnlTLest, oPnlBot
+
+	Private nTotal1 := 0
+	Private nTotal2 := 0
+	Private nTotal3 := 0
+	Private nTotal4 := 0
+	Private nTotal5 := 0
+
+	Private aColsImp := {}
+	Private aColsLoc := {}
+	Private aCols1   := {}
+	Private aMark    := {}
+	Private aMark1   := {}
+	Private lInverte := .F.
+	Private lInverte1:= .F.
+
+	Private cMarca 	:= GetMark()
+	Private lQuery  := .T.
+	Private lQuery1 := .T.
+
+	Private n        := 1
+	Private n1       := 1
+	Private n2       := 1
+	Private aLocal2  := {}
+	Private aLocal   := {}
+	Private cAval    := ""
+	Private cAval1   := ""
+	Private cDescAsp := ""
+	Private cDescImp := ""
+
+	Private oTree,oDesc,oClasse,oDesImp, oMenu, oMenu1
+	Private M->TAB_CODIMP := Space( Len( TAE->TAE_CODIMP ) )
+	Private M->TAB_CODEME := Space( Len( TBB->TBB_CODPLA ) ) //Codigo do Plano Emergencial
+	Private M->TAB_CODPLA := Space( Len( TAA->TAA_CODPLA ) ) //Codigo do Plano de acao
+	Private cDesc    := Space( Len( TAF->TAF_NOMNIV ) ) //Descricao do pai da estrutura
+	Private cDescPla := Space( Len( TAA->TAA_NOME ) ) 	//Descricao do Plano de acao
+	Private cDescEme := Space( Len( TBB->TBB_DESPLA ) ) //Descricao do Plano Emergencial
+	Private cRespEme := Space( Len( TBB->TBB_RESPON ) ) //Codigo do Responsavel pelo Plano Emergencial
+	Private cClasse  := Space( Len( TA8->TA8_DESCRI ) ) //Descricao da Classificacao
+	Private cCodCla  := Space( Len( TA8->TA8_CODCLA ) ) //Codigo da Classificacao
+	Private dDtImp   := cToD("  /  /  ")  //Data de Implantacao do Plano
+	Private dDtEmis  := dDataBase
+	Private cCodEst  := "001"
+	Private lArvore  := .T.
+	Private lWhen    := .F.
+	Private nTotal   := 0
+	Private cDocto   := ""
+	Private aQDG     := {}
+	Private aQdGDoc  := {}
+	Private aQdjDoc  := {}
+	Private aMarcado := {}
+
+	Private oTempSGA, oTempTRBA, oTempTRBB, oTempTRBC
+
+	Private oQDJ, oQDG, bQDGLine1, bQDGLine2, bQDJLine1, bQDJLine2
+	Private lSituac := If(Inclui .Or. Altera,.T.,.F.)//Varáivel que verifica When dos campos Plano de Ação e Emergencial
+	Private aVETINR := {}
+	Private cCargo  := ""
+	Private M->TA4_CODASP := Space( Len( TA4->TA4_CODASP ) )
+	Private M->TAB_DESCRI := Space( 40 )
+	Private M->TAB_SITUAC := "1"
+
+	Private M->TAB_REVISA := Space(6)
+
+	//Tabelas temporarias para manipular o desempenho.
+	Private cTRBA := GetNextAlias()
+	Private cTRBB := GetNextAlias()//Marcados
+	Private cTRBC := GetNextAlias()//Tela
+	Private aSize := MsAdvSize(,.F.,430), aObjects := {}
+
+	aAdd(aObjects,{050,050,.T.,.T.})
+	aAdd(aObjects,{100,100,.T.,.T.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+
+	If !Empty(cCodAsp)
+		cCodAsp := VldAspPar(cCodAsp)
+	EndIf
+
+	asMenu1 := {{STR0007,"Sg110Qdo()"}} // //"Visualizar Documento"
+
+	If ValType(xPar01) == "C"
+		cLocAsp := xPar01
+
+	EndIf
+
+	If NGCADICBASE("TAB_SITUAC","A","TAB",.F.)
+		lSituac := If(Inclui .Or. (Altera .And. TAB->TAB_SITUAC == "1"),.T.,.F.)
+		If nOpcx == 3
+			M->TAB_SITUAC := "1"
+		Else
+			M->TAB_SITUAC := If(Empty(TAB->TAB_SITUAC),"1",TAB->TAB_SITUAC)
+
+		EndIf
+
+	EndIf
+
+	If NGCADICBASE("TAB_CODOBJ","A","TAB",.F.)
+		M->TAB_CODOBJ := Space( Len( TAB->TAB_CODOBJ ) )
+		cDesObj := Space( TAMSX3("TAB_NOMOBJ")[1])
+	EndIf
+
+	dbSelectArea('TA3')
+	dbSetOrder(01)
+	If !dbSeek(xFilial("TA3"))
+		MsgAlert(STR0076) //"É necessário ter pelo menos uma Fórmula cadastrada."
+		Return .F.
+
+	EndIf
+
+	If nOpcx <> 3 .Or. lCpy
+		M->TA4_CODASP := TAB->TAB_CODASP
+		M->TAB_CODIMP := TAB->TAB_CODIMP
+		M->TAB_DESCRI := TAB->TAB_DESCRI
+		If NGCADICBASE("TAB_REVISA","A","TAB",.F.)
+			M->TAB_REVISA := TAB->TAB_REVISA
+		EndIf
+		DbSelectArea('TA8')
+		DbSetOrder(1)
+		If DbSeek(xFilial('TA8')+TAB->TAB_CODCLA)
+			cClasse := TA8->TA8_DESCRI
+
+		EndIf
+
+		M->TAB_CODPLA := TAB->TAB_CODPLA
+		M->TAB_CODEME := TAB->TAB_CODEME
+
+		nTotal1	:= TAB->TAB_RESULT
+		nTotal2	:= TAB->TAB_RESUL2
+		nTotal3	:= TAB->TAB_RESUL3
+		nTotal4	:= TAB->TAB_RESUL4
+		nTotal5	:= TAB->TAB_RESUL5
+
+		If NGCADICBASE("TAB_CODOBJ","A","TAB",.F.)
+			M->TAB_CODOBJ := TAB->TAB_CODOBJ
+			DbSelectArea('TBH')
+			TBH->(DbSetOrder(1))
+			If TBH->(Dbseek(xFilial('TBH')+M->TAB_CODOBJ))
+				cDesObj := TBH->TBH_DESCRI
+
+			EndIf
+
+		EndIf
+
+		If !lCpy
+			dDtEmis := TAB->TAB_DTRESU
+		EndIf
+
+		cOrdem := TAB->TAB_ORDEM
+
+		DbSelectArea('TA4')
+		DbSetOrder(1)
+		If DbSeek(xFilial('TA4')+M->TA4_CODASP)
+			cDescAsp := TA4->TA4_DESCRI
+		EndIf
+
+		DbSelectArea('TAE')
+		DbSetOrder(1)
+		If DbSeek(xFilial('TAE')+M->TAB_CODIMP)
+			cDescImp := TAE->TAE_DESCRI
+		EndIf
+
+		DbSelectArea('TAA')
+		DbSetOrder(1)
+		If Dbseek(xFilial('TAA')+M->TAB_CODPLA)
+			cDescPla := TAA->TAA_NOME
+			dDtImp   := TAA->TAA_DTIMPL
+		EndIf
+
+		dbSelectArea("TBB")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TBB")+M->TAB_CODEME)
+			cDescEme := TBB->TBB_DESPLA
+			cRespEme := TBB->TBB_RESPON
+		EndIf
+	Else
+		If !Empty(cCodAsp)
+			M->TA4_CODASP := cCodAsp
+
+			dbSelectArea('TA4')
+			dbSetOrder(1)
+			If dbSeek(xFilial('TA4')+M->TA4_CODASP)
+				cDescAsp := TA4->TA4_DESCRI
+			EndIf
+		EndIf
+	EndIf
+
+	If nOpcx == 3
+		If lCpy
+			cOrdemOld := Sg110Ordem()
+		Else
+			cOrdem := Sg110Ordem()
+		EndIf
+	EndIf
+
+	TAF->(DbSeek(xFilial('TAF')+'001'))
+	cDesc := TAF->TAF_NOMNIV
+
+	CargaTRB(nOpcX)
+	aCols1 := Sg110Get(nOpcx,'1')
+
+	aTRB     := SGATRBEST(.T.)//Define estrutura do TRB
+	cTRBSGA  := aTRB[3]
+	oTempSGA := FWTemporaryTable():New( cTRBSGA, aTRB[1] )
+	For nIdx := 1 To Len( aTRB[2] )
+		oTempSGA:AddIndex( RETASC( cValToChar( nIdx ) , 1 , .T. ), aTRB[2,nIdx] )
+	Next nIdx
+	oTempSGA:Create()
+
+	For nA := 1 To NFOLDERS
+
+		If nA == FLD_ASPECTO //1
+			Aadd(aTitles,OemToAnsi(STR0008)) //"Aspecto"
+			Aadd(aPages,"Header  "+AllTrim(Str(nA)))
+			nControl++
+		Elseif nA == FLD_IMPACTO //2
+			Aadd(aTitles,OemToAnsi(STR0009)) //"Impacto"
+			Aadd(aPages,"Header  "+AllTrim(Str(nA)))
+			nControl++
+		Elseif nA == FLD_LOCALIZA  //3
+			Aadd(aTitles,OemToAnsi(STR0127)) //"Localização"
+			Aadd(aPages,"Header "+AllTrim(Str(nA)))
+			nControl++
+		Elseif nA == FLD_PLN_ACAO //4
+			Aadd(aTitles,OemToAnsi(STR0082)) //"Plano de Ação"
+			Aadd(aPages,"Header  "+AllTrim(Str(nA)))
+			nControl++
+		Elseif nA == FLD_PLN_EMER //5
+			Aadd(aTitles,OemToAnsi(STR0083)) //"Plano Emergencial"
+			Aadd(aPages,"Header "+AllTrim(Str(nA)))
+			nControl++
+
+		Elseif nA == FLD_OBJETIVO //6
+			If NGCADICBASE("TAB_CODOBJ","A","TAB",.F.)
+				Aadd(aTitles,OemToAnsi(STR0121)) //"Objetivo"
+				Aadd(aPages,"Header "+AllTrim(Str(nA)))
+				nControl++
+			EndIf
+
+		EndIf
+	Next
+
+	Define MsDialog oDlg Title cTitulo From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel
+
+	oDES01PNL := TPanel():New(0,0,,oDlg,,,,CLR_BLACK,CLR_WHITE,0,0,.F.,.F.)
+	oDES01PNL:Align := CONTROL_ALIGN_ALLCLIENT
+
+	// Header
+	oPnlCab := TPanel():New( 0 , 0 , , oDES01PNL , , , , CLR_BLACK , CLR_WHITE , 0 , 0 , .F. , .F. )
+		oPnlCab:Align := CONTROL_ALIGN_TOP
+		oPnlCab:nHeight := 40
+
+		oPnlDiv := TPanel():New( 0 , 0 , , oDES01PNL , , , , CLR_BLACK , CLR_HBLUE , 0 , 0 , .F. , .F. )
+			oPnlDiv:Align := CONTROL_ALIGN_TOP
+			oPnlDiv:nHeight := 1.5
+
+	@ 007,008 Say OemToAnsi(STR0010) Size 37,7 Of oPnlCab Pixel Color CLR_HBLUE   //"Num. Ordem"
+	If lCpy
+		@ 005,047 MsGet cOrdemOld Size 038,08 Of oPnlCab Pixel When .F.
+	Else
+		@ 005,047 MsGet cOrdem Size 038,08 Of oPnlCab Pixel When .F.
+
+	EndIf
+
+	@ 007,100 Say OemToAnsi(STR0120) Size 57,7 Of oPnlCab Pixel Color CLR_HBLUE //"Data do Desempenho"
+	@ 005,155 MsGet dDtEmis Size 48,06 Of oPnlCab Pixel Picture '99/99/9999' When .F. HASBUTTON
+
+	If NGCADICBASE("TAB_REVISA","A","TAB",.F.)
+	@ 007,220 Say OemToAnsi(STR0129) Size 57,7 Of oPnlCab Pixel Color CLR_HBLUE //"Revisão"
+	@ 005,255 MsGet M->TAB_REVISA Size 48,06 Of oPnlCab Pixel Valid ExistCPO('TDR') F3 'TDR'  When .T. HASBUTTON
+
+	EndIf
+
+	@ 20,004 TO 21,468 Label '' of oPnlCab Pixel
+
+	// Panel Esquerdo
+	oPnlLeft := TPanel():New( 0 , 0 , , oDES01PNL , , , , CLR_BLACK , CLR_WHITE , 0 , 0 , .F. , .F. )
+		oPnlLeft:Align := CONTROL_ALIGN_LEFT
+		oPnlLeft:nWidth := 450
+
+		oPnlTLeft := TPanel():New( 0 , 0 , , oPnlLeft , , , , CLR_BLACK , CLR_WHITE , 0 , 0 , .F. , .F. )
+			oPnlTLeft:Align := CONTROL_ALIGN_TOP
+			oPnlTLeft:nHeight := 40//22
+
+	@ 003,025 Say OemToAnsi(STR0012) Size 200,7 Of oPnlTLeft Pixel Font oFont //"Estrutura Organizacional"
+
+	oTree := DbTree():New(042, 005, 250, 180, oPnlLeft,,, .T.)
+	oTree:bChange   := {|| SG110CTree(2) }
+	oTree:Align 	:= CONTROL_ALIGN_ALLCLIENT
+
+	NgPopUp(AsMenu1,@oMenu)
+	oTree:bRClicked := { |o,x,y| oMenu:Activate(x-175,y-330,oTree)}
+
+	If nOpcx <> 3 .Or. lCpy .Or. ValType(cLocAsp) == "C"
+		SetNivMrk(M->TA4_CODASP, cOrdem, cLocAsp) // Carrega niveis selecionados
+		Sg110Tree(.F.)                   // Construcao de componentes da tree
+
+	EndIf
+
+	// Se nao for inclusao, desativa 'action' de duplo clique
+	If nOpcx == 3
+		oTree:blDblClick := {|| Sg110ChangeBmp() }
+	Else
+		oTree:BlDblClick := {||  }
+
+	EndIf
+
+	NgPopUp(AsMenu,@oMenu1)
+	oPnlLeft:bRClicked:= { |o,x,y| oMenu1:Activate(x,y,oPnlLeft)}
+
+	nTree := aScan(aLocal2,{|x| x[2]})
+	If nTree > 0
+		cCargo := aLocal2[nTree][1]
+
+	EndIf
+
+	// Verifica item definido como 'Sendo Avaliado', e se o processo for de copia
+	If lCpy .And. oTree:TreeSeek(cCargo)
+
+		// Retira marcacao de nivel 'Sendo Avaliado'
+		// Altera referencia do item da tree com situacao 'Sendo Avaliado' [ Folder Amarelo], para 'Presenca de Aspecto' [ Folder Vermelho ]
+		oTree:ChangeBmp("Folder7","Folder8")
+		(oTree:cArqTree)->T_CARGO := SubStr(oTree:getCargo(),1,6)+"2"
+
+		nPos := aScan(aLocal2, {|x| x[1] == SubStr( oTree:GetCargo(), 1, 3 )})
+		If nPos > 0
+			aLocal2[nPos][2] := .F.
+		Else
+			aAdd( aLocal2,{ SubStr( oTree:GetCargo(), 1, 3 ),.F. } )
+
+		EndIf
+
+	EndIf
+	oTree:TreeSeek("001")
+
+	oPnlBLeft := TPanel():New( 0 , 0 , , oPnlLeft , , , , CLR_BLACK , CLR_WHITE , 0 , 0 , .F. , .F. )
+		oPnlBLeft:Align := CONTROL_ALIGN_BOTTOM
+		oPnlBLeft:nHeight := 60
+
+	@ 000,008 Bitmap oBmp1 Resource "Folder11" Size 20,20 Pixel Of oPnlBLeft Noborder When .F.
+	@ 003,023 Say OemToAnsi(STR0013) Size 27,7 Of oPnlBLeft Pixel //"Normal"
+	@ 000,063 Bitmap oBmp2 Resource "Folder8" Size 20,20 Pixel Of oPnlBLeft Noborder When .F.
+	@ 003,078 Say OemToAnsi(STR0014) Size 57,7 Of oPnlBLeft Pixel //"Presença de Aspecto"
+	@ 000,150 Bitmap oBmp3 Resource "Folder6" Size 20,20 Pixel Of oPnlBLeft Noborder When .F.
+	@ 003,165 Say OemToAnsi(STR0015) Size 57,7 Of oPnlBLeft Pixel //"Sendo Avaliado"
+
+	// Panel Direito
+	oFolderDes := TFolder():New(031,180,aTitles,aPages,oDES01PNL,,,,.T.,.F.,290,240,)
+		oFolderDes:Align := CONTROL_ALIGN_ALLCLIENT
+		oFolderDes:aDialogs[FLD_ASPECTO]:oFont := oDlg:oFont
+		oFolderDes:aDialogs[FLD_IMPACTO]:oFont := oDlg:oFont
+		oFolderDes:aDialogs[FLD_PLN_ACAO]:oFont := oDlg:oFont
+		oFolderDes:aDialogs[FLD_PLN_EMER]:oFont := oDlg:oFont
+		oFolderDes:aDialogs[FLD_LOCALIZA]:oFont := oDlg:oFont
+		If NGCADICBASE("TAB_CODOBJ","A","TAB",.F.)
+			oFolderDes:aDialogs[FLD_OBJETIVO]:oFont := oDlg:oFont
+		EndIf
+		oFolderDes:bSetOption := { |nFolder| AtuFolder(nFolder,nOpcx) } //Atualiza o ListBox e as opcoes de Marcação do folder
+
+	// Folder 01 - Aspecto
+	oPnlTopAsp := TPanel():New( 0, 0,, oFolderDes:aDialogs[FLD_ASPECTO],,,, CLR_BLACK, CLR_WHITE, 0, 40, .F., .F. )
+		oPnlTopAsp:Align := CONTROL_ALIGN_TOP
+	
+	oPnlBotAsp := TPanel():New( 0, 0,, oFolderDes:aDialogs[FLD_ASPECTO],,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlBotAsp:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlAspLb1 := TPanel():New( 0, 0,, oPnlBotAsp,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlAspLb1:Align := CONTROL_ALIGN_TOP
+	oPnlAspCar := TPanel():New( 0, 0,, oPnlBotAsp,,,, CLR_BLACK, CLR_WHITE, 0, 95, .F., .F. )
+		oPnlAspCar:Align := CONTROL_ALIGN_TOP
+	oPnlAspLb2 := TPanel():New( 0, 0,, oPnlBotAsp,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlAspLb2:Align := CONTROL_ALIGN_TOP
+	oPnlAspOpc := TPanel():New( 0, 0,, oPnlBotAsp,,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlAspOpc:Align := CONTROL_ALIGN_ALLCLIENT
+	
+	@ 007,008 Say OemToAnsi(STR0008) Size 37,7 Of oPnlTopAsp Pixel Color CLR_HBLUE //"Aspecto"
+	@ 005,047 MsGet M->TA4_CODASP Size 038,08 Of oPnlTopAsp Pixel F3 'TA4' Valid Sg110Desc() .And. Sg110Tree() When If (!Empty(cCodAsp),.F.,Inclui) HASBUTTON
+
+	@ 19,008 Say OemToAnsi(STR0016) Size 37,7 Of oPnlTopAsp Pixel //"Descrição"
+	@ 17,047 MsGet oDesc Var cDescAsp Size 240,08 Of oPnlTopAsp Pixel When .F.
+
+	@ 030,650 BTNBMP oBtn02 Resource "sduprop" Size 162,24 Of oPnlTopAsp Pixel;
+		Action Sg110Demanda(1)
+		oBtn02:cCaption:= PADR(OemToAnsi(STR0084),20) //"Requisito do Aspecto"
+		oBtn02:cToolTip:= OemToAnsi(STR0021) //"Visualiza as Demadas referentes ao aspecto..."
+
+	@ 000,008 Say OemToAnsi(STR0017) Size 84,7 Of oPnlAspLb1 Pixel Font oFont //"Caracterizacoes"
+
+	@ 45,008 ListBox oGet Fields aCols1[n][1], aCols1[n][2], aCols1[n][3], aCols1[n][4], aCols1[n][5];
+		Headers STR0018,STR0128,STR0016,STR0023,STR0024; //"Avaliacao"###"Forma Avaliação"###"Descricao"###"Peso"###"Resultado"
+		Of oPnlAspCar Size 388,63 Pixel;
+		On Change ( Sg110LinOk(nOpcx, aCols1[n,1], aCols1, 1, cAliasAsp) )
+		oGet:bGotop := { || n := 1 }
+		oGet:bGoBottom := { || n := eval( oGet:bLogicLen ) }
+		oGet:bSkip := { | nwant, nold | nold := n , n += nwant,;
+			n := max( 1, min( n, eval( oGet:bLogicLen ))),;
+			n - nOld }
+		oGet:bLogicLen := { || Len(aCols1) }
+		oGet:cAlias := "Array"
+		oGet:Align := CONTROL_ALIGN_ALLCLIENT
+
+	If Len(aCols1) > 0
+		cAval:= aCols1[1][1]
+	EndIf
+
+	Sg110Mark(aCols1[1][1],nOpcx,.T.,cAliasAsp,aCols1)
+	
+	@ 000,008 Say OemToAnsi(STR0019) Size 57,7 Of oPnlAspLb2 Pixel Font oFont //"Opcoes"
+	oMark := MsSelect():New(cAliasASP,"TRB_OK",,aMark1,@lInverte,@cMarca,{130,8,193,395},,,oPnlAspOpc)
+		oMark:oBrowse:lHasMark := .T.
+		oMark:oBrowse:lCanAllMark := .F.
+		oMark:oBrowse:bAllMark := { || fMarkAll(oMark,cAliasAsp,n,aCols1) }
+		oMark:bMark := { || Sg110ValMark(nOpcx,cMarca,oGet,oMark,n,aCols1,'aCols1',cAliasAsp) }
+		oMark:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	If Str(nOpcx,1) $ "2/5" .Or. M->TAB_SITUAC <> "1"
+		oMark:oBrowse:lReadOnly := .T.
+	EndIf
+
+	// Folder 02 - Impacto
+	oPnlTopImp := TPanel():New( 0, 0,, oFolderDes:aDialogs[FLD_IMPACTO],,,, CLR_BLACK, CLR_WHITE, 0, 40, .F., .F. )
+		oPnlTopImp:Align := CONTROL_ALIGN_TOP
+	
+	oPnlBotImp := TPanel():New( 0, 0,, oFolderDes:aDialogs[FLD_IMPACTO],,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlBotImp:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlImpLb1 := TPanel():New( 0, 0,, oPnlBotImp,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlImpLb1:Align := CONTROL_ALIGN_TOP
+	oPnlImpAva := TPanel():New( 0, 0,, oPnlBotImp,,,, CLR_BLACK, CLR_WHITE, 0, 95, .F., .F. )
+		oPnlImpAva:Align := CONTROL_ALIGN_TOP
+	oPnlImpLb2 := TPanel():New( 0, 0,, oPnlBotImp,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlImpLb2:Align := CONTROL_ALIGN_TOP
+	oPnlImpOpc := TPanel():New( 0, 0,, oPnlBotImp,,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlImpOpc:Align := CONTROL_ALIGN_ALLCLIENT
+
+	aColsImp := Sg110Get(nOpcx,'2')
+	@ 007,008 Say OemToAnsi(STR0009) Size 37,7 Of oPnlTopImp Pixel Color CLR_HBLUE //"Impacto"
+	@ 005,047 MsGet M->TAB_CODIMP Size 038,08 Of oPnlTopImp Pixel F3 'TAE' Valid Sg110DesIm() When Inclui HasButton
+
+	@ 19,008 Say OemToAnsi(STR0016) Size 37,7 Of oPnlTopImp Pixel //"Descricao"
+	@ 17,047 MsGet oDesImp Var cDescImp Size 240,08 Of oPnlTopImp Pixel When .F.
+
+	@ 030,650 BTNBMP oBtn03 Resource "sduprop" Size 162,24 OF oPnlTopImp Pixel ;
+		Action Sg110Demanda(2)
+		oBtn03:cCaption:= PADR(OemToAnsi(STR0085),20) //"Requisito do Impacto"
+		oBtn03:cToolTip:= OemToAnsi(STR0026) //"Visualiza as Demadas referentes ao impacto..."
+
+	@ 000,008 Say OemToAnsi(STR0022) Size 57,7 Of oPnlImpLb1 Pixel Font oFont //"Avaliacoes"
+
+	@ 45,008 ListBox oGet1 Fields aColsImp[n1][1],aColsImp[n1][2],aColsImp[n1][3],aColsImp[n1][4],aColsImp[n1][5] ;
+		Headers STR0018,STR0128,STR0016,STR0023,STR0024 Of oPnlImpAva Size 388,63 Pixel; //"Avaliacao"###"Forma Avaliação"###"Descricao"###"Peso"###"Resultado"
+		On Change ( Sg110LinOk(nOpcx,aColsImp[n1,1],aColsIMP,2,cAliasIMP) )
+		oGet1:bGotop := { || n1 := 1 }
+		oGet1:bGoBottom := { || n1 := eval( oGet1:bLogicLen ) }
+		oGet1:bSkip := { | nwant, nold | nold := n1 , n1 += nwant,;
+			n1 := max( 1, min( n1, eval( oGet1:bLogicLen ))),;
+			n1 - nOld }
+		oGet1:bLogicLen := { || Len(aColsImp) }
+		oGet1:cAlias := "Array"
+		oGet1:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Sg110Mark(aColsImp[1][1],nOpcx,.T.,cAliasIMP,aColsIMP)
+	@ 000,008 Say OemToAnsi(STR0019) Size 57,7 Of oPnlImpLb2 Pixel Font oFont //"Opcoes"
+
+	oMark1 := MsSelect():New(cAliasIMP,"TRB_OK",,aMark1,@lInverte,@cMarca,{130,8,193,395},,,oPnlImpOpc)
+		oMark1:oBrowse:lHasMark = .F.
+		oMark1:oBrowse:lCanAllMark := .F.
+		oMark1:bMark := { || Sg110ValMark(nOpcx,cMarca,oGet1,oMark1,n1,aColsImp,'aColsImp',cAliasIMP) }
+		If Str(nOpcx,1) $ "2/5" .Or. M->TAB_SITUAC <> "1"
+			oMark1:oBrowse:lReadOnly := .T.
+		EndIf
+		oMark1:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	// Folder 03 - Localização
+	oPnlLoc := TPanel():New( 0, 0,, oFolderDes:aDialogs[FLD_LOCALIZA],,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlLoc:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlLocLb1 := TPanel():New( 0, 0,, oPnlLoc,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlLocLb1:Align := CONTROL_ALIGN_TOP
+	oPnlLocLoc := TPanel():New( 0, 0,, oPnlLoc,,,, CLR_BLACK, CLR_WHITE, 0, 105, .F., .F. )
+		oPnlLocLoc:Align := CONTROL_ALIGN_TOP
+	oPnlLocLb2 := TPanel():New( 0, 0,, oPnlLoc,,,, CLR_BLACK, CLR_WHITE, 0, 10, .F., .F. )
+		oPnlLocLb2:Align := CONTROL_ALIGN_TOP
+	oPnlLocOpc := TPanel():New( 0, 0,, oPnlLoc,,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlLocOpc:Align := CONTROL_ALIGN_ALLCLIENT
+
+	aColsLoc := Sg110Get(nOpcx,'3')
+
+	@ 000,008 Say OemToAnsi(STR0127) Size 57,7 Of oPnlLocLb1 Pixel Font oFont //"Localização"
+	
+	@ 45,008 ListBox oGet2 Fields aColsLoc[n2][1],aColsLoc[n2][2],aColsLoc[n2][3],aColsLoc[n2][4],aColsLoc[n2][5] ;
+		Headers STR0018,STR0128,STR0016,STR0023,STR0024 Of oPnlLocLoc Size 388,63 Pixel; //"Avaliacao"###"Forma Avaliação"###"Descricao"###"Peso"###"Resultado"
+		On Change ( Sg110LinOk(nOpcx,aColsLoc[n2,1],aColsLoc,3,cAliasLOC) )
+		oGet2:bGotop := { || n2 := 1 }
+		oGet2:bGoBottom := { || n2 := eval( oGet2:bLogicLen ) }
+		oGet2:bSkip := { | nwant, nold | nold := n2 , n2 += nwant,;
+			n2 := max( 1, min( n2, eval( oGet2:bLogicLen ))),;
+			n2 - nOld }
+		oGet2:bLogicLen := { || Len(aColsLoc) }
+		oGet2:cAlias := "Array"
+		oGet2:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Sg110Mark(aColsLoc[1][1],nOpcx,.T.,cAliasLOC,aColsLoc)
+	
+	@ 000,008 Say OemToAnsi(STR0019) Size 57,7 Of oPnlLocLb2 Pixel Font oFont //"Opcoes"
+	
+	oMark2 := MsSelect():New(cAliasLOC, "TRB_OK",, aMark1, @lInverte, @cMarca, {130,8,193,395},,, oPnlLocOpc)
+		oMark2:oBrowse:lHasMark = .F.
+		oMark2:oBrowse:lCanAllMark := .F.
+		oMark2:bMark := { || Sg110ValMark(nOpcx,cMarca,oGet2,oMark2,n2,aColsLoc,'aColsLoc',cAliasLOC) }
+		If Str(nOpcx,1) $ "2/5" .Or. M->TAB_SITUAC <> "1"
+			oMark2:oBrowse:lReadOnly := .T.
+		EndIf
+		oMark2:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	// Folder 04 - Plano de Ação
+	@ 007,008 Say OemToAnsi(STR0031) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel  //'Plano Acao'
+	@ 005,047 MsGet M->TAB_CODPLA Size 038,08 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel F3 'TAA' Valid Sg110Pla() When lSituac HasButton
+
+	@ 020,008 Say OemToAnsi(STR0016) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel  //"Descrição"
+	@ 018,047 MsGet cDescPla Size 240,08 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel When .F.
+
+	@ 033,008 Say OemToAnsi(STR0033) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel  //'Data Impl.'
+	@ 031,047 MsGet dDtImp Size 48,06 Of oFolderDes:aDialogs[FLD_PLN_ACAO] Pixel When .F. HASBUTTON
+
+	// Folder 05 - Plano Emergencial
+	@ 007,008 Say OemToAnsi(STR0086) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel //"Plano Emerg."
+	@ 005,047 MsGet M->TAB_CODEME Size 038,08 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel F3 'TBB' Valid Sg110Eme() When lSituac HasButton
+
+	@ 020,008 Say OemToAnsi(STR0016) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel  //"Descrição"
+	@ 018,047 MsGet cDescEme Size 240,08 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel When .F.
+
+	@ 033,008 Say OemToAnsi(STR0087) Size 37,7 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel //"Responsável"
+	@ 031,047 MsGet MDTHideCpo( cRespEme, "TBB_RESPON" ) Size 240,08 Of oFolderDes:aDialogs[FLD_PLN_EMER] Pixel When .F.
+
+	// Folder 06 - Objetivo
+	If NGCADICBASE("TAB_CODOBJ", "A", "TAB", .F.)
+		// Folder Objetivos e Metas
+		@ 007,008 Say OemToAnsi(STR0121) Size 37,7 Of oFolderDes:aDialogs[FLD_OBJETIVO] Pixel //"Plano Emerg."
+		@ 005,047 MsGet M->TAB_CODOBJ Size 038,08 Of oFolderDes:aDialogs[FLD_OBJETIVO] Pixel F3 'TBH' Valid Sga110Obj() When lSituac HasButton
+		@ 020,008 Say OemToAnsi(STR0016) Size 37,7 Of oFolderDes:aDialogs[FLD_OBJETIVO] Pixel  //"Descrição"
+		@ 018,047 MsGet cDesObj Size 240,08 Of oFolderDes:aDialogs[FLD_OBJETIVO] Pixel When .F.
+	EndIf
+
+	// Footer
+	oPnlBot := TPanel():New( 0, 0,, oDES01PNL,,,, CLR_BLACK, CLR_WHITE, 0, 0, .F., .F. )
+		oPnlBot:Align := CONTROL_ALIGN_BOTTOM
+		oPnlBot:nHeight := 80
+
+		@ 005,004 TO 030,140 Label STR0027 of oPnlBot Pixel //'Significancia'
+		@ 015,008 MsGet oClasse Var cClasse Size 118,08 Of oPnlBot Pixel When .F.
+
+		@ 005,145 TO 030,( aSize[ 5 ] / 2 ) - 10 Label STR0028 of oPnlBot Pixel //'Resultado'
+		Sg110AResu()
+
+		@ 015,147 Button oBtn1 Prompt STR0029 Size 30,10 Of oPnlBot Pixel Action Sg110aCalc() //"Calcular"
+			oBtn1:SetEnable( !(Str(nOpcx,1) $ "2/5") )
+
+
+	Activate MsDialog oDlg On Init Sg110Bar(oDlg, ;
+		{|| lOk := .T., nOpca := 1, If(Sg110VldAv(nOpcx), oDlg:End(), (lOk := .F., nOpca := 0)) },;	// bOk
+		{|| nOk := 0, oDlg:End(), nOpca := 0 },; // bCancel
+		{|| lGrava := .F., IIf(!Sg110Memo(.T., nOpcx), oDlg:End(), .T.) }, @nOpca, nOpcx) Centered // bCria
+
+	dbSelectArea("TAB")
+	dbSetOrder(1)
+	If nOpca == 1
+		EvalTrigger()
+		confirmSX8()
+	Else
+		RollBackSX8()
+	EndIf
+
+	DbSelectArea(cTRBB)
+	DbCloseArea()
+
+	//Deleta o arquivo temporario fisicamente
+	oTempSGA:Delete()
+	If Select(cTRBA) == 0
+		oTempTRBA:Delete()
+	EndIf
+	oTempTRBB:Delete()
+	oTempTRBC:Delete()
+
+	NGRETURNPRM(aNGBEGINPRM)//Devolve Varíaveis armazenadas
+
+Return {nOpca, cLocAsp}
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Sg110VldAv
+Validação geral da tela de desempenho.
+
+@param nOpcx Opcao do processo atual.
+
+@author Hugo R. Pereira
+@since 09/10/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function Sg110VldAv( nOpcx )
+
+	// Se o processo for de visualizacao, nao realiza a validacao 'geral'
+	If nOpcx == 2
+		Return .T.
+	EndIf
+
+	// Verifica obrigatoriedades
+	If !Sg110Obrig(nOpcx)
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110Get
+Programa para Avaliar Aspectos e Impactos.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110Get()
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110Get( nOpcx, cTipo )
+
+	Local lFirst   := .T.
+	Local nPeso    := 0
+	Local nPosCol	:= 0
+	Local aColunas := {}
+
+	Default cTipo  := " "
+
+	If nOpcx <> 3
+		DbSelectArea("TAD")
+		DbSetOrder(1)
+		DbSeek(xFilial("TAD")+cOrdem)
+		While TAD->(!Eof()) .And. xFilial("TAD") == TAD->TAD_FILIAL .And. TAD->TAD_ORDEM == cOrdem
+			nPeso := 0
+			If (nPosCol := aScan( aColunas, {|x| x[1] == TAD->TAD_CODAVA }) )== 0
+				If NGSEEK("TA6", TAD->TAD_CODAVA, 1, "TA6_TIPO") <> cTipo
+					dbskip()
+				Loop
+
+			EndIf
+
+			If lFirst
+				cAval1 := TAD->TAD_CODAVA
+				lFirst:= .F.
+
+			EndIf
+
+				aAdd( aColunas , { TAD->TAD_CODAVA ,;
+							NGRETSX3BOX( "TA6_TITULO" , NGSEEK("TA6", TAD->TAD_CODAVA, 1, "TA6_TITULO") ) ,;
+							NGSEEK("TA6", TAD->TAD_CODAVA, 1, "TA6_DESCRI") ,;
+							NGSEEK("TA6", TAD->TAD_CODAVA, 1, "TA6_PESO") ,;
+							nPeso , .F. } )
+				nPosCol := Len(aColunas)
+
+			EndIf
+			If TAD->TAD_OK == "1"
+				dbSelectArea( "TA6" )
+			dbSetOrder(1)
+				If DbSeek( xFilial( "TA6" ) + TAD->TAD_CODAVA ) .And. TAD->TAD_PESO > 0
+				nPeso := (TA6->TA6_PESO*TAD->TAD_PESO)/100
+
+			EndIf
+				aColunas[ nPosCol , 5 ] := nPeso
+
+			EndIf
+			DbSelectArea("TAD")
+			TAD->(DbSkip())
+		EndDo
+	Else
+		DbSelectArea('TA6')
+		DbSetOrder(1)
+		DbSeek(xFilial('TA6'))
+		While TA6->(!Eof()) .And. xFilial('TA6') == TA6->TA6_FILIAL
+
+			nPeso := 0
+			If TA6->TA6_TIPO <> cTipo .Or. TA6->TA6_MSBLQL == "1"
+				Dbskip()
+				Loop
+
+			EndIf
+
+			If lFirst
+				cAval1 := TA6->TA6_CODAVA
+				lFirst:= .F.
+
+			EndIf
+
+			//Busca o Resultado quando for alteração ou Visualização
+			DbSelectArea('TAD')
+			DbSetOrder(1)
+			If DbSeek(xFilial('TAD')+cOrdem+TA6->TA6_CODAVA) .And. TA6->TA6_PESO > 0
+				nPeso := (TA6->TA6_PESO*TAD->TAD_PESO)/100
+
+			EndIf
+
+			aAdd( aColunas,{TA6->TA6_CODAVA,NGRETSX3BOX('TA6_TITULO',TA6->TA6_TITULO),TA6->TA6_DESCRI,TA6->TA6_PESO,nPeso,.F.} )
+
+			DbSelectArea('TA6')
+			DbSkip()
+
+		EndDo
+
+	EndIf
+
+	If Len( aColunas ) == 0
+		aAdd( aColunas,{"","","",0,0,.F.} )
+
+	EndIf
+
+Return aColunas
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110Mark
+Monta um MarkBrowse com as respostas das avaliações.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110Mark()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110Mark( cCodAva, nOpc, lPrimeiro, cTRBC, aColunas )
+
+	aDbf := {}
+	aAdd(aDbf,{ "TRB_OK"       , "C" ,02, 0 })
+	aAdd(aDBF,{ "TRB_CODAVA"   , "C" ,03, 0 })
+	aAdd(aDBF,{ "TRB_CODIGO"   , "C" ,03, 0 })
+	aAdd(aDBF,{ "TRB_DESCRI"   , "C" ,40, 0 })
+	aAdd(aDBF,{ "TRB_PESO"     , "N" ,03, 0 })
+
+	// Arquivo Temporario para o usuario selecionar as respostas
+	If Select(cTRBC) <> 0
+	DbSelectArea(cTRBC)
+	DbCloseArea()
+
+	EndIf
+
+	oTempTRBC := FWTemporaryTable():New( cTRBC, aDBF )
+	oTempTRBC:AddIndex( "1", {"TRB_CODAVA","TRB_CODIGO"} )
+	oTempTRBC:Create()
+
+	If Len(aMark1) == 0
+		aAdd(aMark1,{"TRB_OK"       ,NIL," ",})
+		aAdd(aMark1,{"TRB_CODIGO"   ,NIL,STR0034 ,})     // //"Codigo"
+		aAdd(aMark1,{"TRB_DESCRI"   ,NIL,STR0035 ,})     // //"Respostas"
+		aAdd(aMark1,{"TRB_PESO"     ,NIL,STR0036 ,})     // //"Peso %"
+
+	EndIf
+
+	If nOpc <> 3
+		DbSelectArea('TAD')
+		DbSetOrder(1)
+		DbSeek(xFilial('TAD')+cOrdem+cCodAva)
+		Do While !Eof() .And. xFilial('TAD') == TAD->TAD_FILIAL .And.;
+			TAD->TAD_ORDEM == cOrdem .And. TAD->TAD_CODAVA == cCodAva
+			cCheck := ''
+			dbSelectArea(cTRBB)
+			dbSetOrder(1)
+			If dbSeek( cCodAva + TAD->TAD_CODOPC)
+				cCheck := If( !Empty( (cTRBB)->TRB_OK ) , cMarca , "" )
+			Else
+				If TAD->TAD_OK == "1"
+					cCheck := cMarca
+				Else
+					cCheck := ''
+
+				EndIf
+
+			EndIf
+			RecLock(cTRBC,.T.)
+			(cTRBC)->TRB_OK      := cCheck
+			(cTRBC)->TRB_CODAVA  := TAD->TAD_CODAVA
+			(cTRBC)->TRB_CODIGO  := TAD->TAD_CODOPC
+			(cTRBC)->TRB_DESCRI  := NGSEEK("TA7",TAD->(TAD_CODAVA+TAD_CODOPC),1,"TA7_OPCAO")
+			(cTRBC)->TRB_PESO    := TAD->TAD_PESO
+			MsUnLock(cTRBC)
+			DbSelectArea('TAD')
+			TAD->(DbSkip())
+		EndDo
+	Else
+		DbSelectArea('TA7')
+		DbSetOrder(1)
+		DbSeek(xFilial('TA7')+cCodAva)
+		Do While !Eof() .And. xFilial('TA7') == TA7->TA7_FILIAL .And.;
+			TA7->TA7_CODAVA == cCodAva
+			//Desconsidera opção de avaliação bloqueada.
+			If TA7->TA7_MSBLQL == "1"
+			Dbskip()
+			Loop
+
+			EndIf
+			cCheck := ''
+			dbSelectArea(cTRBB)
+			dbSetOrder(1)
+			If dbSeek( cCodAva + TA7->TA7_CODOPC)
+				cCheck := If( !Empty( (cTRBB)->TRB_OK ) , cMarca , "" )
+				Else
+				cCheck := ''
+
+			EndIf
+			RecLock(cTRBC,.T.)
+			(cTRBC)->TRB_OK      := cCheck
+			(cTRBC)->TRB_CODAVA  := TA7->TA7_CODAVA
+			(cTRBC)->TRB_CODIGO  := TA7->TA7_CODOPC
+			(cTRBC)->TRB_DESCRI  := TA7->TA7_OPCAO
+			(cTRBC)->TRB_PESO    := TA7->TA7_PESO
+			MsUnLock(cTRBC)
+			DbSelectArea('TA7')
+			DbSkip()
+		EndDo
+
+		EndIf
+	(cTRBC)->(DbGoTop())
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110ValMark
+Atualiza o total do resultado de acordo com a opção escolhida.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110ValMark()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110ValMark( nOpcx, cMarca, _oGet, _oMark, nPos, aColunas, cArray, cTRBC )
+
+	Local   cFieldMarca := "TRB_OK"
+	Local cCodAva, cCodOpc
+	Default cTRBC := cTRBC
+
+	DbSelectArea(cTRBC)
+	nRecno := Recno()
+
+	// Se for Caracterização do Aspecto
+	If aColunas[nPos,4] == 0
+		IsMark(cFieldMarca,cMarca,lInverte)
+	Else
+		If IsMark(cFieldMarca,cMarca,lInverte)
+			cCodAva := (cTRBC)->TRB_CODAVA
+			cCodOpc := (cTRBC)->TRB_CODIGO
+			nPeso1  := (cTRBC)->TRB_PESO
+			nRecno1 := Recno()
+			nCont1  := 0
+			DbSelectArea(cTRBC)
+			DbGotop()
+			Do While !Eof()
+				If !Empty( (cTRBC)->TRB_OK )
+					nCont1 ++
+
+				EndIf
+				Dbskip()
+			EndDo
+			If nCont1 > 1
+				DbSelectArea(cTRBC)
+				If DbSeek( cCodAva+cCodOpc )
+					RecLock(cTRBC,.F.)
+					(cTRBC)->TRB_OK := Space(02)
+					MsUnLock(cTRBC)
+
+				EndIf
+			Else
+				oTotal1:Refresh()
+				aColunas[nPos][5] := IIF(nPeso1   > 0 , (aColunas[nPos][4]*nPeso1)/100 , 0 )
+
+			EndIf
+			DbGoTo(nRecno1)
+		Else
+			cCodAva := (cTRBC)->TRB_CODAVA
+			cCodOpc := (cTRBC)->TRB_CODIGO
+			nPeso1   := (cTRBC)->TRB_PESO
+			nRecno1  := Recno()
+			nCont1   := 0
+			aColunas[nPos][5] := 0
+			oTotal1:Refresh()
+
+		EndIf
+		aColunas[nPos][6] := .T.
+
+	EndIf
+
+	Sg110GraTrbB(nOpcx,nRecno,aColunas,cTRBC,nPOS)
+
+	DbSelectArea(cTRBC)
+	DbGoto(nRecno)
+
+	_oMark:oBrowse:Refresh()
+	_oGet:Refresh()
+
+	&cArray := aClone(aColunas)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110LinOk
+Monta o MarkBrowse de acordo com a seleção do getdados.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110LinOk()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110LinOk( nOpcx, cCodAVA, aColunas, nPos, cTRBC )
+
+	Local nPosCol := If( nPos == 1 , n , &( "n" + cValToChar( nPos - 1 ) ) )
+
+	Sg110Mark(aColunas[nPosCol][1],nOpcx,.F.,cTRBC,aColunas)
+
+	DbSelectArea(cTRBC)
+	DbGoTOP()
+	oMark:oBrowse:Refresh()
+	oFolderDes:aDialogs[FLD_ASPECTO]:Refresh()
+	oMark1:oBrowse:Refresh()
+	oMark2:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110GraTrbB
+Grava TRB com as informacoes do MarkBrowse.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110GraTrbB()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110GraTrbB( nOPCX, nRecno, aColunas, cTRBC, nPos )
+
+	Local   cCodAva := ''
+
+	DbSelectArea(cTRBC)
+	DbGoto(nRecno)
+	cCodAva := (cTRBC)->TRB_CODAVA
+
+	If nOpcx <> 5
+		DbSelectArea(cTRBB) // APAGA A RESPOSTA ANTERIOR
+		DbSetOrder(1)
+		If dbSeek((cTRBC)->(TRB_CODAVA+TRB_CODIGO))
+			RecLock(cTRBB,.F.)
+			DbDelete()
+			MsUnLock(cTRBB)
+
+		EndIf
+		DbSelectArea(cTRBC)
+		DbSelectArea(cTRBB)
+		DbSetOrder(1)
+		If !Empty((cTRBC)->TRB_CODAVA)
+			RecLock(cTRBB,.T.)
+			(cTRBB)->TRB_OK     := If(!Empty((cTRBC)->TRB_OK),cMarca," ")
+			(cTRBB)->TRB_CODAVA := (cTRBC)->TRB_CODAVA
+			(cTRBB)->TRB_CODIGO := (cTRBC)->TRB_CODIGO
+			(cTRBB)->TRB_PESO   := (cTRBC)->TRB_PESO
+			(cTRBB)->TRB_RESULT := IIf((cTRBC)->TRB_PESO <> 0 ,(aColunas[nPos][4]*(cTRBC)->TRB_PESO)/100 , 0 )
+			MsUnLock(cTRBB)
+
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110aCalc
+Calcula o valor das formulas.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/12/2003
+@sample  Sg110aCalc()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg110aCalc()
+
+	Local xResult,cStrForm, aAlias := {}, aAval := {}
+	Local bBlock:=ErrorBlock(),bErro := ErrorBlock( { |e| ChecErro(e) } )
+	Local i, cSavAlias := Alias(),nTotal := 0,nHif:=0,nQtd:=0,lSair:=.F.
+	Local Ind := 1,nCount := 0,cCampo := '',aCampo := {},nAval := 1,nFor := 1
+	Local nA
+	Local aPesosForm := {}
+	Local cFormError := ""
+	Local aFormError := {}
+
+	DbSelectArea('TA3')
+	DbSetOrder(1)
+	DbSeek(xFilial('TA3'))
+	Do While !Eof() .And. TA3->TA3_FILIAL == xFilial('TA3')
+
+		cStrForm := Upper(TA3->TA3_FORMUL)
+		aCampo := {}
+		aAlias := {}
+		cCampo := ''
+		lSair  := .F.
+		nTotal := 0
+		Ind    := 1
+
+		BEGIN SEQUENCE
+		Do While !lSair
+			nAcha := 0
+			nAcha := AT("#",SubStr(cStrForm,nTotal+1,Len(cStrForm)))
+			If nAcha > 0
+				nTotal += nAcha
+				nHif := nAcha
+				aAdd( aAlias, { nAcha, nTotal } )
+				nQtd ++
+			Else
+				lSair := .T.
+
+			EndIf
+		EndDo
+		END SEQUENCE
+
+		BEGIN SEQUENCE
+		For i:= 1 to Len( aAlias ) - 1
+			If Mod(i,2) <> 0
+				aAdd( aAval, { SubStr( cStrForm, aAlias[ i ][ 2 ]+1, aAlias[ i + 1][ 1 ]-1) } )
+
+			EndIf
+		Next
+		END SEQUENCE
+
+		TexLinha := cStrForm
+
+		// Monta Array Com Todas os Criterios Avaliados por Peso Para verificar
+		// se os critérios controlados por PESO e fazem parte da Formula estão preenchidos
+		aPesosForm := {}
+		For nA := 1 To Len(aCols1)
+			If aCols1[nA,4] > 0
+				aadd(aPesosForm,{aCols1[nA,1],aCols1[nA,2],aCols1[nA,3],aCols1[nA,4],aCols1[nA,5],aCols1[nA,6]})
+
+			EndIf
+		Next
+
+		For nA := 1 To Len(aColsIMP)
+			If aColsIMP[nA,4] > 0
+				aadd(aPesosForm,{aColsIMP[nA,1],aColsIMP[nA,2],aColsIMP[nA,3],aColsIMP[nA,4],aColsIMP[nA,5],aColsIMP[nA,6]})
+
+			EndIf
+		Next
+
+		For nA := 1 To Len(aColsLOC)
+			If aColsLOC[nA,4] > 0
+				aadd(aPesosForm,{aColsLOC[nA,1],aColsLOC[nA,2],aColsLOC[nA,3],aColsLOC[nA,4],aColsLOC[nA,5],aColsLOC[nA,6]})
+
+			EndIf
+		Next
+
+
+		BEGIN SEQUENCE
+		For i := 1 To Len( TexLinha )
+			If SubStr( TexLinha, Ind, 1 ) == '#'
+				If nCount > 1
+					nCount := 0
+					nPos   := 0
+					nPos1  := 0
+					cAvaliacao := aAval[nAval][1]
+					nPos1 := aScan( aPesosForm,{|x| AllTrim(x[3]) == AllTrim(cAvaliacao) } )
+					If nPos1 > 0
+						aAdd( aCampo, { aPesosForm[nPos1][4]/100 * aPesosForm[nPos1][5] } )
+
+					EndIf
+					If nPos1 == 0
+						Help(" ",1,STR0074,,STR0037+cAvaliacao,3,1)  // //"Nao existe a avaliacao " //"ATENÇÃO"
+						Return .F.
+
+					EndIf
+					Ind++
+					nAval++
+
+				EndIf
+
+			EndIf
+			If SubStr( TexLinha, Ind, 1 ) <> "#" .And. nCount == 0
+				aAdd( aCampo, { SubStr( TexLinha, Ind, 1 ) } )
+			Else
+				nCount ++
+
+			EndIf
+			Ind++
+		Next
+		END SEQUENCE
+
+		BEGIN SEQUENCE
+		For i := 1 To Len( aCampo )
+			If ValType( aCampo[i][1] ) == 'N'
+				cCampo += Str( aCampo[i][1] )
+			Else
+				cCampo += aCampo[i][1]
+
+			EndIf
+		Next i
+		xResult := &cCampo
+		END SEQUENCE
+
+		If ValType(xResult) <> "N"
+			Aadd(aFormError, TA3->TA3_CODFOR )
+		Else
+			cResult := xResult
+			If ValType(cResult) == "C"
+				cResult := Val(cResult)
+
+			EndIf
+			lWhen := .T.
+			If nFor == 1
+				nTotal1 := cResult
+				oTotal1:Refresh()
+			ElseIf nFor == 2
+				nTotal2 := cResult
+				oTotal2:Refresh()
+			ElseIf nFor == 3
+				nTotal3 := cResult
+				oTotal3:Refresh()
+			ElseIf nFor == 4
+				nTotal4 := cResult
+				oTotal4:Refresh()
+			ElseIf nFor == 5
+				nTotal5 := cResult
+				oTotal5:Refresh()
+				Exit
+
+			EndIf
+
+		EndIf
+
+		DbSelectArea(cSavAlias)
+		ErrorBlock(bBlock)
+		nFor++
+		DbSelectArea("TA3")
+		DbSkip()
+
+	EndDo
+
+	If !Sg110Form(nTotal1)
+		Return .F.
+
+	EndIf
+
+	If !Empty(aFormError)
+		For i := 1 To Len( aFormError )
+			cFormError += CRLF + aFormError[i]
+		Next
+		ShowHelpDlg( STR0090 , 	{ STR0130 +cFormError} , 2 ,;//"Atenção!" ## "Existem fórmula(s) incorreta(s): "
+									{ STR0131 } , 2 )				//"Para a confirmação da Avaliação do Desempenho, corrija a(s) fórmula(s)."
+		Return .F.
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110Obrig
+Calcula o valor das formulas.
+
+@type    function
+@author  Thiago Olis Machado
+@since   07/01/2004
+@sample  Sg110Obrig()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg110Obrig( nOpcx, lFinal )
+
+	Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+
+	Default lFinal := .F.//Indica se o desempenho está sendo finalizado
+
+	If Empty( M->TA4_CODASP )
+		ShowHelpDlg(STR0074,{STR0114},2,{STR0115},2)
+		Return .F.
+
+	EndIf
+
+	If Empty( M->TAB_CODIMP )
+		ShowHelpDlg(STR0074,{STR0116},2,{STR0117},2)
+		Return .F.
+
+	EndIf
+
+	If nTotal1 == 0
+		ShowHelpDlg(STR0074,{STR0038},2,{STR0112},2)//Help(" ",1,STR0074,,STR0038,3,1)  //### //"Avaliacao sem resultado" //"ATENÇÃO"
+		Return .F.
+
+	EndIf
+
+	If Len( aLocal2 ) == 0
+		Help(" ",1,STR0074,,STR0079,3,1) //"Escolha em que área o Aspecto está sendo avaliado."###"Atenção"
+		Return .F.
+	Else
+		nPos := aScan(aLocal2, {|x| x[2] == .T.})
+		If nPos == 0
+			Help(" ",1,STR0074,,STR0079,3,1) //"Escolha em que área o Aspecto está sendo avaliado."###"Atenção"
+			Return .F.
+
+		EndIf
+
+	EndIf
+
+	If Empty(cCodCla) .And. Empty(cClasse)
+		ShowHelpDlg(STR0074,{STR0118},2,{STR0119},2)
+		cCodCla := ""
+		cClasse := ""
+		Return .F.
+
+	EndIf
+
+	If !lFinal
+
+		If nOpcx != 5
+			If !Sg110aCalc()
+				Return .F.
+
+			EndIf
+
+		EndIf
+
+		If !Sg110aGrv(nOpcx)
+			Return .F.
+
+		EndIf
+
+
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg110aGrv
+Grava a avaliação.
+
+@type    function
+@author  Thiago Olis Machado
+@since   08/01/2004
+@sample  Sg110aGrv()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg110aGrv(nOpcx)
+
+	Local nPos, cLocal, cOrd
+	Local lCampSit := NGCADICBASE("TAB_SITUAC","A","TAB",.F.)
+	Local lCampRev := NGCADICBASE("TAB_REVISA","A","TAB",.F.)
+	Local lCampObj := NGCADICBASE("TAB_CODOBJ","A","TAB",.F.)
+
+	Local aAreaTA7
+	Local lTA6BLQ := .F.
+	Local cCodAva
+	If lCpy
+		cOrd := Padr( cOrdemOld, 6 )
+	Else
+		cOrd := Padr( cOrdem, 6 )
+
+	EndIf
+
+	nPos := aScan(aLocal2, {|x| x[2] == .T.})
+	cLocal := aLocal2[nPos][1]
+
+	//Manipula a tabela TAB
+
+	If nOpcx == 3
+		//Procura uma avaliacao semelhante
+		dbSelectArea("TAB")
+		dbSetOrder(6)
+		If dbSeek(xFilial("TAB")+"001"+cLocal+M->TA4_CODASP+M->TAB_CODIMP)
+			If !MsgYesNo(STR0093+TAB->TAB_ORDEM+STR0094+CHR(13)+CHR(10)+STR0095,STR0090) //"Já existe uma avaliação ("###") com a mesma chave (Nivel+Aspecto+Impacto)."###"Deseja finalizá-la e tornar a avaliação atual como vigente?"###"Atenção!"
+				Return .F.
+			Else
+				//Cancela avaliação antiga gerando histórico
+				If !Sg110GraHis(TAB->TAB_ORDEM)
+					Return .F.
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	DbSelectArea('TAA')
+	DbSetOrder(1)
+	If Dbseek(xFilial('TAA')+M->TAB_CODPLA)
+		If !Empty(TAA->TAA_STATUS) .And. TAA->TAA_STATUS <> "1"
+			If !MsgYesNo("O Plano de Ação: "+M->TAB_CODPLA+" se encontra "+If(TAA->TAA_STATUS=="2","Finalizado.","Cancelado.")+Chr(13)+Chr(10)+;
+				"Deseja gravá-lo assim mesmo?","Atenção")
+				M->TAB_CODPLA := Space( Len( TAA->TAA_CODPLA ) )
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	DbSelectArea('TAB')
+	DbSetOrder(1)
+	If DbSeek(xFilial('TAB')+cOrd+M->TA4_CODASP)
+		RecLock('TAB',.F.)
+	Else
+		RecLock('TAB',.T.)
+
+	EndIf
+
+	If nOpcx <> 5
+		TAB->TAB_FILIAL := xFilial('TAB')
+		TAB->TAB_CODASP := M->TA4_CODASP
+		TAB->TAB_CODIMP := M->TAB_CODIMP
+		TAB->TAB_CODPLA := M->TAB_CODPLA
+		TAB->TAB_CODEME := M->TAB_CODEME
+		TAB->TAB_RESULT := nTotal1
+		TAB->TAB_RESUL2 := nTotal2
+		TAB->TAB_RESUL3 := nTotal3
+		TAB->TAB_RESUL4 := nTotal4
+		TAB->TAB_RESUL5 := nTotal5
+		TAB->TAB_CODEST := '001'
+		TAB->TAB_CODNIV := cLocal
+		TAB->TAB_DTRESU := dDtEmis
+		TAB->TAB_ORDEM  := cOrd
+		TAB->TAB_DESCRI := M->TAB_DESCRI
+		If lCampSit
+			TAB->TAB_SITUAC := M->TAB_SITUAC
+
+		EndIf
+		If lCampRev
+			TAB->TAB_REVISA := M->TAB_REVISA
+
+		EndIf
+		If lCampObj
+			TAB->TAB_CODOBJ := M->TAB_CODOBJ
+
+		EndIf
+
+		aAreaTAB := TAB->(GetArea())
+		DbSelectArea('TA8')
+		DbSetOrder(2)
+		If DbSeek(xFilial('TA8')+cClasse)
+			TAB->TAB_CODCLA := TA8->TA8_CODCLA
+
+		EndIf
+		RestArea(aAreaTAB)
+	Else
+		DbDelete()
+
+	EndIf
+
+	MsUnLock('TAB')
+
+	// Manipula a tabela TAD
+
+	If nOpcx == 3
+		dbSelectArea( "TA7" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TA7" ) )
+		While TA7->( !Eof() )
+			lTA6BLQ  := .F.
+			cCodAva  := TA7->TA7_CODAVA
+			aAreaTA7 := TA7->(GetArea())
+			dbSelectArea("TA6")
+			dbSetOrder(1)
+			DbSeek(xFilial("TA6")+cCodAva)
+			If TA6->TA6_MSBLQL = "1"
+				lTA6BLQ := .T.
+
+			EndIf
+			RestArea(aAreaTA7)
+			//Desconsidera opção de avaliação bloqueada.
+			If TA7->TA7_MSBLQL == "1" .Or. lTA6BLQ
+			Dbskip()
+			Loop
+
+			EndIf
+
+			dbSelectArea( "TAD" )
+			dbSetOrder(1) // TAD_FILIAL+TAD_ORDEM+TAD_CODAVA+TAD_CODOPC
+			If !dbSeek( xFilial("TAD") + cOrd + TA7->TA7_CODAVA + TA7->TA7_CODOPC)
+				RecLock( "TAD" , .T. )
+				TAD->TAD_FILIAL	:= xFilial("TAD")
+				TAD->TAD_ORDEM 	:= cOrd
+				TAD->TAD_CODAVA	:= TA7->TA7_CODAVA
+				TAD->TAD_CODOPC	:= TA7->TA7_CODOPC
+			Else
+				RecLock( "TAD" , .F. )
+
+			EndIf
+
+			TAD->TAD_OK	   	:= "2"
+			TAD->TAD_PESO  	:= TA7->TA7_PESO
+			TAD->TAD_INDICA	:= IF( TA6->TA6_TIPO == "1" , "1" , "2" )
+
+			TAD->( MsUnLock() )
+			TA7->( dbSkip() )
+		End
+	ElseIf nOpcx == 5
+		DbSelectArea( "TAD" )
+		DbSetOrder(1)
+		dbSeek( xFilial( "TAD" ) + cOrd )
+		While !Eof() .And. TAD->TAD_FILIAL == xFilial('TAD') .And. TAD->TAD_ORDEM == cOrd
+			RecLock('TAD',.F.)
+			DbDelete()
+			MsUnLock('TAD')
+			TAD->(dbSkip())
+		End
+
+	EndIf
+
+	If nOpcx <> 5
+		DbSelectArea(cTRBB)
+		DbGoTop()
+		Do While !Eof()
+
+			cCodAva := NGSEEK("TA6",(cTRBB)->TRB_CODAVA,1,"TA6_TIPO")
+
+			DbSelectArea('TAD')
+			DbSetOrder(1)
+			If !DbSeek( xFilial('TAD') + cOrd + (cTRBB)->TRB_CODAVA + (cTRBB)->TRB_CODIGO)
+				RecLock('TAD',.T.)
+			Else
+				RecLock('TAD',.F.)
+
+			EndIf
+			If nOpcx == 5
+				DbDelete()
+			Else
+				TAD->TAD_FILIAL := xFilial('TAD')
+					TAD->TAD_OK	   	:= If(!empty((cTRBB)->TRB_OK),'1','2')
+					TAD->TAD_CODAVA	:= (cTRBB)->TRB_CODAVA
+					TAD->TAD_CODOPC	:= (cTRBB)->TRB_CODIGO
+					TAD->TAD_PESO  	:= (cTRBB)->TRB_PESO
+				TAD->TAD_INDICA	:= IF( cCodAva == "1" , "1" , "2" )
+				TAD->TAD_ORDEM  := cOrd
+
+			EndIf
+			MsUnLock('TAD')
+			DbSelectArea(cTRBB)
+			DbSkip()
+
+		EndDo
+
+	EndIf
+	CursorArrow()
+	Sg110ResGra()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilização de Menu Funcional.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   11/01/2007
+@sample  MenuDef()
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef(lLegenda)
+
+	Local aRotina := {	{ STR0001, "AxPesqui" , 0, 1    },; //"Pesquisar"
+						{ STR0002, "Sg110APro", 0, 2    },; //"Visualizar"
+						{ STR0003, "Sg110APro", 0, 3    },; //"Incluir"
+						{ STR0004, "Sg110APro", 0, 4    },; //"Alterar"
+						{ STR0005, "Sg110APro", 0, 5, 3 },; //"Excluir"
+						{ STR0099, "Sg110Cpy" , 0, 4    } } //"Copiar"
+	If lLegenda
+		aADD(aRotina, { STR0058 , "SG110Lgn"   , 0 , 3}) //"Legenda"
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} AtuFolder
+Atualizado o Folder que for selecionado com as respostas do aspecto
+Utilizado nos Folders Aspecto/Impacto/Localização que tem o mesmo conceito
+
+@param nFolder  Numero do Folder a ser Atualizado
+@param nOpcx    Modo de Edição
+
+@author Alessandro Arnold
+@since 07/02/2013
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function AtuFolder(nFolder,nOpcx)
+
+	cTRBC := 'TRBG'+Alltrim(Str(nFolder))
+
+	If nFolder == FLD_ASPECTO // ASpecto
+		Sg110LinOk(nOpcx,aCols1[n,1],aCols1,1,cTRBC)
+		oGet:Refresh()
+		oMark:oBrowse:Refresh()
+	ElseIf nFolder == FLD_IMPACTO // Impacto
+		Sg110LinOk(nOpcx,aColsImp[n1,1],aColsIMP,2,cTRBC)
+		oGet1:Refresh()
+		oMark1:oBrowse:Refresh()
+	ElseIf nFolder == FLD_LOCALIZA // Localizacao
+		Sg110LinOk(nOpcx,aColsLoc[n2,1],aColsLOC,3,cTRBC)
+		oGet2:Refresh()
+		oMark2:oBrowse:Refresh()
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} CargaTRB
+Carrega os Arquivos Temporarios de Resposta de Acordo
+@author Alessandro Arnold
+@since 02/2013
+@version MP10/MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function CargaTRB(nOpcX)
+
+	aDbf := {}
+	aAdd(aDBF,{ "TRB_OK"        , "C" ,02, 0 })
+	aAdd(aDBF,{ "TRB_CODAVA"   , "C" ,03, 0 })
+	aAdd(aDBF,{ "TRB_CODIGO"   , "C" ,03, 0 })
+	aAdd(aDBF,{ "TRB_PESO"     , "N" ,03, 0 })
+	aAdd(aDBF,{ "TRB_RESULT"   , "N" ,03, 0 })
+
+	oTempTRBB := FWTemporaryTable():New( cTRBB, aDBF )
+	oTempTRBB:AddIndex( "1", {"TRB_CODAVA","TRB_CODIGO"} )
+	oTempTRBB:Create()
+
+	If Select(cTRBA) == 0
+		aDbf := {}
+		aAdd(aDBF,{ "TRB_OK"        , "C" ,02, 0 })
+		aAdd(aDBF,{ "TRB_CODAVA"   , "C" ,03, 0 })
+		aAdd(aDBF,{ "TRB_CODIGO"   , "C" ,03, 0 })
+		aAdd(aDBF,{ "TRB_PESO"     , "N" ,03, 0 })
+		aAdd(aDBF,{ "TRB_RESULT"   , "N" ,03, 0 })
+
+		oTempTRBA := FWTemporaryTable():New( cTRBA, aDBF )
+		oTempTRBA:AddIndex( "1", {"TRB_CODAVA","TRB_CODIGO"} )
+		oTempTRBA:Create()
+
+	EndIf
+
+	If nOpcX <> 3 .Or. lCpy
+	dbSelectArea('TAD')
+	dbSetOrder(1)
+	dbSeek(xFilial('TAD')+cOrdem)
+	Do While !Eof() .And. TAD->TAD_ORDEM == cOrdem
+		DbSelectArea('TA6')
+		DbSetOrder(1)
+		DbSeek(xFilial('TA6')+TAD->TAD_CODAVA)
+		dbSelectArea(cTRBB)
+		dbSetOrder(1)
+		If !dbSeek( TAD->TAD_CODAVA + TAD->TAD_CODOPC )
+			RecLock(cTRBB,.T.)
+			(cTRBB)->TRB_OK 		:= If(TAD->TAD_OK == '1',cMarca,'')
+			(cTRBB)->TRB_CODAVA := TAD->TAD_CODAVA
+			(cTRBB)->TRB_CODIGO := TAD->TAD_CODOPC
+			(cTRBB)->TRB_PESO   := TAD->TAD_PESO
+			(cTRBB)->TRB_RESULT := (TA6->TA6_PESO*TAD->TAD_PESO)/100
+			MsUnLock(cTRBB)
+
+		EndIf
+		dbSelectArea('TAD')
+		TAD->(DbSkip())
+		Enddo
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SetNivMrk
+Define niveis de 'Presenca de Aspecto', conforme aspecto informado.
+
+@param cCodAsp Codigo do Aspecto a ser considerado para analise.
+@param cOrdem Numero da ordem a ser verificada.
+
+@author Hugo R. Pereira
+@since 09/10/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function SetNivMrk(cCodAsp, cOrdem, cLocAsp)
+
+	Local aArea    := GetArea()
+	Local aAreaTAG := TAG->(GetArea())
+
+	Default cOrdem := ""
+	Default cLocAsp := ""
+
+	// Verifica niveis com 'Presenca de Aspecto'
+	dbSelectArea("TAG")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TAG") + cCodAsp + "001")
+		While !Eof() .And. xFilial("TAG") + cCodAsp == TAG->TAG_FILIAl + TAG->TAG_CODASP
+			If aScan(aLocal,{|x| Trim(Upper(x[1])) == TAG->TAG_CODNIV}) == 0
+				aAdd(aLocal, {TAG->TAG_CODNIV, .T.} )
+
+			EndIf
+			dbSelectArea("TAG")
+			dbSkip()
+		End
+
+	EndIf
+
+	// Realiza copia de itens marcados [Necessario devido a atual situacao do fonte | Verificar possibilidade de correcao]
+	aMarcado := aClone(aLocal)
+
+	// Caso a ordem seja informada, define nivel com estado 'Sendo Avaliado'
+	If !Empty(cOrdem) .Or. !Empty(cLocAsp)
+		GetAvalNiv(cOrdem,cLocAsp)
+
+	EndIf
+
+	// Restaura areas
+	RestArea(aArea)
+	RestArea(aAreaTAG)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GetAvalNiv
+Define nivel referente a avaliacao atual, conforme ordem informada.
+
+@param cOrdem Numero da ordem a ser verificada.
+
+@author Hugo R. Pereira
+@since 09/10/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function GetAvalNiv(cOrdem,cLocAsp)
+
+	Local aArea    := GetArea()
+	Local aAreaTAB := TAB->(GetArea())
+
+	If !Empty(cLocAsp)
+		cFolderA := "Folder5"
+		cFolderB := "Folder6"
+		aAdd( aLocal2, { cLocAsp, .T. } ) // Adiciona item em array de controle de itens marcados como 'Sendo Avaliado'
+	ElseIf !Empty(cOrdem)
+		dbSelectArea("TAB")
+		dbSetOrder(1)
+		If DbSeek(xFilial("TAB") + cOrdem)
+			cFolderA := "Folder5"
+			cFolderB := "Folder6"
+			aAdd( aLocal2, { TAB->TAB_CODNIV, .T. } ) // Adiciona item em array de controle de itens marcados como 'Sendo Avaliado'
+
+		EndIf
+
+	EndIf
+
+	RestArea(aArea)
+	RestArea(aAreaTAB)
+
+Return Nil
+
+/*---------------------------------------------------------------------------------
+									ATENCAO
+	As funcoes abaixo foram replicadas da versao 5 do fonte SGAA140 (Protheus 11)
+	devido a um incorreta analise e alteracao de fontes. Realizada esta trativa
+	de maneira EMERGENCIAL. Assim que possivel, corrigir e aplicas as devidas
+	correcoes.
+-----------------------------------------------------------------------------------*/
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fChangeTree
+Realiza carregamento da estrutura organizacional
+
+@author
+@since
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function SG110CTree( nOpcao, aNivMrk, cFctClr )
+
+	Local cLocal := ""
+	Local i
+
+	Default aNivMrk   := {}
+	Default cFctClr := ""
+
+	If nOpcao == 1//Opcao 1 Carrega tudo e 2 bChange
+
+		//Posiciona no nivel pai da estrutura
+		dbSelectArea("TAF")
+		dbSetOrder(1)
+		dbSeek(xFilial("TAF")+cCodest+"000")
+
+		// Processa itens da tree, e define suas marcacoes
+		Processa( { |lEnd| Sg100Tree(.F., cCodest, 3, aNivMrk) }, STR0041, STR0088, .T. ) // "Aguarde..." ## "Carregando Estrutura..."
+		Processa( { |lEnd| fMkNiv(aNivMrk) }, STR0041, STR0088, .T. )                 // "Aguarde..." ## "Carregando Estrutura..."
+		SetNivMrk(M->TA4_CODASP)
+
+	Else
+
+		dbSelectArea(oTree:cArqTree)
+		cLocal := SubStr( oTree:getCargo(), 1, 3 )
+		SG100VChg( 3, {} )
+
+
+	EndIf
+
+	f110ACor(cLocal)//Troca cor das pastas
+
+	// Executa funcao especifica de cores
+	If !Empty(cFctClr)
+		ExecFctClr(cFctClr)
+
+	EndIf
+
+	//Se estiver abrindo a tela, fecha a estrutura
+	If nOpcao == 1
+		For i:=1 to Len(aLocal)
+			If aLocal[i][2]
+				oTree:TreeSeek(aLocal[i][1])
+
+			EndIf
+		Next i
+		oTree:TreeSeek(cCodest)
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMkNiv
+Define marcacao para os niveis relacionados.
+
+@author
+@since
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fMkNiv(aNivMrk)
+
+	Local i
+
+	ProcRegua(Len(aLocal))
+
+	// Abre itens na estrutura
+	For i := 1 to Len(aLocal)
+		IncProc()
+		If aLocal[i][2]
+			fPosicLoc( aLocal[i][1], aNivMrk )
+
+		EndIf
+	Next i
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f110ACor
+Altera cor dos itens que foram previamente marcados
+
+@author
+@since
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function f110ACor(cLocal)
+
+	Local i
+	Local aArea := GetArea()
+
+	For i:=1 to Len(aMarcado)
+		If aMarcado[i][Len(aMarcado[i])]
+			dbSelectArea(cTRBSGA)
+			dbSetOrder(2)
+			If dbSeek(cCodest+aMarcado[i][1])
+				dbSelectArea(oTree:cArqTree)
+				dbSetOrder(4)
+				If dbSeek(aMarcado[i][1])
+					If SubStr( (oTree:cArqTree)->T_CARGO, 1, 3 ) == aMarcado[i][1] .And. SubStr( (oTree:cArqTree)->T_CARGO, 7, 1 ) != "2"//Desmraca
+
+						oTree:TreeSeek(aMarcado[i][1])
+						oTree:ChangeBmp("Folder7","Folder8")
+						(oTree:cArqTree)->T_CARGO := SubStr(oTree:getCargo(),1,6)+"2"
+						aMarcado[i][Len(aMarcado[i])] := .F.
+
+						//Caso nao seja nivel clicado, fecha o mesmo
+						If (cTRBSGA)->NIVSUP != cLocal .And. (cTRBSGA)->CODPRO != cCodest
+							oTree:TreeSeek((cTRBSGA)->NIVSUP)
+							oTree:PtCollapse()
+
+						EndIf
+
+						oTree:TreeSeek(cLocal)
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		EndIf
+	Next i
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPosicLoc
+Posiciona na localizacao a ser marcada
+
+@author
+@since
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPosicLoc( cCodigo, aNivMrk )
+
+	Local i
+	Local cSupNiv  := cCodEst
+	Local aLocPais := {}
+
+	//Carrega itens pais
+	If !Empty(cCodigo)
+
+		aAdd(aLocPais, cCodigo)
+		cSupNiv := NGSEEK("TAF",cCodigo,8,"TAF->TAF_NIVSUP")
+
+		dbSelectArea("TAF")
+		dbSetOrder(2)
+		dbSeek(xFilial("TAF")+cCodEst+cCodigo)
+		While !eof() .And. Found() .And. cSupNiv != "000"
+
+			dbSelectArea("TAF")
+			dbSetOrder(2)
+			If dbSeek(xFilial("TAF")+cCodEst+cSupNiv)
+				aAdd(aLocPais, TAF->TAF_CODNIV)
+				cSupNiv := TAF->TAF_NIVSUP
+
+			EndIf
+
+		End
+	Else
+		Return .F.
+	EndIf
+
+	//Encontra item na arvore
+	For i:=Len(aLocPais) to 1 Step -1
+		oTree:TreeSeek(aLocPais[i]+"LOC")
+		SG100VChg( 3, aNivMrk )
+	Next i
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ExecFctClr
+Executa funcao para selecao de cores secundarias.
+
+@param cFctClr Nome da funcao em forma de string, a ser executada.
+
+@author
+@since
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ExecFctClr(cFctClr)
+
+	Local nPos     := At("(", cFctClr)
+	Local cExecFct := If(nPos > 0, SubStr(cFctClr, 1, Len(cFctClr) - nPos), cFctClr)
+
+	If FindFunction( cExecFct )
+		cFctClr += If(nPos > 0, "", "()")
+		&cFctClr.
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fMarkAll
+Efetua a marcação do itens não marcados e desmarca os marcados.
+
+@author Bruno L. Souza
+@since
+@version MP11
+@return Nil
+*/
+//---------------------------------------------------------------------
+Static Function fMarkAll(oMarkAll,cAliasMark,nP,aCols)
+
+	If aCols[nP,4] == 0
+
+		NGSETIFARQUI(cAliasMark)
+
+		While !Eof()
+		RecLock(cAliasMark,.F.)
+		(cAliasMark)->TRB_OK := If(IsMark('TRB_OK',cMarca),"  ",cMarca)
+		MsUnLock(cAliasMark)
+		dbSkip()
+		End
+
+		NGSETIFARQUI(cAliasMark)
+		oMarkAll:oBrowse:Refresh()
+
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} Sg110AVPrv
+Define variaveis private para a execucao da rotina.
+
+@author Juliani Damasceno
+@since
+@version MP11
+@return Nil
+*/
+//---------------------------------------------------------------------
+Function Sg110AVPrv()
+
+	_SetOwnerPrvt("lLegenda" , NGCADICBASE("TAB_SITUAC","A","TAB",.F.))//Varíavel para verificação do campo Situação
+	_SetOwnerPrvt("aRotina"  , MenuDef(lLegenda))
+	_SetOwnerPrvt("asMenu1"  , {})
+	_SetOwnerPrvt("cCadastro", OemtoAnsi(STR0081))//"Desempenho Ambiental dos Aspectos e Impactos"
+	_SetOwnerPrvt("cAliasAsp", 'TRBG'+Alltrim(Str(FLD_ASPECTO)))
+	_SetOwnerPrvt("cAliasLOC", 'TRBG'+Alltrim(Str(FLD_LOCALIZA)))
+	_SetOwnerPrvt("cAliasIMP", 'TRBG'+Alltrim(Str(FLD_IMPACTO)))
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} VldAspPar
+Validacao para o aspecto repassado por parametro.
+
+@author Juliani Damasceno
+@since
+@version MP11
+@return Nil
+*/
+//---------------------------------------------------------------------
+Static Function VldAspPar(cCodAsp)
+
+	Local aAreaTA4 := TA4->(GetArea())
+
+	dbSelectArea('TA4')
+	dbSetOrder(1)
+	If !dbSeek(xFilial('TA4')+cCodAsp)
+		cCodAsp := Space(Len(TA4->TA4_CODASP))
+
+	EndIf
+
+	RestArea(aAreaTA4)
+
+Return cCodAsp
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Sg110AResu
+
+@author Gabriel Augusto Werlich
+@since 26/11/2014
+@version MP11/12
+@return
+/*/
+//---------------------------------------------------------------------
+Function Sg110AResu()
+
+	Local nColX1 := 420
+	Local nColY1 := 430
+	Local nColX2 := 360
+	Local nColY2 := 370
+	Local nColX3 := 300
+	Local nColY3 := 310
+	Local nColX4 := 240
+	Local nColY4 := 250
+	Local nColX5 := 180
+	Local nColY5 := 190
+	
+	Private nCont  := 0
+
+	DbSelectArea('TA3')
+	DbSetOrder(1)
+	DbSeek(xFilial('TA3'))
+	Do While !Eof() .And. TA3->TA3_FILIAL == xFilial('TA3')
+		nCont++
+		If nCont == 1
+			cLabel := TA3->TA3_CODFOR
+
+			@ 015,nColX1 Say OemToAnsi(cLabel) Size 37,7 Of oPnlBot Pixel
+			@ 015,nColY1 MsGet oTotal1 Var nTotal1 Size 37,06 Of oPnlBot Pixel When .F.  Hasbutton
+			oTotal1:blDblClick := { || Sg110Form(nTotal1)}
+		ElseIf nCont	== 2
+			cLabel1 := TA3->TA3_CODFOR
+			@ 015,nColX2 Say OemToAnsi(cLabel1) Size 37,7 Of oPnlBot Pixel
+			@ 015,nColY2 MsGet oTotal2 Var nTotal2 Size 37,06 Of oPnlBot Pixel When .F. Hasbutton
+			oTotal2:blDblClick := { || Sg110Form(nTotal2)}
+		ElseIf nCont == 3
+			cLabel2 := TA3->TA3_CODFOR
+			@ 015,nColX3 Say OemToAnsi(cLabel2) Size 37,7 Of oPnlBot Pixel
+			@ 015,nColY3 MsGet oTotal3 Var nTotal3 Size 37,06 Of oPnlBot Pixel When .F. Hasbutton
+			oTotal3:blDblClick := { || Sg110Form(nTotal3)}
+		ElseIf nCont == 4
+			cLabel3 := TA3->TA3_CODFOR
+			@ 015,nColX4 Say OemToAnsi(cLabel3) Size 37,7 Of oPnlBot Pixel
+			@ 015,nColY4 MsGet oTotal4 Var nTotal4 Size 37,06 Of oPnlBot Pixel When .F. Hasbutton
+			oTotal4:blDblClick := { || Sg110Form(nTotal4)}
+		ElseIf nCont == 5
+			cLabel4 := TA3->TA3_CODFOR
+			@ 015,nColX5 Say OemToAnsi(cLabel4) Size 37,7 Of oPnlBot Pixel
+			@ 015,nColY5 MsGet oTotal5 Var nTotal5 Size 37,06 Of oPnlBot Pixel When .F. Hasbutton
+			oTotal5:blDblClick := { || Sg110Form(nTotal5)}
+
+		EndIf
+
+		DbSkip()
+	EndDo
+
+Return .T.

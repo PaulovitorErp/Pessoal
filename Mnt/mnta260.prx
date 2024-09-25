@@ -1,0 +1,990 @@
+#INCLUDE "MNTA260.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA260
+Exclusao de Ordens de Servico do plano de manutencao
+
+@Obs Refeito segundo SS
+
+@author Elisangela Costa
+@since 18/10/06
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA260()
+
+	Local aNGBeginPrm := {}
+	Local oTmpTblP
+	Local oTmpTblC
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		aNGBeginPrm := NGBeginPrm( , , , , .T. )
+
+		Private cDeOrd,cAteOrd,cDePla,cAtePla,cDeBem,cAteBem,cDeFam,cAteFam,cDeSer,cAteSer
+		Private cCadastro	:= STR0012
+		Private lContFil	:= .f.
+		Private aTrocaF3	:= {}
+		Private cTRBP		:= GetNextAlias()
+		Private cTRBC		:= GetNextAlias()
+
+		aDBF := {	{'OK'     , 'C', 02                       , 0},;
+					{'ORDEM'  , 'C', TamSX3( 'TJ_ORDEM'   )[1], 0},;
+					{'PLANO'  , 'C', TamSX3( 'TJ_PLANO'   )[1], 0},;
+					{'TIPO'   , 'C', 12                       , 0},;
+					{'BEM'    , 'C', TamSX3( 'TJ_CODBEM'  )[1], 0},;
+					{'NOMEBEM', 'C', TamSX3( 'TJ_NOMBEM'  )[1], 0},;
+					{'FAMILIA', 'C', TamSX3( 'T9_CODFAMI' )[1], 0},;
+					{'SERVICO', 'C', TamSX3( 'TJ_SERVICO' )[1], 0},;
+					{'NOMESER', 'C', TamSX3( 'TJ_NOMSERV' )[1], 0},;
+					{'DTORIGI', 'D', 08                       , 0},;
+					{'SEQUENC', 'C', TamSX3( 'TJ_SEQRELA' )[1], 0}}
+
+		vIND := {"ORDEM","PLANO","BEM","FAMILIA","SERVICO"}
+
+		//+-------------------------------------------+
+		//| Cria arquivos temporarios                 |
+		//+-------------------------------------------+
+		oTmpTblP := FWTemporaryTable():New(cTRBP, aDBF)
+		oTmpTblP:AddIndex( "Ind01" , vIND )
+		oTmpTblP:Create()
+
+		oTmpTblC := FWTemporaryTable():New(cTRBC, aDBF)
+		oTmpTblC:AddIndex( "Ind01" , vIND )
+		oTmpTblC:Create()
+
+		aTRB := {}
+		Aadd(aTRB,{"OK"     ,NIL," "    ,})
+		Aadd(aTRB,{"ORDEM"  ,NIL,NGRETTITULO("TJ_ORDEM"),})
+		Aadd(aTRB,{"PLANO"  ,NIL,NGRETTITULO("TJ_PLANO"),})
+		Aadd(aTRB,{"TIPO"   ,NIL,NGRETTITULO("TJ_TIPOOS"),})
+		Aadd(aTRB,{"BEM"    ,NIL,NGRETTITULO("TJ_CODBEM"),})
+		Aadd(aTRB,{"NOMEBEM",NIL,NGRETTITULO("TJ_NOMBEM"),})
+		Aadd(aTRB,{"FAMILIA",NIL,NGRETTITULO("T9_CODFAMI"),})
+		Aadd(aTRB,{"SERVICO",NIL,NGRETTITULO("TJ_SERVICO"),})
+		Aadd(aTRB,{"NOMESER",NIL,NGRETTITULO("TJ_NOMSERV"),})
+		Aadd(aTRB,{"SEQUENC",NIL,NGRETTITULO("TJ_SEQRELA"),})
+
+		DbSelectArea(cTRBP)
+		DbGotop()
+
+		lINVERTE := .F.
+		cMARCA   := GetMark()
+		MNT260FI()
+
+		oTmpTblP:Delete()
+		oTmpTblC:Delete()
+
+		DbSelectArea("ST9")
+		NGReturnPrm( aNGBeginPrm )
+	
+	EndIf
+
+Return Nil
+
+//------------------------------------------------------
+/*/{Protheus.doc} MNTA260ALL
+Inverte a marcação total do objeto markbrowse.
+@type static
+
+@author Inacio Luiz Kolling
+@since 19/11/2009
+
+@param cMark, Caracter, Marca utilizada no objeto.
+@return Nil
+
+@obs Reescrito por: Alexandre Santos, 06/02/2019.
+/*/
+//------------------------------------------------------
+Static Function MNTA260ALL( cMark )
+
+	Local lSkip     := .T.
+	Local aNoCancel := {}
+
+	dbSelectarea(cTRBP)
+	dbGoTop()
+	Do While (cTRBP)->( !Eof() )
+
+		dbSelectArea( 'STL' )
+		dbSetOrder( 1 )
+		If MsSeek( xFilial( 'STL' ) + (cTRBP)->ORDEM + (cTRBP)->PLANO )
+
+			Do While STL->( !EoF() ) .And. (cTRBP)->ORDEM == STL->TL_ORDEM .And. (cTRBP)->PLANO == STL->TL_PLANO .And.;
+			    xFilial( 'STL' ) == STL->TL_FILIAL
+
+				lSkip := NGGERCOTAC( STL->TL_ORDEM, .F., STL->TL_CODIGO )
+
+				If !lSkip
+					Exit
+				Else
+					STL->( dbSkip() )
+				EndIf
+
+			EndDo
+
+		EndIf
+
+		If !lSkip
+
+			aAdd( aNoCancel, { (cTRBP)->ORDEM, (cTRBP)->PLANO, (cTRBP)->SERVICO } )
+			lSkip := .T.
+
+		Else
+
+			RecLock( cTRBP, .F. )
+			(cTRBP)->OK := IIf( IsMark( 'OK', cMark ), Space( 3 ), cMark )
+			(cTRBP)->( MsUnLock() )
+
+		EndIf
+
+		(cTRBP)->( dbSkip() )
+
+	EndDo
+
+	If Len( aNoCancel ) > 0
+
+		fLogCancel( aNoCancel )
+
+	EndIf
+
+	dbSelectarea( cTRBP )
+	dbGoTop()
+	oMarkBrow:oBrowse:Refresh()
+
+Return
+
+//------------------------------------------------------
+/*/{Protheus.doc} MNT260MARK
+Inverte a marcação de um registro do objeto markbrowse.
+@type static
+
+@author Inacio Luiz Kolling
+@since 19/11/2009
+
+@param cMarca, Caracter, Marca utilizada no objeto.
+@return Nil
+
+@obs Reescrito por: Alexandre Santos, 06/02/2019.
+/*/
+//------------------------------------------------------
+Static Function MNT260MARK( cMarca )
+
+	Local cFldMark  := 'OK'
+	Local lSkip     := .T.
+	Local nRecno    := (cTRBP)->( Recno() )
+	Local aNoCancel := {}
+
+	If IsMark( cFldMark, cMarca, lInverte )
+
+		dbSelectArea( 'STL' )
+		dbSetOrder( 1 )
+		If MsSeek( xFilial( 'STL' ) + (cTRBP)->ORDEM + (cTRBP)->PLANO )
+
+			Do While STL->( !EoF() ) .And. (cTRBP)->ORDEM == STL->TL_ORDEM .And. (cTRBP)->PLANO == STL->TL_PLANO .And.;
+			    xFilial( 'STL' ) == STL->TL_FILIAL
+
+				lSkip := NGGERCOTAC( STL->TL_ORDEM, .F., STL->TL_CODIGO )
+
+				If !lSkip
+					aAdd( aNoCancel, { (cTRBP)->ORDEM, (cTRBP)->PLANO, (cTRBP)->SERVICO } )
+					Exit
+				Else
+					STL->( dbSkip() )
+				EndIf
+
+			EndDo
+
+		EndIf
+
+		dbSelectArea( cTRBP )
+		dbGoTo( nRecno )
+
+		If !lSkip
+			(cTRBP)->OK := Space( 3 )
+			fLogCancel( aNoCancel )
+		EndIf
+
+	EndIf
+
+	oMarkBrow:oBrowse:Refresh()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260FI
+Filro da MarkBrowse
+
+@author Inacio Luiz Kolling
+@since 19/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260FI()
+
+	Local nOPGA2 := 0
+	Local oFont14   := TFont():New("Arial",,14,,.F.,,,,.F.,.F.)
+	Local oPanelTot
+	Local nI
+
+	//Variáveis para o Ponto de Entrada MNTA2601
+	Private aMNTA2601 := {}
+	Private aNGButton := {}
+
+	Private cCBoxGos := ""
+	Private oCBoxGos , lRet
+	Private oPanel
+	Private M->TL_TIPOREG := " " //"Produto"
+
+	Private aSize := MsAdvSize(,.f.,430), aObjects := {}
+
+	Aadd(aObjects,{050,050,.t.,.t.})
+	Aadd(aObjects,{100,100,.t.,.t.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+	Store Space(6)         To cDeOrd,cDePla,cDeFam,cDeSer
+	Store Replicate("Z",6) To cAteOrd,cAtePla,cAteFam,cAteSer
+	cDeBem   := Space(Len(st9->t9_codbem))
+	cAteBem  := Replicate("Z",Len(st9->t9_codbem))
+	M->TL_CODIGO  := Space(Len(STL->TL_CODIGO))
+	dDeData  := CTOD("  /  /  ")
+	dAteData := CTOD("  /  /  ")
+
+	cF3 := "SB1"
+	aTprg	:= {"P=Produto","T=Terceiros","M=Mao de Obra","F=Ferramenta",""}
+
+	DEFINE MSDIALOG oDlg1 Title STR0012 FROM aSize[7],0 TO aSize[6],aSize[5] Of oMainWnd PIXEL COLOR CLR_BLACK
+	oDLG1:lMaximized := .t.
+
+	//Cria Painel para adequação da tela.
+	oPanelTot := TPanel():New(0,0,,oDlg1,,,,,,0,0,.F.,.F.)
+	oPanelTot:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPanel := TPanel():New(0, 0, Nil, oPanelTot, Nil, .T., .F., Nil, Nil, 0,50, .T., .F. )
+	oPanel:Align := CONTROL_ALIGN_TOP
+
+	@ 06,05  say oTitBemd   Var STR0021	 Size 100,08 Of oPanel Pixel Font oFont14 // De Bem
+	@ 02,33  MsGet oDeBem   Var cDeBem   Size 80 ,08 Of oPanel Pixel Picture '@!' F3 'ST9' Valid fValid( cDeBem, cAteBem ) HasButton
+	@ 06,115 say oTitBema   Var STR0034	 Size 100,08 Of oPanel Pixel Font oFont14  // Até Bem
+	@ 02,145 MsGet oAteBem  Var cAteBem	 Size 80 ,08 Of oPanel Pixel Picture '@!' F3 'ST9' Valid IIf( AteCodigo( 'ST9',;
+		cDeBem, cAteBem, Len( cDeBem ) ), .T., .F. ) HasButton
+
+	@ 06,227 say oTitData1  Var STR0038	 Size 100,08 Of oPanel Pixel Font oFont14 COLOR CLR_HBLUE//"De Data"
+	@ 02,257 MsGet oDeData  Var dDeData	 Size 50 ,08 Of oPanel Pixel Picture "99/99/99" Valid MNT260DT()  HasButton
+	@ 06,315 say oTitData2  Var STR0039	 Size 100,08 Of oPanel Pixel Font oFont14 COLOR CLR_HBLUE //"Ate Data"
+	@ 02,345 MsGet oAteData Var dAteData Size 50 ,08 Of oPanel Pixel Picture '99/99/99' Valid MNT260DT( .T. ) HasButton
+
+	@ 26,05 say oTiPoIn     Var STR0040     Size 100,08 Of oPanel Pixel Font oFont14 //"Tipo de Insumo"
+	@ 22,47 COMBOBOX M->TL_TIPOREG ITEMS aTPRG Valid  MNT260F3() SIZE 60,7 OF oPanel PIXEL ON CHANGE MNT260F3()
+
+	@ 26,115 say oTitData1 Var  STR0041     Size 100,08 Of oPanel Pixel Font oFont14//"Código"
+
+	@ 22,145 MsGet oCodigo Var M->TL_CODIGO		Size 112,09 Of oPanel Pixel Picture "@!"   F3 cF3 Valid If(!Empty(M->TL_CODIGO),MNT260VLF(),"")  When !Empty(M->TL_TIPOREG) HasButton
+
+	//--------------------------------------------------------------------------------
+	// Ponto de Entrada para carregar novos Botões em tela
+	//--------------------------------------------------------------------------------
+	If ExistBlock("MNTA2601")
+		aMNTA2601 := ExecBlock("MNTA2601", .F., .F.)
+		If ValType(aMNTA2601) == "A"
+			For nI := 1 To Len(aMNTA2601)
+				aAdd(aNGButton, aClone(aMNTA2601[nI]))
+			Next nI
+		EndIf
+	EndIf
+
+	@ 24,265 BUTTON STR0042 Of oPanel Size 40,09 Pixel Action Processa({ |lEnd| MNT260DT( .T. ), GeraCon() },STR0016)  //"gerar consulta" //"Aguarde... Processando ordens de servico..."
+
+	oMarkBrow := MsSelect():New(cTRBP,"OK",,aTRB,@lInverte,@cMarca,{60,1,285,417},,,oPanelTot)
+
+	oMarkBrow:oBrowse:lHasMark = .t.
+	oMarkBrow:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+	oMarkBrow:oBrowse:lCanAllMark := .t.
+	oMarkBrow:bMark := { || MNT260MARK( cMarca ) }
+	oMarkBrow:oBrowse:bAllMark   := { || MNTA260ALL( cMarca ) }
+
+	Activate Msdialog oDLG1 On Init EnchoiceBar(oDLG1,{|| nOPGA2 := 1,MNT260CA(),oDLG1:End()},{|| nOPGA2 := 2,oDLG1:End()},,aNgButton) CENTERED
+
+Return
+
+//------------------------------------------------------
+/*/{Protheus.doc} GeraCon
+Gera consulta de Ordens de Serviço a serem canceladas.
+@type static
+
+@author Tainã A. Cardoso
+@since 07/11/2010
+
+@obs Reescrito por: Alexandre Santos, 04/02/2019.
+/*/
+//------------------------------------------------------
+Static Function GeraCon()
+
+	Local lRet 		:= .T.
+	Local lMNTA2602 := ExistBlock( 'MNTA2602' )
+	Local cTRBSTJ   := GetNextAlias()
+	Local cWhere    := '%%'
+	Local cJoin     := '%%'
+	Local cDescOP   := Padr( 'OS001', TAMSX3('CP_OP')[1] )
+	Local cDeData   := DtoS( dDeData )
+	Local cAteData  := DtoS( dAteData )
+
+	MNT260LF() //Limpa o Filtro
+
+	If !Empty( M->TL_TIPOREG )
+
+		cJoin  := '%LEFT JOIN ' + RetSqlName( 'STL' ) + ' STL ON '
+		cJoin  += 'STJ.TJ_FILIAL = STL.TL_FILIAL AND STJ.TJ_ORDEM = STL.TL_ORDEM AND '
+		cJoin  += "STJ.TJ_PLANO = STL.TL_PLANO AND STL.D_E_L_E_T_ <> '*'%"
+		cWhere := '%AND STL.TL_TIPOREG = ' + ValToSql( M->TL_TIPOREG )
+
+		If !Empty( M->TL_CODIGO )
+			cWhere += ' AND STL.TL_CODIGO  = ' + ValToSql( M->TL_CODIGO )
+		EndIf
+
+		cWhere += '%'
+
+	EndIf
+
+	BeginSQL Alias cTRBSTJ
+
+		SELECT
+			STJ.TJ_ORDEM  ,
+			STJ.TJ_PLANO  ,
+			STJ.TJ_FILIAL ,
+			STJ.TJ_TIPOOS ,
+			STJ.TJ_CODBEM ,
+			STJ.TJ_SERVICO,
+			STJ.TJ_SEQRELA,
+			STJ.TJ_DTORIGI
+		FROM %table:STJ% STJ
+		%exp:cJoin%
+		WHERE
+			STJ.TJ_FILIAL   = %xFilial:STJ% AND
+			STJ.TJ_SITUACA <> 'C'           AND
+			STJ.TJ_TERMINO <> 'S'           AND
+			STJ.TJ_TIPORET <> 'S'           AND
+			( STJ.TJ_CODBEM  BETWEEN %exp:cDeBem%  AND %exp:cAteBem%  ) AND
+			( STJ.TJ_DTORIGI BETWEEN %exp:cDeData% AND %exp:cAteData% ) AND
+			STJ.%NotDel%
+			AND ( // Retira ordens que tenham pre-requisição
+				SELECT 
+					COUNT( SCP.CP_OP ) QNT
+				FROM 
+					%table:SCP% SCP
+				WHERE 
+					SCP.CP_FILIAL = %xFilial:SCP% AND
+					SCP.CP_OP = STJ.TJ_ORDEM || %exp:cDescOP% AND
+					SCP.CP_PREREQU = 'S' AND
+					( ( SCP.CP_QUJE > 0 AND
+						SCP.CP_STATUS = 'E' ) OR SCP.CP_STATUS = '' ) AND
+					SCP.%NotDel%
+			) = 0
+			%exp:cWhere%
+		GROUP BY
+			STJ.TJ_ORDEM  ,
+			STJ.TJ_PLANO  ,
+			STJ.TJ_FILIAL ,
+			STJ.TJ_TIPOOS ,
+			STJ.TJ_CODBEM ,
+			STJ.TJ_SERVICO,
+			STJ.TJ_SEQRELA,
+			STJ.TJ_DTORIGI
+		ORDER BY
+			STJ.TJ_ORDEM
+
+	EndSQL
+
+    Do While (cTRBSTJ)->( !Eof() )
+
+		If lMNTA2602
+
+			lRet := ExecBlock( 'MNTA2602', .F., .F., { (cTRBSTJ)->TJ_FILIAL, (cTRBSTJ)->TJ_ORDEM, (cTRBSTJ)->TJ_PLANO } )
+
+			If !lRet
+				dbSelectArea(cTRBSTJ)
+				dbSkip()
+				Loop
+			EndIf
+
+		EndIf
+
+		dbSelectArea( cTRBP )
+	    RecLock( cTRBP, .T. )
+	    (cTRBP)->ORDEM 	 := (cTRBSTJ)->TJ_ORDEM
+	    (cTRBP)->PLANO 	 := (cTRBSTJ)->TJ_PLANO
+	    (cTRBP)->TIPO 	 := NGRETSX3BOX( 'TJ_TIPOOS', (cTRBSTJ)->TJ_TIPOOS )
+	    (cTRBP)->BEM 	 := (cTRBSTJ)->TJ_CODBEM
+
+	    If (cTRBSTJ)->TJ_TIPOOS == 'L'
+			(cTRBP)->NOMEBEM := Posicione( 'TAF', 7, xFilial( 'TAF' ) + 'X2' + SubStr( (cTRBSTJ)->TJ_CODBEM, 1, 3 ), 'TAF_NOMNIV' )
+		Else
+			(cTRBP)->NOMEBEM := Posicione( 'ST9', 1, xFilial( 'ST9' ) + (cTRBSTJ)->TJ_CODBEM, 'T9_NOME' )
+			(cTRBP)->FAMILIA := Posicione( 'ST9', 1, xFilial( 'ST9' ) + (cTRBSTJ)->TJ_CODBEM, 'T9_CODFAMI' )
+		EndIf
+
+	    (cTRBP)->SERVICO := (cTRBSTJ)->TJ_SERVICO
+	    (cTRBP)->NOMESER := Posicione( 'ST4', 1, xFilial( 'ST4' ) + (cTRBSTJ)->TJ_SERVICO, 'T4_NOME' )
+	    (cTRBP)->SEQUENC := (cTRBSTJ)->TJ_SEQRELA
+	    (cTRBP)->DTORIGI := StoD( (cTRBSTJ)->TJ_DTORIGI )
+	    (cTRBP)->( MsUnLock() )
+
+	    (cTRBSTJ)->(dbSkip())
+
+	EndDo
+
+	(cTRBSTJ)->( dbCloseArea() )
+	(cTRBP)->( dbGoTop() )
+	lContFil := .T.
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260LF
+Limpa o filtro da MarkBrowse
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260LF()
+
+	If lContFil
+		Store Space(6)         To cDeOrd,cDePla,cDeFam,cDeSer
+		Store Replicate("Z",6) To cAteOrd,cAtePla,cAteFam,cAteSer
+		DbSelectArea(cTRBP)
+		Zap
+		MNTA260ALTR(cTRBP,cTRBC)
+		NGSETIFARQUI(cTRBP)
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA260ALTR
+Alimenta arquivo temporario
+
+@param cArLe, Caracter, Arquivo temporario de leitura.
+@param cArGr, Caracter, Arquivo temporario a ser gravado.
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA260ALTR(cArLe,cArGr)
+
+	DbSelectArea(cArLe)
+	Dbgotop()
+	While !Eof()
+		DbSelectArea(cArGr)
+		RecLock(cArGr,.T.)
+		(cArGr)->OK      := (cArLe)->OK
+		(cArGr)->ORDEM   := (cArLe)->ORDEM
+		(cArGr)->PLANO   := (cArLe)->PLANO
+		(cArGr)->TIPO    := (cArLe)->TIPO
+		(cArGr)->BEM     := (cArLe)->BEM
+		(cArGr)->NOMEBEM := (cArLe)->NOMEBEM
+		(cArGr)->FAMILIA := (cArLe)->FAMILIA
+		(cArGr)->SERVICO := (cArLe)->SERVICO
+		(cArGr)->NOMESER := (cArLe)->NOMESER
+		(cArGr)->SEQUENC := (cArLe)->SEQUENC
+		(cArGr)->DTORIGI := (cArLe)->DTORIGI
+		(cArGr)->(MsUnLock())
+		DbSelectArea(cArLe)
+		DbSkip()
+	End
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260CA
+Chamada do processo de cancelamento
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260CA()
+
+	Local oFont14   := TFont():New("Arial",8,14,,.t.,,.f.,,.f.,.f.)
+	Local oMemo
+	Local nOPGA3
+	Local aAreaSTJ	:= {}
+	Private cObserv := ''
+	Private nQtdDel := 0
+
+	If GetNewPar("MV_NGMNTCC","N") == "S"
+		aAreaSTJ := GetArea()
+		dbSelectArea("TV9")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TV9")+(cTRBP)->BEM+(cTRBP)->ORDEM)
+			MsgStop(STR0047,STR0011)
+			Return .F.
+		EndIf
+		RestArea(aAreaSTJ)
+	EndIf
+
+	DEFINE MSDIALOG oDlg2 Title STR0043 FROM 00,00 TO 180,550 Of oMainWnd PIXEL COLOR CLR_BLACK //"Observação"
+
+	oPnlScr := TPanel():New(00,00,,oDlg2,,,,,,400,30,.F.,.F.)
+	oPnlScr:Align := CONTROL_ALIGN_ALLCLIENT
+
+	@10,05 say oTitObs  Var STR0043    Size 100,08 Of oPnlScr Pixel Font oFont14 COLOR RGB(0,85,150) //"Observação"
+	@10,48 GET oMemo Var cObserv MEMO SIZE 220,40 MEMO of oPnlScr PIXEL
+
+	Activate Msdialog oDlg2 On Init EnchoiceBar(oDlg2,{|| nOPGA3 := 1,MNT260OBS(),oDlg2:End()},{|| nOPGA3 := 2,oDlg2:End()}) CENTERED
+
+	Processa({ |lEnd| MNT260OSC() },STR0016) //"Aguarde... Processando ordens de servico..."
+	If nQtdDel > 0
+		DbSelectArea(cTRBP)
+		Dbgotop()
+		While !Eof()
+			If !Empty((cTRBP)->OK)
+				cChaveTRBP := (cTRBP)->ORDEM+(cTRBP)->PLANO
+				NGDELETAREG(cTRBP)
+
+				dbSelectArea(cTRBC)
+				dbSetOrder(01)
+				If dbSeek(cChaveTRBP)
+					NGDELETAREG(cTRBC)
+				Endif
+			Endif
+			dbSelectArea(cTRBP)
+			DbSkip()
+		End
+
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260OSC
+Processo de cancelamento
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260OSC()
+
+	Local nQtdRe 	:= 0
+	Local lNGTERMOT := ExistBlock("NGTERMOT")
+
+	dbSelectArea(cTRBP)
+	dbGoTop()
+
+	ProcRegua( (cTRBP)->( LastRec() ) )
+
+	Do While (cTRBP)->( !EoF() )
+
+		nQtdRe++ // Incrementa variável de controle da registros processados.		
+
+		IncProc()
+		aArea := GetArea()
+		DbSelectArea('STQ')
+		dbSetOrder(1)
+		If dbSeek( xFilial('STQ') + (cTRBP)->ORDEM + (cTRBP)->PLANO )
+			While STQ->(!Eof()) .AND. xFilial('STQ') == STQ->TQ_FILIAL .AND. (cTRBP)->ORDEM == STQ->TQ_ORDEM .AND. (cTRBP)->PLANO == STQ->TQ_PLANO
+				If !Empty(STQ->TQ_OK)
+					//Verifica se foi gerada OS para esta etapa, e a OS gerada nao esta cancelada
+					If !MNT400OSG( STQ->TQ_ORDEM , STQ->TQ_PLANO , STQ->TQ_TAREFA , STQ->TQ_ETAPA , .T. , .T. )
+						Return .F.
+					ElseIf !MNT400SSG( STQ->TQ_ORDEM, STQ->TQ_PLANO, STQ->TQ_TAREFA, STQ->TQ_ETAPA, .T., .T. )
+						Return .F.
+					EndIf
+				EndIf
+				STQ->(dbSkip())
+			End
+		Endif
+		RestArea(aArea)
+		If !Empty((cTRBP)->OK)
+			NGIFDBSEEK("STJ",(cTRBP)->ORDEM+(cTRBP)->PLANO,1)
+
+			//Ponto de entrada para validar cancelamento de O.S.
+			If lNGTERMOT
+				If !ExecBlock("NGTERMOT",.F.,.F.)
+					dbSelectArea(cTRBP)
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			Begin Transaction
+
+				If NGDELETOS((cTRBP)->ORDEM,(cTRBP)->PLANO,STR0012+" MNTA260")
+
+					nQtdDel ++
+
+					//Deleta o historico do contador 1 e 2 se tiver registro relacionado a OS
+					If STJ->TJ_POSCONT > 0 .And. !Empty(STJ->TJ_HORACO1)
+						MNT470EXCO(STJ->TJ_CODBEM,STJ->TJ_DTORIGI,STJ->TJ_HORACO1,1)
+					EndIf
+
+					If STJ->TJ_POSCON2 > 0 .And. !Empty(STJ->TJ_HORACO2)
+						MNT470EXCO(STJ->TJ_CODBEM,STJ->TJ_DTORIGI,STJ->TJ_HORACO2,2)
+					EndIf
+
+				Else
+
+					Disarmtransaction()
+
+				EndIf
+
+			End transaction
+
+		EndIf
+		DbSelectArea(cTRBP)
+		DbSkip()
+	End
+
+	If nQtdDel > 0
+		If MsgYesNo(STR0024+" "+STR0025+"...:"+Str(nQtdRe,10)+CRLF;
+		+STR0024+" "+STR0032+"......:"+Str(nQtdDel,10)+CRLF+CRLF; //"Canceladas"
+		+STR0027,STR0028)
+			MNTA260IMP()
+		Endif
+	Else
+		MsgInfo(STR0024+" "+STR0025+"...:"+Str(nQtdRe,10)+CRLF;
+		+STR0024+" "+STR0032+"......:"+Str(nQtdDel,10),STR0028) //"Canceladas"
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA260IMP
+Processo de impressao
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA260IMP()
+
+	Private cNomPro := "MNTA260"
+	Private cTitulo := STR0044  //"Ordens de servico canceladas"
+	Private cCabec1 := {{STR0030,45},{STR0020,210},{STR0029,370},{aTRB[5,3],500},;
+	{aTRB[6,3],900},{aTRB[7,3],1490},{aTRB[8,3],1670},;
+	{aTRB[9,3],1870},{Left(aTRB[10,3],3)+".",2280}}
+	Private cCabec2 := {}
+	NGIMPRGRAFI({|| MNTA260DET()},.f.)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA260DET
+Processo de impressao dos detalhes
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return Vazio
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA260DET()
+
+	DbSelectArea(cTRBP)
+	Dbgotop()
+	ProcRegua(LastRec())
+	While !Eof()
+		IncProc()
+		If !Empty((cTRBP)->OK)
+			NGCABECEMP()
+			oPrint:Say(li,  45,(cTRBP)->ORDEM  ,oCouNew10)
+			oPrint:Say(li, 210,(cTRBP)->PLANO  ,oCouNew10)
+			oPrint:Say(li, 370,(cTRBP)->TIPO   ,oCouNew10)
+			oPrint:Say(li, 500,(cTRBP)->BEM    ,oCouNew10)
+			oPrint:Say(li, 900,SubStr((cTRBP)->NOMEBEM,1,25),oCouNew10)
+			oPrint:Say(li,1490,(cTRBP)->FAMILIA,oCouNew10)
+			oPrint:Say(li,1670,(cTRBP)->SERVICO,oCouNew10)
+			oPrint:Say(li,1870,SubStr((cTRBP)->NOMESER,1,17),oCouNew10)
+			oPrint:Say(li,2280,(cTRBP)->SEQUENC,oCouNew10)
+		Endif
+		DbSelectArea(cTRBP)
+		DbSkip()
+	End
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260VFI
+Consistencia de parametros para o filtro
+
+@param cChave, Caracter, Chave da pesquisa.
+@param nCamP , Numérico, Determina o campo posicionado.
+@param nAte  , Numérico, Determina até que campo.
+
+@author Inacio Luiz Kolling
+@since 20/11/2009
+
+@return lRet, Lógico, Determina se a validação foi realizada corretamente.
+/*/
+//---------------------------------------------------------------------
+Function MNT260VFI(cChave,nCamP,nAte)
+
+	Local lRet := .t.
+	If nAte = 2 .And. cChave = Replicate("Z",Len(cChave))
+		Return lRet
+	Endif
+	DbSelectArea(cTRBP)
+	nIndO := IndexOrd()
+	nRecT := Recno()
+	nNovI := 1     // Ordem
+	cTipF := aTRB[2,3]
+	If nCamP = 2
+		nNovI := 2  // Plano
+		cTipF := aTRB[3,3]
+	ElseIf nCamP = 3
+		nNovI := 3  // Bem
+		cTipF := aTRB[5,3]
+	ElseIf nCamP = 4
+		nNovI := 4  // Familia
+		cTipF := aTRB[7,3]
+	ElseIf nCamP = 5
+		nNovI := 5  // Servico
+		cTipF := aTRB[8,3]
+	Endif
+
+	DbsetOrder(nCamP)
+	If !Dbseek(cChave)
+		lRet := .f.
+	Endif
+
+	If !lRet
+		MsgInfo(Alltrim(cTipF)+" "+STR0031+" "+STR0012,STR0011)
+	Endif
+	DbSetOrder(nIndO)
+	Dbgoto(nRecT)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260OBS
+Preenche a Observacao das Ordens Canceladas
+
+@author Taina A. Cardoso
+@since 23/11/10
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260OBS()
+
+	DbSelectArea(cTRBP)
+	Dbgotop()
+	While !Eof()
+		If !Empty((cTRBP)->OK)
+			NGIFDBSEEK("STJ",(cTRBP)->ORDEM+(cTRBP)->PLANO,1)
+			RecLock("STJ",.F.)
+			STJ->TJ_OBSERVA := cObserv
+			MsUnLock("STJ")
+		EndIf
+		DbSelectArea(cTRBP)
+		DbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260DT
+Validade os campos deData , AteData
+
+@author Taina A. Cardoso
+@since 23/11/10
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260DT( lUpDate )
+
+	Local cHelp     := ''
+	Local lRet      := .T.
+
+	Default lUpDate := .F.
+
+	// Caso o campo De Data esteja vazio
+	If Empty( dDeData )
+
+		cHelp := STR0045 // Informe o campo De Data.
+
+	Else
+
+		// Se a validação estiver no campo "Até Data" e o campo esteja vazio
+		If lUpDate .And. Empty( dAteData )
+
+			cHelp := STR0053 // Informe o campo Até Data.
+
+		ElseIf !Empty( dAteData ) .And. dDeData > dAteData
+
+			cHelp := STR0046 // Campo ate Data não pode ser menor que de Data
+
+		EndIf
+
+	EndIf
+
+	// Se tiver encontrado alguma inconsitêcia, apresenta o help.
+	If !Empty( cHelp )
+
+		MsgStop( cHelp )
+		lRet := .F.
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260F3
+Troca o f3 do codigo.
+
+@author Taina A. Cardoso
+@since 23/11/10
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260F3()
+
+	aTrocaF3  := {}
+
+	M->TL_CODIGO := Space(Len(M->TL_CODIGO))
+
+	If M->TL_TIPOREG == "M"
+		Aadd(aTrocaF3,{"TL_CODIGO", "ST1"})
+		aalias  := "ST1"
+		lCalend := .t.
+		cF3 := 'ST1'
+	ElseIf M->TL_TIPOREG == "P"
+		Aadd(aTrocaF3,{"TL_CODIGO", "SB1"})
+		aalias := "SB1"
+		LEDESTINO := .T.
+		cF3 := 'SB1'
+
+	ElseIf M->TL_TIPOREG == "T"
+		Aadd(aTrocaF3,{"TL_CODIGO", "SA2"})
+		aalias := "SA2"
+		cF3 := 'SA2'
+	ElseIf M->TL_TIPOREG == "F"
+		Aadd(aTrocaF3,{"TL_CODIGO", "SH4"})
+		aalias := "SH4"
+		cF3 := 'SH4'
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT260VLF
+Valida a culsuta de acordo com o tipode de Insumo
+
+@author Taina A. Cardoso
+@since 29/11/10
+
+@return lRet, Lógico, Retorna o valor da verificação.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT260VLF()
+
+	Local lRet := .T.
+
+	If M->TL_TIPOREG == "F"
+		lRet := ExistCpo("SH4",Substr(M->TL_CODIGO,1,Len(SH4->H4_CODIGO)))
+	ElseIf M->TL_TIPOREG == "T"
+		lRet := ExistCpo("SA2",Substr(M->TL_CODIGO,1,Len(SA2->A2_COD)))
+	ElseIf M->TL_TIPOREG == "P"
+		lRet := ExistCpo("SB1",Substr(M->TL_CODIGO,1,Len(SB1->B1_COD)))
+	ElseIf M->TL_TIPOREG == "M"
+		lRet := ExistCpo("ST1",Substr(M->TL_CODIGO,1,Len(ST1->T1_CODFUNC)))
+
+	EndIf
+
+Return lRet
+
+//--------------------------------------------------------------
+/*/{Protheus.doc} MNTA260ALL
+Apresenta log com O.S que não podem ser canceladas.
+@type static
+
+@author Alexandre Santos
+@since 06/02/2019
+
+@param aNoCancel, Array, Ordens que não podem ser canceladas
+@return Nil
+/*/
+//--------------------------------------------------------------
+Static Function fLogCancel( aNoCancel )
+
+	Local cText := ''
+	Local nX    := 0
+	Local oFont := Nil
+	Local oDlg  := Nil
+	Local oMemo := Nil
+	Local oPnl  := Nil
+
+	cText += STR0052 //Algumas ordens de serviço não podem ser canceladas, pois possuem insumos com solicitação de compra vinculadas a um pedido de compra ou cotação
+	cText +=  CRLF + CRLF + STR0048 + Space( TAMSX3( 'TJ_ORDEM' )[1] ) + STR0049 + Space( TAMSX3( 'TJ_PLANO' )[1] ) + STR0050 + CRLF //Ordem Serv. # Plano Manut. # Serviço
+
+	For nX := 1 to Len( aNoCancel )
+		cText += aNoCancel[nX,1] + Space( 14 ) + aNoCancel[nX,2] + Space( 15 ) + aNoCancel[nX,3] + CRLF
+	Next nX
+
+	DEFINE FONT oFont NAME "Courier New" SIZE 5,0
+	DEFINE MSDIALOG oDlg TITLE STR0051 From 3,0 TO 340,417 COLOR CLR_BLACK,CLR_WHITE PIXEL // Ordens de Serviço Não Canceladas
+
+		oPnl := TPanel():New( ,,, oDlg,,,,,,,, .F., .F. )
+			oPnl:Align := CONTROL_ALIGN_ALLCLIENT
+
+			@ 5,5 GET oMemo  VAR cText MEMO SIZE 200,145 OF oPnl PIXEL
+			oMemo:bRClicked := { || AllwaysTrue() }
+			oMemo:oFont 	:= oFont
+			oMemo:lReadOnly := .T.
+
+			SButton():New( 153, 175, 01, { || oDlg:End() }, oPnl, .T. ) // OK
+
+	ACTIVATE MSDIALOG oDlg CENTERED
+
+Return
+
+//------------------------------------------------------------------------------------
+/*/{Protheus.doc} fValid
+Realiza validação para campos De / Até bem.
+@type function
+
+@author Alexandre Santos
+@since 23/01/2020
+
+@sample fSaveDtOS( '00001', '00002' )
+
+@param  cOfCode, Caracter, Conteúdo do campo "De Bem".
+@param  cUpCode, Caracter, Conteúdo do campo "Até Bem".
+@return Lógico , Define se o processo foi validado com êxito.
+/*/
+//------------------------------------------------------------------------------------
+Static Function fValid( cOfCode, cUpCode )
+
+	Local lRet := .T.
+
+	If !Empty( cOfCode )
+
+		lRet := ExistCpo( 'ST9', cOfCode )
+
+		If lRet .And. ( !Empty( cUpCode ) .And. cUpCode < cOfCode )
+
+			Help( '', 1, 'DEATEINVAL' ) // Para opção de parâmetro De/Até no arqui-vo de perguntas esta opção e invalida.
+			lRet := .F.
+
+		EndIf
+
+	EndIf
+
+Return lRet

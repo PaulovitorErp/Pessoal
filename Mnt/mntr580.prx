@@ -1,0 +1,1307 @@
+#INCLUDE "MNTR580.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR580
+Relatorio de Sinistro
+
+@author Marcos Wagner Junior
+@since 21/09/2006
+@return true
+/*/
+//---------------------------------------------------------------------
+Function MNTR580()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local nCont := 0//Variavel para alteracao de SX1
+
+	Private nSizeFil := If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(TRH->TRH_FILIAL))
+
+	WNREL      := "MNTR580"
+	LIMITE     := 136
+	cDESC1     := STR0001 //"O relatorio apresentará dados de uma "
+	cDESC2     := STR0002 //"ocorrência de sinistro"
+	cDESC3     := " "
+	cSTRING    := "TRH"
+
+	Private NOMEPROG := "MNTR580"
+	Private TAMANHO  := "M"
+	Private aRETURN  := {STR0003,1,STR0004,1,2,1,"",1}   //"Zebrado"###"Administracao"
+	Private TITULO   := STR0005  //"Relatório de Sinistro"
+	Private nTIPO    := 0
+	Private nLASTKEY := 0
+	Private CABEC1,CABEC2
+	Private aVETINR := {}
+	Private cPERG := "MNR580"
+	Private aPerg :={}
+	Private lValid := .t.
+	Private lVeri := .f.
+	Private lOper := If(Alltrim(GetMv("MV_NGOPER")) == "S",.T.,.F.)
+	Private cContab := GetMv("MV_MCONTAB")
+	Private vCampoCC := {}
+
+	If cContab == "CTB"
+		vCampoCC := {"CTT","CTT_CUSTO","CTT_OPERAC"}
+	ElseIf cContab == "CON"
+		vCampoCC := {"SI3","I3_CUSTO","I3_OPERAC"}
+	EndIf
+
+	Pergunte(cPERG,.T.)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	WNREL:=SetPrint(cSTRING,WNREL,cPERG,TITULO,cDESC1,cDESC2,cDESC3,.F.,"")
+	If nLASTKEY = 27
+		Set Filter To
+		DbSelectArea("TRH")
+		Return
+	EndIf
+	SetDefault(aReturn,cSTRING)
+	RptStatus({|lEND| MNTR580IMP(@lEND,WNREL,TITULO,TAMANHO)},STR0007,STR0008) //"Aguarde..."###"Processando Registros..."
+	Dbselectarea("TRH")
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR580IMP
+Chamada do Relatório
+
+@author Marcos Wagner Junior
+@since 14/09/2006
+@param lEnd, Lógico, controle da régua de progressão
+@param wnRel, Caractere, Nome do relatório
+@param titulo, Caractere, Título do relatório
+@param tamanho, Caractere, tamanho do rodapé
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTR580IMP(lEnd, wnRel, titulo, tamanho)
+
+	Local nI := 0
+	Local _cGetDB := TcGetDb()
+	// [LGPD] Se as funcionalidades, referentes à LGPD, podem ser utilizadas
+	Local lLgpd   := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. )
+	Local lMotvei := .F.
+	Local lNompr  := .F.
+	Local lEndpro := .F.
+	Local lTelmot := .F.
+	Local lTelpro := .F.
+	Local lNomvit := .F.
+	Local lDocto  := .F.
+	Local lEndtes := .F.
+	Local lCidtes := .F.
+	Local lUftes  := .F.
+	Local lNomMot := .F.
+	Local lNomTes := .F.
+
+	Private cRODATXT   := ""
+	Private nCNTIMPR   := 0
+	Private li         := 80
+	Private m_pag      := 1
+	Private cNomeOri
+	Private cDescricao := ''
+	Private cCodSer    := ''
+	Private nNaoApur   := 0
+	Private aHistorico := {}
+	Private aMotorista := {}
+	Private aOperacao  := {}
+	Private nVezes     := 1
+
+	If lLgpd
+		// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+		aOfusc  := FwProtectedDataUtil():UsrAccessPDField(__CUSERID, {'TRO_MOTVEI', 'TRO_NOMPR', 'TRO_ENDPRO', 'TRO_TELMOT', 'TRO_TELPRO',;
+																	  'TRM_NOMVIT', 'TRN_DOCTO', 'TRN_ENDTES', 'TRN_CIDTES', 'TRN_UFTES',;
+																	  'DA4_NOME', 'TRN_NOMTES'})
+		lMotvei := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRO_MOTVEI' } ) == 0
+		lNompr  := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRO_NOMPR' } ) == 0
+		lEndpro := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRO_ENDPRO' } ) == 0
+		lTelmot := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRO_TELMOT' } ) == 0
+		lTelpro := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRO_TELPRO' } ) == 0
+		lNomvit := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRM_NOMVIT' } ) == 0
+		lDocto  := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRN_DOCTO' } ) == 0
+		lEndtes := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRN_ENDTES' } ) == 0
+		lCidtes := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRN_CIDTES' } ) == 0
+		lUftes  := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRN_UFTES' } ) == 0
+		lNomMot := Ascan( aOfusc, { |x|  AllTrim(x) == 'DA4_NOME' } ) == 0
+		lNomTes := Ascan( aOfusc, { |x|  AllTrim(x) == 'TRN_NOMTES' } ) == 0
+	EndIf
+
+	nTIPO  := IIf(aReturn[4]==1,15,18)
+
+	CABEC1 := ""
+	CABEC2 := ""
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TRH.TRH_NUMSIN, TRH.TRH_DTACID, TRH.TRH_EVENTO, TRH.TRH_GRAVID, TRH.TRH_NUMBO, TRH.TRH_NOMDP, "
+	cQuery += " TRH.TRH_CAUPRE, TRH.TRH_TIPACI, TRH.TRH_VELOC, TRH.TRH_VELPER, TRH.TRH_VEIROU, TRH.TRH_FILIAL, "
+	cQuery += " TRH.TRH_INTERR, TRH.TRH_GUINCH, TRH.TRH_VALGUI, TRH.TRH_RECVEL, TRH.TRH_SEQUES, TRH.TRH_CONDEL, TRH.TRH_STATUS, "
+	cQuery += " TRH.TRH_MOTLIB, TRH.TRH_LOCAL, TRH.TRH_CIDACI, TRH.TRH_DTACID, TRH.TRH_HRACID, TRH.TRH_CODBEM, TRH.TRH_PLACA, "
+	cQuery += " ST9.T9_MODELO,  ST9.T9_CCUSTO, ST9.T9_SERIE,  ST9.T9_TIPMOD  "
+	If lOper .AND.	!Empty(MV_PAR06)
+		cQuery += ",TSZ.TSZ_CODSER "
+	Endif
+	If !Empty(MV_PAR05)
+		cQuery += " ,TRV.TRV_CODMOT "
+	Endif
+	cQuery += " FROM " + RetSqlName("TRH")+" TRH, " + RetSqlName("ST9")+" ST9 "
+	If lOper .AND.	!Empty(MV_PAR06)
+		cQuery += ", " + RetSqlName("TSZ")+" TSZ "
+		If !Empty(MV_PAR06)
+			cQuery += ", " + RetSQLName(vCampoCC[1])+" D "
+		Endif
+	Endif
+	If !Empty(MV_PAR05)
+		cQuery += ", "  + RetSqlName("TRV")+" TRV "
+	Endif
+	cQuery += " WHERE TRH.TRH_CODBEM = ST9.T9_CODBEM "
+
+	If NGSX2MODO("ST9") == NGSX2MODO("TRH")
+		cQuery += " AND ST9.T9_FILIAL = TRH.TRH_FILIAL "
+	Else
+		cQuery += " AND ST9.T9_FILIAL = '"+xFilial("ST9")+"'"
+	EndIf
+
+	cQuery += " AND   TRH.D_E_L_E_T_ <> '*' "
+	cQuery += " AND   ST9.D_E_L_E_T_ <> '*' "
+	If !Empty(MV_PAR01)
+		cQuery += " AND TRH.TRH_NUMSIN  = '"+MV_PAR02+"'"
+		cQuery += " AND TRH.TRH_FILIAL  = '"+MV_PAR01+"'"
+	Else
+		cQuery += " AND TRH.TRH_FILIAL  = '"+xFilial("TRH")+"'"
+	Endif
+	If !Empty(MV_PAR03)
+		cQuery += " AND TRH.TRH_DTACID  >= '"+DTOS(MV_PAR03)+"'"
+	Endif
+	If !Empty(MV_PAR04)
+		cQuery += " AND TRH.TRH_DTACID  <= '"+DTOS(MV_PAR04)+"'"
+	Endif
+	If lOper .AND.	!Empty(MV_PAR06)
+		cQuery += " AND D."+vCampoCC[3]+"=TSZ.TSZ_CODSER "
+		cQuery += " AND TSZ.TSZ_CODSER = '"+MV_PAR06+"'"
+		cQuery += " AND D.D_E_L_E_T_ <> '*' "
+		cQuery += " AND TSZ.D_E_L_E_T_ <> '*' "
+	Endif
+	If !Empty(MV_PAR05)
+		cQuery += " AND TRV.TRV_FILIAL = TRH.TRH_FILIAL "
+
+		If NGSX2MODO("TRV") == NGSX2MODO("TRH")
+			cQuery += " AND TRV.TRV_FILIAL = TRH.TRH_FILIAL"
+		Else
+			cQuery += " AND TRV.TRV_FILIAL = '"+xFilial("TRV")+"'"
+		EndIf
+
+		cQuery += " AND TRV.TRV_NUMSIN = TRH.TRH_NUMSIN "
+		cQuery += " AND TRV.TRV_CODMOT = '"+MV_PAR05+"'"
+		cQuery += " AND TRV.D_E_L_E_T_ <> '*' "
+	Endif
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	SetRegua(LastRec())
+
+	If !Eof() .AND. (!Empty(MV_PAR02) .OR. !Empty(MV_PAR03) .OR. !Empty(MV_PAR04) .OR. IIF(!lOper,.t.,!Empty(MV_PAR06)) .OR. !Empty(MV_PAR05))
+		While !Eof()
+			If nVezes > 1
+				aHistorico := {}
+				Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo)
+			Endif
+			nVezes++
+			If lOper .AND.	!Empty(MV_PAR06)
+				cOperac := (cAliasQry)->TSZ_CODSER //SubStr((cAliasQry)->T9_CCUSTO,11,3)
+				If !Empty(cOperac)
+					nRetorno := aSCAN(aOperacao,{|x| x[1] = cOperac})
+					If nRetorno > 0
+						aOperacao[nRetorno][2] += 1
+					Else
+						AADD(aOperacao,{cOperac,1})
+					Endif
+				Endif
+			Endif
+			cMotorista := NGSEEK('TRV',(cAliasQry)->TRH_NUMSIN,1,'TRV_CODMOT')
+			If !Empty(cMotorista)
+				nRetorno := aSCAN(aMotorista,{|x| x[1] = cMotorista})
+				If nRetorno > 0
+					aMotorista[nRetorno][2] += 1
+				Else
+					AADD(aMotorista,{cMotorista,1})
+				Endif
+			Endif
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0009 + (cAliasQry)->TRH_NUMSIN //"Número: "
+			@ Li,060 	 Psay STR0010 + (cAliasQry)->TRH_NUMBO //"B.O.: "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0011 //"Data: "
+			@ Li,006 	 Psay STOD((cAliasQry)->TRH_DTACID) Picture '99/99/9999'
+			@ Li,060 	 Psay STR0012 + (cAliasQry)->TRH_NOMDP //"D.P.: "
+			NgSomaLi(58)
+			If lOper
+				cCodSer  := SubStr((cAliasQry)->T9_CCUSTO,11,3)
+			Endif
+			cDescricao :=  NGSEEKDIC("SM0",cEmpAnt+cFilAnt,1,"SM0->M0_NOME")
+
+			@ Li,000 	 Psay STR0013 + cDescricao //"Empresa: "
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_EVENTO = '1'
+				cDescricao := STR0014 //"Acidente"
+			ElseIf (cAliasQry)->TRH_EVENTO = '2'
+				cDescricao := STR0015 //"Roubo"
+			ElseIf (cAliasQry)->TRH_EVENTO = '3'
+				cDescricao := STR0016 //"Incidente"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,000 	 Psay STR0017 + cDescricao //"Tipo do Sinistro: "
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000 	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,063 	 Psay STR0018	 //"1 - Acidente"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_GRAVID = '1'
+				cDescricao := STR0019 //"Leve"
+			ElseIf (cAliasQry)->TRH_GRAVID = '2'
+				cDescricao := STR0020 //"Médio"
+			ElseIf (cAliasQry)->TRH_GRAVID = '3'
+				cDescricao := STR0021 //"Grave"
+			ElseIf (cAliasQry)->TRH_GRAVID = '4'
+				cDescricao := STR0022 //"Gravíssimo"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,000 	 Psay STR0023 + cDescricao //"Gravidade: "
+			DbSelectArea("SX5")
+			DbSetOrder(01)
+			If DbSeek(xFilial("SX5")+"AF"+(cAliasQry)->TRH_TIPACI)
+				cDescricao := AllTrim(X5DESCRI())
+			Else
+				cDescricao := ''
+			EndIf
+			@ Li,060 	 Psay STR0024 + cDescricao //"Tipo Acidente: "
+			NgSomaLi(58)
+			DbSelectArea("SX5")
+			DbSetOrder(01)
+			If DbSeek(xFilial("SX5")+"CX"+(cAliasQry)->TRH_CAUPRE)
+				cDescricao := AllTrim(X5DESCRI())
+			Else
+				cDescricao := ''
+			EndIf
+			@ Li,000 	 Psay STR0025 + AllTrim(cDescricao) //"Avaliação Inicial da Culpa: "
+			dbSelectArea("TRV")
+			dbSetOrder(01)
+			If dbSeek(xFilial("TRV",(cAliasQry)->TRH_FILIAL)+(cAliasQry)->TRH_NUMSIN)
+				If TRV->TRV_RASTRE = '1'
+					cRastre := STR0026 //"Sim"
+				ElseIf TRV->TRV_RASTRE = '2'
+					cRastre := STR0027 //"Não"
+				Else
+					cRastre := ''
+				Endif
+				If TRV->TRV_TIPRAS = '1'
+					cTipRas := STR0028 //"Autotrac"
+				ElseIf TRV->TRV_TIPRAS = '2'
+					cTipRas := STR0029 //"OMNILINK"
+				ElseIf TRV->TRV_TIPRAS = '2'
+					cTipRas := STR0030			 //"Outros"
+				Else
+					cTipRas := ''
+				Endif
+				cCidOri := TRV->TRV_CIDORI
+				cCidDes := TRV->TRV_CIDDES
+				If TRV->TRV_RECCAR = '1'
+					cRecCar := STR0026 //"Sim"
+				ElseIf TRV->TRV_RECCAR = '2'
+					cRecCar := STR0027 //"Não"
+				Else
+					cRecCar := ''
+				Endif
+				cCodMot := TRV->TRV_CODMOT
+			Else
+				cRastre := ''
+				cTipRas := ''
+				cCidOri := ''
+				cCidDes := ''
+				cRecCar := ''
+				cCodMot := ''
+			Endif
+			@ Li,060 	 Psay STR0031 + cRastre //"Frota Rastreada? "
+			NgSomaLi(58)
+			/*If (cAliasQry)->TRH_SEGVIA = '1'
+			cDescricao := 'Sim'
+			ElseIf (cAliasQry)->TRH_SEGVIA = '2'
+			cDescricao := 'Não'
+			Else
+			cDescricao := ' '
+			Endif
+			@ Li,000 	 Psay STR0032 + cDescricao //"Impossibilitado de Seguir Viagem? "*/
+			@ Li,060 	 Psay STR0033 + cTipRas //"Tecnologia: "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0034 + cCidOri //"Origem: "
+			@ Li,060 	 Psay STR0035 + cCidDes //"Destino: "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0036 //"Descrição Sumária: "
+			dbSelectArea("TRH")
+			dbSetOrder(01)
+			dbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+			cDescricao := If(NGCADICBASE('TRH_MMDAN2','A','TRH',.F.),;
+			NGMEMOSYP(TRH->TRH_MMSYP),TRH->TRH_DESCRI)
+			If !Empty(cDescricao)
+				NGIMPMEMO(cDescricao,115,019,,.T.,.F.)
+			Else
+				NgSomaLi(58)
+			Endif
+			@ Li,000 	 Psay STR0037 //"Velocidade Momento Acidente: "
+			If !Empty(AllTrim(Str((cAliasQry)->TRH_VELOC)))
+				@ Li,029 	 Psay AllTrim(Str((cAliasQry)->TRH_VELOC)) + ' Km/h'
+			Endif
+			@ Li,060 	 Psay STR0038 //"Velocidade Permitida no Local: "
+			If !Empty(AllTrim(Str((cAliasQry)->TRH_VELPER)))
+				@ Li,091 	 Psay AllTrim(Str((cAliasQry)->TRH_VELPER)) + ' Km/h'
+			Endif
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_INTERR = '1'
+				cDescricao := STR0138 //"Sim"
+			ElseIf (cAliasQry)->TRH_INTERR = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ' '
+			Endif
+			@ Li,000 	 Psay STR0039 + cDescricao //"Houve Interrupção da Viagem? "
+
+
+			If (cAliasQry)->TRH_GUINCH = '1'
+				cDescricao := STR0138 //"Sim"
+			ElseIf (cAliasQry)->TRH_GUINCH = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ' '
+			Endif
+			@ Li,060 	 Psay STR0041 + cDescricao //"Houve Necessidade do Guincho? "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0042 //"Valor do Guincho: "
+			@ Li,018 	 Psay STR0043 //"R$ "
+			If (cAliasQry)->TRH_VALGUI > 1000000
+				@ Li,021 	 Psay (cAliasQry)->TRH_VALGUI Picture '@E 999,999,999.99'
+			ElseIf (cAliasQry)->TRH_VALGUI > 1000
+				@ Li,021 	 Psay (cAliasQry)->TRH_VALGUI Picture '@E 999,999.99'
+			ElseIf (cAliasQry)->TRH_VALGUI < 1000
+				@ Li,021 	 Psay (cAliasQry)->TRH_VALGUI Picture '@E 999.99'
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000 	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,061 	 Psay STR0044	 //"2 - Roubo/Furto"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_CONDEL = '1'
+				cDescricao := STR0138 //"Sim"
+			Elseif (cAliasQry)->TRH_CONDEL = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,000 	 Psay STR0045 + cDescricao //"Roubo/Furto/Assalto foi Concretizado? "
+			@ Li,060 	 Psay STR0046 + cRecCar //"A Carga/Equip. foi Recuperada? "
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_VEIROU = '1'
+				cDescricao := STR0138 //"Sim"
+			Elseif (cAliasQry)->TRH_VEIROU = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,000 	 Psay STR0047 + cDescricao //"O Veículo foi Roubado? "
+			If (cAliasQry)->TRH_SEQUES = '1'
+				cDescricao := STR0138 //"Sim"
+			Elseif (cAliasQry)->TRH_SEQUES = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,060 	 Psay STR0048 + cDescricao //"Motorista Sequestrado? "
+			NgSomaLi(58)
+			If (cAliasQry)->TRH_RECVEL = '1'
+				cDescricao := STR0138 //"Sim"
+			Elseif (cAliasQry)->TRH_RECVEL = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,000 	 Psay STR0049 + cDescricao //"O Veículo foi Recuperado? "
+			If (cAliasQry)->TRH_MOTLIB = '1'
+				cDescricao := STR0138 //"Sim"
+			Elseif (cAliasQry)->TRH_MOTLIB = '2'
+				cDescricao := STR0139 //"Não"
+			Else
+				cDescricao := ''
+			Endif
+			@ Li,060 	 Psay STR0050 + cDescricao //"Motorista foi Liberado? "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0051 + AllTrim((cAliasQry)->TRH_LOCAL) //"Local: "
+			@ Li,060 	 Psay STR0052 + (cAliasQry)->TRH_CIDACI //"Cidade: "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0011 //"Data: "
+			@ Li,006 	 Psay STOD((cAliasQry)->TRH_DTACID) Picture '99/99/9999'
+			@ Li,060 	 Psay STR0053 + (cAliasQry)->TRH_HRACID //"Hora: "
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000 	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,062 	 Psay STR0054	 //"Dados do Sinistro"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			@ Li,000 	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,065 	 Psay STR0055	 //"Vítimas"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			dbSelectArea("TRM")
+			dbSetOrder(01)
+			If dbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+				@ Li,000 	 Psay STR0056 //"Vítimas? Sim"
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+				While !Eof() .AND. (cAliasQry)->TRH_FILIAL == TRM->TRM_FILIAL .AND. (cAliasQry)->TRH_NUMSIN == TRM->TRM_NUMSIN
+					If TRM->TRM_INDFUN = '1'
+						cDescricao := STR0057 //"Funcionário"
+					ElseIf TRM->TRM_INDFUN = '2'
+						cDescricao := STR0058 //"Terceiro"
+					Else
+						cDescricao := ''
+					Endif
+					@ Li,000 	 Psay STR0059 + cDescricao //"Funcionário ou Terceiro? "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0060 + TRM->TRM_DESFUN //"Função: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0061 + IIf(lNomvit, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRM->TRM_NOMVIT), TRM->TRM_NOMVIT) //"Nome: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0062 + TRM->TRM_LESOES //"Lesões: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0063 + TRM->TRM_ACAO //"Ação: "
+					NgSomaLi(58)
+					@ Li,000  	 Psay Replicate("-",134)
+					NgSomaLi(58)
+					dbSkip()
+				End
+			Else
+				@ Li,000 	 Psay STR0064 //"Vítimas? Não"
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,064 	 Psay STR0065	 //"Testemunha"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			dbSelectArea("TRN")
+			dbSetOrder(01)
+			If dbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+				@ Li,000 	 Psay STR0066 //"Houve Testemunha? Sim"
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+				While !Eof() .AND. (cAliasQry)->TRH_FILIAL == TRN->TRN_FILIAL .AND. (cAliasQry)->TRH_NUMSIN == TRN->TRN_NUMSIN
+					@ Li,000 	 Psay STR0067 + TRN->TRN_QLFTES	 //"Qualificação: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0061 + IIf(lNomTes, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRN->TRN_NOMTES), TRN->TRN_NOMTES) //"Nome: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0068 + IIf(lEndtes, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRN->TRN_ENDTES), TRN->TRN_ENDTES) //"Endereço: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0052 + IIf(lCidtes, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRN->TRN_CIDTES), TRN->TRN_CIDTES) //"Cidade: "
+					@ Li,060 	 Psay STR0069 + IIf(lUftes, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRN->TRN_UFTES), TRN->TRN_UFTES) //"UF: "
+					NgSomaLi(58)
+					If TRN->TRN_TIPDOC = '1'
+						cDescricao := 'RG'
+					ElseIf TRN->TRN_TIPDOC = '2'
+						cDescricao := 'CPF'
+					ElseIf TRN->TRN_TIPDOC = '3'
+						cDescricao := 'C.Nasc.'
+					Else
+						cDescricao := ''
+					Endif
+					@ Li,000 	 Psay STR0070 + cDescricao  //"Tipo Documento: "
+					@ Li,060 	 Psay STR0071 + IIf(lDocto, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRN->TRN_DOCTO), TRN->TRN_DOCTO) //"Documento: "
+					NgSomaLi(58)
+					@ Li,000  	 Psay Replicate("-",134)
+					NgSomaLi(58)
+					dbSkip()
+				End
+			Else
+				@ Li,000 	 Psay STR0072 //"Houve Testemunha? Não"
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,063 	 Psay STR0073	 //"Frota Própria"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0075 + (cAliasQry)->TRH_CODBEM	 //"Frota: "
+			@ Li,060 	 Psay STR0076 + (cAliasQry)->TRH_PLACA //"Placa: "
+			NgSomaLi(58)
+
+			@ Li,000	 Psay STR0134 + AllTrim((cAliasQry)->T9_TIPMOD) + " - " + ;
+			NGSEEK("TQR",(cAliasQry)->T9_TIPMOD,1,"TQR->TQR_DESMOD")  //"Tipo Modelo: "
+			If lOper
+				dbSelectArea("TSZ")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TSZ")+cCodSer)
+					cDescricao := TSZ->TSZ_DESSER
+				Else
+					cDescricao := ''
+				Endif
+				@ Li,060 	 Psay STR0077 + cDescricao	 //"Operação: "
+			Endif
+			NgSomaLi(58)
+			If !Empty(cCodMot)
+				dbSelectArea("DA4")
+				dbSetOrder(01)
+				If dbSeek(xFilial("DA4")+cCodMot)
+					cMotori := IIf(lNomMot, FwProtectedDataUtil():ValueAsteriskToAnonymize(DA4->DA4_NOME), DA4->DA4_NOME)
+					cMatric := DA4->DA4_MAT
+				Else
+					cMotori := ''
+					cMatric := ''
+				Endif
+
+				@ Li,000 	 Psay STR0078 + AllTrim(cCodMot) + " - " + cMotori //"Motorista: "
+				If !Empty(cMatric)
+					@ Li,060 	 Psay STR0079 + cMatric //"Matrícula: "
+				EndIf
+				NgSomaLi(58)
+			Endif
+			nComCulpa := 0
+			nSemCulpa := 0
+			cDescricao := STR0139 //"Não"
+			dbSelectArea("TRV")
+			dbSetOrder(02)
+			If dbSeek((cAliasQry)->TRH_FILIAL+cCodMot)
+				While !Eof() .AND. TRV->TRV_FILIAL == (cAliasQry)->TRH_FILIAL .AND. TRV->TRV_CODMOT == cCodMot
+					If TRV->TRV_NUMSIN != (cAliasQry)->TRH_NUMSIN
+						cHdata   := '  /  /    '
+						cHevento := ''
+						cHgravid := ''
+						cHcodbem := ''
+						cHopera  := ''
+						cHlocal  := ''
+						cHJuri   := ''
+						cHcausa  := TRV->TRV_CAUREA
+						If cCodMot == TRV->TRV_CODMOT
+							dbSelectArea("TRH")
+							dbSetOrder(01)
+							If dbSeek((cAliasQry)->TRH_FILIAL+TRV->TRV_NUMSIN)
+								cHdata   := TRH->TRH_DTACID
+								cHevento := TRH->TRH_EVENTO
+								cHgravid := TRH->TRH_GRAVID
+								cHcodbem := TRH->TRH_CODBEM
+								cHlocal  := TRH->TRH_LOCAL
+								dbSelectArea("ST9")
+								dbSetOrder(01)
+								If dbSeek(TRH->TRH_FILIAL+TRH->TRH_CODBEM)
+									cVeiculo := ST9->T9_MODELO
+									If lOper
+										dbSelectArea("TSZ")
+										dbSetOrder(01)
+										If dbSeek(xFilial("TSZ")+cCodSer)
+											cHopera := TSZ->TSZ_DESSER
+										Endif
+									Endif
+								Endif
+								aHlocal := SubStr(TRH->TRH_LOCAL,1,25)
+								If (TRH->TRH_STATUS != '06') .AND. (TRH->TRH_STATUS != '07')
+									nNaoApur := nNaoApur + 1
+								Endif
+							Endif
+						Endif
+						If TRH->TRH_DTACID < STOD((cAliasQry)->TRH_DTACID)
+							cDescricao := STR0138 //"Sim"
+						ElseIf TRH->TRH_DTACID == STOD((cAliasQry)->TRH_DTACID)
+							If (cAliasQry)->TRH_HRACID > TRH->TRH_HRACID
+								cDescricao := STR0138 //"Sim"
+							Endif
+						Endif
+						dbSelectArea("TRJ")
+						dbSetOrder(01)
+						If dbSeek((cAliasQry)->TRH_FILIAL+TRV->TRV_NUMSIN)
+							cHjuri := TRJ->TRJ_CAUJUR
+							If TRJ->TRJ_CAUJUR == '01' .OR. TRJ->TRJ_CAUJUR == '02' .AND. TRH->TRH_DTACID < STOD((cAliasQry)->TRH_DTACID)
+								nSemCulpa := nSemCulpa + 1
+							Else
+								If !Empty(TRJ->TRJ_CAUJUR) .AND. TRH->TRH_DTACID < STOD((cAliasQry)->TRH_DTACID)
+									nComCulpa := nComCulpa + 1
+								Endif
+							Endif
+						Endif
+						If TRH->TRH_DTACID < STOD((cAliasQry)->TRH_DTACID)
+							AADD(aHistorico,{cHdata,cHcausa,cHevento,cHgravid,cHcodbem,cHopera,cHlocal,cHjuri})
+						Endif
+					Endif
+					dbSelectArea("TRV")
+					dbSkip()
+				End
+			Endif
+			@ Li,000 	 Psay STR0080 + cDescricao //"Reincidente em Acidentes de Trânsito: "
+
+			@ Li,060 	 Psay STR0081 + AllTrim(Str(nComCulpa)) //"Qtde. Ac. Anteriores C/Culpa: "
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0082 + AllTrim(Str(nSemCulpa)) //"Qtde. Ac. Anteriores S/Culpa: "
+
+			If ((cAliasQry)->TRH_STATUS != '06') .AND. ((cAliasQry)->TRH_STATUS != '07')
+				nNaoApur := nNaoApur + 1
+			Endif
+			@ Li,060 	 Psay STR0083 + AllTrim(Str(nNaoApur)) //"Não Apurados pelo Jurídico: "
+			NgSomaLi(58)
+
+			If !Empty((cAliasQry)->T9_MODELO)
+				@ Li,000 	Psay STR0136 + (cAliasQry)->T9_MODELO // "Modelo:"
+				@ Li,060 	Psay STR0135 + (cAliasQry)->T9_SERIE // "Série:"
+				NgSomaLi(58)
+			EndIf
+
+			cCarga:= NGSEEK("TRV",(cAliasQry)->TRH_NUMSIN,1,"TRV->TRV_TIPCAR")
+			@ Li,000 	 Psay STR0137 + AllTrim(cCarga) + " - " + AllTrim(NGSEEK("SX5","DU"+cCarga,1,"X5DESCRI()"))
+			dbSelectArea("TRK")
+			dbSetOrder(01)
+			If dbSeek(xFilial("TRK")+(cAliasQry)->TRH_NUMSIN) .And. !Empty(TRK->TRK_VALAVA)
+				@ Li,060 	 Psay STR0085 + STR0138 //"Danos na Carga: " "Sim"
+			Else
+				@ Li,060 	 Psay STR0085 + STR0139 //"Danos na Carga: " "Não"
+			Endif
+
+			NgSomaLi(58)
+			@ Li,000 	 Psay STR0086 //"Desc. Danos: "
+			DbSelectArea("TRH")
+			DbSetOrder(01)
+			DbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+			If NGCADICBASE("TRH_MMDAN2","A","TRH",.F.)
+				cDanos := NGMEMOSYP(TRH->TRH_MMDAN2)
+			Else
+				cDanos := TRH->TRH_DANOS
+			EndIf
+
+			If !Empty(cDanos)
+				NGIMPMEMO(cDanos,127,013,,.T.,.F.)
+				NgSomaLi(58)
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,061 	 Psay STR0087	 //"Veículo Terceiro"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			dbSelectArea("TRO")
+			dbSetOrder(01)
+			If dbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+				While !Eof() .AND. (cAliasQry)->TRH_FILIAL == TRO->TRO_FILIAL .AND. (cAliasQry)->TRH_NUMSIN == TRO->TRO_NUMSIN
+					If TRO->TRO_TIPVEI = '1'
+						cDescricao := STR0088 //"Carro"
+					ElseIf TRO->TRO_TIPVEI = '2'
+						cDescricao := STR0089 //"Caminhonete"
+					ElseIf TRO->TRO_TIPVEI = '3'
+						cDescricao := STR0090 //"Caminhão"
+					ElseIf TRO->TRO_TIPVEI = '4'
+						cDescricao := STR0091 //"ônibus"
+					ElseIf TRO->TRO_TIPVEI = '5'
+						cDescricao := STR0092 //"Micro-ônibus"
+					ElseIf TRO->TRO_TIPVEI = '6'
+						cDescricao := STR0093 //"Moto"
+					ElseIf TRO->TRO_TIPVEI = '7'
+						cDescricao := STR0094 //"Bicicleta"
+					ElseIf TRO->TRO_TIPVEI = '8'
+						cDescricao := STR0095 //"Tração-Animal"
+					ElseIf TRO->TRO_TIPVEI = '9'
+						cDescricao := STR0096 //"Maquinário Agrícola"
+					ElseIf TRO->TRO_TIPVEI = '10'
+						cDescricao := STR0097 //"Ignorado"
+					ElseIf TRO->TRO_TIPVEI = '11'
+						cDescricao := STR0030 //"Outros"
+					Else
+						cDescricao := ''
+					Endif
+					@ Li,000 	 Psay STR0098	+ cDescricao //"Tipo: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0074	+ TRO->TRO_DESVEI //"Veículo: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0076 + TRO->TRO_PLACA //"Placa: "
+					NgSomaLi(58)
+					If TRO->TRO_DANOS == '1'
+						cDescricao := STR0138 //"Sim"
+					Else
+						cDescricao := STR0139 //"Não"
+					Endif
+					@ Li,000 	 Psay STR0086 + cDescricao //"Danos: "
+					If TRO->TRO_SEGUR == '1'
+						cDescricao := STR0138 //"Sim"
+					Else
+						cDescricao := STR0139 //"Não"
+					Endif
+					@ Li,060 	 Psay STR0099 + cDescricao //"Veículo Segurado: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0100			 //"Tel. Seguradora: "
+					@ Li,017 	 Psay TRO->TRO_TELSEG Picture PesqPict("TRO","TRO_TELSEG")
+					@ Li,060 	 Psay STR0101	+ TRO->TRO_RENAVA //"RENAVAN: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0102  + IIf(lMotvei, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRO->TRO_MOTVEI), TRO->TRO_MOTVEI) //"Nome do Mot.: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0103 //"Tel. Mot.: "
+					@ Li,011 	 Psay IIf(lTelmot, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRO->TRO_TELMOT), TRO->TRO_TELMOT) Picture PesqPict("TRO","TRO_TELMOT")
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0104	+ IIf(lNompr, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRO->TRO_NOMPR), TRO->TRO_NOMPR) //"Nome do Prop.: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0105	+ IIf(lEndpro, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRO->TRO_ENDPRO), TRO->TRO_ENDPRO) //"End. Prop.: "
+					NgSomaLi(58)
+					@ Li,000 	 Psay STR0106 //"Tel Prop.: "
+					@ Li,011 	 Psay IIf(lTelpro, FwProtectedDataUtil():ValueAsteriskToAnonymize(TRO->TRO_TELPRO), TRO->TRO_TELPRO) Picture PesqPict("TRO","TRO_TELPRO")
+					NgSomaLi(58)
+					@ Li,000  	 Psay Replicate("-",134)
+					NgSomaLi(58)
+					dbSkip()
+				End
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,027 	 Psay STR0107	 //"Lista de Documentos a Serem Enviados Para a Gestão de Riscos (prazo de 7 dias úteis)"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+
+			If FunName() = 'MNTR580'
+				dbSelectArea("TRI")
+				dbSetOrder(01)
+				If dbSeek((cAliasQry)->TRH_FILIAL+(cAliasQry)->TRH_NUMSIN)
+					While !Eof() .AND. (cAliasQry)->TRH_FILIAL == TRI->TRI_FILIAL .AND. (cAliasQry)->TRH_NUMSIN == TRI->TRI_NUMSIN
+						cDescricao := ''
+						dbSelectArea("TRU")
+						dbSetOrder(01)
+						If dbSeek((cAliasQry)->TRH_FILIAL+TRI->TRI_CODDOC)
+							cDescricao := TRU->TRU_NOMDOC
+						Endif
+						@ Li,000  Psay STR0071 + AllTrim(cDescricao) //"Documento: "
+						NgSomaLi(58)
+						dbSelectArea("TRI")
+						dbSkip()
+					End
+				Else
+					@ Li,000  Psay STR0108 //"Documento: Não existe documento."
+					NgSomaLi(58)
+				Endif
+				cDescricao := ''
+				Dbselectarea("SX5")
+				Dbsetorder(01)
+				If Dbseek(xFilial("SX5")+"SP"+(cAliasQry)->TRH_STATUS)
+					cDescricao := AllTrim(X5DESCRI())
+				Endif
+				@ Li,000 	 Psay STR0109 + AllTrim(cDescricao)	 //"Conclusão do Processo: "
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+			Else
+				@ Li,000  Psay "RAV (RELATÓRIO DE ACIDENTE VEÍCULO)"
+				NgSomaLi(58)
+				@ Li,000  Psay "BO"
+				NgSomaLi(58)
+				@ Li,000  Psay "DECLARAÇÃO DO MOTORISTA"
+				NgSomaLi(58)
+				@ Li,000  Psay "DISCO DE TACÓGRAFO"
+				NgSomaLi(58)
+				@ Li,000  Psay "CHECK LIST"
+				NgSomaLi(58)
+				@ Li,000  Psay "FOTOS DO ACIDENTE E VEÍCULO"
+				NgSomaLi(58)
+				@ Li,000  Psay "DECLARAÇÃO DE TESTEMUNHAS(SE HOUVER)"
+			Endif
+			//////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,056 	 Psay STR0110	 //"4 - Histórico do Motorista"
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			@ Li,000  	 Psay Replicate("-",134)
+			NgSomaLi(58)
+			/*        1         2         3         4         5         6         7         8         9         0         1         2         3
+			01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+			Data       Evento                                     Tipo Evento            Gravidade           Frota
+			Operacao                                   Local                                      C.Juridico
+			99/99/99   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxx
+			xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+			*/
+			dbSelectArea("SRA")
+			dbSetOrder(01)
+			If dbSeek(xFilial("SRA")+cCodMot)
+				cData := SRA->RA_ADMISSA
+			Else
+				cData := ''
+			Endif
+			If Len(aHistorico) == 0
+				@ Li,000 	 Psay "Motorista Possui Histórico? Não"
+				@ Li,055 	 Psay "Data de Admissão: "
+				@ Li,073 	 Psay cData
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+			Else
+				@ Li,000 	 Psay "Motorista Possui Histórico? Sim"
+				@ Li,055 	 Psay "Data de Admissão: "
+				@ Li,073 	 Psay cData
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+				@ Li,000 	 Psay STR0111 //"Data"
+				@ Li,011 	 Psay STR0112 //"Evento"
+				@ Li,054 	 Psay STR0113 //"Tipo Evento"
+				@ Li,077 	 Psay STR0114 //"Gravidade"
+				@ Li,097 	 Psay STR0115 //"Frota"
+				NgSomaLi(58)
+				@ Li,003 	 Psay STR0116 //"Operação"
+				@ Li,046 	 Psay STR0117 //"Local"
+				@ Li,099 	 Psay STR0118 //"C.Jurídico"
+				NgSomaLi(58)
+				@ Li,000  	 Psay Replicate("-",134)
+				NgSomaLi(58)
+				For nI := 1 to Len(aHistorico)
+					NgSomaLi(58)
+					@ Li,000  Psay aHistorico[nI][1]
+					Dbselectarea("SX5")
+					Dbsetorder(01)
+					If Dbseek(xFilial("SX5")+"CX"+aHistorico[nI][2])
+						cDescricao := AllTrim(SubStr(X5DESCRI(),1,40))
+					Else
+						cDescricao := Space(40)
+					Endif
+					@ Li,011  Psay cDescricao
+					If aHistorico[nI][3] == '1'
+						cDescricao := AllTrim(STR0014) //"Acidente"
+					ElseIf aHistorico[nI][3] == '2'
+						cDescricao := AllTrim(STR0015) //"Roubo"
+					ElseIf aHistorico[nI][3] == '32'
+						cDescricao := AllTrim(STR0016) //"Incidente"
+					Else
+						cDescricao := Space(09)
+					Endif
+					@ Li,054  Psay cDescricao
+					If aHistorico[nI][4] == '1'
+						cDescricao := AllTrim(STR0019) //"Leve"
+					ElseIf aHistorico[nI][4] == '2'
+						cDescricao := AllTrim(STR0119) //"Medio"
+					ElseIf aHistorico[nI][4] == '3'
+						cDescricao := AllTrim(STR0021) //"Grave"
+					ElseIf aHistorico[nI][4] == '4'
+						cDescricao := AllTrim(STR0022)			 //"Gravíssimo"
+					Else
+						cDescricao := Space(10)
+					Endif
+					@ Li,077  Psay cDescricao
+					@ Li,097  Psay AllTrim(aHistorico[nI][5])
+					NgSomaLi(58)
+					@ Li,003  Psay AllTrim(aHistorico[nI][6])
+					@ Li,046  Psay AllTrim(aHistorico[nI][7])
+					cDescricao := Space(35)
+					Dbselectarea("SX5")
+					Dbsetorder(01)
+					If Dbseek(xFilial("SX5")+"CX"+aHistorico[nI][8])
+						cDescricao := SubStr(X5DESCRI(),1,35)
+					Endif
+					@ Li,099  Psay AllTrim(cDescricao)
+				Next
+			Endif
+			DbSelectArea(cAliasQry)
+			DbSkip()
+			If Eof() .AND. (Len(aOperacao) > 0 .OR. Len(aMotorista) > 0)
+				Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo)
+				If lOper
+					If Len(aOperacao) > 0
+						@ Li,000  Psay "TOTAL POR OPERAÇÃO: "
+						NgSomaLi(58)
+						For nI := 1 to Len(aOperacao)
+							NgSomaLi(58)
+							@ Li,000  Psay aOperacao[nI][1] + ' - '
+							dbSelectArea('TSZ')
+							dbSetOrder(01)
+							dbSeek(xFilial('TSZ')+aOperacao[nI][1])
+							@ Li,009  Psay TSZ->TSZ_DESSER
+							@ Li,049  Psay ' : ' + AllTrim(Str(aOperacao[nI][2]))
+						Next
+						NgSomaLi(58)
+					Endif
+				Endif
+				If Len(aMotorista) > 0
+					@ Li,000  Psay "TOTAL POR MOTORISTA: "
+					NgSomaLi(58)
+					For nI := 1 to Len(aMotorista)
+						NgSomaLi(58)
+						@ Li,000  Psay aMotorista[nI][1] + ' - '
+						dbSelectArea('DA4')
+						dbSetOrder(01)
+						dbSeek(xFilial('DA4')+aMotorista[nI][1])
+						@ Li,009  Psay IIf(lNomMot, FwProtectedDataUtil():ValueAsteriskToAnonymize(DA4->DA4_NOME), DA4->DA4_NOME)
+						@ Li,049  Psay ' : ' + AllTrim(Str(aMotorista[nI][2]))
+					Next
+				Endif
+			Endif
+			DbSelectArea(cAliasQry)
+		End
+	Else
+		Msgstop(STR0130,STR0120)  //"Não existem dados para montar o relatório!"###"Atenção"
+		Return .f.
+	EndIf
+	(cAliasQry)->(dbCloseArea())
+
+	RODA(nCNTIMPR,cRODATXT,TAMANHO)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Devolve a condicao original do arquivo principal             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	RetIndex('TRH')
+	Set Filter To
+	Set Device To Screen
+	If aReturn[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(WNREL)
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    |MNTR580EXI| Autor ³ Marcos Wagner Junior  ³ Data ³27/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Verifica se o Sinistro existe na TRH                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTR580                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTR580EXI()
+
+	Local aArea  := GetArea()
+	Local lEmpty := Empty( MV_PAR01 )
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TRH.TRH_FILIAL "
+	cQuery += " FROM " + RetSqlName("TRH") + " TRH"
+	cQuery += " WHERE TRH.TRH_NUMSIN = '"+MV_PAR02+"'"
+
+	If !lEmpty
+		cQuery += " AND TRH.TRH_FILIAL = " + ValtoSql( MV_PAR01 )
+	EndIf
+
+	cQuery += " AND   TRH.D_E_L_E_T_ <> '*' "
+	cQuery += " ORDER BY TRH.TRH_FILIAL, TRH.TRH_NUMSIN "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	dbGoTop()
+	If Eof()
+		If Empty(MV_PAR02) .AND. Empty(MV_PAR03) .AND. !Empty(MV_PAR04) .AND. IIF(!lOper,.t.,!Empty(MV_PAR06)) .AND. !Empty(MV_PAR05)
+			Msgstop(STR0121,STR0120)  //"Sinistro não existente!"###"Atenção"
+			(cAliasQry)->(dbCloseArea())
+			RestArea(aArea)
+			Return .f.
+		Else
+			MV_PAR01 := Space(02)
+		Endif
+	ElseIf lEmpty
+		MV_PAR01 := (cAliasQry)->TRH_FILIAL
+	Endif
+	(cAliasQry)->(dbCloseArea())
+
+	RestArea(aArea)
+
+Return .t.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³NG580TRH  ³ Autor ³ Marcos Wagner Junior  ³ Data ³27/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consulta especifica na TRH, trazendo todos sinistros        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NG580TRH()
+
+	Local i,j
+	Local nOpca := 0
+	Local aFunc := {}
+	Local nInd  := 0
+	local oOrdem, oChave
+	Local cOrdIx
+	Local cChave := Space(255)
+	Local nOrdem := 1
+	Local oTempTable //Obj. Tab. Temp.
+
+	Private cTRB := GetNextAlias() //Alias Tab. Temp.
+
+	Private oLbx,oDlg2
+
+	aDbf := {{"FILIAL"  , "C", nSizeFil,0},;
+	{"SINISTRO", "C", 06,0}}
+
+	//Instancia classe FWTemporaryTable
+	oTempTable  := FWTemporaryTable():New( cTRB, aDbf )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"FILIAL","SINISTRO"}  )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TRH.TRH_FILIAL, TRH.TRH_NUMSIN "
+	cQuery += " FROM " + RetSqlName("TRH")+" TRH "
+	cQuery += " WHERE TRH.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	While !Eof()
+		DbSelectArea(cTRB)
+		RecLock((cTRB),.t.)
+		(cTRB)->FILIAL   := (cAliasQry)->TRH_FILIAL
+		(cTRB)->SINISTRO := (cAliasQry)->TRH_NUMSIN
+		MsUnlock(cTRB)
+		DbSelectArea((cAliasQry))
+		DbSkip()
+	EndDo
+
+	(cAliasQry)->(DbCloseArea())
+
+	DbSelectArea(cTRB)
+	Dbgotop()
+	If Reccount() = 0
+		MsgInfo(STR0124,STR0120)//"Não existem sinistros!"###"Atenção"
+		oTempTable:Delete()//Deleta Arquivo temporario
+		Return .F.
+	EndIf
+
+	cLine := "{ || { "
+	i     := 0
+	aAux  := {}
+	aLbx  := {}
+
+	// Monta os dados do listbox
+	aFields := DBSTRUCT()
+	aCabec  := {STR0123,STR0122}//"Filial"###"Sinistro"
+
+	While !Eof()
+		aAux := ARRAY(Len(aFields))
+		For j := 1 to Len(aFields)
+			aAux[j] := &(aFields[j][1])
+		Next j
+		Aadd(aLbx,aAux)
+		dbSkip()
+	End
+
+	nTAMB := Len(aLbx)
+
+	// Define o numero de colunas do listbox
+	For i:=1 To Len(aDbf)
+		If aDbf[i][2] == "D"
+			cLine+= "DtoC(aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"])"
+		ElseIf aDbf[i][2] == "N"
+			cLine+= "Str(aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"])"
+		Else
+			cLine+= "aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"]"
+		EndIf
+		If i#Len(aDbf)
+			cLine+=","
+		Else
+			cLine+="}"
+		EndIf
+	Next i
+
+	cLine+= "}"
+	nGuarda := 1
+	nOrdem  := 1
+
+	aAdd( aFunc, STR0126  )//###"Filial+Sinistro"
+
+	Define MsDialog oDlg2 Title STR0122 From 000,000 To 421,522 Pixel //###"Sinistro"
+
+	@ 005, 005 combobox oOrdem var cOrdIx items aFunc size 210,08 PIXEL OF oDlg2 ON CHANGE nOrdem := oOrdem:nAt
+	@ 020, 005 msget oChave var cChave size 210,08 of oDlg2 pixel
+	@ 005, 220 Button STR0127 of oDlg2 Size 40,10 Pixel Action MNT580Rec(cChave)
+
+	oLbx:= TWBrowse():New(3,0,263,149,,aCabec,, oDlg2,,,,,,,,,,,, .F.,, .F.,, .F.,,, )
+
+	oLbx:SetArray(aLbx)
+	oLbx:bLine := &(cline)
+	oLbx:nAt   := nGuarda
+	oLbx:bLDblClick := {|| (nOpcA := 1,nGuarda:=oLbx:nAt,oDlg2:End()) }
+
+	Define sButton oBtOk  from 195, 05 type 1 action (nOpcA := 1,nGuarda := oLbx:nAt, oDlg2:End()) enable of oDlg2 pixel
+	Define sButton oBtCan from 195, 36 type 2 action (nOpcA := 0, oDlg2:End()) enable of oDlg2 pixel
+	Define sButton oBtPar from 195, 67 type 15 action MNT580VI2() enable of oDlg2 pixel
+
+	ACTIVATE MSDIALOG oDlg2 CENTERED
+
+	If nOpca == 1
+		DbSelectArea("TRH")
+		DbSetOrder(1)
+		DbSeek(aLbx[nGuarda][1]+aLbx[nGuarda][2])
+		MV_PAR01 :=	aLbx[nGuarda][1]
+		MV_PAR02 :=	aLbx[nGuarda][2]
+		lValid := .f.
+	Else
+		lValid := .t.
+	EndIf
+
+	oTempTable:Delete()//Deleta Arquivo temporario
+	DbSelectArea("TRH")
+
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³MNT580RET ³ Autor ³ Marcos Wagner Junior  ³ Data ³27/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consulta especifica na TRH	                              ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT580RET()
+Return TRH->TRH_NUMSIN
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT580VI2 ³ Autor ³ Marcos Wagner Junior  ³ Data ³27/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Visualizacao do Sinistro                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR580                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT580VI2()
+	Private cCadastro := STR0122//###"Sinistro"
+
+	DbSelectArea("TRH")
+	DbSetOrder(1)
+	DbSeek(aLbx[oLbx:nAt][1]+aLbx[oLbx:nAt][2])
+	NgCad01("TRH",Recno(),2)
+
+Return .t.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT580Rec ³ Autor ³ Marcos Wagner Junior  ³ Data ³27/07/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Pesquisa Filial+Sinistro                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR580                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNT580Rec(cCHPesq)
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	Dbseek(cCHPesq,.t.)
+	If !Eof()
+		nOrdem := recno()
+	ElseIf Eof()
+		nOrdem := Len(aLbx)
+	Endif
+
+	oLbx:SetFocus(aLbx[nOrdem])
+	oLbx:nAt   := nOrdem
+	oLbx:bLine := &(cline)
+
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT580VAL
+Funcao para validacao dos parametros de SX1
+
+@return Nil
+
+@sample
+MNT580VAL()
+
+@author
+@since 08/10/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MNT580VAL(nSX1)
+	Local lRet := .T.
+
+	Default nSX1 := 0
+
+	If nSX1 == 1
+		lRet := .T.
+	ElseIf nSX1 == 2
+		If !MNTR580EXI()
+			lRet := .F.
+		Endif
+	ElseIf nSX1 == 3
+		If Empty(MV_PAR03) .OR. MV_PAR03 > dDataBase
+			Help(" ",1,STR0101,"DATAINVAL",,3,1)
+			lRet := .F.
+		ElseIf !Empty(MV_PAR04) .AND. MV_PAR04 < MV_PAR03
+			ShowHelpDlg("ATENÇÃO",{"Parâmetro 'De Data' não pode ser maior que 'Até Data'."},2,;
+			{"Corrija o parâmetro 'De Data' para que seja menor ou igual a "+DTOC(MV_PAR04)+"."},2)
+			lRet := .F.
+		EndIf
+	ElseIf nSX1 == 4
+		If Empty(MV_PAR04) .OR. MV_PAR04 > dDataBase
+			Help(" ",1,STR0101,"DATAINVAL",,3,1)
+			lRet := .F.
+		ElseIf !Empty(MV_PAR03) .AND. MV_PAR04 < MV_PAR03
+			ShowHelpDlg("ATENÇÃO",{"Parâmetro 'Até Data' não pode ser menor que 'De Data'."},2,;
+			{"Corrija o parâmetro 'Até Data' para que seja maior ou igual a "+DTOC(MV_PAR03)+"."},2)
+			lRet := .F.
+		EndIf
+	ElseIf nSX1 == 5
+		If !Empty(MV_PAR05) .AND. !ExistCpo("DA4",MV_PAR05)
+			lRet := .F.
+		EndIf
+	ElseIf nSX1 == 6
+		If !Empty(MV_PAR06) .AND. !ExistCpo("TSZ",MV_PAR06)
+			lRet := .F.
+		EndIf
+	Endif
+
+Return lRet

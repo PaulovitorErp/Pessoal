@@ -1,0 +1,768 @@
+#INCLUDE "mdta275.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA275
+Geracao de Exames para Funcionario Admitido
+
+@author Denis Hyroshi de Souza
+@since 28/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA275
+
+//----------------------------------------------------
+//  Armazena variaveis p/ devolucao (NGRIGHTCLICK)   -
+//----------------------------------------------------
+Local aNGBEGINPRM := NGBEGINPRM()
+Private lNgMdtPs := .f.
+Private nSizeCOD := If((TAMSX3("A2_COD")[1]) < 1,6,(TAMSX3("A2_COD")[1]))
+Private nSizeLOJ := If((TAMSX3("A2_LOJA")[1]) < 1,2,(TAMSX3("A2_LOJA")[1]))
+Private cCliMdtPs  := Space(Len(SA1->A1_COD+SA1->A1_LOJA))
+Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+
+If SuperGetMv("MV_NGMDTPS",.F.,"N") == "S"
+	lNgMdtPs := .t.
+Endif
+
+PRIVATE aRotina := MenuDef()
+
+PRIVATE cCadastro := STR0004 //"Geracao de Exames para Funcionarios Admitidos"
+PRIVATE cAlias    := "TM5"
+PRIVATE cNUMFIC   := space(09)
+PRIVATE cPrograma := "MDTA275"
+Private nSizeSI3
+nSizeSI3 := If((TAMSX3("I3_CUSTO")[1]) < 1,9,(TAMSX3("I3_CUSTO")[1]))
+PRIVATE nSizeSRJ := If((TAMSX3("RJ_FUNCAO")[1]) < 1,5,(TAMSX3("RJ_FUNCAO")[1]))
+PRIVATE aVetinr := {}
+
+cCadastro := OemtoAnsi(cCadastro)
+
+aCHKDEL := { }
+
+If FindFunction("MDTRESTRI") .AND. !MDTRESTRI(cPrograma)
+	//----------------------------------------------------
+	//  Devolve variaveis armazenadas (NGRIGHTCLICK) 	-
+	//----------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+	Return .F.
+Endif
+
+//----------------------------------------------------
+//  Endereca a funcao de BROWSE                      -
+//----------------------------------------------------
+If lSigaMdtps
+	dbSelectArea("SA1")
+	dbSetOrder(1)
+	mBrowse( 6, 1,22,75,"SA1")
+Else
+	dbSelectArea("TM0")
+	dbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TM0",,,,,,fCorFun() )
+Endif
+
+//----------------------------------------------------
+//  Devolve variaveis armazenadas (NGRIGHTCLICK)     -
+//----------------------------------------------------
+NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT275SRA
+Filtra os funcionarios do cliente
+
+@author Denis Hyroshi de Souza
+@since 29/06/10
+@sample MDTA275
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT275SRA()
+
+Local aArea	:= GetArea()
+Local oldROTINA := aCLONE(aROTINA)
+Local oldCad := cCadastro
+cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+
+nSizeSA1 := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+nSizeLo1 := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+aRotina :=	{{STR0001 	,"AxPesqui",0,1},; //"Pesquisar"
+             {STR0002	,"NGCAD01" ,0,2},;  //"Visualizar"
+             {STR0003  ,"MDT275EX",0,2},; //"Exames"
+             {STR0045, "GpLegend" ,  0,  6, 0, .F.} }  //"Legenda"
+
+dbSelectArea("TM0")
+Set Filter To TM0->TM0_CLIENT == SubStr(cCliMdtPs,1,nSizeSA1) .and. TM0->TM0_LOJA == SubStr(cCliMdtPs,nSizeSA1+1,nSizeLo1)
+dbSetOrder(1)
+mBrowse( 6, 1,22,75,"TM0",,,,,,fCorFun() )
+
+dbSelectArea("TM0")
+Set Filter To
+
+aROTINA := aCLONE(oldROTINA)
+RestArea(aArea)
+cCadastro := oldCad
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT275EX
+Verifica e grava exames
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT275EX()
+
+	Local lRet := .T.
+
+	Private cCusto   := " "
+	Private cFuncao  := " "
+	Private cPcmso := Space(6)
+	Private aTarefas := {}
+	Private aRiscos  := {}
+
+	If lSigaMdtps .And. !MdtTemTOL(/*Cliente*/,/*Loja*/,/*Exame*/,.T.) //Valida se tem contrato
+		lRet := .F.
+	ElseIf !SitFunFicha(TM0->TM0_NUMFIC,.f.,.t.,.t.) //Verifica se o funcionario esta demitido
+		lRet := .F.
+	Endif
+
+	If lRet
+		cFuncao := TM0->TM0_CODFUN
+		cCusto  := TM0->TM0_CC
+
+		Dbselectarea("SRA")
+		Dbsetorder(1)
+		If Dbseek(xFilial("SRA")+TM0->TM0_MAT)
+			If Empty(cFuncao)
+				cFuncao := SRA->RA_CODFUNC
+			Endif
+			If Empty(cCusto)
+				cCusto := SRA->RA_CC
+			Endif
+		Endif
+
+		Dbselectarea("TM5")
+		Dbsetorder(01)
+		If Dbseek(xFilial("TM5")+TM0->TM0_NUMFIC)
+			If Msgyesno(STR0005) //"Este funcionário já possui exames. Deseja continuar a inclusão de Exames Admissionais?"
+				lRet := .T.
+			Else
+				lRet := .F.
+			EndIf
+		Endif
+
+		If lRet
+			aRiscos := MDTRETRIS()[1]
+			NG275EXA()  // Busca os EXAMES P/ OS RISCOS
+		EndIf
+
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG275EXA
+Verifica os exames necessarios para os riscos
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function NG275EXA()
+Local OldRot, xx
+Local aExames := {}, i
+Local nContador := 0,nCnt := 0,nUsed,nColumn,nOld
+Local lGrava := .f.
+Local aArea := GetArea()
+Local oDLG3,oMenu3,oPanelDlg3,oPnlPai
+Local nOpca
+Local aPOS
+Local oTempTRB
+
+Private aSize := MsAdvSize(,.f.,430), aObjects := {}
+
+Aadd(aObjects,{050,050,.t.,.t.})
+Aadd(aObjects,{020,020,.t.,.t.})
+Aadd(aObjects,{100,100,.t.,.t.})
+aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+nSizeCli := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+nSizeLoj := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+OldRot := aCLONE(aROTINA)
+aROTINA := {}
+
+lInverte:= .f.
+cMARCA  := GetMark()
+lQuery := .t.
+
+dbSelectArea("TM4")
+
+aDBF := {}
+AADD(aDBF,{"TM4_OK"    ,"C",02,0})
+AADD(aDBF,{"TM4_EXAME" ,"C",If( TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1] ),0})
+AADD(aDBF,{"TM4_NOMEXA","C",30,0})
+AADD(aDBF,{"TM4_CODFOR","C",nSizeCOD,0})
+AADD(aDBF,{"TM4_LOJFOR","C",nSizeLOJ,0})
+AADD(aDBF,{"TM4_NOMFOR","C",40,0})
+
+aTRB1 := {}
+AADD(aTRB1,{"TM4_OK"    ,NIL," "                 ,})
+AADD(aTRB1,{"TM4_EXAME" ,NIL,STR0006             ,}) //"Exame"
+AADD(aTRB1,{"TM4_NOMEXA",NIL,STR0007,}) //"Descricao do Exame"
+AADD(aTRB1,{"TM4_CODFOR",NIL,STR0026+Space(12),}) //"Fornecedor"
+AADD(aTRB1,{"TM4_LOJFOR",NIL,STR0036,}) //"Loja"
+AADD(aTRB1,{"TM4_NOMFOR",NIL,STR0037,}) //"Nome Fornecedor"
+
+cTRBTM4 := GetNextAlias()
+
+//Cria TRB
+oTempTRB := FWTemporaryTable():New( cTRBTM4, aDBF )
+oTempTRB:AddIndex( "1", {"TM4_EXAME"} )
+oTempTRB:Create()
+
+aExames := MDTRETEXA(cFuncao,"A",aRiscos,cCliMdtps,If(lSigaMdtPS,.F.,.T.),.T.,.T.,.T.,TM0->TM0_NUMFIC)//Busca todos os exames necessarios para admissao
+For i := 1 to Len(aExames)//Grava no TRB e verifica fornecedor
+	If lSigaMdtPS
+		If !MdtTemTOL(/*Cliente*/,/*Loja*/,aExames[i][1],.F.)
+			Loop
+		Endif
+	Endif
+	dbSelectArea((cTRBTM4))
+	dbGoTop()
+	If !dbSeek(aExames[i][1])
+		aFornec := {{"     "," "}}
+		aFornec := NGUTILFOR(aExames[i][1])
+		RecLock((cTRBTM4),.T.)
+		(cTRBTM4)->TM4_OK     := cMarca
+		(cTRBTM4)->TM4_EXAME  := aExames[i][1]
+		(cTRBTM4)->TM4_NOMEXA := aExames[i][2]
+		(cTRBTM4)->TM4_CODFOR := aFornec[1][1]
+		(cTRBTM4)->TM4_LOJFOR := aFornec[1][2]
+		(cTRBTM4)->TM4_NOMFOR := Posicione("SA2",1,xFilial("SA2")+aFornec[1,1]+aFornec[1,2],"A2_NOME")
+		MsUnlock((cTRBTM4))
+	Endif
+Next i
+
+DbselectArea("TMW")
+DbsetOrder(1)
+Dbgobottom()
+Do While !BOF()
+	If TMW->TMW_FILIAL != xFilial("TMW")
+      	Dbskip(-1)
+      	Loop
+	Endif
+	If TMW->(FieldPos("TMW_CCDE")) > 0 .and. TMW->(FieldPos("TMW_CCATE")) > 0
+		If lNgMdtPs
+	      	If SubStr(cCusto,1,nSizeCli) < SubStr(TMW->TMW_CCDE,1,nSizeCli) .or. SubStr(cCusto,1,nSizeCli) > SubStr(TMW->TMW_CCATE,1,nSizeCli)
+				DbselectArea("TMW")
+		      	Dbskip(-1)
+		      	Loop
+			Endif
+		ElseIf lSigaMdtPS
+	      	If SubStr(cCusto,1,nSizeCli+nSizeLoj) < SubStr(TMW->TMW_CCDE,1,nSizeCli+nSizeLoj) .or. SubStr(cCusto,1,nSizeCli+nSizeLoj) > SubStr(TMW->TMW_CCATE,1,nSizeCli+nSizeLoj)
+				DbselectArea("TMW")
+		      	Dbskip(-1)
+		      	Loop
+			Endif
+		Endif
+	Endif
+	If dDataBase >= TMW->TMW_DTINIC .AND. dDataBase <= TMW->TMW_DTFIM
+		cPcmso := TMW->TMW_PCMSO
+		Exit
+	Endif
+	DbSkip(-1)
+End
+
+dbSelectArea((cTRBTM4))
+dbGoTop()
+nOpca := 2
+DEFINE MSDIALOG oDlg3 TITLE OemToAnsi(cCadastro) From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd Pixel
+
+	oPnlPai := TPanel():New(,,,oDlg3,,,,,,,)
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oPanelDlg3:= tPanel():New(01,01,,oPnlPai,,,,,,0,55)
+			oPanelDlg3:Align := CONTROL_ALIGN_TOP
+
+			@ 7,7    SAY OemToAnsi(STR0019) Of oPanelDlg3 Pixel  //"Ficha Medica"
+			@ 5,45   MSGET MDTHideCpo( TM0->TM0_NUMFIC, "TM0_NUMFIC" ) Picture "@!" SIZE 40,9 WHEN .f. Of oPanelDlg3 Pixel
+			@ 7,100  SAY OemToAnsi(STR0020) Of oPanelDlg3 Pixel //"Nome"
+			@ 5,120  MSGET MDTHideCpo( TM0->TM0_NOMFIC, "TM0_NOMFIC" ) Picture "@!" SIZE 130,9 WHEN .f. Of oPanelDlg3 Pixel
+
+			If ExistBlock('MDT2751') // Se existir o PE, os botões devem ser reposicionados
+				@ 40,7  BUTTON STR0029 Of oPanelDlg3 SIZE 40,11 Pixel ACTION (A275ADDEX(1),oMark:oBrowse:Refresh(.t.)) //"I&ncluir Exame"
+				@ 40,50 BUTTON STR0038 Of oPanelDlg3 SIZE 40,11 Pixel ACTION (A275ADDEX(2),oMark:oBrowse:Refresh(.t.)) //"&Alterar Exame"
+			Else
+				@ 22,7  BUTTON STR0029 Of oPanelDlg3 SIZE 40,11 Pixel ACTION (A275ADDEX(1),oMark:oBrowse:Refresh(.t.)) //"I&ncluir Exame"
+				@ 22,50 BUTTON STR0038 Of oPanelDlg3 SIZE 40,11 Pixel ACTION (A275ADDEX(2),oMark:oBrowse:Refresh(.t.)) //"&Alterar Exame"
+			EndIf
+
+		oMARK := MsSelect():NEW((cTRBTM4),"TM4_OK",,aTRB1,@lINVERTE,@cMARCA,{ 0 , 0 , 100 , 100 },,,oPnlPai)
+			oMARK:bMARK := {|| MDTA275MAQ(cMarca,lInverte)}
+			oMARK:oBROWSE:lHASMARK := .T.
+			oMARK:oBROWSE:lCANALLMARK := .T.
+			oMARK:oBROWSE:bALLMARK := {|| MDTA275INV(cMarca) }
+			oMark:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+		If Len(aSMenu) > 0
+			NgPopUp(asMenu,@oMenu3)
+			oDlg3:bRClicked:= { |o,x,y| oMenu3:Activate(x,y,oPnlPai)}
+		Endif
+
+		If ExistBlock('MDT2751')
+		    ExecBlock('MDT2751',.F.,.F.)
+		Endif
+
+ACTIVATE MSDIALOG oDlg3 ON INIT EnchoiceBar(oDlg3,{|| nOpca := 1,oDlg3:End()},{|| nOpca := 2,oDlg3:End()})CENTERED
+
+If nOpca == 1
+	NG275PROC()
+Endif
+
+dbSelectArea((cTRBTM4))
+//Use
+oTempTRB:Delete()
+aRotina := aCLONE(OldRot)
+RestArea(aArea)
+lRefresh := .t.
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCorFun
+Função para definir cores para as situações do funcionário.
+
+@author Taina Alberto Cardoso
+@since 14/04/2010
+@sample MDTA275
+
+@return aCores
+/*/
+//---------------------------------------------------------------------
+Function fCorFun()
+
+	Local aCores := { ;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) $ '30/31'"	, 'BR_PINK' 	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == ' '"    	, 'BR_VERDE'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'D'"    	, 'BR_VERMELHO'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'A'"    	, 'BR_AMARELO'	},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'F'"    	, 'BR_AZUL'		},;
+		{ "Posicione( 'SRA', 1, TM0->TM0_FILFUN + TM0->TM0_MAT, 'SRA->RA_SITFOLH' ) == 'I'"    	, 'BR_LARANJA'	};
+	}
+
+Return aCores
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG275PROC
+Grava os exames
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function NG275PROC()
+Local cCodCBO := ""
+
+Dbselectarea((cTRBTM4))
+Dbgotop()
+While !eof()
+	If Empty((cTRBTM4)->TM4_OK)
+		Dbskip()
+		Loop
+	Endif
+
+	Dbselectarea("SRJ")
+	Dbsetorder(1)
+	Dbseek(xFilial("SRJ")+cFuncao)
+	cCodCBO := SRJ->RJ_CBO
+	If !Empty(SRJ->RJ_CODCBO)
+		cCodCBO := SRJ->RJ_CODCBO
+	Endif
+
+	Dbselectarea("TM5")
+	Dbsetorder(1)
+	If !Dbseek(xFilial("TM5")+TM0->TM0_NUMFIC+DTOS(dDataBase)+(cTRBTM4)->TM4_EXAME)
+		RecLock("TM5",.t.)
+		TM5->TM5_FILIAL  := xFilial("TM5")
+		TM5->TM5_NUMFIC  := TM0->TM0_NUMFIC
+		TM5->TM5_EXAME   := (cTRBTM4)->TM4_EXAME
+		TM5->TM5_DTPROG  := dDataBase
+		TM5->TM5_FORNEC  := (cTRBTM4)->TM4_CODFOR
+		TM5->TM5_LOJA    := (cTRBTM4)->TM4_LOJFOR
+		TM5->TM5_FILFUN  := TM0->TM0_FILFUN
+		TM5->TM5_MAT     := TM0->TM0_MAT
+		TM5->TM5_ORIGEX  := If(!Empty(cPcmso),"2","1")
+		TM5->TM5_PCMSO   := cPcmso
+		TM5->TM5_INDRES  := "1"
+		TM5->TM5_NATEXA  := "1"
+		TM5->TM5_CC      := cCusto
+		TM5->TM5_CODFUN  := cFuncao
+		TM5->TM5_CBO     := cCodCBO
+		Msunlock('TM5')
+
+		If lSigaMdtps
+			MDT120GTOU()
+		Endif
+	Endif
+
+	Dbselectarea((cTRBTM4))
+	Dbskip()
+End
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA275INV
+Inverte a marcacao do browse
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@param cMarca - Contem o valor da marcação
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA275INV(cMarca)
+Local aArea := GetArea()
+
+Dbselectarea((cTRBTM4))
+Dbgotop()
+While !eof()
+	(cTRBTM4)->TM4_OK := IF(TM4_OK == "  ",cMARCA,"  ")
+	Dbskip()
+End
+
+RestArea(aArea)
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA275MAQ
+Inverte a marcacao do browse
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA275MAQ(cMarca,lInverte)
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A275GUIAPS
+Imprimi guia de prestacao de servico
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A275GUIAPS()
+Local oDlg,oScr,oCbox,o2Cbox,oCLi,oFOr
+Local nOpcc := 0
+Local aExamesPS := {}
+Local cFornec  := Space(If((TAMSX3("A2_COD")[1]) < 1,6,(TAMSX3("A2_COD")[1])))
+Local cCliente := Space(If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1])))
+Local nSizeCli := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+Local nSizeLoj := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+Local cObsGuia := Space(40)
+Local aOpcCbox := {STR0039,STR0040,STR0041} //"Em Disco"###"Via Spool"###"Via E-mail"
+Local aOpc2Cbox := {"AMB","CBHPM"}
+Local cCbox := STR0039 //"Em Disco"
+Local c2Cbox := "AMB"
+Local odtv, dDtval := CTOD("  /  /  ")
+
+
+Dbselectarea((cTRBTM4))
+Dbgotop()
+While !eof()
+	If Empty((cTRBTM4)->TM4_OK)
+		Dbskip()
+		Loop
+	Endif
+	aAdd(aExamesPS,{(cTRBTM4)->TM4_EXAME})
+	Dbskip()
+End
+If Len(aExamesPS) == 0
+	Dbselectarea((cTRBTM4))
+	Dbgotop()
+	MsgStop(STR0021+; //"Não será possível imprimir a Guia de Prestação de Serviços, pois "
+			STR0022,STR0023) //"não existe nenhum exame selecionado."###"AVISO"
+	Return
+Endif
+
+DEFINE MSDIALOG oDlg TITLE STR0024 From 0,0 To 18,45 OF oMainWnd //"Parâmetros do Relatório"
+
+@ 0,0   SCROLLBOX oScr VERTICAL SIZE 142,180 OF oDlg BORDER
+@ 05,5  SAY STR0025 Of oScr Pixel //"Tipo Impressão"
+@ 05,45 Combobox oCbox VAR cCbox ITEMS aOpcCbox SIZE 40,40 Pixel OF oScr
+@ 25,5  SAY STR0026 Of oScr Pixel //"Fornecedor"
+@ 25,45 MsGet oFor VAR cFornec Size 50,08 Picture "@!" F3 "SA2" Of oScr Pixel Valid Existcpo("SA2",cFornec) When .t.
+@ 45,5  SAY STR0027 Of oScr Pixel //"Data Validade"
+@ 45,45 MsGet oDtv VAR dDtVal Size 50,08 Picture "99/99/9999" Of oScr Pixel When .t.
+@ 65,5  SAY STR0030 Of oScr Pixel //"Observação"
+@ 65,45 MsGet cObsGuia Size 120,08 Picture "@!S40" Of oScr Pixel When .t.
+@ 85,5  SAY STR0031 Of oScr Pixel //"PCMSO"
+@ 85,45 MsGet cPcmso Size 50,08 Picture "@!" F3 "TMW" Of oScr Pixel ;
+	Valid (If(Empty(cPcmso),.t.,Existcpo("TMW",cPcmso))) When .t.
+@ 105,5  SAY STR0042 Of oScr Pixel //"Cód. Exame"
+@ 105,45 Combobox o2Cbox VAR c2Cbox ITEMS aOpc2Cbox SIZE 40,40 Pixel OF oScr
+
+DEFINE SBUTTON FROM 123,105 TYPE 1 ENABLE OF oScr ACTION EVAL({|| nOpcc := 1,oDlg:End()})
+DEFINE SBUTTON FROM 123,135 TYPE 2 ENABLE OF oScr ACTION oDlg:End()
+
+ACTIVATE MSDIALOG oDlg CENTERED
+
+If nOpcc == 1
+	lPROC := .t.
+	If lNgMdtPs
+		lDbskip := .t.
+		If TM0->(FieldPos("TM0_CLIENT")) > 0
+			If !Empty(TM0->TM0_CLIENT)
+				cCliente := TM0->TM0_CLIENT
+				lDbskip := .f.
+			Endif
+		Endif
+		If TM0->(FieldPos("TM0_CC")) > 0 .and. lDbskip
+			If !Empty(Substr(TM0->TM0_CC,1,nSizeCli))
+				cCliente := Substr(TM0->TM0_CC,1,nSizeCli)
+				lDbskip := .f.
+			Endif
+		Endif
+		Dbselectarea("SRA")
+		Dbsetorder(1)
+		If Dbseek(xFilial("SRA")+TM0->TM0_MAT) .and. lDbskip
+			If !Empty(Substr(SRA->RA_CC,1,nSizeCli))
+				cCliente := Substr(SRA->RA_CC,1,nSizeCli)
+				lDbskip := .f.
+			Endif
+		Endif
+	Endif
+
+	If lPROC
+		NG275PROC()
+	Endif
+Endif
+
+Dbselectarea((cTRBTM4))
+Dbgotop()
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A275ADDEX
+Inclui exame na lista de exames p/ GUIA
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@param nTipo - Inclusão ou Alteração.
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A275ADDEX(nTipo)
+Local oDlg,oScr
+Local nOpcz := 0
+
+Private M->TM5_EXAME  := Space(If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1]))
+Private M->TM5_FORNEC := Space(nSizeCOD)
+Private M->TM5_LOJA   := Space(nSizeLOJ)
+Private M->TM5_DTRESU := CTOD("")
+Private M->TM5_DTPROG := dDataBase
+Private aHeader := {}
+Private aCols   := {}
+
+cTitTela := STR0032 //"Inclusão de Exame"
+nLinha1 := 8
+nLinha2 := 19
+nLinha3 := 30
+
+If nTipo == 2
+	If (cTRBTM4)->(RecCount()) == 0
+		MsgStop(STR0043) //"Não será possível alterar, pois o arquivo está vazio."
+		Return .f.
+	Endif
+	M->TM5_EXAME  := (cTRBTM4)->TM4_EXAME
+	M->TM5_FORNEC := (cTRBTM4)->TM4_CODFOR
+	M->TM5_LOJA   := (cTRBTM4)->TM4_LOJFOR
+	cTitTela := STR0044 //"Alteração do Exame"
+	nLinha2 := 8
+	nLinha3 := 19
+Endif
+
+DEFINE MSDIALOG oDlg TITLE cTitTela From 0,0 To 10,30 OF oMainWnd
+
+@ 00,00 SCROLLBOX oScr VERTICAL SIZE 122,180 OF oDlg BORDER
+
+If nTipo != 2
+	@ nLinha1,05 SAY STR0006 Of oScr Pixel //"Exame"
+	@ nLinha1,30 MsGet M->TM5_EXAME Size 50,08 Picture "@!" F3 "TM4" Of oScr Pixel Valid fNG275Val(M->TM5_EXAME) When .t. HasButton
+Endif
+
+@ nLinha2,05 SAY STR0035 Of oScr Pixel //"Fornec."
+@ nLinha2,30 MsGet M->TM5_FORNEC Size 80,08 Picture "@!" F3 "FOR" Of oScr Pixel Valid fNG275VlFo(M->TM5_FORNEC+M->TM5_LOJA,,.F.) When .t. HasButton
+
+@ nLinha3,05 SAY STR0036 Of oScr Pixel //"Loja"
+@ nLinha3,30 MsGet M->TM5_LOJA Size 30,08 Picture "@!" Of oScr Pixel When .F.
+
+DEFINE SBUTTON FROM 55, 40 TYPE 1 ENABLE OF oScr ACTION EVAL({|| lRET:=fNG275VlFo(M->TM5_FORNEC+M->TM5_LOJA,,.T.),If(lRET,(nOpcz := 1,oDlg:End()),nil)})
+DEFINE SBUTTON FROM 55, 70 TYPE 2 ENABLE OF oScr ACTION oDlg:End()
+ACTIVATE MSDIALOG oDlg CENTERED
+
+If nOpcz == 1
+	Dbselectarea("TM4")
+	Dbsetorder(1)
+	If Dbseek(xFilial("TM4")+M->TM5_EXAME)
+		Dbselectarea((cTRBTM4))
+		DbGotop()
+		If !Dbseek(M->TM5_EXAME)
+			RecLock((cTRBTM4),.t.)
+			(cTRBTM4)->TM4_OK     := cMarca
+			(cTRBTM4)->TM4_EXAME  := M->TM5_EXAME
+			(cTRBTM4)->TM4_NOMEXA := TM4->TM4_NOMEXA
+			(cTRBTM4)->TM4_CODFOR := M->TM5_FORNEC
+			(cTRBTM4)->TM4_LOJFOR := M->TM5_LOJA
+			(cTRBTM4)->TM4_NOMFOR := Posicione("SA2",1,xFilial("SA2")+M->TM5_FORNEC+M->TM5_LOJA,"A2_NOME")
+			(cTRBTM4)->(MsUnLock())
+		Else
+			RecLock((cTRBTM4),.f.)
+			(cTRBTM4)->TM4_CODFOR := M->TM5_FORNEC
+			(cTRBTM4)->TM4_LOJFOR := M->TM5_LOJA
+			(cTRBTM4)->TM4_NOMFOR := Posicione("SA2",1,xFilial("SA2")+M->TM5_FORNEC+M->TM5_LOJA,"A2_NOME")
+			(cTRBTM4)->(MsUnLock())
+		Endif
+	Endif
+Endif
+
+Dbselectarea((cTRBTM4))
+Dbgotop()
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fNG275VlFo
+Valida codigo do fornecedor
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@param cFORNECLOJA	- Código do Fornecedor.
+@param nTipoV			- Tipo
+@param lConfim	 		- Indica se é confirmação
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function fNG275VlFo(cFORNECLOJA,nTipoV,lConfim)
+
+Local lRet	:=.T.
+
+Default lConfim:=.T.
+
+If lConfim
+	If !lSigaMdtPS .and. !Empty(cFORNECLOJA)
+		dbselectArea("TMD")
+		dbSetOrder(1)
+		If !Dbseek(xFilial("TMD")+cFORNECLOJA+M->TM5_EXAME)
+		   MsgStop(STR0047,STR0023)
+			lRet:=.F.
+		Else
+			If !CARRELOJA()//Funcao do MDTA120 que valida periodo de exames
+				M->TM5_LOJA := Substr(cFORNECLOJA,Len(cFornecLOJA)-Len(TM5->TM5_LOJA)+1,Len(TM5->TM5_LOJA))
+				lRet:=.F.
+			Endif
+			M->TM5_LOJA := Substr(cFORNECLOJA,Len(cFornecLOJA)-Len(TM5->TM5_LOJA)+1,Len(TM5->TM5_LOJA))
+		Endif
+	Endif
+	If Empty(cFORNECLOJA)//Verifica se o campo de fornecedor foi preenchido
+		lRet:=.F.
+		ShowHelpDlg( STR0067, {STR0068} , 2 , {STR0069} , 2  )//ATENÇÃO##O campo de Fornecedor não foi preenchido !##Favor preencher o campo.
+	Endif
+Else
+	If !ExistCpo("SA2",cFORNECLOJA,1)
+		lRet:= .f.
+	Endif
+Endif
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fNG275Val
+Valida codigo do exame
+
+@author Denis Hyroshi de Souza
+@since 25/07/2003
+@param cCodExa - Código do Exame.
+@sample MDTA275
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function fNG275Val(cCodExa)
+
+If !Existcpo("TM4",cCodExa)
+	Return .f.
+Endif
+
+If lSigaMdtps
+	If !MdtTemTOL(/*Cliente*/,/*Loja*/,cCodExa,.T.)
+		Return .f.
+	Endif
+Endif
+
+Dbselectarea((cTRBTM4))
+DbGotop()
+If Dbseek(cCodExa)
+	MsgStop(STR0033,STR0023) //"Este exame já está incluido na lista de exames."###"AVISO"
+	Return .f.
+Endif
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilização do Menu Funcional
+
+@author Rafael Diogo Richter
+@since 29/11/2006
+
+@param 1. Nome a aparecer no cabecalho
+@param 2. Nome da Rotina associada
+@param 3. Reservado
+@param 4. Tipo de Transação a ser efetuada:
+			1 - Pesquisa e Posiciona em um Banco de Dados
+			2 - Simplesmente Mostra os Campos
+			3 - Inclui registros no Bancos de Dados
+			4 - Altera o registro corrente
+			5 - Remove o registro corrente do Banco de Dados
+@param 5. Nivel de acesso
+@param 6. Habilita Menu Funcional
+
+@return aRotina
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+Local aRotina
+
+If lSigaMdtps
+	aRotina := { { STR0001,   "AxPesqui"  , 0 , 1},; //"Pesquisar"
+	             { STR0002,   "NGCAD01"   , 0 , 2},; //"Visualizar"
+	             { STR0046,   "MDT275SRA" , 0 , 4} } //"Funcionários"
+Else
+	aRotina :=	{{STR0001 	,"AxPesqui",0,1},; //"Pesquisar"
+                 {STR0002	,"NGCAD01" ,0,2},;  //"Visualizar"
+                 {STR0003  	,"MDT275EX",0,2},; //"Exames"
+                 {STR0045, "GpLegend" ,  0,  6, 0, .F.} }  //"Legenda"
+Endif
+
+Return aRotina

@@ -1,0 +1,2738 @@
+#INCLUDE "mnta340.ch"
+#INCLUDE "PROTHEUS.CH"
+
+Static lHasMNTCM := SuperGetMV( 'MV_NGMNTCM', .F., 'N' ) == 'S'
+Static lIntegRM  := Trim( SuperGetMV( 'MV_NGINTER', .F., 'N' ) ) == 'M'
+Static lAglutSA
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340
+Programa para Confirmacao de Servico de Manutencao
+@param cPlano - Plano utilizado.
+@author Inacio Luiz Kolling
+@since
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTA340(cPlano)
+
+	Local _cTRB340    := ''
+	Local _cTRBSTA340 := ''
+	Local _cTRBSTK340 := ''
+	Local cFilBrw     := ''
+	Local aNGBeginPrm := {}
+	
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 35, 95 ) .And. fVersion()
+
+		aNGBeginPrm := NGBeginPrm()
+
+		Private aVETINR  := {},lTemOSc := .f.,aSIM := {}
+		Private cPesq    := STR0004
+		Private cChavTr  := STR0011+'+'+STR0013+'+'+STR0015+'+'+STR0016
+		Private nomeprog := "MNTA340"
+		Private aSAGer   := {},INCLUI := .T.
+
+		If NGIFDICIONA("SX6",xFILIAL("SX6")+"MV_NGNUMOS")
+			NGDELETAREG("SX6")
+		Endif
+
+		If(Type("cTRB340")    == "C",_cTRB340    := cTRB340,)
+		If(Type("cTRBSTA340") == "C",_cTRBSTA340 := cTRBSTA340,)
+		If(Type("cTRBSTK340") == "C",_cTRBSTK340 := cTRBSTK340,)
+
+		PRIVATE aRotina := MenuDef()
+
+		Private cCADASTRO := If(cPlano = "L",OEMTOANSI(STR0034),OEMTOANSI(STR0007))
+									//"Conf.Plano Lubrif.","Conf.Plano Manut."
+		Private cORDEMSTJ := Space(Len(stj->tj_ordem))
+		Private lPROBLEMA := .f.
+
+		// INICIO
+		// Variaveis usadas na geracao de solicitacao de compras
+		// NAO MEXER....
+		Private aDataOPC1 := {}, aDataOPC7 := {}, aOPC1 := {}, aOPC7 := {}, vVetP  := {}, aNumSC1 := {}
+		Private cNumSC1   := Space(Len(SC1->C1_NUM)),cNuISC1 := 0, lconsterc := .t., lconsNPT  := .t.
+		// FIM
+
+		Private cUsaIntEs := AllTrim(GetMV("MV_NGMNTES"))
+		//Verifica se Gera Solicit. ao Armazem em vez de Solic. Compras
+		Private lGeraSA := .F.
+		Private aRetSA :={}
+
+		//Inicialização variáveis AEN
+		If ExistBlock("MNTA420T")
+			Private aLinhaProd := {}
+			ExecBlock("MNTA420T", .F., .F.)
+		EndIf
+
+		If NGCADICBASE('TL_NUMSA','A','STL',.F.) .And. FindFunction("NGGERASA")
+			If SuperGetMv("MV_NGGERSA",.F.,"N") $ "S/P" .And. cUsaIntEs == "S"
+				lGeraSA := .T.
+			EndIf
+		EndIf
+
+		cALMEMPE  := Space(02)
+		cALMCOMP  := Space(02)
+		cUsaIntPc := AllTrim(GETMv("MV_NGMNTPC"))
+		cUsaIntCm := AllTrim(GetMv("MV_NGMNTCM"))
+		cUsaIntEs := AllTrim(GetMv("MV_NGMNTES"))
+		lCORRET   := .T.
+
+		//---------------------------------------------------------------
+		// Endereca a funcao de BROWSE
+		//---------------------------------------------------------------
+		dbSelectArea("STI")
+		dbSeek(xFILIAL('STI'))
+		If cPlano = NIL
+			cFilBrw := "TI_FILIAL = " + ValToSQL(xFilial('STI'))
+			cFilBrw += " AND TI_SITUACA = 'P' AND TI_TERMINO <> 'S'"
+			cFilBrw += " AND (TI_LUBRIFI = 'N' OR TI_LUBRIFI <> '')"
+		Else
+			cFilBrw := "TI_FILIAL = " + ValToSQL(xFilial('STI'))
+			cFilBrw += "AND TI_SITUACA = 'P' AND TI_TERMINO <> 'S'"
+			cFilBrw += "AND TI_LUBRIFI = 'S'"
+		Endif
+
+		If Eof()
+			HELP("",1,"ARQVAZIO")
+		Else
+			MBROWSE(6,1,22,75,"STI",,,,,,,,,,,,,,cFilBrw)
+		Endif
+
+		//---------------------------------------------------------------
+		// Devolve a condicao original do arquivo principal
+		//---------------------------------------------------------------
+		dbSelectArea("STI")
+		SET FILTER TO
+		dbSetOrder(1)
+
+		Set Key VK_F9 To
+		Set Key VK_F12 To
+
+		dbSelectArea("STI")
+		dbSetOrder(1)
+		dbSeek(xFILIAL('STI'))
+
+		//---------------------------------------------------------------
+		// Devolve variaveis de Tabelas Temporarias
+		//---------------------------------------------------------------
+		cTRB340    := _cTRB340
+		cTRBSTA340 := _cTRBSTA340
+		cTRBSTK340 := _cTRBSTK340
+
+		NGRETURNPRM( aNGBeginPrm )
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340CONFP
+Funcao para montar MARKBROWSE para confirmarcao parcial
+
+@param cALIAS, string, Alias da tabela utilizada
+@param nREG, numeric, Recno da tabela utilizada
+@param nOPCX, numeric, 2-Confirma Total ou 3-Confirma Parcial
+
+@author Inacio Luiz Kolling
+@since
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340CONFP( cALIAS, nREG, nOPCX )
+
+	Local oTmpTbl1
+	Local oTmpTbl2
+	Local oTmpTbl3
+	Local oTmpTbl4
+	Local oTmpTbl5
+	Local OLDROT
+	Local aDbf         := {}
+	
+	Private cTRBZ	   := GetNextAlias()
+	Private cTRBW	   := GetNextAlias()
+	Private cTRB340	   := GetNextAlias()
+	Private cTRBSTA340 := GetNextAlias()
+	Private cTRBSTK340 := GetNextAlias()
+	Private cORDEMSTJ  := Space( Len( STJ->TJ_ORDEM ) )
+
+	// Ponto de entrada definido para possibilitar a confirmação do plano de manutenção
+	If ExistBlock("MNTA340C")
+		If !ExecBlock("MNTA340C",.F.,.F.)
+			Return .F.
+		Endif
+	Endif
+
+	cUsaIntPc     := AllTrim(GETMv("MV_NGMNTPC"))
+	cUsaIntCm     := AllTrim(GetMv("MV_NGMNTCM"))
+	cUsaIntEs     := AllTrim(GetMv("MV_NGMNTES"))
+
+	M->TI_PLANO   := STI->TI_PLANO
+	M->TI_DATAPLA := STI->TI_DATAPLA
+	aSIM          := {}
+
+	/*------------------------------------------------------------+
+    | Gera as tabelas temporarias para o processo de confirmação. |
+    +------------------------------------------------------------*/
+    MNTA340TRB( @oTmpTbl1, @oTmpTbl2, @oTmpTbl3, @oTmpTbl4, @oTmpTbl5, @aDbf )
+	
+	/*-----------------------------------------------+
+    | Carrega as infrmações nas tabelas temporarias. |
+    +-----------------------------------------------*/
+    Processa( { |lEnd| NG340TRB( nOPCX ) } )
+
+	If !FindFunction( 'MNTA340A' )
+
+		Private aRotina := { { STR0021, "a340ALTVL", 0 , 1 },; // Visualizar
+							 { STR0022, "a340ALTDT", 0 , 4 } } // Alterar Data
+
+		If lTemOSc
+			aAdd( aRotina, { STR0041, "MNT340OSL()", 0, 1 } )
+		EndIf
+
+		OldRot := aCLONE(aROTINA)
+
+		dbSelectArea(cTRB340)
+		dbGoTop()
+
+		//---------------------------------------------------------------
+		// Verifica as perguntas selecionadas
+		//---------------------------------------------------------------
+		MV_AUX := 0
+		lMARCA := .T.
+
+		If nOpcx == 3
+
+			MV_PAR01 := 1
+			lCONT    := .T.
+			MV_AUX   := MV_PAR01
+			cMarca   := GetMark()
+			lINVERTE := .F.
+			lMARCA   := .T.
+
+			dbSelectArea(cTRB340)
+			MNTA340DLG( aDBF, cMarca, cTRB340 ) // Cria markbrowse para escolher as ordens que serão liberadas
+
+			aRotina := aCLONE( OLDROT )
+
+		EndIf
+
+	EndIf
+
+	/*-----------------------------------+
+    | Grava as infrmações em definitivo. |
+    +-----------------------------------*/
+	If MNTA340SAV( nOpcX )
+
+		/*-----------------------------------+
+    	| Imprime problemas do planejamento. |
+    	+-----------------------------------*/
+		MNTA340PROB( .T. ) 
+
+	EndIf
+
+	oTmpTbl3:Delete()
+	oTmpTbl4:Delete()
+	oTmpTbl5:Delete()
+	oTmpTbl1:Delete()
+	oTmpTbl2:Delete()
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340PROC
+Função retornar o Proximo numero de OS valido
+@type function
+
+@author Paulo Pego
+@since 05/09/2012
+
+@sample A340PROC( 'STJ', 1, 3 )
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function A340PROC()
+
+	Local aNAO      := {}
+	Local nQtdOSDia := 0, nMaxOSDia := 1 // Quantidade de O.S. por Dia e Quantidade Máxima de O.S. em um Dia
+
+	Local lOK      := .T.
+	Local lManut   := .F.,lParBem := .F.
+	Local aAreaSTF := STF->(GetArea())
+	Local aDtBkp   := {}
+
+	Local cIntSFC    := If( FindFunction("NGINTSFC"), NGINTSFC(.F.), "" ) // Verifica se ha integracao com modulo Chao de Fabrica [SIGASFC]
+	Local aValuesCZ2 := {}
+
+	// Variaveis utilizadas para calculos de parada do bem
+	Private dPRE, hPRE, dPOS, hPOS
+	Private aBLO := { {},{},{},{},{} }
+
+	Store CTOD("")  To dPRE, dPOS
+	Store Space(05) To hPRE, hPOS
+
+	aSIM         := {}
+
+	dbSelectArea(cTRB340)
+	dbGoTop()
+
+	PROCREGUA(LASTREC())
+
+	BEGIN TRANSACTION
+
+		While (cTRB340)->(!Eof())
+
+			IncProc()
+			lCONT := If((lMARCA .And. !Empty(TJ_OK)) .Or. (!lMARCA .And. Empty(TJ_OK)),.t.,.f.)
+
+			dbSelectArea("STF")
+			dbSetOrder(1)
+			If dbSeek(xFilial("STF")+(cTRB340)->TJ_CODBEM+(cTRB340)->TJ_SERVICO+(cTRB340)->TJ_SEQRELA)
+				If STF->TF_UNENMAN == "H"
+					// Se estiver marcada, somente pode Liberar caso não tenha atingido o máximo de O.S. por Dia
+					If lCONT
+						// Máximo de O.S./dia
+						nMaxOSDia := MNTA340MXD((cTRB340)->TJ_CODBEM, (cTRB340)->TJ_SERVICO, (cTRB340)->TJ_SEQRELA)
+						// Quantidade de O.S. já NA BASE
+						nQtdOSDia := MNTA340QUD((cTRB340)->TJ_CODBEM, (cTRB340)->TJ_SERVICO, (cTRB340)->TJ_SEQRELA, (cTRB340)->TJ_DTORIGI)
+						// Não dede ultrapassar o máximo
+						If nQtdOSDia >= nMaxOSDia
+							lCONT := .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			If lCONT    //  01         02        03         04         05        06             07
+
+				laSIM  := .F. // Verifica se considera O.S.
+				lManut := NGIFdbSeek("STF",(cTRB340)->TJ_CODBEM+(cTRB340)->TJ_SERVICO+(cTRB340)->TJ_SEQRELA,1)
+				dbSelectArea(cTRB340)
+
+				// Se Manutencao e Unica verifica se ja foi confirmada em outros planos
+				If lManut .And. STF->TF_PERIODO == "U"
+					vaSIM := NGJAMANUNICA((cTRB340)->TJ_CODBEM,(cTRB340)->TJ_SERVICO,(cTRB340)->TJ_SEQRELA)
+					laSIM := vaSIM[1]
+				Endif
+
+				dbSelectArea("STJ")
+				dbSetOrder(1)
+				Dbgoto((cTRB340)->TJ_RECNO)
+
+				aDtBkp := {STJ->TJ_DTPPINI, STJ->TJ_HOPPINI}
+
+				// Caso a Manutencao nao seja unica, ou ainda não tenha sido confirmada
+				If !laSIM
+					
+					// Define O.S. como liberada antes da chamada da integração RM, pois o JSON limita algumas informações para O.S. pendentes
+					RecLock( 'STJ', .F. )
+						STJ->TJ_SITUACA := 'L'
+					STJ->( MsUnLock() )
+
+					If lIntegRM
+
+						lOk := NGMUMntOrd( STJ->( RecNo() ), 3 )
+
+					EndIf
+
+					If lOK
+
+						nDATA := (cTRB340)->TJ_DTMPINI - STJ->TJ_DTMPINI
+						nHORA := HTOM((cTRB340)->TJ_HOMPINI) - HTOM(STJ->TJ_HOMPINI)
+						dINI  := STJ->TJ_DTMPINI + nDATA
+						hINI  := MTOH(HTOM(STJ->TJ_HOMPINI) + nHORA)
+						dFIM  := STJ->TJ_DTMPFIM + nDATA
+						hFIM  := MTOH(HTOM(STJ->TJ_HOMPFIM) + nHORA)
+
+						// Caso a manutenção exija parada do Bem
+						If lManut .And. (lParBem := STF->TF_PARADA == "S" .Or. STF->TF_PARADA == "T")
+
+							// Inicializa variaveis com valores atuais de Parada do bem, referente a O.S.
+							dPRE  := dINI // Data Inicial prevista de Parada do Bem
+							hPRE  := hINI // Hora Inicial prevista de Parada do Bem
+							dPOS  := dFIM // Data Final prevista de Parada do Bem
+							hPOS  := hFIM // Hora Final prevista de Parada do Bem
+
+							// Realiza calculo do tempo de Parada do Bem
+							MNT330CDHP(dINI,hINI,"A",STF->TF_TEPAANT,STF->TF_UNPAANT) // Tempo Antes da Manutenção
+							MNT330CDHP(dFIM,hFIM,"D",STF->TF_TEPADEP,STF->TF_UNPADEP) // Tempo Apos a Manutenção
+
+						Endif
+
+						// Persiste dados da O.S.
+						dbSelectArea("STJ")
+						RecLock("STJ",.F.)
+						STJ->TJ_USUARIO := If(Len(STJ->TJ_USUARIO) > 15,cUsername,Substr(cUsuario,7,15))
+						STJ->TJ_TERMINO := "N"
+						STJ->TJ_DTMPINI := dINI
+						STJ->TJ_HOMPINI := hINI
+						STJ->TJ_DTMPFIM := dFIM
+						STJ->TJ_HOMPFIM := hFIM
+
+						// Caso a manutencao considere Parada do Bem
+						If lParBem
+							STJ->TJ_DTPPINI := dPRE
+							STJ->TJ_HOPPINI := hPRE
+							STJ->TJ_DTPPFIM := dPOS
+							STJ->TJ_HOPPFIM := hPOS
+						Endif
+
+						STJ->(MsUnLock())
+
+						If !Empty(cIntSFC) .And. (nDATA <> 0 .Or. nHORA <> 0) .And. STJ->TJ_PLANO > "000000" .And. lParBem .And. ;
+								!Empty(NGVRFMAQ(STJ->TJ_CODBEM))
+							aValuesCZ2 := {}
+							aAdd(aValuesCZ2,{ 'CZ2_DTBGPL' , STJ->TJ_DTPPINI    })
+							aAdd(aValuesCZ2,{ 'CZ2_HRBGPL' , Padr(Trim(Transform(STJ->TJ_HOPPINI,"99:99:99")),8,"0") })
+							aAdd(aValuesCZ2,{ 'CZ2_DTEDPL' , STJ->TJ_DTPPFIM    })
+							aAdd(aValuesCZ2,{ 'CZ2_HREDPL' , Padr(Trim(Transform(STJ->TJ_HOPPFIM,"99:99:99")),8,"0") })
+							aAdd(aValuesCZ2,{ "CZ2_TPSTSP" , NGSFCSTPP(cIntSFC) })
+							NGSFCATPRD(STJ->TJ_ORDEM, aValuesCZ2)
+						Endif
+
+						dbSelectArea(cTRB340)
+										//        01              02                 03                04               05               06                 07                08                 09                10                   11      12
+						aAdd(aSIM,{TJ_ORDEM,TJ_CODBEM,TJ_CCUSTO,TJ_DTMPINI,TJ_DIFDATA,TJ_DIFHORA,"cORDEM",TJ_DTMPFIM,TJ_SERVICO,TJ_SEQRELA,TJ_DTORIGI," "})
+					
+					Else
+
+						dbSelectArea( 'STJ' )
+						dbGoTo( (cTRB340)->TJ_RECNO )
+						
+						// Caso algum problema na integração retorna a situação para Pendente.
+						RecLock( 'STJ', .F. )
+							STJ->TJ_SITUACA := 'P'
+						STJ->( MsUnLock() )
+					
+					EndIf
+
+				Else
+
+					If lIntegRM
+
+						lOk := NGMUCanMnO( STJ->( RecNo() ) )
+					
+					EndIf
+
+					If lOk
+						cMemoSTJ := ""
+						If NGCADICBASE("TJ_MMSYP","A","STJ",.F.)
+							cMEMOSTJ := NGMEMOSYP(STJ->TJ_MMSYP)
+						Else
+							cMEMOSTJ:= STJ->TJ_OBSERVA
+						EndIf
+						cMEMOSTJ += CRLF+CRLF+vaSIM[2]
+
+						RecLock("STJ",.F.)
+						STJ->TJ_SITUACA := "C"
+						If NGCADICBASE("TJ_MMSYP","A","STJ",.F.)
+							MsMM(STJ->TJ_MMSYP,TamSx3("TJ_OBSERVA")[1],,cMEMOSTJ,1,,,"STJ","TJ_MMSYP")
+						Else
+							STJ->TJ_OBSERVA := cMEMOSTJ
+						EndIf
+						MsUnLock("STJ")
+
+						// Caso integrado ao modulo de Chao de Fabrica (SIGASFC), deleta parada programada (CZ2)
+						If STJ->TJ_PLANO > "000000" .And. !Empty(STJ->TJ_DTPPINI) .And. !Empty(cIntSFC) .And. !Empty(NGVRFMAQ(STJ->TJ_CODBEM))
+							NGSFCDELPP(STJ->TJ_ORDEM)
+						Endif
+
+						dbSelectArea(cTRB340)
+						aAdd(aNAO,{TJ_ORDEM,TJ_CODBEM,TJ_CCUSTO,TJ_DTMPINI,TJ_HOMPINI,TJ_PLANO,"P",TJ_SERVICO,TJ_SEQRELA,TJ_DTORIGI})
+					EndIf
+
+				Endif
+
+				// Atualiza Bloqueio
+				If FindFunction('MNTAJUSSH9') .And. (aDtBkp[1] <> STJ->TJ_DTPPINI .Or. aDtBkp[2] <> STJ->TJ_HOPPINI) .And. NGIFDBSEEK('ST9',STJ->TJ_CODBEM,1);
+				.And. !Empty(ST9->T9_RECFERR)
+
+					MNTAJUSSH9(STJ->TJ_ORDEM, STJ->TJ_PLANO, aDtBkp)
+
+				EndIf
+
+			Else
+				dbSelectArea(cTRB340)
+				//               01        02        03         04         05       06 07          08         09         10
+				aAdd(aNAO,{TJ_ORDEM,TJ_CODBEM,TJ_CCUSTO,TJ_DTMPINI,TJ_HOMPINI,TJ_PLANO,"P",TJ_SERVICO,TJ_SEQRELA,TJ_DTORIGI})
+			Endif
+
+			dbSelectArea(cTRB340)
+			Dbskip(1)
+
+		End
+
+		RestArea(aAreaSTF)
+
+		dbSelectArea( 'STJ' )
+		If STJ->TJ_SITUACA == 'L'
+
+			A340ASIM( aSIM, @lOk )
+
+			RecLock( 'STI', .F. )
+				STI->TI_SITUACA := 'L'
+			MsUnLock()
+
+		EndIf
+
+	END TRANSACTION 
+
+	FWFreeArray( aNAO )
+	FWFreeArray( aAreaSTF )
+	FWFreeArray( aDtBkp )
+	FWFreeArray( aValuesCZ2 )
+
+Return lOk
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340ASIM
+Processa as OS confirmadas
+@type function
+
+@author Paulo Pego
+@since
+
+@param aSIM, array  , Array que contem os valores.
+@param lOk , boolean, Indica se o processo teve alguma falha.
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340ASIM( aSIM, lOk )
+
+	Local i,xv,nFER,nFUN,nESP,nTER
+	Local aItens        := {}
+	Local lMNTA3407 	:= ExistBlock("MNTA3407")
+	Local lMNTA3408		:= ExistBlock("MNTA3408")
+	Local lMNTA3404		:= ExistBlock("MNTA3404")
+	Local lMNTA3405		:= ExistBlock("MNTA3405")
+	Local lMNTA420Q		:= ExistBlock("MNTA420Q")
+	Local lMNTA3403		:= ExistBlock("MNTA3403")
+	Local cPRODMNT		:= GetMv("MV_PRODMNT")
+	Local lTemTTY 		:= NGCADICBASE("TTY_ORDEM","A","TTY",.F.)
+	Local aOldArea
+	Local nQtdOSDia 	:= 0
+	Local nMaxOSDia 	:= 1 // Quantidade de O.S. por Dia e Quantidade Máxima de O.S. em um Dia
+	Local lLogix        := AllTrim( GetNewPar("MV_NGINTER", "N") ) == "L"
+	Local lNGTARGE      := SuperGetMV( 'MV_NGTARGE', .F., '2' ) == '1'
+	Local lNGGERSA      := SuperGetMV( 'MV_NGGERSA', .F., 'N' ) == 'S'
+	Local lNGMNTAS      := SuperGetMV( 'MV_NGMNTAS', .F., '2' ) == '1'
+	Local aLinhaProd    := {}
+	// Define se utiliza produto alternativo
+	Local lUsePrAlt := AllTrim( SuperGetMv( 'MV_MNTPRAL', .F., '2' ) ) == '1' .And. FindFunction( 'NGATUSTL' ) .And. AllTrim( SuperGetMv( 'MV_NGGERSA', .F., 'N' ) ) == 'N'
+
+	Private aBLO   := { {},{},{},{},{} }
+	Private aNewSc := {} // Utilizada quando parametro MV_MNTPRAL estiver habilitado
+	Private lPROBLEMA := .F.
+
+	// Nao mexer
+	Private lSoComp 	:= .T.
+	Private lEmpenho 	:= .T.
+	//Utilizado na função NGGERASA#Não mexer
+	Private cNumSA  	:= Space(Len(SCP->CP_NUM))
+
+	cUsaIntPc  := AllTrim(GETMv("MV_NGMNTPC"))
+	cUsaIntCm  := AllTrim(GetMv("MV_NGMNTCM"))
+	cUsaIntEs  := AllTrim(GetMv("MV_NGMNTES"))
+
+	// VERIFICA AS ORDENS Jµ CONFIRMADAS EM OUTROS PLANOS
+
+	aVETOSPL := {}
+
+	aOldArea := STJ->(GetArea())
+	
+	For xv := 1 To Len(aSIM)
+		
+		// Máximo de O.S./dia
+		nMaxOSDia := MNTA340MXD(aSIM[xv,2], aSIM[xv,9], aSIM[xv,10])
+		
+		// Quantidade de O.S. já salva no banco, exceto a O.S. em verificação.
+		nQtdOSDia := MNTA340QUD( aSIM[xv,2], aSIM[xv,9], aSIM[xv,10], aSIM[xv,11], aSIM[xv,1] )
+		
+		// Quantidade de O.S. A LIBERAR até o momento (contador 'xv')
+		If IsInCallStack("MNTA340")
+			If Len(aSIM) > 0
+				aEval(aSIM, {|x| If(x[2] == (cTRB340)->TJ_CODBEM .And. x[11] == (cTRB340)->TJ_DTORIGI, nQtdOSDia++, ) }, 1, xv)
+			EndIf
+		EndIf
+
+		// Se já estiver atingido o máximo de O.S. por Dia, deixa esta nova O.S. como Pendente ainda
+		If nQtdOSDia >= nMaxOSDia
+			aSIM[xv,12] := "P"
+			Exit
+		Endif
+
+
+	Next xv
+	RestArea(aOldArea)
+
+	PROCREGUA(LEN(aSIM))
+
+	aREGSTQ := {}
+	For i := 1 TO LEN(aSIM)
+
+		// Usado na funcao NGGERASA.. Nao mexer
+		cNumSA := Space(Len(SCP->CP_NUM))
+
+		If Empty(aSIM[i,12])
+			aBLO := {{},{},{},{},{}}
+			aSAGer := {}
+			INCPROC()
+
+			//---------------------------------------------------------------
+			// Efetua o processamento no STJ
+			//---------------------------------------------------------------
+			dbSelectArea("STJ")
+			dbSetOrder(1)
+			If dbSeek(xFILIAL('STJ')+aSIM[i][1]+M->TI_PLANO)
+				cORDEM := STJ->TJ_ORDEM
+				If lUsePrAlt .And. cUsaIntEs == 'S'
+					// Ajusta STL caso haja produto alternativo
+					NGATUSTL( STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_CODBEM )
+				EndIf
+
+				aSIM[i][07] := cORDEM
+				RecLock("STJ",.F.)
+				STJ->TJ_SITUACA := "L"
+				STJ->TJ_USUARIO := If(Len(STJ->TJ_USUARIO) > 15,cUsername,Substr(cUsuario,7,15))
+				STJ->TJ_TERMINO := "N"
+				MsUnLock("STJ")
+				// Grava o Status do STJ como "10" - Aprovado
+				If lMNTA3407
+					ExecBlock("MNTA3407",.F.,.F.)
+				EndIf
+				nSTJ := RECNO()
+				dbSelectArea("STJ")
+
+				If lIntegRM
+					
+					NGMUMntOrd( STJ->( RecNo() ), 4 )
+
+				EndIf
+
+			EndIf
+
+			cOP := cORDEM+"OS001"
+			cOP := Alltrim(cOP)+Space(Len(SC1->C1_OP)-Len(Alltrim(cOP)))
+			//---------------------------------------------------------------
+			// Muda o Numero da Ordem do STL
+			//---------------------------------------------------------------
+			dbSelectArea("STL")
+			dbSetOrder(1)
+			dbSeek(xFILIAL('STL')+aSIM[i][1]+M->TI_PLANO)
+
+			While !Eof() .And. STL->TL_FILIAL == xFILIAL('STL') .And.;
+				STL->TL_ORDEM == aSIM[i][1] .And. STL->TL_PLANO == M->TI_PLANO
+
+				dbSelectArea("STL")
+				RecLock("STL",.F.)
+				STL->TL_DTINICI := STL->TL_DTINICI + aSIM[i][5]
+				STL->TL_HOINICI := MTOH(HTOM(STL->TL_HOINICI) + aSIM[i][6])
+				If STL->TL_TIPOREG != "P"
+					STL->TL_DTFIM := STL->TL_DTFIM + aSIM[i][5]
+					STL->TL_HOFIM := MTOH(HTOM(STL->TL_HOFIM) + aSIM[i][6])
+				Else
+					STL->TL_DTFIM := STL->TL_DTINICI
+					STL->TL_HOFIM := STL->TL_HOINICI
+				Endif
+				MsUnLock("STL")
+				STL->(Dbskip())
+			End
+
+			//---------------------------------------------------------------
+			// Muda o Numero da O.S.  do STK
+			//---------------------------------------------------------------
+			dbSelectArea("STK")
+			dbSetOrder(1)
+			dbSeek(xFILIAL('STK')+aSIM[i][1]+M->TI_PLANO)
+			While !Eof() .And. STK->TK_FILIAL == xFILIAL('STK') .And.;
+				STK->TK_ORDEM == aSIM[i][1] .And. STK->TK_PLANO == M->TI_PLANO
+				dbSelectArea("STK")
+				RecLock("STK",.F.)
+				STK->TK_DATAINI := STK->TK_DATAINI + aSIM[i][5]
+				STK->TK_HORAINI := MTOH(HTOM(STK->TK_HORAINI) + aSIM[i][6])
+				STK->TK_DATAFIM := STK->TK_DATAFIM + aSIM[i][5]
+				STK->TK_HORAFIM := MTOH(HTOM(STK->TK_HORAFIM) + aSIM[i][6])
+				MsUnLock("STK")
+				STK->(Dbskip())
+			End
+
+			//---------------------------------------------------------------
+			// Muda o Numero da O.S.  do TTY
+			//---------------------------------------------------------------
+			If lTemTTY
+				dbSelectArea("TTY")
+				dbSetOrder(1)
+				dbSeek(xFILIAL("TTY")+aSIM[i][1]+M->TI_PLANO)
+				While !Eof() .And. TTY->TTY_FILIAL == xFILIAL("TTY") .And.;
+					TTY->TTY_ORDEM == aSIM[i][1] .And. TTY->TTY_PLANO == M->TI_PLANO
+					dbSelectArea("TTY")
+					RecLock("TTY",.F.)
+					TTY->TTY_DTINI := TTY->TTY_DTINI + aSIM[i][5]
+					TTY->TTY_HRINI := MTOH(HTOM(TTY->TTY_HRINI) + aSIM[i][6])
+					TTY->TTY_DTFIM := TTY->TTY_DTFIM + aSIM[i][5]
+					TTY->TTY_HRFIM := MTOH(HTOM(TTY->TTY_HRFIM) + aSIM[i][6])
+					MsUnLock("TTY")
+					TTY->(Dbskip())
+				End
+			Endif
+
+			//---------------------------------------------------------------
+			// Muda o Numero da O.S.  do ST3
+			//---------------------------------------------------------------
+			aREGST3 := {}
+			dbSelectArea("ST3")
+			dbSetOrder(2)
+			dbSeek(xFilial('ST3') + aSIM[i][1] + m->TI_PLANO)
+			While !Eof() .And. ST3->T3_FILIAL == xFILIAL("ST3") .And.;
+				ST3->T3_ORDEM == aSIM[i][1] .And. ST3->T3_PLANO == M->TI_PLANO
+				aAdd(aREGST3,Recno())
+				dbSelectArea("ST3")
+				RecLock("ST3",.F.)
+				ST3->T3_DTINI := ST3->T3_DTINI + aSIM[i][5]
+				ST3->T3_HRINI := MTOH(HTOM(ST3->T3_HRINI) + aSIM[i][6])
+				ST3->T3_DTFIM := ST3->T3_DTFIM + aSIM[i][5]
+				ST3->T3_HRFIM := MTOH(HTOM(ST3->T3_HRFIM) + aSIM[i][6])
+				MsUnLock("ST3")
+				ST3->(Dbskip())
+			End
+			dbSetOrder(1)
+
+			//---------------------------------------------------------------
+			// Gera ordem de Producao para a OS
+			//---------------------------------------------------------------
+			If cUsaIntPc == "S"         //INTEGRACAO COM O P.C.P.
+				cCODPRO  := Alltrim(If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], cPRODMNT)) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+				cCODPRO := cCODPRO+Space(Len(SB1->B1_COD)-Len(cCODPRO))
+				cOP      := aSIM[i][7] + "OS001"
+				cOP      := Alltrim(cOP)+Space(Len(SC1->C1_OP)-Len(Alltrim(cOP)))
+				DTPREINI := aSIM[i][4]
+				DTPREFIM := aSIM[i][8]
+				GERAOP(cCODPRO,1,cOP,DTPREINI,DTPREFIM)
+				//-- Grava os Campos Especificos na OP
+				dbSelectArea('SC2')
+				RecLock('SC2',.F.)
+				SC2->C2_CC      := aSIM[I][3]
+				SC2->C2_STATUS  := 'U'
+				SC2->C2_OBS     := 'PLANO '+M->TI_PLANO
+				MsUnLock('SC2')
+			Endif
+
+			dbSelectArea("STK")
+			dbSetOrder(1)
+			dbSelectArea("STJ")
+			dbSetOrder(1)
+			If lTemTTY
+				dbSelectArea("TTY")
+				dbSetOrder(1)
+			Endif
+
+			cORDEMSTJ := aSIM[i][1]
+			aREGSTL := {}
+
+			dbSelectArea("STL")
+			dbSetOrder(1)
+			dbSeek(xFILIAL('STL')+aSIM[i][1]+M->TI_PLANO)
+			While !Eof() .And. TL_FILIAL+TL_ORDEM+TL_PLANO == xFILIAL('STL')+aSIM[i][1]+M->TI_PLANO
+
+				aAdd(aREGSTL,Recno())
+
+				//---------------------------------------------------------------
+				// Monta Array para Ferramentas, Funcionarios , Especia-
+				// listas e Produtos; contendo Codigo, quantidade e prazo
+				// em que sera utilizado (Data e hora Inicio e Fim).
+				//---------------------------------------------------------------
+				nTIP := 0
+				_OK  := .F.
+				STJ->(dbSeek(xFILIAL('STJ')+aSIM[i][01]+STL->TL_PLANO))
+				STG->(dbSeek(xFILIAL('STG')+STJ->TJ_CODBEM + STJ->TJ_SERVICO+STJ->TJ_SEQRELA+STL->TL_TAREFA+STL->TL_TIPOREG+STL->TL_CODIGO))
+
+				If STL->TL_TIPOREG == "F"
+					_OK  := !(STI->TI_BLOQFER == "S" .And. STG->TG_RESERVA == "S")
+					nTIP := If(STI->TI_BLOQITE == "S" .And. STG->TG_RESERVA == "S",0,1)
+				Elseif STL->TL_TIPOREG == "M"
+					_OK  := !STK->(dbSeek(xFILIAL('STK')+STL->TL_ORDEM+STL->TL_PLANO+STL->TL_TAREFA+STL->TL_CODIGO))
+					nTIP := If(_OK,2,0)
+				Elseif STL->TL_TIPOREG == "E"
+					If lTemTTY
+						_OK  := !TTY->(dbSeek(xFILIAL('TTY')+STL->TL_ORDEM+STL->TL_PLANO+STL->TL_TAREFA+Substr(STL->TL_CODIGO,1,3)))
+						nTIP := If(_OK,3,0)
+					Else
+						_OK  := !STK->(dbSeek(xFILIAL('STK')+STL->TL_ORDEM+STL->TL_PLANO+STL->TL_TAREFA+STL->TL_CODIGO))
+						nTIP := If(_OK,3,0)
+					Endif
+				Elseif STL->TL_TIPOREG == "P"
+					_OK  := .T.
+					nTIP := 4
+				Elseif STL->TL_TIPOREG == "T"
+					_OK  := .T.
+					nTIP := 5
+				Endif
+
+				dDATAINI := STL->TL_DTINICI + aSIM[i][05]
+				dDATAFIM := STL->TL_DTFIM   + aSIM[i][05]
+				dDATAINI := MTOH(HTOM(STL->TL_HOINICI)+aSIM[i][06])
+				dDATAFIM := MTOH(HTOM(STL->TL_HOFIM)  +aSIM[i][06])
+				cALMOXA  := Space(len(sb1->b1_locpad))
+
+				If STL->TL_TIPOREG $ 'P/T'
+					cALMOXA := STL->TL_LOCAL
+				Endif
+
+				If nTIP > 0
+
+					lGrvBLO := .T.
+
+					If nTIP == 4
+
+						If lNGTARGE .And. lNGGERSA .And. !lNGMNTAS
+
+							nPosBlo := aScan( aBlo[nTip], { |aArray| aArray[1] + aArray[2] + aArray[18] == STL->TL_TAREFA + STL->TL_CODIGO + cAlmoxa } )
+
+						Else
+
+							nPosBlo := aScan( aBlo[nTip], { |aArray| aArray[2] + aArray[18] == STL->TL_CODIGO + cALMOXA } )
+
+						EndIf
+
+						If nPosBlo > 0
+
+							aBLO[nTIP][nPosBlo][3] += If(STL->TL_TIPOREG$"E/F",STL->TL_QUANREC,STL->TL_QUANTID)
+							lGrvBLO := .F.
+
+						Else
+
+							lGrvBLO := .T.
+
+						EndIf
+
+					EndIf
+
+					If lGrvBLO
+
+						// Estrutura array aBlo
+						aAdd(aBLO[nTIP]              ,;
+						   {STL->TL_TAREFA            ,; //1
+							STL->TL_CODIGO     ,; //2
+							IIf(STL->TL_TIPOREG$"E/F",STL->TL_QUANREC,STL->TL_QUANTID),; //3
+							STL->TL_DTINICI          ,; //4
+							STL->TL_HOINICI          ,; //5
+							STL->TL_DTFIM            ,; //6
+							STL->TL_HOFIM            ,; //7
+							STL->TL_ORDEM            ,; //8 Ordem de serviço
+							M->TI_PLANO              ,; //9 Plano da manutenção
+							_OK                      ,; //10 Centro de Ccusto
+							SPACE(LEN(SC1->C1_NUM))  ,; //11 Numero solicitacao compra
+							SPACE(LEN(SC1->C1_ITEM)) ,; //12 Item da solicitacao de compra
+							0.00                     ,; //13 QUANTIDADE DO ESTOQUE DA OPERACAO   TL_QTDOPER
+							SPACE(LEN(SB2->B2_LOCAL)),; //14 CODIGO DO ALMOXARIFADO OPERACAO     TL_ALMOPERA
+							0.00                     ,; //15 QUANTIDADE DO ESTOQUE DA MATRIZ     TL_QTDOMAT
+							SPACE(LEN(SB2->B2_LOCAL)),; //16 CODIGO DO ALMOXARIFADO DA MATRIZ    TL_ALMOMAT
+							0.00					 ,; //17 QUANTIDADE DA SOLICITACAO DE COMPRA TL_QTDSC1
+							STL->TL_LOCAL            ,; //18 Local
+							STL->TL_UNIDADE          ,; //19 Unidade de medida
+							''                       ,; //20 Observação do insumo
+							0.0                      ,; //21 QUANTIDADE DA SOLICITACAO DE COMPRA TL_QTDSC1
+							STL->TL_FORNEC           ,; //22 Fornecedor
+							STL->TL_LOJA             })  //23 Loja
+					
+					EndIf
+
+				EndIf
+
+				STL->( dbSkip() )
+
+			End
+
+			//---------------------------------------------------------------
+			// Efetua o bloqueio de Ferramentas
+			//---------------------------------------------------------------
+			For nFER := 1 TO LEN(aBLO[1])
+				If aBLO[1][nFER][10]
+					A330FER(aBLO[1][nFER])
+				Else
+					A340FER(aBLO[1][nFER])
+				Endif
+			Next
+
+			//---------------------------------------------------------------
+			// Efetua o bloqueio de Mao de Obras (FUNCIONARIO)
+			//---------------------------------------------------------------
+			For nFUN := 1 TO LEN(aBLO[2])
+				If aBLO[2][nFUN][10]
+					A330FUN(aBLO[2][nFUN])
+				Endif
+			Next
+
+			//---------------------------------------------------------------
+			//³Efetua o bloqueio de Especialistas (FUNCIONARIO)
+			//---------------------------------------------------------------
+			For nESP := 1 TO LEN(aBLO[3])
+				If aBLO[3][nESP][10]
+					A330ESP(aBLO[3][nESP])
+				Endif
+			Next
+
+			//---------------------------------------------------------------
+			// Efetua o bloqueio de Produtos
+			//---------------------------------------------------------------
+			nPRO    := 1
+			aItens  := {}
+			aIAglu  := {} // [PRODUTO],[LOCAL],[QUANTIDADE],[OP],[TAREFA],[C.C.],[DT. INICIO],[RESERVA],[ORDEM],[PLANO]
+			While nPRO <= Len(aBLO[4])
+
+				lSoComp  := .T.
+				If lMNTA3408
+					lSoComp := ExecBlock("MNTA3408",.F.,.F.)
+				EndIf
+
+				// INICIO DO NOVO PROCESSO DE GERACAO COMPRAS E EMPENHO
+				If !lMNTA3404
+					
+					If lSoComp
+						
+						nQTDCOMP  := aBLO[4][nPRO][3]
+						cTAREFA   := aBLO[4][nPRO][1]
+						cLOCSTL   := aBLO[4][nPRO][18]
+						cCODPRO   := Left(aBLO[4][nPRO][2], LEN(SB1->B1_COD))
+
+						If lNGTARGE .And. lNGGERSA .And. !lNGMNTAS
+
+							nPosSC := aScan( aIAglu, { |x| x[5] + x[1] + x[2] == cTarefa + cCodPro + cLocSTL } )
+
+						Else
+						
+							nPosSC := aScan( aIAglu, { |x| x[1] + x[2] == cCodPro + cLocSTL } )
+
+						EndIf
+
+						If nPosSC > 0
+
+							aIAglu[nPosSC][3] += nQTDCOMP
+
+						Else
+
+							aAdd( aIAglu, { cCodPro, cLOCSTL, nQTDCOMP, cOp, cTAREFA, STJ->TJ_CCUSTO,;
+								aBLO[4][nPRO][4], aBLO[4][nPRO][22], STJ->TJ_ORDEM, STJ->TJ_PLANO } )
+
+						EndIf
+
+					EndIf
+
+				EndIf
+				nPRO++
+			End
+
+			If !lMNTA3404
+				
+				If NGIFdbSeek('STJ',aSIM[i][1]+M->TI_PLANO,1) .And. STJ->TJ_SITUACA = "L"
+						
+					//Ponto de Entrada AEN LOGIX
+					If lMNTA420Q
+						aLinhaProd := {}
+						ExecBlock("MNTA420Q", .F., .F.)
+					Else
+						
+						If lLogix .And. Empty(aLinhaProd)
+							
+							dbSelectArea("STL")
+							dbSetOrder(1)
+							If dbSeek( xFilial("STL") + STJ->TJ_ORDEM + STJ->TJ_PLANO )
+								
+								While !Eof() .And. STJ->TJ_ORDEM == STL->TL_ORDEM .And. STJ->TJ_PLANO == STL->TL_PLANO
+									If Alltrim(STL->TL_SEQRELA) == "0"
+										aAdd(aLinhaProd, {STL->TL_CODIGO, STL->TL_ORDEM, STL->TL_QUANTID, STL->TL_CODAEN})
+									EndIf
+
+									dbSelectArea("STL")
+									dbSkip()
+								End
+							
+							EndIf
+						
+						EndIf
+
+						lOk := NGINTCOMPEST( STJ->TJ_DTMPINI, STJ->TJ_DTMPFIM, 'MNTA340', , aLinhaProd )
+
+						If !lOk
+
+							DisarmTransaction()
+
+							BREAK
+
+						EndIf
+							
+					EndIf
+
+				EndIf
+
+			EndIf
+
+			// Grava dados no STL gravados na array aBLO[4][nPRO]
+			If lMNTA3405
+				ExecBlock("MNTA3405",.F.,.F.)
+			EndIf
+
+			//---------------------------------------------------------------
+			// Efetua o bloqueio de TERCEIROS
+			//---------------------------------------------------------------
+			For nTER := 1 TO LEN(aBLO[5])
+
+				lOk := a340TER( aBLO[5][nTER], aBLO[5][nTER][18], aBLO[5][nTER][3],;
+					aBLO[5][nTER][19], .F., nTER )
+				
+				If !lOk
+
+					DisarmTransaction()
+
+					BREAK
+
+				EndIf
+
+			Next nTER
+
+			If lMNTA3403
+				Execblock("MNTA3403",.F.,.F.)
+			EndIf
+
+		Endif
+
+	Next
+
+	If lOk .And. FunName() != "MNTA365"
+		MNTW215(M->TI_PLANO,)
+	Endif
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} a340FER
+Bloqueio do Bem (Recurso) para a manutencao
+
+@param aFER - Array que contem os valores.
+
+@author Paulo Pego
+@since
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340FER(aFER)
+dbSelectArea("SH9")
+dbSetOrder(3)
+dbSeek(xFILIAL('SH9')+"F"+Left(aFER[2],LEN(SH9->H9_FERRAM))+DTOS(aFER[4])+aFER[5])
+While !Eof() .And. H9_FILIAL+H9_TIPO+H9_FERRAM+DTOS(H9_DTINI)+H9_HRINI == xFILIAL('SH9')+;
+   "F"+Left(aFER[2],LEN(SH9->H9_FERRAM))+DTOS(aFER[4])+aFER[5]
+
+   cOLD := STR0026+aFER[12]+STR0027+M->TI_PLANO //"OS.MANUT."###" PLANO "
+   cNEW := STR0026+aFER[08]+STR0027+M->TI_PLANO //"OS.MANUT."###" PLANO "
+   If TRIM(cOLD) == TRIM(SH9->H9_MOTIVO) .And. SH9->H9_ORIGEM == '1'
+      RecLock("SH9",.F.)
+      SH9->H9_MOTIVO := cNEW
+      MsUnLock("SH9")
+   Endif
+   Dbskip()
+End
+dbSetOrder(1)
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} a340TER
+Efetua uma solicitacao de compra para terceiros
+
+@param aTER - Array que contem os valores.
+@param cVLOC - Registro de saldo.
+@param nQUANTT - Quantidade.
+@param cUNIDT - Unidade.
+@param lARSC1 -
+@param nINC -
+@param cCodTer - Código do produto.
+@param cObs - Campo Obs.
+
+@author Paulo Pego
+@since
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function a340TER(aTER,cVLOC,nQUANTT,cUNIDT,lARSC1,nINC,cCodTer,cObs)
+
+	Local cOP
+	Local cLoctemp
+	Local cCODPRO   := Space(Len(SB1->B1_COD))
+	Local cCPNUM    := ''
+	Local cCPITEM   := ''
+	Local OldAli    := Alias()
+	Local lGeraSAL  := .F.
+	Local cLParCP	:= If(GetNewPar("MV_NGMNTCP","N") == "S","S","N")
+	Local aItens    := {}
+	Local lGeraSC1  := .T.
+	Local lSolicit  := .F.
+	Local aBkpACols := {}
+	Local aBkHeader := {}
+	Local lHasHeader:= Type("aHeader") == "A"
+	Local lHasAcols := Type("aCols") == "A"
+	Local lOk       := .T.
+
+	// Usado na funcao NGGERASA.. Nao mexer
+	Private cNumSA   := Space(Len(SCP->CP_NUM))
+
+	Default lAglutSA := SuperGetMv( 'MV_NGMNTAS', .F., '2' ) == '1'
+
+	// Variáveis Private
+	cUsaIntCm := AllTrim(GetMv("MV_NGMNTCM"))
+	cUsaIntEs := AllTrim(GetMv("MV_NGMNTES"))
+
+	//Verifica se Gera Solicit. ao Armazem em vez de Solic. Compras
+	//Nao mexer
+
+	If lHasAcols
+		aBkpACols := aClone( aCols )
+	EndIf
+
+	If lHasHeader
+		aBkHeader := aClone( aHeader )
+	EndIf
+
+	If NGCADICBASE('TL_NUMSA','A','STL',.F.) .And. FindFunction("NGGERASA")
+		If SuperGetMv("MV_NGGERSA",.F.,"N") == "S" .And. cUsaIntEs == "S"
+			lGeraSAL := .T.
+		EndIf
+	EndIf
+
+	If cCodTer <> Nil
+		If !Empty(cCodTer)
+			cCODPRO := cCodTer
+		Endif
+	Endif
+	// Define o tamanho mínimo do Array
+	While Len(aTer) < 14
+		aAdd(aTer, Nil)
+	End
+	lSolicit := ( ValType(aTer[14]) == "C" .And. !Empty(aTer[14]) )
+
+	If Empty(cCODPRO)
+		cCODPRO := If(FindFunction("NGProdMNT"), NGProdMNT("T")[1], PADR(GETMV("MV_PRODTER"),LEN(SB1->B1_COD))) //Ira verificar apenas o primeiro Produto Terceiro do parametro
+	Endif
+	cCODPRO := Alltrim(cCODPRO)+Space( Len(SB1->B1_COD) - Len(Alltrim(cCODPRO)))
+	cOP     := If(!lSolicit, AllTrim(aTER[8])+"OS", AllTrim(aTer[14])+"SS")+"001"
+	cOP     := Alltrim(cOP)+Space(Len(SC1->C1_OP)-Len(Alltrim(cOP)))
+	cLOCSC1 := cVLOC
+	dbSelectArea("SB1")
+	If !dbSeek(xFILIAL('SB1')+cCODPRO)
+		RecLock("SB1",.T.)
+		SB1->B1_FILIAL := xFILIAL('SB1')
+		SB1->B1_COD    := cCODPRO
+		SB1->B1_DESC   := STR0028     //"ITEM PARA CONTROLE DE MANUTENCAO"
+		SB1->B1_TIPO   := "MC"
+		SB1->B1_UM     := 'UN'
+		SB1->B1_LOCPAD := cLOCSC1
+		MsUnLock("SB1")
+		NGAtuErp("SB1","INSERT")
+	Endif
+
+	If ExistBlock("MNTA3409") .And. FunName() == "MNTA340"
+		lGeraSA := ExecBlock("MNTA3409",.F.,.F.)
+	Endif
+
+	If ExistBlock("MNTA340A")
+		cCODPRO := ExecBlock("MNTA340A",.F.,.F.)
+	Endif
+
+	cLOCSC1 := If (Empty(cLOCSC1),SB1->B1_LOCPAD,cLOCSC1)
+
+	dbSelectArea(OLDALI)
+	If cUsaIntCm == 'S'
+
+		If lGeraSAL
+
+			If Len( aTer ) > 24
+
+				cCPNUM  := aTer[24]
+				cCPITEM := aTer[25]
+
+			EndIf
+
+			aRetSA := NGGERASA( cCODPRO, aTER[8], aTER[9], aTER[3], cLOCSC1, cCPITEM,;
+				IIf( cObs != Nil, cObs, '' ), .F., aTer[14], .T., cCPNUM )
+
+			If aRetSA[5]
+
+				If !lSolicit
+					
+					dbSelectArea("STL")
+					dbSetOrder(1)
+					If dbSeek(xFilial("STL")+aTER[8]+aTER[9]+aTER[1]+"T"+aTER[2])
+						
+						Reclock("STL",.F.)
+							STL->TL_NUMSA  := aRetSA[1]
+							STL->TL_ITEMSA := aRetSA[2]
+						MsUnLock()
+
+					EndIf
+
+					If lIntegRM .And. lAglutSA .And. NGIfDbSeek( 'SCP', aRetSA[1], 01, .F. ) .And.;
+						!NGMUReques( SCP->( RecNo() ), 'SCP', .F., 3 )
+
+						Return .F.
+
+					EndIf
+
+				EndIf
+
+			Else
+
+				cTextoSTA := STR0061 //"PROBLEMA AO GERAR SOLICITACAO ARMAZEM"
+
+				If !NGIFdbSeek("STA",aTER[8]+aTER[9]+aTER[1]+"T"+aTER[2]+cTextoSTA,1,.F.)
+					MNTGRAVSTA(aTER[8],aTER[9],aTER[1],"T",aTER[2],cTextoSTA)
+				EndIf
+
+				Return aRetSA[5]
+
+			EndIf
+
+		Else //atendimento necessidade Itambe de gerar S.C. para um produto fixo na O.S. Lote de Pneus.
+
+			If cLParCP = 'N'
+				aQTDES := {nQUANTT}
+
+				If ExistBlock("MNTA340A")
+					If Len(aTER) > 22
+						
+						NGGERASC1( cCODPRO, aQtdes, cOp, aTER[4], cLOCSC1, , nINC, { 15, 16, 21 }, aTER[2], nQUANTT, cUNIDT,;
+							lARSC1, 5, IIf( cObs != Nil, cObs, '' ), , aTER[22], aTER[23], aTer[1], aTer[11], aTer[12] )
+
+					Else
+						
+						NGGERASC1( cCODPRO, aQTDES, cOp, aTER[4], cLOCSC1, , nINC, { 15, 16, 21 }, aTER[2], nQUANTT, cUNIDT,;
+							lARSC1, 5, IIf( cObs != Nil, cObs, '' ), , , ,aTer[1], aTer[11], aTer[12] )
+
+					EndIf
+				Else
+					//A quantidade  do pedido e a mesma da empenhada
+					aQTDES := {nQUANTT}
+					lGeraSC1 := .T.
+
+					/*---------------------------------------------------------------------------------------------------+
+					| Verifica se a quantidade do insumo terceiro está igual à STL e se ja foi gerada uma SC para o item |
+					| caso positivo não gera novamente. Verifica o produto para garantir que seja do tipo terceiro       |
+					+---------------------------------------------------------------------------------------------------*/
+					If NGIFDBSEEK('SC1',cOP,4) .And. SC1->C1_PRODUTO == cCODPRO .And. ;//C1_FILIAL+C1_OP+C1_NUM+C1_ITEM
+						SC1->C1_FORNECE == aTER[22] .And. SC1->C1_LOJA == aTER[23]
+
+						cAliasQry := GetNextAlias()
+
+						BeginSql Alias cAliasQry
+
+							SELECT ISNULL(SUM(C1_QUANT),0) QUANT_SC1,
+
+							(SELECT ISNULL(SUM(TL_QUANTID),0) 
+							FROM %Table:STL% STL
+							WHERE STL.TL_FILIAL = %xFilial:STL%
+								AND STL.TL_TIPOREG = 'T'
+								AND STL.TL_ORDEM = SubString(SC1.C1_OP,1,6) 
+								AND STL.%notDel%
+								GROUP BY STL.TL_ORDEM ) QUANT_STL
+
+							FROM %Table:SC1% SC1
+
+							WHERE SC1.C1_FILIAL = %xFilial:SC1%
+								AND SC1.C1_OP = %exp:cOP%
+								AND SC1.C1_PRODUTO = %exp:cCODPRO%
+								AND SC1.%notDel%
+								GROUP BY SC1.C1_OP
+
+						EndSql
+						
+						//Se a quantidade estiver correta não será inserida nova SC1
+						If (cAliasQry)->QUANT_SC1 == (cAliasQry)->QUANT_STL
+							lGeraSC1 := .F.
+						EndIf
+						dbCloseArea()
+					EndIf
+
+					If lGeraSC1
+						
+						If Len(aTER) > 22
+							
+							lOk := NGGERASC1( cCODPRO, aQTDES, cOp, aTER[4], cLOCSC1, , nINC, { 15, 16, 21 }, aTER[2], nQUANTT, cUNIDT,;
+								lARSC1, 5, IIf( cObs != Nil, cObs, '' ), , aTER[22], aTER[23], aTer[1], aTer[11], aTer[12] )[1]
+
+						Else
+
+							lOk := NGGERASC1( cCODPRO, aQTDES, cOp, aTER[4], cLOCSC1, , nINC, { 15, 16, 21 }, aTER[2], nQUANTT, cUNIDT,;
+								lARSC1, 5, IIf( cObs != Nil, cObs, '' ), , , , , aTer[11], aTer[12] )[1]
+
+						EndIf
+
+						If !lOk
+							Return lOk
+						EndIf
+
+					EndIf
+
+				EndIf
+
+			Else
+				If Len(aTER) > 22
+					aAdd( aItens, { cCodPro, nQUANTT, aTER[4], cLOCSC1, aTER[2], aTER[22], aTER[23], aTer[1], aTer[11], aTer[12] } )
+				Else
+					aAdd( aItens, { cCodPro, nQUANTT, aTER[4], cLOCSC1, aTER[2], , , aTer[1], aTer[11], aTer[12] } )
+				EndIf
+			EndIf
+		EndIf
+
+		If ExistBlock("MNTA340B") .And. (IsInCallStack("MNTA410") .Or.IsInCallStack("MNTA420"))
+			ExecBlock("MNTA340B",.F.,.F.)
+		EndIf
+
+	EndIf
+
+	//Gera registro de saldo na SB2 para se não existir
+	If Empty(cVLOC)
+		cLoctemp := Padr( SuperGetMv("MV_NGLOCPA",.F.,"01"), TamSx3("NNR_CODIGO")[1] )
+	Else
+		cLoctemp := cVLOC
+	EndIf
+	If !NGIFdbSeek("SB2",cCODPRO+cLoctemp,1)
+		CriaSB2(cCODPRO,cLoctemp)
+	EndIf
+	//Gera solicitação de compras para este produto
+	If cLParCP = 'S' .And. Len(aItens) > 0 .And. !lGeraSAL
+		
+		lOk := NGGRAVSC1CM(cOP,aItens)
+
+		If !lOk
+			Return lOk
+		EndIf
+
+		If ExistBlock("MNTA340B") .And. (IsInCallStack("MNTA410") .Or.IsInCallStack("MNTA420"))
+			ExecBlock("MNTA340B",.F.,.F.)
+		EndIf
+
+	EndIf
+	
+	//Gera empenho para este produto
+	If cUsaIntEs == "S" .And. !lGeraSAL
+		cOp	:= cOp+Space(Len(SD4->D4_OP)-Len(cOP))
+		dbSelectArea("SD4")
+		dbSetOrder(1)
+		If !dbSeek(xFilial("SD4")+cCodPro+cOp+Str(nInc,3))
+			//-- Atualiza os Empenhos
+			aTRAVAS := {}
+			GRAVAEMP(cCODPRO,cLOCSC1,nQuantt,0,'','','','',cOP,Str(nInc,3),NIL,NIL,'SC2',NIL,SC2->C2_DATPRF,@aTRAVAS,.F.,.F.,.T.,.T.,NIL,NIL,.F.)
+			dbSelectArea("SD4")
+			dbGoTo(LastRec())
+			NGAtuErp("SD4","INSERT")
+		EndIf
+	EndIf
+
+	If lHasAcols
+		aCols := aClone(aBkpACols)
+	EndIf
+
+	If lHasHeader
+		aHeader := aClone( aBkHeader )
+	EndIf
+
+Return lOk
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG340TRB
+
+@param nOPCX - Opção utilizada.
+
+@author Paulo Pego
+@since
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function NG340TRB(nOPCX)
+
+	Local nISTJ 	:= NGRETORDEM("STJ","TJ_FILIAL+TJ_TIPOOS+TJ_CODBEM+TJ_SERVICO+TJ_SEQRELA+Dtos(TJ_DTORIGI)+TJ_SITUACA",.T.)
+	Local lSeekSTJ 	:= .F.
+	Local lMNTA340G	:= ExistBlock("MNTA340G")
+
+	If nISTJ == 0
+		nISTJ := 6
+	Endif
+
+	dbSelectArea("STJ")
+	dbSetOrder(3)
+	dbSeek(xFILIAL('STJ')+M->TI_PLANO)
+	ProcRegua(LastRec())
+
+	While !Eof() .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_PLANO == M->TI_PLANO
+
+		INCPROC()
+		If STJ->TJ_SITUACA != "P" .Or. stj->tj_tipoos <> "B"
+			Dbskip()
+			LOOP
+		Endif
+
+		dbSelectArea(cTRBW)
+		DbAppend()
+		(cTRBW)->TJ_ORDEM   := STJ->TJ_ORDEM
+		(cTRBW)->TJ_PLANO   := STJ->TJ_PLANO
+		(cTRBW)->TJ_CODBEM  := STJ->TJ_CODBEM
+		(cTRBW)->TJ_SERVICO := STJ->TJ_SERVICO
+		(cTRBW)->TJ_SEQRELA := STJ->TJ_SEQRELA
+		(cTRBW)->TJ_DTORIGI := STJ->TJ_DTORIGI
+		(cTRBW)->TJ_DTMPINI := STJ->TJ_DTMPINI
+		(cTRBW)->TJ_HOMPINI := STJ->TJ_HOMPINI
+		(cTRBW)->TJ_DTMPFIM := STJ->TJ_DTMPFIM
+		(cTRBW)->TJ_HOMPFIM := STJ->TJ_HOMPFIM
+		(cTRBW)->TJ_CCUSTO  := STJ->TJ_CCUSTO
+		(cTRBW)->TJ_RECNO   := STJ->(RECNO())
+		dbSelectArea("STJ")
+		Dbskip()
+	End
+
+	dbSelectArea(cTRBW)
+	dbGoTop()
+	ProcRegua(LastRec())
+	While !Eof()
+		INCPROC()
+
+		dbSelectArea("STJ")
+		dbSetOrder(nISTJ)
+		lSeekSTJ := dbSeek(xFILIAL('STJ')+"B"+(cTRBW)->TJ_CODBEM+(cTRBW)->TJ_SERVICO+(cTRBW)->TJ_SEQRELA+Dtos((cTRBW)->TJ_DTORIGI)+"L")
+		If !lSeekSTJ .Or. ( lSeekSTJ .And. MNTA340OSD((cTRBW)->TJ_CODBEM, (cTRBW)->TJ_SERVICO, (cTRBW)->TJ_SEQRELA, (cTRBW)->TJ_DTORIGI) )
+			dbSelectArea("ST9")
+			dbSeek(xFILIAL("ST9")+(cTRBW)->TJ_CODBEM)
+			dbSelectArea("ST4")
+			dbSeek(xFILIAL("ST4")+(cTRBW)->TJ_SERVICO)
+			dbSelectArea(cTRB340)
+			DbAppend()
+			(cTRB340)->TJ_ORDEM   := (cTRBW)->TJ_ORDEM
+			(cTRB340)->TJ_PLANO   := (cTRBW)->TJ_PLANO
+			(cTRB340)->TJ_CODBEM  := (cTRBW)->TJ_CODBEM
+			(cTRB340)->TJ_T9NOMEB := ST9->T9_NOME
+			(cTRB340)->TJ_SERVICO := (cTRBW)->TJ_SERVICO
+			(cTRB340)->TJ_T4NOMSE := ST4->T4_NOME
+			(cTRB340)->TJ_SEQRELA := (cTRBW)->TJ_SEQRELA
+			(cTRB340)->TJ_DTORIGI := (cTRBW)->TJ_DTORIGI
+			(cTRB340)->TJ_DTMPINI := (cTRBW)->TJ_DTMPINI
+			(cTRB340)->TJ_HOMPINI := (cTRBW)->TJ_HOMPINI
+			(cTRB340)->TJ_DTMPFIM := (cTRBW)->TJ_DTMPFIM
+			(cTRB340)->TJ_HOMPFIM := (cTRBW)->TJ_HOMPFIM
+			(cTRB340)->TJ_CCUSTO  := (cTRBW)->TJ_CCUSTO
+			(cTRB340)->TJ_RECNO   := (cTRBW)->TJ_RECNO
+			If nOPCx == 2
+				(cTRB340)->TJ_OK  := "ng"
+			Endif
+
+			//Carrega os campos criado pelo ponto de entrada MNTA340G
+			If lMNTA340G
+				ExecBlock("MNTA340G",.F.,.F.,{cTRB340})
+			EndIf
+
+		Else
+
+			dbSelectArea(cTRBZ)
+			DbAppend()
+			(cTRBZ)->ORDEM   := (cTRBW)->TJ_ORDEM
+			(cTRBZ)->PLANO   := (cTRBW)->TJ_PLANO
+			(cTRBZ)->CODBEM  := (cTRBW)->TJ_CODBEM
+			(cTRBZ)->SERVICO := (cTRBW)->TJ_SERVICO
+			(cTRBZ)->SEQRELA := (cTRBW)->TJ_SEQRELA
+			(cTRBZ)->DTORIGI := (cTRBW)->TJ_DTORIGI
+			(cTRBZ)->ORDEML  := STJ->TJ_ORDEM
+			(cTRBZ)->PLANOL  := STJ->TJ_PLANO
+			lTemOSc       := .t.
+		Endif
+
+		dbSelectArea(cTRBW)
+		Dbskip()
+	End
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340ALTDT
+Altera a data e hora prevista na manutencao
+
+@param cALIAS - Alias da tabela utilizada.
+@param nREG - Recno utilizado.
+@param nOPCX - Opção utilizada.
+
+@author Paulo Pego
+@since
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340ALTDT(cALIAS,nREG,nOPCX)
+Local oDLG5, oPnlPai, oMenu
+
+Local nOPCA := 0
+Local dDATA := (cTRB340)->TJ_DTMPINI
+Local cHORA := (cTRB340)->TJ_HOMPINI
+
+DEFINE MSDIALOG oDLG5 TITLE OEMTOANSI(STR0029)+'  O.S. '+(cTRB340)->TJ_ORDEM FROM 00,00 TO 120,350 OF oMAINWND PIXEL //"Altera a Data/Hora Prevista"
+oPnlPai := TPanel():New(00,00,,oDLG5,,,,,,70,21,.F.,.F.)
+	oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+@ 12,25 SAY OEMTOANSI(STR0032) SIZE 37,7 OF oPnlPai PIXEL //"Data..:"
+@ 12,95 SAY OEMTOANSI(STR0033) SIZE 37,7 OF oPnlPai PIXEL //"Hora..:"
+@ 10,45   MSGET dDATA SIZE 45,10 OF oPnlPai PIXEL PICTURE "99/99/99" HASBUTTON
+@ 10,115  MSGET cHORA SIZE 10,10 OF oPnlPai PIXEL PICTURE "99:99"
+
+NGPOPUP(aSMenu,@oMenu)
+oPnlPai:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPnlPai)}
+ACTIVATE MSDIALOG oDLG5 ON INIT EnchoiceBar(oDLG5,{|| nOPCA := 1, If(MNT340VLDT(dDATA, cHORA),oDLG5:END(),nOPCA := 0)}, {|| oDLG5:END()})
+
+If nOPCA = 1
+   nDATA := (dDATA - (cTRB340)->TJ_DTMPINI)
+   nHORA := (HTOM(cHORA) - HTOM((cTRB340)->TJ_HOMPINI))
+   (cTRB340)->TJ_DIFDATA := nDATA
+   (cTRB340)->TJ_DIFHORA := nHORA
+   (cTRB340)->TJ_DTMPINI := (cTRB340)->TJ_DTMPINI + nDATA
+   (cTRB340)->TJ_HOMPINI := MTOH(HTOM((cTRB340)->TJ_HOMPINI) + nHORA)
+   (cTRB340)->TJ_DTMPFIM := (cTRB340)->TJ_DTMPFIM + nDATA
+   (cTRB340)->TJ_HOMPFIM := MTOH(HTOM((cTRB340)->TJ_HOMPFIM) + nHORA)
+   MsUnLock(cTRB340)
+Endif
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340ALTVL
+Visualiza o registro
+
+@param dDATA - Data utilizada.
+@param cHORA - Hora utilizada.
+
+@author Hugo Rizzo Pereira
+@since 28/11/11
+
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNT340VLDT(dDATA, cHORA)
+
+Local cIntSFC := If( FindFunction("NGINTSFC"), NGINTSFC(.F.), "" ) // Verifica se ha integracao com modulo Chao de Fabrica [SIGASFC]
+
+Local dDtPIni, cHrPIni
+Local dDtPFim, cHrPFim
+Local lRet := .T.
+
+Local aArea := GetArea()
+Local aAreaSTJ := STJ->(GetArea())
+
+Local nDATA := (dDATA - (cTRB340)->TJ_DTMPINI)
+Local nHORA := (HTOM(cHORA) - HTOM((cTRB340)->TJ_HOMPINI))
+
+If (nDATA <> 0 .Or. nHORA <> 0) .And. (cTRB340)->TJ_PLANO > "000000" .And. NGIFdbSeek("STJ",(cTRB340)->TJ_ORDEM+(cTRB340)->TJ_PLANO,1)
+	If !Empty(STJ->TJ_DTPPINI) .And. !Empty(cIntSFC) .And. !Empty(NGVRFMAQ(STJ->TJ_CODBEM))
+
+		dDtPIni := STJ->TJ_DTPPINI + nDATA
+		cHrPIni := MTOH(HTOM(STJ->TJ_HOPPINI) + nHORA)
+
+		dDtPFim := STJ->TJ_DTPPFIM + nDATA
+		cHrPFim := MTOH(HTOM(STJ->TJ_HOPPFIM) + nHORA)
+
+		aValuesCZ2 := {}
+		aAdd(aValuesCZ2,{ 'CZ2_DTBGPL' , dDtPIni            })
+		aAdd(aValuesCZ2,{ 'CZ2_HRBGPL' , Padr(Trim(Transform(cHrPIni,"99:99:99")),8,"0") })
+		aAdd(aValuesCZ2,{ 'CZ2_DTEDPL' , dDtPFim            })
+		aAdd(aValuesCZ2,{ 'CZ2_HREDPL' , Padr(Trim(Transform(cHrPFim,"99:99:99")),8,"0") })
+		aAdd(aValuesCZ2,{ "CZ2_TPSTSP" , NGSFCSTPP(cIntSFC) })
+
+		If !NGSFCVPRD(STJ->TJ_ORDEM) .Or. !NGSFCATPRD(STJ->TJ_ORDEM, aValuesCZ2, .F., .F.)
+			NGSFCSNDML(2, {{STJ->TJ_ORDEM,,dDtPIni,cHrPIni,dDtPFim,cHrPFim}})
+			lRet := .F.
+		Endif
+	Endif
+Endif
+
+RestArea(aArea)
+RestArea(aAreaSTJ)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340ALTVL
+Visualiza o registro
+
+@param cALIAS -Alias da tabela utilizada.
+@param nREG - Recno ulitizado.
+@param nOPCX - Opção utilizada.
+
+@author Paulo Pego
+@since 09/11/99
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340ALTVL(cALIAS,nREG,nOPCX)
+
+Private lSituaca := .t.
+dbSelectArea("STJ")
+dbSetOrder(1)
+If dbSeek(xFILIAL('ST9')+(cTRB340)->TJ_ORDEM+M->TI_PLANO)
+
+   TIPOACOM  := .f.
+   TIPOACOM2 := .f.
+   If ST9->T9_TEMCONT <> "N"
+      TIPOACOM  := .t.
+      TIPOACOM2 := .t.
+   Endif
+
+   NGCAD01("STJ",RECNO(),2)
+Endif
+
+dbSelectArea(cTRB340)
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340MARCA
+Consiste o campo OK
+
+@author Paulo Pego
+@since 09/11/99
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340MARCA()
+
+If LastKey() == K_ENTER                                // Marca Corrente
+   RecLock(cTRB340,.F.)
+   REPLACE (cTRB340)->TJ_OK WITH IIF(Empty((cTRB340)->TJ_OK),cMARCA,"  ")
+   MsUnLock(cTRB340)
+Elseif LastKey() == K_ALT_M                             // Marca todos
+   dbSelectArea(cTRB340)
+   dbGoTop()
+   While !Eof()
+      RecLock(cTRB340,.F.)
+      (cTRB340)->TJ_OK := cMARCA
+      MsUnLock(cTRB340)
+      Dbskip()
+   End
+   dbSelectArea(cTRB340)
+   dbGoTop()
+Elseif LastKey() == K_ALT_R                             // Remove todas as marcas
+   dbSelectArea(cTRB340)
+   dbGoTop()
+   While !Eof()
+      RecLock(cTRB340,.F.)
+      (cTRB340)->TJ_OK :=  "  "
+      MsUnLock(cTRB340)
+      Dbskip()
+   End
+   dbSelectArea(cTRB340)
+   dbGoTop()
+Endif
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A340INVERT
+Inverte marcacoes - Windows
+
+@param cAliasTRB - Alias da TRB utilizada.
+
+@author Paulo Pego
+@since 09/11/99
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function A340INVERT(cAliasTRB)
+
+	Local nREG := (cAliasTRB)->(RECNO())
+
+	dbSelectArea(cAliasTRB)
+	dbGoTop()
+	While !Eof()
+		(cAliasTRB)->TJ_OK := IIF(TJ_OK == "  ",cMARCA,"  ")
+		Dbskip()
+	End
+
+	(cAliasTRB)->(Dbgoto(nREG))
+	lREFRESH := .T.
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de menu Funcional
+
+Parametros³Parametros do array a Rotina:
+   1. Nome a aparecer no cabecalho
+   2. Nome da Rotina associada
+   3. Reservado
+   4. Tipo de Transação a ser efetuada:
+      1 - Pesquisa e Posiciona em um Banco de Dados
+      2 - Simplesmente Mostra os Campos
+      3 - Inclui registros no Bancos de Dados
+      4 - Altera o registro corrente
+      5 - Remove o registro corrente do Banco de Dados
+      5. Nivel de acesso
+      6. Habilita Menu Funcional
+
+@author Ricardo Dal Ponte
+@since 29/11/2006
+
+@return aRotina
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := { 	{ STR0004, 'AxPesqui' , 0 , 1    },; // Pesquisar
+						{ STR0005, 'A340CONFP', 0 , 4, 0 } } // Total
+
+	If FindFunction( 'MNTA340A' )
+		aAdd( aRotina, { STR0006, 'MNTA340A' , 0, 4, 0 } ) // Individual
+	Else
+		aAdd( aRotina, { STR0006, 'A340CONFP', 0, 4, 0 } ) // Individual
+	EndIf
+
+	If ExistBlock("MNTA340F")
+		aAdd(aRotina,{STR0062,"U_MNTA340F",0,1}) //"Imp. Problemas"
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340OSL
+Browse das ordens de servico liberadas em outros planos
+
+@author Inacio Luiz Kolling
+@since 28/05/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNT340OSL()
+Local aAreaAP := GetArea(),OldRotP := aCLONE(aROTINA), aTRB2 := {}
+Local cCadOlP := cCadastro
+cCadastro     := STR0046
+aROTINA       := {{STR0004,"NGPESQTRB(cTRBZ,{cChavTr},33,cPesq)",0,1},;
+                  {STR0044,"MNT340VL((cTRBZ)->ORDEM+(cTRBZ)->PLANO)",0,2},;
+                  {STR0045,"MNT340VL((cTRBZ)->ORDEML+(cTRBZ)->PLANOL)",0,2},;
+                  {STR0047,"MNT340IL()",0,4}}
+
+aAdd(aTRB2,{STR0009             ,"ORDEM"  ,"C",06,0,"@!"})
+aAdd(aTRB2,{STR0010             ,"PLANO"  ,"C",06,0,"@!"})
+aAdd(aTRB2,{STR0011             ,"CODBEM" ,"C",16,0,"@!"})
+aAdd(aTRB2,{STR0013             ,"SERVICO","C",06,0,"@!"})
+aAdd(aTRB2,{STR0015             ,"SEQRELA","C",03,0,"@!"})
+aAdd(aTRB2,{STR0016             ,"DTORIGI","D",08,0,"99/99/99"})
+aAdd(aTRB2,{STR0009+" "+STR0042 ,"ORDEML" ,"C",06,0,"@!"})
+aAdd(aTRB2,{STR0010+" "+STR0043 ,"PLANOL" ,"C",06,0,"@!"})
+
+MBROWSE(6,1,22,75,cTRBZ,aTRB2)
+
+aROTINA   := aCLONE(OldRotP)
+cCadastro := cCadOlP
+RestArea(aAreaAP)
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340VL
+Visualizacao da ordem de servico
+
+@param cChaV - Chave de acesso
+
+@author Inacio Luiz Kolling
+@since 28/05/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNT340VL(cChaV)
+Local aAreaVL := GetArea()
+Local cCadOVL := cCadastro
+cCadastro := NGSX2NOME("STJ")
+NGIFdbSeek("STJ",cChaV,1)
+NGCAD01("STJ",Recno(),2)
+cCadastro := cCadOVL
+RestArea(aAreaVL)
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340IL
+Chamada da impressao do resultado
+
+@param lLibnP - Tipo do Plano.
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNT340IL(lLibnP)
+Local aAreaAA := GetArea()
+Local cString := "STJ"
+Local cdesc1  := STR0046
+Local cdesc2  := " "
+Local cdesc3  := " "
+Local wnrel   := "MNTA340"
+
+Private aReturn  := { STR0048, 1,STR0049, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+Private nLastKey := 0
+Private Titulo   := STR0046
+Private Tamanho  := "P"
+Private lTipOsP  := If(lLibnP = Nil,.f.,.t.)
+
+If lTipOsP
+   cdesc1  := STR0052+" "+STI->TI_PLANO
+   Titulo  := cdesc1
+   Tamanho := "M"
+Endif
+
+wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+If nLastKey = 27
+   Set Filter To
+   dbSelectArea("STJ")
+   Return
+EndIf
+
+SetDefault(aReturn,cString)
+If nLastKey = 27
+   Set Filter To
+   dbSelectArea("STJ")
+   Return
+EndIf
+
+RptStatus({|lEnd| MNT340CHI(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+RestArea(aAreaAA)
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340CHI
+Chamada do Relatório de impressao tolerancia
+
+@param lEnd - Cancela a impressão.
+@param wnRel - Programa utilizado.
+@param titulo - Titulo do relatório.
+@param tamanho - Tamanho do relatório.
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function MNT340CHI(lEnd,wnRel,titulo,tamanho)
+Local cRodaTxt := ""
+Local nCntImpr := 0
+Private li := 80 ,m_pag := 1
+Private Cabec1   := STR0050
+Private Cabec2   := " "
+Private nomeprog := "MNTA340"
+Private nTipo    := IIF(aReturn[4]==1,15,18)
+
+If lTipOsP
+   Cabec1   := STR0055
+
+   /*/
+             1         2         3         4         5         6         7         8         9       100       110       120       130
+   0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+   *************************************************************************************************************************************
+   ORDEM  CODBEM           NOME                           SERVICO NOME                  SEQ. DT.ORIGI DT.INICIO  HORA   DT. FIM   HORA
+   *************************************************************************************************************************************
+   xxxxxx xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxx  xxxxxxxxxxxxxxxxxxxx  xxx  99/99/99  99/99/99  99:99  99/99/99  99:99
+   /*/
+
+   dbSelectArea(cTRB340)
+   dbGoTop()
+   SetRegua(LastRec())
+   While !Eof()
+      NGSOMALI(58)
+      @LI,000 Psay (cTRB340)->TJ_ORDEM   Picture "@!"
+      @LI,007 Psay (cTRB340)->TJ_CODBEM  Picture "@!"
+      @LI,024 Psay (cTRB340)->TJ_T9NOMEB Picture "@!"
+      @LI,055 Psay (cTRB340)->TJ_SERVICO Picture "@!"
+      @LI,063 Psay (cTRB340)->TJ_T4NOMSE Picture "@!"
+      @LI,085 Psay (cTRB340)->TJ_SEQRELA Picture "@!"
+      @LI,090 Psay (cTRB340)->TJ_DTORIGI Picture "99/99/99"
+      @LI,100 Psay (cTRB340)->TJ_DTMPINI Picture "99/99/99"
+      @LI,110 Psay (cTRB340)->TJ_HOMPINI Picture "99:99"
+      @LI,117 Psay (cTRB340)->TJ_DTMPFIM Picture "99/99/99"
+      @LI,127 Psay (cTRB340)->TJ_HOMPFIM Picture "99:99"
+      dbSelectArea(cTRB340)
+      dbSkip()
+   End
+
+Else
+   /*/
+             1         2         3         4         5         6         7
+   01234567890123456789012345678901234567890123456789012345678901234567890123456789
+   ********************************************************************************
+   ORDEM  PLANO   CODBEM            SERVICO  SEQ. DTORIGI     O.S. LIB.  PLANO LIB.
+   ********************************************************************************
+   xxxxxx xxxxxx  xxxxxxxxxxxxxxxx  xxxxxx   xxx  99/99/99    xxxxxx     xxxxxx
+   /*/
+
+   dbSelectArea(cTRBZ)
+   dbGoTop()
+   SetRegua(LastRec())
+   While !Eof()
+      NGSOMALI(58)
+      @LI,000 Psay (cTRBZ)->ORDEM   Picture "@!"
+      @LI,007 Psay (cTRBZ)->PLANO   Picture "@!"
+      @LI,015 Psay (cTRBZ)->CODBEM  Picture "@!"
+      @LI,033 Psay (cTRBZ)->SERVICO Picture "@!"
+      @LI,042 Psay (cTRBZ)->SEQRELA Picture "@!"
+      @LI,047 Psay (cTRBZ)->DTORIGI Picture "99/99/99"
+      @LI,059 Psay (cTRBZ)->ORDEML  Picture "@!"
+      @LI,070 Psay (cTRBZ)->PLANOL  Picture "@!"
+      dbSelectArea(cTRBZ)
+      dbSkip()
+   End
+Endif
+Roda(nCntImpr,cRodaTxt,Tamanho)
+
+RetIndex("STJ")
+Set Filter To
+Set device To Screen
+
+If aReturn[5] = 1
+   Set Printer To
+   dbCommitAll()
+   OurSpool(wnrel)
+EndIf
+MS_FLUSH()
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340LT
+Montagem do Browse de OS's liberadas pelo plano.
+@type function
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@sample MNT340LT()
+
+@obs Reescrito por Alexandre Santos, 24/10/2018.
+/*/
+//---------------------------------------------------------------------
+Function MNT340LT()
+
+	Local aAreaAT := GetArea()
+	Local aRotOld := aClone( aRotina )
+	Local cExpFil := 'STJ->TJ_PLANO == STI->TI_PLANO'
+	Local cCadOlT := cCadastro
+	Local oBrowse := Nil
+
+	cCadastro     := STR0052 + Space(1) + STI->TI_PLANO
+	aRotina       := {{STR0044, "NgCad01", 0, 2}} //Vis. O.S. Plano
+
+	If (cTRBZ)->( Reccount() ) > 0
+   		aAdd( aRotina, {STR0041, 'MNT340OSL()', 0, 1} ) //Liber. Planos
+	EndIf
+
+	oBrowse := FWMBrowse():New()
+	oBrowse:SetAlias( 'STJ' )
+	oBrowse:SetDescription( cCadastro )
+	oBrowse:SetFilterDefault( cExpFil )
+	oBrowse:Activate()
+
+	aRotina   := aClone(aRotOld)
+	cCadastro := cCadOlT
+
+	RestArea(aAreaAT)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340PROB
+Verifica se tem problemas nas ordens confirmadas
+
+@param lLiberadas - Situação.
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA340PROB( lLiberadas )
+
+	Local aAreaAT   := GetArea()
+	Local lTemProb  := .F.
+	Local cAliasQry := GetNextAlias()
+	Local cCondSql	:= "%%"
+
+	Default lLiberadas := .F.
+
+	If lLiberadas
+		cCondSql := "%AND STJ.TJ_SITUACA = 'L' AND STJ.TJ_TERMINO = 'N'%"
+	EndIf
+
+	BeginSql Alias cAliasQry
+
+		SELECT COUNT( STJ.TJ_ORDEM ) TOTAL
+		FROM %Table:STJ% STJ
+		JOIN %Table:STA% STA
+			ON STJ.TJ_ORDEM = STA.TA_ORDEM
+			AND STJ.TJ_PLANO = STA.TA_PLANO
+			AND STA.TA_FILIAL = %xFilial:STA%
+			AND STA.%notDel%
+		WHERE STJ.TJ_FILIAL = %xFilial:STJ%
+			AND STJ.TJ_PLANO = %exp:M->TI_PLANO%
+			AND STJ.%notDel%
+			%exp:cCondSql%
+
+	EndSql
+
+	lTemProb := (cAliasQry)->TOTAL > 0
+
+	(cAliasQry)->( dbCloseArea() )
+
+	If lTemProb
+		If ExistBlock("MNTA340F") //Verifica se o relatório personalizado de problemas do plano existe
+			ExecBlock("MNTA340F",.F.,.F.,{.T.})
+		ElseIf MsgYesNo(STR0056)
+			MNTA340STA(lLiberadas)
+		Endif
+	Endif
+
+	RestArea(aAreaAT)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340STA
+Relacao Das Ordens de Servico de manutencao
+
+@param lLiberadas - Situação.
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA340STA(lLiberadas)
+	Local cString := "STJ"
+	Local wnrel   := "MNTA340"
+	Local cDesc1  := STR0057
+	Local cDesc2  := " "
+	Local cDesc3  := " "
+
+	Private aReturn  := { STR0048, 1,STR0049, 2, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cPerg    := "XXXXXX"
+	Private titulo   := STR0058+" "+M->TI_PLANO
+	Private cabec1,cabec2
+	Private Tamanho  := "G"
+	Private ntipo    := 0
+	Private nomeprog := "MNTA340"
+
+	Pergunte(cPerg,.F.)
+
+	//---------------------------------------------------------------
+	// Envia controle para a funcao SETPRINT
+	//---------------------------------------------------------------
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+	Set Filter To
+	Return
+	Endif
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| R340Imp(@lEnd,wnRel,titulo,tamanho,lLiberadas)},titulo)
+	dbSelectArea("STI")
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R340Imp
+Chamada do Relatório
+
+@param lEnd - Cancela a impressão.
+@param wnRel - Programa utilizado.
+@param titulo - Titulo do relatório.
+@param tamanho - Tamanho do relatório.
+@param lLiberadas - Situação.
+
+@author Inacio Luiz Kolling
+@since 23/10/2009
+
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function R340Imp(lEnd,wnRel,titulo,tamanho,lLiberadas)
+
+
+Local cRodaTxt         := ""
+Local nCntImpr         := 0,nF := 0
+Private li := 80 ,m_pag := 1
+nTipo      := IIF(aReturn[4]==1,15,18)
+
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³ Monta os Cabecalhos                                          ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+cabec1 := STR0059//"Pri O.S.   Bem              Nome                                     Servico Descricao                                                    Seq.  Manutencao                                C.Tra.  Area"
+cabec2 := STR0060//"                                                                     .....Inicio..... .......Fim...... Ult.Man.                           Contador "
+
+//       1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         20        210     220
+//01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+// ____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+// Pri O.S.   Bem              Nome                                     Servico Descricao                                                    Seq.  Manutencao                                C.Tra.  Area
+//                                                                      .....Inicio..... .......Fim...... Ult.Man.                           Contador "
+// ____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+//
+// xxx xxxxxx xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                      999  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxx  xxxxxx
+//            xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xx/xx/xxxx xx:xx xx/xx/xxxx xx:xx xx/xx/xxxx 999.999.999 xxx  xxx  xxx  xxx
+//                          xxxxx0 EspeciaL.xx ELExxxxxxxxxxxx ELETRONICO 01xxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+//                          xxxxx0 EspeciaL.xx ELExxxxxxxxxxxx ELETRONICO 01xxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+If NGIFdbSeek("STJ",M->TI_PLANO,3)
+   SetRegua(LastRec())
+   While !Eof() .And. stj->tj_filial = Xfilial("STJ") .And. stj->tj_plano = M->TI_PLANO
+      IncRegua()
+      If !lLiberadas .or. (stj->tj_situaca = 'L' .And. stj->tj_termino = 'N')
+         If NGIFdbSeek("STA",STJ->TJ_ORDEM+STJ->TJ_PLANO,1)
+            NGSomali(58)
+            @ Li,000 Psay STJ->TJ_PRIORID
+            @ Li,004 Psay STJ->TJ_ORDEM
+            @ Li,011 Psay STJ->TJ_CODBEM
+            @ Li,028 Psay Substr(NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_NOME"),1,40)
+            @ Li,069 Psay STJ->TJ_SERVICO
+            @ Li,077 Psay Substr(NGSEEK("ST4",STJ->TJ_SERVICO,1,"T4_NOME"),1,40)
+            @ Li,139 Psay STJ->TJ_SEQRELA Picture "@!"
+            @ Li,144 Psay Substr(NGSEEK("STF",STJ->TJ_CODBEM+STJ->TJ_SERVICO+STJ->TJ_SEQRELA,1,"TF_NOMEMAN"),1,40)
+            @ Li,186 Psay STJ->TJ_CENTRAB
+            @ Li,194 Psay STJ->TJ_CODAREA
+            NGSomali(58)
+            @ Li,069 Psay STJ->TJ_DTMPINI Picture "99/99/9999"
+            @ Li,080 Psay STJ->TJ_HOMPINI Picture "99:99"
+            @ Li,086 Psay STJ->TJ_DTMPFIM Picture "99/99/9999"
+            @ Li,097 Psay STJ->TJ_HOMPFIM Picture "99:99"
+            @ Li,103 Psay STF->TF_DTULTMA Picture "99/99/9999"
+            @ Li,135 Psay STJ->TJ_POSCONT Picture "@E 999,999,999"
+            aMatSTA := {}
+            NGSomali(58)
+            While !Eof() .And. sta->ta_filial = Xfilial("STA") .And. sta->ta_ordem = stj->tj_ordem;
+               .And. sta->ta_plano = stj->tj_plano
+               aAdd(aMatSTA,{STA->TA_TAREFA,;
+                             If(STA->TA_TIPOREG = "B",Upper(STR0011),SubStr(VIRTIPREG(STA->TA_TIPOREG),1,11)),;
+                             STA->TA_CODIGO,;
+                             SubStr(VIRTINSUMO(STA->TA_TIPOREG,STA->TA_CODIGO),1,35),;
+                             Substr(STA->TA_DESCRIC,1,40)})
+               NGDBSELSKIP("STA")
+            End
+
+            aMatOrd := Asort(aMatSTA,,,{|x,y| x[1]+x[2]+x[3] < y[1]+y[2]+y[3] })
+            For nF := 1 To Len(aMatOrd)
+               @ Li,15 	Psay aMatOrd[nF,1]
+               @ Li,23 	Psay aMatOrd[nF,2]
+               @ Li,36 	Psay aMatOrd[nF,3]
+               @ Li,69 	Psay aMatOrd[nF,4]
+               @ Li,106 Psay aMatOrd[nF,5]
+               Somalinha()
+            Next nF
+
+         Endif
+      Endif
+      NGDBSELSKIP("STJ")
+   End
+Endif
+Roda(nCntImpr,cRodaTxt,tamanho)
+//---------------------------------------------------------------
+// Devolve a condicao original do arquivo principal
+//---------------------------------------------------------------
+dbSelectArea("STJ")
+RetIndex("STJ")
+Set Filter To
+
+Set Device To Screen
+If aReturn[5] = 1
+   Set Printer To
+   dbCommitAll()
+   OurSpool(wnrel)
+EndIf
+MS_FLUSH()
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Somalinha
+Incrementa Linha e Controla Salto de Pagina
+
+@author Inacio Luiz Kolling
+@since  /06/97
+
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function Somalinha()
+    Li++
+    If Li > 58
+        Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo,,.f.)
+    EndIf
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340SBR
+Inicializador de Browse do campo TJ_NOMSERV
+
+@sample MNTA340
+
+@author Guilherme Benkendorf
+@since 12/07/12
+
+@return cSERVICO
+/*/
+//---------------------------------------------------------------------
+Function MNT340SBR()
+Return NgSeek( 'ST4', STJ->TJ_SERVICO, 1, 'ST4->T4_NOME' )
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT340BBR
+Inicializador de Browse do campo TJ_NOMBEM
+
+@sample MNTA340
+
+@author Guilherme Benkendorf
+@since 12/07/12
+
+@return cNOMBEM
+/*/
+//---------------------------------------------------------------------
+Function MNT340BBR()
+Return NGIniBemLoc( STJ->TJ_TIPOOS )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340MXD
+Função que verifica retorna o Máximo de O.S. por dia de acordo com a
+Manutenção do Bem.
+
+* MNTA340MXD: MNTA340 MAX o.s. DIA *
+
+@author Wagner Sobral de Lacerda
+@since 05/09/2012
+
+@param cManCodBem
+	Código do Bem * Obrigatório
+@param cManServic
+	Serviço * Obrigatório
+@param cManSeqRel
+	Sequência * Obrigatório
+
+@return nMaxOSDia
+/*/
+//---------------------------------------------------------------------
+Function MNTA340MXD(cManCodBem, cManServic, cManSeqRel)
+
+	// Salva as áreas atuais
+	Local aAreaSTF := STF->( GetArea() )
+
+	// Variável do Retorno
+	Local nMaxOSDia	:= 1 // Quantidade Máxima de O.S. em um Dia (sempre é 1, com exceção da manutenção com incremento em Horas)
+	Local nTotaliza	:= 0
+	Local aCalenda	:= {}
+	Local aHrsCalen	:= {}
+
+	//----------
+	// Executa
+	//----------
+	//--- Busca cadastro da Manutenção
+	dbSelectArea("STF")
+	dbSetOrder(1)
+	If dbSeek(xFilial("STF") + cManCodBem + cManServic + cManSeqRel)
+		If STF->TF_UNENMAN == "H"
+
+			aHrsCalen	:= NGCALENDAH( STF->TF_CALENDA ) //Retorna um array, com as horas do calendário da manutenção
+			aCalenda	:= NG_H7( STF->TF_CALENDA ) //Retorna um array, com as horas do calendário da manutenção;
+			nHrFimCal	:= HTON( aCalenda[1][2] ) //Atribui o último horário do calendário da manutenção;
+
+			/*----------------------------------------------------------------------------------------------------
+			Realiza o cálculo considerando o período linear útil,
+			Exemplo: ( 08:00 (horário inicial do calendário) + 5h (incremento) = 13h )
+			Desta forma, atribui à variável 'nTotaliza' a soma entre (primeiro horário do calendário + incremento).
+			-----------------------------------------------------------------------------------------------------*/
+			nTotaliza := SomaHoras( STF->TF_TEENMAN,aCalenda[2][1] )
+
+			/*----------------------------------------------------------------------------------------------------
+			Se a soma entre (primeiro horário do calendário + incremento) estiver entre a 'quebra' do calendário
+			da manutenção. A variável 'nTotaliza' recebe o conteúdo do 'primeiro horário da quebra' do calendário.
+			-----------------------------------------------------------------------------------------------------*/
+			If Len( aHrsCalen[2,2] ) > 1 .And. nTotaliza > hToN( aHrsCalen[2,2,1,2] ) .And.	nTotaliza < hToN( aHrsCalen[2][2][2][1] )
+				nTotaliza := HTON( aHrsCalen[2][2][1][2] )
+			EndIf
+
+			/*A variável 'nMaxOSDia' totaliza o número de manutenções que serão gerada, sendo assim, enquanto
+			a quantidade de horas totalizadas for menor/igual que o último horário final do calendário.*/
+			While nTotaliza < nHrFimCal
+				nMaxOSDia += 1 //Atribiu uma ordem de serviço
+				nTotaliza += STF->TF_TEENMAN
+			End While
+
+		EndIf
+	EndIf
+
+	// Devolve as áreas
+	RestArea( aAreaSTF )
+
+Return nMaxOSDia
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340OSD
+Função que verifica se já foi atingido o limite de O.S. por dia
+em uma manutenção, retornando TRUE caso possa haver mais uma O.S.
+para o dia, e FALSE caso não possa.
+
+* MNTA340OSD: MNTA340 O.S. por DIA *
+
+@author Wagner Sobral de Lacerda
+@since 05/09/2012
+
+@param cManCodBem
+	Código do Bem da O.S. * Obrigatório
+@param cManServic
+	Serviço da O.S. * Obrigatório
+@param cManSeqRel
+	Sequência da O.S. * Obrigatório
+@param dDataOrigi
+	Data Original da O.S. * Obrigatório
+
+@return lRetorno
+/*/
+//---------------------------------------------------------------------
+Function MNTA340OSD(cManCodBem, cManServic, cManSeqRel, dDataOrigi)
+
+	// Variável do retorno
+	Local lRetorno := .T. // Permite uma Nova O.S.
+
+	// Variáveis auxiliares
+	Local nQtdOSDia := 0, nMaxOSDia := 1 // Quantidade de O.S. por Dia e Quantidade Máxima de O.S. em um Dia
+
+	//----------
+	// Executa
+	//----------
+	//--- Busca o Máximo de O.S. por dia
+	nMaxOSDia := MNTA340MXD(cManCodBem, cManServic, cManSeqRel)
+
+	//--- Busca Ordens de Serviço
+	nQtdOSDia := MNTA340QUD(cManCodBem, cManServic, cManSeqRel, dDataOrigi)
+
+	// Define retorno, onde se a quantidade de O.S. for maior ou igual ao máximo, então não pode haver mais O.S. para a Data Original informada
+	If nQtdOSDia >= nMaxOSDia
+		lRetorno := .F.
+	EndIf
+
+Return lRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340QUD
+Verifica a quantidade de O.S. em um dia de acordo com a data original.
+@type function
+
+@author Wagner Sobral de Lacerda
+@since 05/09/2012
+
+@param cManCodBem, string, Código do Bem.
+@param cManServic, string, Serviço.
+@param cManSeqRel, string, Sequência.
+@param dDataOrigi, date  , Data original.
+@param [cNewOS]  , string, O.S. a ser desconsiderada na consulta.
+
+@return numeric  , Quantidade de O.S. no dia.
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA340QUD( cManCodBem, cManServic, cManSeqRel, dDataOrigi, cNewOS )
+
+	// Salva as áreas atuais
+	Local aAreaSTJ := STF->( GetArea() )
+
+	// Variável do Retorno
+	Local cPlanCorre := Replicate("0", TAMSX3("TI_PLANO")[1])
+	Local nQtdOSDia  := 0 // Quantidade de O.S. por Dia
+	Local cAliSTJ    := GetNextAlias()
+	Local cWhere     := '%%'
+
+	Default cNewOS   := ''
+
+	If !Empty( cNewOS )
+
+		cWhere := '% AND ( TJ_ORDEM <> ' + ValToSQL( cNewOS ) 
+		cWhere +=   '  AND TJ_PLANO <> ' + ValToSQL( M->TI_PLANO ) + ')%'
+
+	EndIf
+
+	//--- Busca Ordens de Serviço
+	BeginSQL Alias cAliSTJ
+
+		SELECT 
+			COUNT( TJ_ORDEM ) AS QTDDIAS 
+		FROM 
+			%table:STJ%
+		WHERE  
+			TJ_TIPOOS  = 'B' AND TJ_SITUACA = 'L' AND
+			TJ_FILIAL  =  %xFilial:STJ%    AND
+			TJ_CODBEM  =  %exp:cManCodBem% AND
+			TJ_SERVICO =  %exp:cManServic% AND
+			TJ_SEQRELA =  %exp:cManSeqRel% AND
+			TJ_PLANO   <> %exp:cPlanCorre% AND
+			TJ_DTORIGI =  %exp:dDataOrigi% AND
+			%NotDel% %exp:cWhere%
+
+	EndSQL
+
+	nQtdOSDia := (cAliSTJ)->QTDDIAS
+
+	(cAliSTJ)->( dbCloseArea() )
+	
+	// Devolve as áreas
+	RestArea(aAreaSTJ)
+
+Return nQtdOSDia
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340DLG
+Monta Markbrowse conforme Trb de ordens
+
+@author Maria Elisandra de Paula
+@since 05/12/2019
+
+@param aFieldsTrb, array, campos criados na Trb de ordens
+@param cMarkOk, string, marca utilizada no campo ok
+@param cTrbAux, string, codigo da Tabela temporária que será atualizada
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA340DLG( aFieldsTrb, cMarkOk, cTrbAux )
+
+	Local aFieldsMk := {}
+	Local aFilter   := {}
+	Local nIndex    := 0
+	Local oMark     := FWMarkBrowse():New()
+	
+	//----------------------------------------
+	// Carrega campos que serão apresentados
+	//----------------------------------------
+	For nIndex := 1 to Len( aFieldsTrb )
+
+		dbSelectArea("STJ")
+		If FieldPos( aFieldsTrb[ nIndex, 1 ] ) > 0 // verifica a existência do campo na STJ
+
+			// Informações adicionais
+			aAdd( aFieldsTrb[ nIndex ], Posicione("SX3",2,aFieldsTrb[ nIndex, 1 ],"X3Titulo()") ) // 5
+			aAdd( aFieldsTrb[ nIndex ], Posicione("SX3",2,aFieldsTrb[ nIndex, 1 ],"X3_PICTURE") ) // 6
+
+			// Campos utilizados para filtro
+			aAdd( aFilter,{ aFieldsTrb[ nIndex, 1 ],; // Nome do campo
+							aFieldsTrb[ nIndex, 5 ],; // Título
+							aFieldsTrb[ nIndex, 2 ],; // Tipo
+							aFieldsTrb[ nIndex, 3 ],; // Tamanho
+							aFieldsTrb[ nIndex, 4 ],; // Decimais
+							aFieldsTrb[ nIndex, 6 ] }) // Picture
+
+			// Campos apresentados no browse
+			aAdd( aFieldsMk,{ aFieldsTrb[ nIndex, 5 ],; // Titulo
+							aFieldsTrb[ nIndex, 1 ],; // Nome do campo
+							aFieldsTrb[ nIndex, 2 ],; // Tipo
+							aFieldsTrb[ nIndex, 3 ],; //Tamanho
+							aFieldsTrb[ nIndex, 4 ] }) //Decimais
+
+		EndIf
+
+	Next nIndex
+
+	oMark:SetAlias( cTrbAux )
+	oMark:SetFields( aFieldsMk )
+	oMark:SetFieldMark( "TJ_OK" )
+	oMark:SetMark( cMarkOk, cTrbAux, "TJ_OK" ) // Acão ao marcar linha
+	oMark:SetAllMark({|| fAllMark( oMark, cMarkOk, cTrbAux ) }) // Ação ao marcar tudo
+	oMark:SetTemporary( .T. )
+
+	If FwIsInCallStack( 'MNTA340A' )
+		oMark:SetMenuDef( 'MNTA340A' )
+	Else
+		oMark:SetMenuDef( 'MNTA340' )
+	EndIf
+
+	oMark:DisableConfig()
+	oMark:SetDescription( cCadastro )
+	oMark:oBrowse:SetDBFFilter(.T.)
+	oMark:oBrowse:SetUseFilter(.T.) //Habilita a utilização do filtro no Browse
+	oMark:oBrowse:SetFilterDefault("") //Indica o filtro padrão do Browse
+	oMark:oBrowse:SetFieldFilter( aFilter ) // Configuração do filtro
+
+	oMark:Activate()
+
+Return
+
+//----------------------------------------
+/*/{Protheus.doc} fAllMark
+Ações ao marcar/desmarcar tudo
+
+@author Maria Elisandra de Paula
+@since 06/12/2019
+@param oMark, objeto, browse de marcação
+@param cMarkOk, string, marca utilizada no campo ok
+@param cTrbAux, string, codigo da Tabela temporária que será atualizada
+/*/
+//----------------------------------------
+Static Function fAllMark( oMark, cMarkOk, cTrbAux )
+
+	dbSelectArea( cTrbAux )
+	dbGotop()
+	While !Eof()
+		RecLock( cTrbAux, .F. )
+
+		If Empty( (cTrbAux)->TJ_OK )
+			(cTrbAux)->TJ_OK := cMarkOk
+		Else
+			(cTrbAux)->TJ_OK := "  "
+		EndIf
+
+		MsUnLock()
+
+		(cTrbAux)->( dbSkip() )
+	EndDo
+
+	dbSelectArea( cTrbAux )
+	dbGotop()
+
+	oMark:Refresh()
+
+Return 
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340TRB
+Cria tabelas temporárias utilizadas no processo.
+@type function
+
+@author Alexandre Santos
+@since 15/03/2022
+
+@param oTmpTbl1, object, Objeto da tabela de O.S.
+@param oTmpTbl2, object, Objeto da tabela de O.S.
+@param oTmpTbl3, object, Objeto da tabela de O.S. utilizada no MarkBrowse.
+@param oTmpTbl4, object, Objeto da tabela problemas da O.S.
+@param oTmpTbl5, object, Objeto da tabela bloqueios de funcionário.
+@param aDBF    , array , Lista dos campos apresentados no MarkBrowse.
+@return
+/*/
+//---------------------------------------------------------------------------
+Function MNTA340TRB( oTmpTbl1, oTmpTbl2, oTmpTbl3, oTmpTbl4, oTmpTbl5, aDBF )
+
+	Local aDBF001  := {}
+	Local aDBF1    := {}
+	Local aDBFA    := {}
+	Local aDBFK    := {}
+	Local aMnt340D := {}
+
+	aAdd( aDBF001, { 'ORDEM'  , 'C',  6, 0 } )
+	aAdd( aDBF001, { 'PLANO'  , 'C',  6, 0 } )
+	aAdd( aDBF001, { 'CODBEM' , 'C', 16, 0 } )
+	aAdd( aDBF001, { 'SERVICO', 'C',  6, 0 } )
+	aAdd( aDBF001, { 'SEQRELA', 'C',  3, 0 } )
+	aAdd( aDBF001, { 'DTORIGI', 'D',  8, 0 } )
+	aAdd( aDBF001, { 'ORDEML' , 'C',  6, 0 } )
+	aAdd( aDBF001, { 'PLANOL' , 'C',  6, 0 } )
+
+	oTmpTbl1 := FWTemporaryTable():New( cTRBZ, aDBF001 )
+	oTmpTbl1:AddIndex( '01', { 'CODBEM', 'SERVICO', 'SEQRELA', 'DTORIGI' } )
+	oTmpTbl1:Create()
+
+	aAdd( aDBF1, { 'TJ_ORDEM'  , 'C',  6, 0 } )
+	aAdd( aDBF1, { 'TJ_PLANO'  , 'C',  6, 0 } )
+	aAdd( aDBF1, { 'TJ_CODBEM' , 'C', 16, 0 } )
+	aAdd( aDBF1, { 'TJ_SERVICO', 'C',  6, 0 } )
+	aAdd( aDBF1, { 'TJ_SEQRELA', 'C',  3, 0 } )
+	aAdd( aDBF1, { 'TJ_DTORIGI', 'D',  8, 0 } )
+	aAdd( aDBF1, { 'TJ_DTMPINI', 'D',  8, 0 } )
+	aAdd( aDBF1, { 'TJ_HOMPINI', 'C',  5, 0 } )
+	aAdd( aDBF1, { 'TJ_DTMPFIM', 'D',  8, 0 } )
+	aAdd( aDBF1, { 'TJ_HOMPFIM', 'C',  5, 0 } )
+	aAdd( aDBF1, { 'TJ_RECNO'  , 'N', 18, 0 } )
+	aAdd( aDBF1, { 'TJ_CCUSTO' , 'C', Len( SI3->I3_CUSTO ), 0 } ) 
+	
+	oTmpTbl2 := FWTemporaryTable():New( cTRBW, aDBF1 )
+	oTmpTbl2:AddIndex( '01', { 'TJ_CODBEM', 'TJ_SERVICO', 'TJ_SEQRELA', 'TJ_DTORIGI' }  )
+	oTmpTbl2:Create() 
+	
+	aAdd( aDBF, { 'TJ_OK'     , 'C',  2, 0 } )
+	aAdd( aDBF, { 'TJ_ORDEM'  , 'C',  6, 0 } )
+	aAdd( aDBF, { 'TJ_PLANO'  , 'C',  6, 0 } )
+	aAdd( aDBF, { 'TJ_CODBEM' , 'C', 16, 0 } )
+	aAdd( aDBF, { 'TJ_SERVICO', 'C',  6, 0 } )
+	aAdd( aDBF, { 'TJ_T4NOMSE', 'C', 20, 0 } ) 
+	aAdd( aDBF, { 'TJ_SEQRELA', 'C',  3, 0 } )
+	aAdd( aDBF, { 'TJ_DTORIGI', 'D',  8, 0 } )
+	aAdd( aDBF, { 'TJ_DTMPINI', 'D',  8, 0 } )
+	aAdd( aDBF, { 'TJ_HOMPINI', 'C',  5, 0 } )
+	aAdd( aDBF, { 'TJ_DTMPFIM', 'D',  8, 0 } )
+	aAdd( aDBF, { 'TJ_HOMPFIM', 'C',  5, 0 } )
+	aAdd( aDBF, { 'TJ_FLAG'   , 'C',  2, 0 } )
+	aAdd( aDBF, { 'TJ_DIFDATA', 'N',  9, 0 } )
+	aAdd( aDBF, { 'TJ_DIFHORA', 'N',  9, 0 } )
+	aAdd( aDBF, { 'TJ_RECNO'  , 'N', 18, 0 } )
+	aAdd( aDBF, { 'TJ_CCUSTO' , 'C', Len( SI3->I3_CUSTO )  , 0 } )
+	aAdd( aDBF, { 'TJ_T9NOMEB', 'C', TamSX3('TJ_NOMBEM')[1], 0 } )
+
+	// Ponto de Entrada criado para insercao de coluna na tela de confirmacao individual.
+	If ExistBlock( 'MNTA340D' )
+		
+		aMnt340D := ExecBlock( 'MNTA340D', .F., .F., { aDBF } )
+		
+		aDBF := aClone( aMnt340D )
+	
+	EndIf
+	
+	oTmpTbl3 := FWTemporaryTable():New( cTRB340, aDBF )
+	oTmpTbl3:AddIndex( '01', { 'TJ_CODBEM', 'TJ_SERVICO', 'TJ_SEQRELA', 'TJ_DTORIGI' } )
+	oTmpTbl3:Create()
+
+
+	aDBFA := STA->( dbStruct() )
+
+	oTmpTbl4 := FWTemporaryTable():New( cTRBSTA340, aDBFA )
+	oTmpTbl4:AddIndex( '01', { 'TA_FILIAL' } )
+	oTmpTbl4:Create()
+
+	aDBFK := STK->( dbStruct() )
+
+	oTmpTbl5 := FWTemporaryTable():New( cTRBSTK340, aDBFK )
+	oTmpTbl5:AddIndex( '01', { 'TK_FILIAL' } )
+	oTmpTbl5:Create()
+	
+Return
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA340SAV
+Realiza o processo de gravação das O.S. confirmadas.
+@type function
+
+@author Alexandre Santos
+@since 15/03/2022
+
+@param nOpcX   , numeric, Indica a operação ( Total ou Individual ).
+@return boolean, Indica se houveram O.S. confirmadas neste plano.
+/*/
+//---------------------------------------------------------------------------
+Function MNTA340SAV( nOpcX )
+
+	Local lHasOS    := .F.
+	Local lOk       := .T.
+
+	Private lCont   := .T.
+	Private lMarcou := .F.
+
+	M->TI_PLANO     := STI->TI_PLANO
+	M->TI_DATAPLA   := STI->TI_DATAPLA
+	aSIM            := {}
+	lMARCA          := .T.
+
+	// Verifica se há pelo menos uma ordem de serviço marcada
+	dbSelectArea( cTRB340 )
+	dbGoTop()
+	
+	While !Eof()
+		If !Empty((cTRB340)->TJ_OK)
+			lMarcou := .T.
+			Exit
+		Endif
+		(cTRB340)->( dbSkip() )
+	End
+
+	If lMarcou .And. FunName() != "MNTA365"
+
+		lCont    := MsgYesNo( STR0063 ) // Deseja confirmar a atualização?
+		MV_PAR01 := IIf( lCont, 1, 2 )
+		nOpCA    := IIf( MV_PAR01 == 1, 2, 1 )
+
+		If nOpCA == 2 .And. lCont
+
+			Processa( { || lOk := A340PROC() } )
+
+			If lOk
+
+				lHasOS := .T.
+
+				EvalTrigger() // Processa Gatilhos
+			
+				If nOPCX == 2
+					
+					If Len( aSIM ) > 0
+						
+						// "Ordens de serviço liberadas para o plano" "Deseja consultar ?"
+						If MsgYesNo(Alltrim(Str(Len(aSIM),4))+" "+STR0052+" "+STI->TI_PLANO+CRLF+CRLF+STR0053,STR0054)
+							
+							If FindFunction( 'MNTA340C' )
+								MNTA340C()
+							Else
+								MNT340LT() // Montagem do Browse de OS's liberadas pelo plano.
+							EndIf
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	Else
+
+		If nOPCX = 2
+
+			lHasOS := .T.
+
+			dbSelectArea( cTRBZ )
+			
+			If RecCount() > 0
+				
+				If MsgYesNo(STR0051+" "+STI->TI_PLANO+CRLF+CRLF+STR0053,STR0054) // "Não há ordens de servio para serem liberadas no plano"
+
+					If FindFunction( 'MNTA340B' )
+						MNTA340B()
+					Else
+						MNT340OSL()
+					EndIf
+
+				EndIf
+
+			EndIf
+
+			RecLock( 'STI', .F. )
+			STI->TI_SITUACA := 'L'
+			MsUnLock()
+
+		EndIf
+
+	EndIf
+	
+Return lHasOS
+
+//-----------------------------------------------------------------------------------
+/*/{Protheus.doc} fVersion
+Valida a versão de fontes relacionado, consistindo se é necessário atualizações.
+@type function
+
+@author Alexandre Santos
+@since 12/09/2022
+
+@return boolean, Define se as rotina de integração estão atualizadas.
+/*/
+//-----------------------------------------------------------------------------------
+Static Function fVersion()
+
+	Local aVersion := {}
+	Local lRet     := .T.
+
+	If lHasMNTCM
+
+		aVersion := {	{ 'MNTUTIL.prx'   , SToD( '20220914' ), '08:00' },;
+						{ 'MNTUTIL_OS.prw', SToD( '20220914' ), '08:00' } }
+		
+		If !( lRet := NgVldRpo( aVersion ) )
+
+			NGMSGMEMO( STR0065,; // Atenção
+				STR0064 ) // Para a correta utilização da integração com o módulo Compras deve-se realizar a aplicação do pacote acumulado de atualizações.
+
+		EndIf
+
+	EndIf
+	
+Return lRet

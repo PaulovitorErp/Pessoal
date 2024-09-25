@@ -1,0 +1,1728 @@
+#INCLUDE "MNTA480.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480
+Retorno de Etapas em Lote
+@author Inacio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA480()
+
+    Local aNGBEGINPRM := NGBEGINPRM(,,,,.T.)
+    Local aButton     := { {"AVGARMAZEM", {|| MNTA402() }, STR0042, STR0043 } } // "Rateio" ## "Rateio de Insumos"
+    Local oDlg3
+    Local oFuncion
+    Local oGet
+    Local GetList     := {}
+    Local oMenu
+	Local oGet1
+	// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+	Local lOfuscar := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. );
+						.And. Len( FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'T1_NOME' } ) ) == 0
+
+    Private oHora480
+    Private cCodAnt
+    Private cNomServ
+    Private cNomFunc
+    Private cNomEta
+    Private nCnt        := 0
+    Private nOpca       := 1
+    Private dOriginal   := dDataBase
+    Private cHORA480    := Substr(Time(), 1, 5 )
+    Private cFuncion    := Space (TAMSX3("TL_CODIGO" )[1])
+    Private cServico    := Space (TAMSX3("T4_SERVICO")[1])
+    Private M->TQ_ETAPA := Space ( TAMSX3("TPA_ETAPA")[1])
+    Private cCodCale    := Space ( TAMSX3("T1_TURNO") [1])
+    Private nTempoDu    := 0.00
+    Private aUsaCale    := { STR0030, STR0031 }
+    Private cUsaCale    := STR0030
+    Private dDataFim    := dDataBase
+    Private cHOR480F    := "  :  "
+
+    Private oTmpTbl
+    Private cTRB3400      := GetNextAlias()
+    Private lMMoeda       := NGCADICBASE("TL_MOEDA","A","STL",.F.) // Multi-Moeda
+    Private lUsaTarG      := IIf( FindFunction("NGUSATARPAD"), NGUSATARPAD(), .F.)
+    Private cNomTar       := IIf( lUsaTarG, NGSEEK("TT9", "0     ", 1, "TT9_DESCRI"), Space( TAMSX3("TT9_DESCRI")[1]))
+    Private M->TQ_TAREFA  := '0     '
+    Private lCorret       := .T.   // Não retirar, usado na tarefa genérica.
+    Private cNGINSPREA    := "R"   // Indica se o insumo é realizado ou previsto, não deve ser retirada.
+                                   // Variável usada para fazer checagem em funções NG...
+	Private aCols
+
+    Store Space(30) To cNomServ, cNomFunc, cNomEta
+
+    While .T.
+        nOpca   := 0
+        aHeader := "A"
+        nLiD1   := IIf( lUsaTarG, 20, 18 )
+        nLiD2   := 0.4
+
+        Define MsDialog oDlg3 Title OemToAnsi(STR0005) From 06,10 To nLiD1,105 Of oMainWnd COLOR CLR_BLACK,CLR_WHITE //"Retorno Etapas Em Lote - Servico"
+
+        oDlg3:lEscClose := .F.
+        oPnlPai := TPanel():New(00,00,,oDlg3,,,,,,105,nLiD1,.F.,.F.)
+        oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+        @ nLiD2,1  Say OemToAnsi(STR0006) of oPnlPai//"Servico"
+        @ nLiD2,6  MsGet cServico Picture '@!' F3 "ST4" Size 36,7  of oPnlPai Valid NGA480SER() HASBUTTON
+        @ nLiD2,12 MsGet cNomServ When .F. Size 150,7 of oPnlPai
+
+        If lUsaTarG
+            nLiD2++
+            @ nLiD2,1  Say OemtoAnsi(STR0044) of oPnlPai //"Tarefa"
+            @ nLiD2,6  MSGET M->TQ_TAREFA PICTURE '@!' VALID MNT480NTAR() F3 "TT9" SIZE 30,7 of oPnlPai HASBUTTON
+            @ nLiD2,12 MSGET cNomTar PICTURE '@!' When .F. SIZE 150,7 of oPnlPai
+        EndIf
+
+        nLiD2++
+        @ nLiD2,1  Say OemToAnsi(STR0009) of oPnlPai //"Mao de Obra"
+        @ nLiD2,6  MsGet oFUNCION Var cFuncion Picture '@!' F3 "ST1" Size 43,7 of oPnlPai Valid NGA480FUN() HASBUTTON
+        @ nLiD2,12 MsGet oGet1 Var cNomFunc When .F. Size 150,7 of oPnlPai
+		If lOfuscar
+			oGet1:lObfuscate := .T.
+			oGet1:bWhen := {|| .F. }
+		EndIf
+
+        @ nLiD2,36 Say OemToAnsi(STR0032) of oPnlPai //"Usa calendario"
+        @ nLiD2,41 COMBOBOX cUsaCale ITEMS aUSACALE Valid NG480CALE() SIZE 25,7 of oPnlPai When NGCHKFLUT()
+
+        nLiD2++
+        @ nLiD2,1 Say OemToAnsi(STR0033) of oPnlPai //"Data inicio"
+        @ nLiD2,6 MsGet dORIGINAL Picture '99/99/99' Size 45,7 of oPnlPai Valid NAOVAZIO() .AND. NG480DTINI() HASBUTTON
+
+        @ nLiD2,12 Say OemToAnsi(STR0034) of oPnlPai //"Hora inicio"
+        @ nLiD2,16 MsGet oHORA480 Var cHORA480 Picture '99:99' Size 10,7 of oPnlPai Valid NG480HOINI()
+
+        @ nLiD2,20 Say OemToAnsi(STR0035) of oPnlPai //"Data fim"
+        @ nLiD2,23 MsGet dDataFim Picture '99/99/99' Size 45,7 of oPnlPai Valid NG480DTFIM() HASBUTTON
+
+        @ nLiD2,29 Say OemToAnsi(STR0036) of oPnlPai //"Hora fim"
+        @ nLiD2,32 MsGet cHOR480F Picture '99:99' Size 10,7 of oPnlPai Valid NG480HOFIM()
+
+        @ nLiD2,36 Say OemToAnsi(STR0011) of oPnlPai //"T. Estimado"
+        @ nLiD2,41 Msget nTEMPODU Picture '@E 999,999.99' Size 50,7 of oPnlPai  When .F. HASBUTTON
+
+        nLiD2++
+        @ nLiD2,1  Say OemToAnsi(STR0010) of oPnlPai //"Etapa"
+        @ nLiD2,6  MsGet M->TQ_ETAPA   Picture '@!' Size 30,7 of oPnlPai F3 "MNTTAR" Valid NGA480ETA() HASBUTTON
+        @ nLiD2,12 MsGet cNomEta  When .F. Size 272,7 of oPnlPai
+
+        NGPOPUP(aSMenu,@oMenu)
+        oDlg3:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg3)}
+
+        Activate MsDialog oDlg3 On Init EnchoiceBar(oDlg3,{||nopca := 1, IIf( !NG480VALCA(),nOpca := 0, oDlg3:End())},{||oDlg3:End()},,aButton) CENTERED
+
+        If nOpca <> 1
+            Exit
+        EndIf
+    End
+    NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGA480SER
+Programa de Validacao do servico e alimentacao do nome
+@author Inacio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGA480SER()
+
+     M->TJ_SERVICO := cServico
+
+    If !EXISTCPO("ST4", cServico)
+        Return .F.
+    EndIf
+
+    If !CHKSER()
+        Return .F.
+    EndIf
+
+    cNomServ := Substr(ST4->T4_NOME,1,30)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGA480FUN
+Programa de Validacao do FUNCIONARIO
+@author Inácio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGA480FUN()
+
+    cCodCale := Space(len(ST1->T1_TURNO))
+
+    If !EXISTCPO("ST1",cFuncion)
+        Return .F.
+    EndIf
+
+    If Len(Alltrim(cFuncion)) > Len(ST1->T1_CODFUNC)
+        Help(" ",1, "FUNCNEXIST")
+        Return .F.
+    EndIf
+
+    //Valida a disponibilidade da mao de obra
+    cNomFunc := NGSEEK("ST1",cFuncion,1,"T1_NOME")
+    cCodCale := ST1->T1_TURNO
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGA480ETA
+Monta o acols com as dados da etapa
+@author Inacio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGA480ETA()
+
+    Local lRet := .T.
+
+    aCols := {}
+
+    If !ExistCpo( "TPA", M->TQ_ETAPA )
+        lRet := .F.
+    EndIf
+
+    If lRet
+        dbSelectArea("TPA")
+        dbSetOrder(1)
+        If dbSeek(xFilial("TPA") + M->TQ_ETAPA)
+            cNomEta  := TPA->TPA_DESCRI
+            lRefresh := .T.
+        EndIf
+
+        dbSelectArea("TPC")
+        dbSetOrder(1)
+        If dbSeek(xFilial("TPC") + M->TQ_ETAPA)
+            nCnt := 0
+
+            While !Eof() .And. TPC->TPC_FILIAL == xFilial("TPC") .And.;
+                    M->TQ_ETAPA == TPC->TPC_ETAPA
+
+                If TPC->TPC_TIPRES == '2'
+                    nCnt++
+                EndIf
+
+                dbSelectArea("TPC")
+                dbSkip()
+            End
+        Else
+            Help(" ",1,"NGMETCOPCA") //"Etapa Sem Opcoes de Respostas...."//"Informe Uma Etapa Que Tenho Opcoes de Resposta."###"ATENCAO"
+            lRet := .F.
+        EndIf
+
+        If nCnt == 0 .And. lRet
+            Help(" ",1,"NGMETSITEM") //"Informe Uma Etapa Que Tenho Opcoes de Resposta Para Informar..."###"ATENCAO"
+            lRet := .F.
+        EndIf
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGA480ACOL
+Monta o acols com as dados da etapa
+@author Inacio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGA480ACOL()
+
+    Local aCposAlter := {}
+    Local aAlterCols := {"TPQ_RESPOS"}
+    Local z          := 0
+    Local nI         := 0
+    Local nPosCpo    := 0
+    Local nY         := 0
+    Local nX         := 0
+    Local nDesOpc
+
+    Private cBEM480
+	Private cNOMBEM
+	Private cBEMPAI
+	Private cBEMRET
+	Private cNOMBEMP
+	Private nCONTADOR1
+	Private nCONTADOR2
+	Private nOPC2
+    Private cHORCON1
+	Private cHORCON2
+	Private TIPOACOM
+	Private TIPOACOM2
+	Private lCHKCON1
+	Private lCHKCON2
+	Private nOpcx := 3
+
+    dDATACON2 := CToD(' /  /  ')
+
+    // Montando aHeader
+    nUsado  := 0
+    aHeader := {}
+	fMntCabec(aAlterCols,aCposAlter)
+
+    nnOPCA  := aScan(aHeader, {|x| AllTrim(Upper(X[2])) == "TPC_OPCAO" })
+    nDesOpc := aScan(aHeader, {|x| AllTrim(Upper(X[2])) == "TPC_DESOPC" })
+    nRESPOS := aScan(aHeader, {|x| AllTrim(Upper(X[2])) == "TPQ_RESPOS" })
+
+    If ExistBlock("NG480CPU")
+        aCposAlter := ExecBlock("NG480CPU",.F.,.F.)
+    EndIf
+
+    aCols := Array(nCnt, nUsado + 1)
+
+    dbSelectArea("TPC")
+    dbSetOrder(1)
+    If dbSeek(xFilial("TPC") + M->TQ_ETAPA)
+
+        nCnt   := 0
+        nUsado := 0
+
+        While !EoF() .And. TPC->TPC_FILIAL == xFilial("TPC") .And.;
+                M->TQ_ETAPA == TPC->TPC_ETAPA
+
+            If TPC->TPC_TIPRES == '2'
+
+                nCnt++
+                nUsado++
+
+                aCOLS[nCnt][nnOPCA]  := TPC->TPC_OPCAO
+                aCOLS[nCnt][nRESPOS] := Space( TAMSX3("TPC_CONDIN")[1] )
+                aCols[nCnt][nDesOpc] := TPC->TPC_DESOPC
+
+                //+--------------------------------------------------------------+
+                //| Carrega os campos de usuario da array auxiliar aCposAlter... |
+                //+--------------------------------------------------------------+
+                If Len(aCposAlter) > 0
+                    For nI := 1 To Len(aCposAlter)
+                        nONDERL := At( "_", aCposAlter[nI] )
+                        If nONDERL > 0
+                            cCamIgua := Alltrim( Substr( aCposAlter[nI], nONDERL + 1, Len(aCposAlter[nI]) ))
+                            nPosCpo  := aScan(aHeader,{|x| AllTrim( x[2] ) == aCposAlter[nI]})
+                            cCamPTPC := "TPC->TPC_" + cCAMIGUA
+                            cFilPTPC := "TPC_" + cCAMIGUA
+                            If nPosCpo > 0
+                            	aCOLS[nCnt][nPosCpo] := IIf( FieldPos(cFILPTPC) > 0, &cCAMPTPC, CriaVar(aCposAlter[nI]) )
+                            EndIf
+                        EndIf
+                    Next nI
+                EndIf
+
+                ATail(aCOLS[nCnt]) := .F.
+                lRefresh := .T.
+            EndIf
+
+            dbSelectArea("TPC")
+            dbSkip()
+        End
+    EndIf
+
+    //Percorre o acols e preenche os campos de usuarios da tabela TPQ
+    For nY := 1 to Len(aCols)
+    	For nX := 1 to Len(aCols[ny])
+	    	If ValType(acols[nY][nx]) == "U"
+	    		If aHeader[nx][8] == "C"
+	    			aCols[nY][nx] := Space(aHeader[ny][4])
+	    		ElseIf aHeader[nx][8] == "D"
+	    			aCols[nY][nx] := CtoD("  /  /    ")
+	    		ElseIf aHeader[nx][8] == "N"
+	    			aCols[nY][nx] := 0
+	    		ElseIf aHeader[nx][8] == "M"
+	    			aCols[nY][nx] := Space(aHeader[ny][4])
+	    		EndIf
+	    	EndIf
+	    Next nX
+    Next nY
+
+    //Guarda os valores iniciais da acols
+    aCOLS480 := aCLONE(aCOLS)
+
+    Store Space( TAMSX3("T9_CODBEM")[1] )    To cBEM480,cBEMPAI,cBEMRET
+    Store Space( TAMSX3("T9_NOME")[1] )      To cNOMBEM,cNOMBEMP
+    Store 0                                  To nCONTADOR1,nCONTADOR2
+    Store .F.                                To TIPOACOM,TIPOACOM2,lCHKCON1,lCHKCON2
+    Store '  :  '                            To cHORCON1,cHORCON2
+
+    nOPC2     := 2
+    dDATACON2 := Ctod(' /  /  ')
+
+    Define MsDialog oDlg4 Title OemToAnsi(STR0017) From 17,10 To 34,100 Of oMainWnd //"Dados Adicionais do Bem e Opcoes da Etapa"
+
+    oPnlTop := TPanel():New(00,00,,oDlg4,,,,,,100,45,.F.,.F.)
+    oPnlTop:Align := CONTROL_ALIGN_TOP
+
+    oPnlAll := TPanel():New(00,00,,oDlg4,,,,,,100,17,.F.,.F.)
+    oPnlAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+    @ 0.4,1    Say OemToAnsi(STR0018) of oPnlTop  //"Bem"
+    @ 0.4,5  MsGet cBEM480     Picture '@!' Size 60,7 of oPnlTop  F3 "ST9" Valid  NGA480BEM() HASBUTTON
+    @ 0.4,14   MsGet cNOMBEM  When .F. Size 150,7 of oPnlTop
+
+    @ 1.4,1    Say OemToAnsi(STR0019) of oPnlTop //"Bem Pai"
+    @ 1.4,5  MsGet cBEMPAI  Picture '@!' When .F. Size 60,7 of oPnlTop
+    @ 1.4,14   MsGet cNOMBEMP When .F. Size 150,7 of oPnlTop
+
+    @ 2.4,1   Say OemtoAnsi(STR0027) of oPnlTop
+    @ 2.4,5   MSget cHORCON1   Picture "99:99" SIZE 10,10 of oPnlTop;
+    Valid MNTA480HIS(nCONTADOR1,dORIGINAL,cHORCON1,1,.T.) .And. MNTA480CCB(cBEMPAI, dORIGINAL, cHORCON1) When TIPOACOM
+
+    @ 2.4,10    Say OemToAnsi(STR0020) of oPnlTop //"Contador 1"
+    @ 2.4,14  MsGet oCONT1 VAR nCONTADOR1 Picture '@E 999,999,999' Size 38,7 of oPnlTop;
+               Valid MNTA480HIS(nCONTADOR1,dORIGINAL,cHORCON1,1,.T.) When TIPOACOM .And. (!FindFunction("NGBlCont") .Or. NGBlCont( cBEM480 ))
+
+    @ 2.4,19 Say OemToAnsi(STR0021) of oPnlTop //"Contador 2"
+    @ 2.4,22.5   MsGet nCONTADOR2 Picture '@E 999,999,999' SIZE 38,7 of oPnlTop;
+               Valid MNTA480VCO(nCONTADOR2,2) When TIPOACOM2
+
+    @ 2.4,27.5 Say OemToAnsi(STR0028) of oPnlTop
+    @ 2.4,31   MSget dDATACON2  Picture "99/99/99" SIZE 35,10 of oPnlTop VALID Naovazio();
+               When TIPOACOM2 HASBUTTON
+
+    @ 2.4,36  Say OemToAnsi(STR0027) of oPnlTop
+    @ 2.4,40  MSget cHORCON2   Picture "99:99" SIZE 10,10 of oPnlTop;
+              Valid MNTA480HIS(nCONTADOR2,dDATACON2,cHORCON2,2,.T.) When TIPOACOM2
+
+
+    oGet := MsNewGetDados():New( 0, 1, 130, 358, GD_INSERT + GD_UPDATE + GD_DELETE, ;
+                    {||MNTA480LOK() },{|| MNTA480TOK()},, aAlterCols,, 9999,,,, oPnlAll, aHeader, aCols )
+
+    oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+    Activate MsDialog oDlg4 On Init EnchoiceBar( oDlg4, {|| nOPC2 := 1, IIf(!MNTA480TOK( oGet ), nOPC2 := 0, oDlg4:End()) }, {||oDlg4:End() }) CENTERED
+
+    If nOPC2 == 1
+        // Grava a Ordem de Serviço
+        MNTA480GRA( oGet )
+
+        // Limpa os dados do aCols
+        aCOLS := aCLONE(aCOLS480)
+    EndIf
+
+    dbSelectArea("ST9")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480VCO
+Consistencia dos contadores ( GET )
+@author Inacio Luiz Kolling
+@since 27/09/2003
+@version undefined
+@param nCONTG, numeric, descricao
+@param nTIPG, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA480VCO(nCONTG,nTIPG)
+
+    lCHKCON1 := IIf( nTIPG == 1, .F., lCHKCON1 )
+    lCHKCON2 := IIf( nTIPG == 2, .F., lCHKCON2 )
+
+    If !Positivo(nCONTG) .Or. !Naovazio(nCONTG) .Or. !CHKPOSLIM(cBEMRET,nCONTG,nTIPG)
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480HIS
+Consistencia dos contadores ( gets / final )
+@author Inacio Luiz Kolling
+@since 27/09/2003
+@version undefined
+@param nCONTAD, numeric, descricao
+@param dDATACON, date, descricao
+@param cVHORCON, characters, descricao
+@param nTIP, numeric, descricao
+@param lCHKTIP, logical, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA480HIS(nCONTAD,dDATACON,cVHORCON,nTIP,lCHKTIP)
+
+    If !NGVALHORA(cVHORCON,.T.)
+        Return .F.
+    EndIf
+
+    If !Empty(nCONTAD)
+        If !NGCHKHISTO(cBEMRET,dDATACON,nCONTAD,cVHORCON,nTIP,,.T.) .Or.;
+            !NGVALIVARD(cBEMRET,nCONTAD,dDATACON,cVHORCON,nTIP,.T.)
+
+            Return .F.
+        EndIf
+
+        If lCHKTIP
+		  If nTIP = 1
+		     lCHKCON1 := .T.
+		  Elseif nTIP = 2
+		     lCHKCON2 := .T.
+		  Endif
+		Endif
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480TOK
+Consistencia final
+@author Inacio Luiz Kolling
+@since 24/02/2000
+@version undefined
+@param oGet, object, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA480TOK( oGet )
+
+    Local yx      := 0
+    Local aColsOk := oGet:aCols
+
+    If nOPC2 == 1
+        For yx := 1 to nCnt
+            If Empty(aColsOk[yx][nRESPOS])
+                MsgInfo(STR0022 + Str(yx,3)) //"Nao Foi Informado o Conteudo do Item  "
+                Return .F.
+            EndIf
+        Next
+    EndIf
+
+    If TIPOACOM .And. !lCHKCON1
+        If !MNTA480HIS(nCONTADOR1,dORIGINAL,cHORCON1,1,.F.)
+            Return .F.
+        EndIf
+    EndIf
+
+    If TIPOACOM2 .And. !lCHKCON2
+        If !MNTA480HIS(nCONTADOR2,dDATACON2,cHORCON2,2,.F.)
+            Return .F.
+        EndIf
+    EndIf
+
+    // Valida se a data de baixa de estoque é maior que a data de bloqueio de estoque (MNTA480TOK)
+	If !MNTValDBl(dORIGINAL)
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480LOK
+Consistencia da linha
+@author Inacio Luiz Kolling
+@since 24/02/2000
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA480LOK
+
+    If Empty(aCols[n][nRESPOS])
+        MsgInfo( STR0022 + Str(n,3) ) //"Nao Foi Informado o Conteudo do Item  "
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGA480BEM
+Programa de Validacao do BEM
+@author In cio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGA480BEM()
+
+    Store Space( TAMSX3("T9_CODBEM")[1] )   To cBEMPAI   , cBEMRET
+    Store 0                                 To nCONTADOR1, nCONTADOR2
+    Store .F.                               To TIPOACOM  , TIPOACOM2
+    Store '  :  '                           To cHORCON1  , cHORCON2
+    Store Space(30)                         To cNOMBEM   , cNOMBEMP
+
+    If !EXISTCPO("ST9", cBEM480)
+        Return .F.
+    EndIf
+
+    cNOMBEM  := NGSEEK("ST9",cBEM480,1,"T9_NOME")
+    cBEMPAI  := NGSEEK("STC",cBEM480,3,"TC_CODBEM")
+    cNOMBEMP := IIf( !Empty(cBEMPAI), NGSEEK("ST9",cBEMPAI,1,"T9_NOME"), cNOMBEMP )
+    cBEMRET  := cBEM480
+
+    dbSelectArea("ST9")
+    dbSetOrder(1)
+    If dbSeek(XFILIAL("ST9") + cBEMRET)
+        If ST9->T9_TEMCONT == 'S'
+            nCONTADOR1 := ST9->T9_POSCONT
+            cHORCON1   := cHORA480
+            TIPOACOM   := .T.
+
+			//FindFunction remover na release GetRPORelease() >= '12.1.027'
+			If FindFunction("MNTCont2")
+				TIPOACOM2 := MNTCont2(xFilial("TPE"), cBEMRET)
+			Else
+            	dbSelectArea("TPE")
+            	dbSetOrder(1)
+            	TIPOACOM2 := dbSeek(XFILIAL("TPE") + cBEMRET)
+            EndIf
+			If TIPOACOM2
+				nCONTADOR2 := NGSEEK('TPE',cBEMRET,1,"TPE_POSCON")
+				dDATACON2  := dORIGINAL
+                cHORCON2   := cHORCON1
+			EndIf
+        EndIf
+    EndIf
+
+    If TIPOACOM
+        oCONT1:SetFocus()
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480DTINI
+Funcao que v lida a data da O.S.
+@author Deivys Joenck
+@since 29/01/2002
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG480DTINI()
+
+    If dORIGINAL < dDATABASE
+        If !MsgYesNo( STR0026, STR0025)
+            Return .F.
+        EndIf
+    EndIf
+
+    If !NGFUNCRH(cFuncion, .T., dORIGINAL)
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480GRA
+Funcao que Grava a O.S.
+@author Inacio Luiz Kolling
+@since 04/04/2001
+@version undefined
+@param oGet, object, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA480GRA( oGet )
+
+	Local lOk        := .T.
+	Local cGERAPREV  := AllTrim( GetMv("MV_NGGERPR") )
+	Local aGeraOS    := {}
+	Local aCposAlter := {}
+	Local aAreaSTJ   := {}
+	Local aAreaSTL   := {}
+	Local nPosCpo    := 0
+	Local lMMoeda    := NGCADICBASE( "TL_MOEDA", "A", "STL", .F. ) // Multi-Moeda
+	Local aCstMoeda  := {}
+    Local aSolic     := {}
+	Local cItemCont  := ""
+    Local cDocumSD3
+	Local cBemOr
+    Local _Ordem
+	Local xx
+	Local ix
+	Local zx
+	Local xi
+	Local nI
+	Local cForm
+	Local cResp
+	Local cServCar
+	Local cTipoMan
+	Local cMsgSS
+	Local lCondicao
+	Local lTPGeraOs
+	Local lTPGeraSS
+	Local oTmp480Z
+	Local oTmp480K
+	Local oTmpZ480 // Obj. Tab. Temporária
+	Local cCampo     := ""
+	Local cPropri    := ""
+	Local nInd		 := 0
+	Local nTot		 := 0
+	Local aNgHeader	 := {}
+
+	Private cTRBZ400 := GetNextAlias()
+	Private cTRBK400 := GetNextAlias()
+
+	Store .F. To lCondicao, lTPGeraOs, lTPGeraSS
+
+	aCols       := aClone( oGet:aCols )
+	aHeader     := aClone( oGet:aHeader )
+	cOrdem480   := GETSXENUM("STJ", "TJ_ORDEM")
+
+    //+----------------------------------+
+    //| Integracao por mensagem unica    |
+    //+----------------------------------+
+	If GetNewPar("MV_NGINTER","") == "M"
+		M->TJ_ORDEM   := cORDEM480
+		M->TJ_CODBEM  := cBEM480
+		M->TJ_OBSERVA := ""
+		M->TJ_SITUACA := "L"
+		M->TJ_TERMINO := "S"
+		M->TJ_POSCONT := nCONTADOR1
+		M->TJ_POSCON2 := nCONTADOR2
+		M->TJ_USUARIO := IIf( Len(STJ->TJ_USUARIO) > 15, cUsername, Substr( cUsuario, 7, 15 ) )
+		M->TJ_DTORIGI := dORIGINAL
+		M->TJ_SERVICO := cServico
+		M->TJ_INTPRJ  := ''
+		M->TJ_INTTSK  := ''
+
+		lOk := NGMUMntOrd(STJ->(Recno()),3,.T.)  //passar OS finalizada
+	EndIf
+
+	//Gera Op
+	If AllTrim(GetMV("MV_NGMNTPC")) == "S" .And. lOk
+
+		cCODPRO := If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], GetMv("MV_PRODMNT")) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+		dDataIni := MNT420DTOP(dORIGINAL)
+		dDataFim := MNT420DTOP(dORIGINAL)
+		cCusto := NgFilTPN(cBEM480,dORIGINAL,SubStr(Time(),1,5))[2] //Buscar o C.C. do bem na TPN
+		If !GERAOPNEW(cCODPRO,1,cORDEM480,dDataIni,dDataFim,,,cCusto,'PLANO 000000')
+			RollbackSX8()
+			Return .F.
+		EndIf
+	EndIf
+
+	If !lOk
+		RollbackSX8()
+		Return .F.
+	Else
+		If ExistBlock("NG480CPU")
+			aCposAlter := ExecBlock("NG480CPU",.F.,.F.)
+		EndIf
+
+		aNgHeader := NGHeader("TPQ",,.F.)
+
+		nTot := Len(aNgHeader)
+		For nInd := 1 To nTot
+
+			cCampo  := aNgHeader[nInd,2]
+			cPropri := Posicione("SX3",2,cCampo,"X3_PROPRI")
+			If cPropri == "U"
+				If aScan(aCposAlter,AllTrim(cCampo)) == 0
+					aAdd(aCposAlter,cCampo)
+				EndIf
+			EndIf
+		Next nInd
+
+		If TIPOACOM .And. nCONTADOR1 > 0
+			NGTRETCON(cBEMRET,dORIGINAL,nCONTADOR1,cHORCON1,1,,.T.)
+		EndIf
+
+		If TIPOACOM2 .And. nCONTADOR2 > 0
+			NGTRETCON(cBEMRET,dDATACON2,nCONTADOR2,cHORCON2,2,,.F.)
+		EndIf
+
+		cPLANO480 := Replicate( "0", TAMSX3("TJ_PLANO")[1] )
+
+		dbSelectArea("ST9")
+		dbSetOrder(1)
+		dbSeek(xFilial("ST9") + cBEM480)
+
+		dbSelectArea("ST4")
+		dbSetOrder(1)
+		dbSeek(xFilial("ST4") + cServico)
+
+		M->TL_TIPOREG   := 'M'
+		M->TL_UNIDADE   := "H"
+		M->TL_DTINICI   := dORIGINAL
+		M->TL_HOINICI   := cHORA480
+		M->TL_QUANTID   := nTEMPODU
+		M->tl_dtfim     := CTOD('  /  /  ')
+		M->tl_hofim     := Space(5)
+
+		MOSTRADAT()
+
+		dDFIM   := M->tl_dtfim
+		cHORAFI := M->tl_hofim
+
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		If !dbSeek( xFilial("STJ") + cORDEM480 + cPLANO480 )
+			RecLock("STJ",.T.)
+			STJ->TJ_FILIAL  := xFILIAL("STJ")
+			STJ->TJ_ORDEM   := cORDEM480
+			STJ->TJ_PLANO   := cPLANO480
+			STJ->TJ_CODBEM  := cBEM480
+			STJ->TJ_TIPOOS  := "B"
+			STJ->TJ_SERVICO := cServico
+			STJ->TJ_SEQRELA := '000'
+			STJ->TJ_DTORIGI := dORIGINAL
+			STJ->TJ_TIPO    := ST4->T4_TIPOMAN
+			STJ->TJ_SITUACA := "L"
+			STJ->TJ_TERMINO := "S"
+			STJ->TJ_POSCONT := nCONTADOR1
+			STJ->TJ_CODAREA := ST4->T4_CODAREA
+			STJ->TJ_CCUSTO  := ST9->T9_CCUSTO
+			STJ->TJ_CENTRAB := ST9->T9_CENTRAB
+			STJ->TJ_DTMPINI := dORIGINAL
+			STJ->TJ_HOMPINI := cHORA480
+			STJ->TJ_DTMPFIM := dDFIM
+			STJ->TJ_HOMPFIM := cHORAFI
+			STJ->TJ_USUARIO := IIf( Len(STJ->TJ_USUARIO) > 15, cUsername, Substr(cUsuario,7,15) )
+			STJ->TJ_PRIORID := ST9->T9_PRIORID
+			STJ->TJ_DTMRINI := dORIGINAL
+			STJ->TJ_HOMRINI := cHORA480
+			STJ->TJ_DTMRFIM := dDFIM
+			STJ->TJ_HOMRFIM := cHORAFI
+			STJ->TJ_COULTMA := ST9->T9_CONTACU
+			STJ->TJ_DTPRINI := dORIGINAL
+			STJ->TJ_HOPRINI := cHORA480
+			STJ->TJ_DTPRFIM := dDFIM
+			STJ->TJ_HOPRFIM := cHORAFI
+			STJ->TJ_TIPORET := "S"
+			STJ->TJ_HORACO1 := cHORCON1
+			STJ->TJ_POSCON2 := nCONTADOR2
+			STJ->TJ_HORACO2 := cHORCON2
+			STJ->TJ_LUBRIFI := "N"
+			STJ->TJ_TERCEIR := '1'
+
+			If lMMoeda
+				STJ->TJ_MOEDA := '1'
+			EndIf
+
+			STJ->(MsUnlock())
+		EndIf
+
+        // Gera não-conformidade
+		If Val( STJ->TJ_PLANO ) == 0 .And. FindFunction("NGGERAFNC")
+			NGGERAFNC( STJ->TJ_ORDEM, STJ->TJ_CODBEM, STJ->TJ_SERVICO, STJ->TJ_DTORIGI )
+		EndIf
+
+        // Cria o insumo
+		M->TJ_PLANO := cORDEM480
+		M->TJ_ORDEM := cPLANO480
+		M->TL_PLANO := M->TJ_PLANO
+		M->TL_ORDEM := M->TJ_ORDEM
+		nSEQSTL     := ULTSEQ(Recno())
+
+		dbSelectArea('STL')
+		RecLock('STL',.T.)
+		STL->TL_FILIAL  := xfilial("STL")
+		STL->TL_ORDEM   := cORDEM480
+		STL->TL_PLANO   := cPLANO480
+		STL->TL_TAREFA  := M->TQ_TAREFA
+		STL->TL_TIPOREG := 'M'
+		STL->TL_CODIGO  := cFuncion
+		STL->TL_SEQRELA := nSEQSTL
+		STL->TL_QUANTID := nTEMPODU
+		STL->TL_UNIDADE := "H"
+		STL->TL_DTINICI := dORIGINAL
+		STL->TL_HOINICI := cHORA480
+		STL->TL_DTFIM   := dDataFim
+		STL->TL_HOFIM   := cHOR480F
+		STL->TL_USACALE := IIf( cUsaCale == STR0031, "S", "N" )
+		STL->TL_TIPOHOR := Alltrim(GetMv("MV_NGUNIDT"))
+		STL->TL_REPFIM  := "S"
+		STL->TL_GARANTI := "N"
+
+		If lMMoeda
+			STL->TL_MOEDA := "1"
+		EndIf
+
+		STL->(MsUnLock())
+		If AllTrim(GetMv("MV_NGMNTES")) == 'S'
+
+			If STL->TL_TIPOREG $"PM"
+				cNUMSEQ := MNTGERAD3("RE0")
+				If NGPRODESP(SD3->D3_COD,.F.,"M")
+					NGAtuErp("SD3","INSERT")
+				EndIf
+
+				dbSelectArea("STL")
+				RecLock("STL",.F.)
+				STL->TL_NUMSEQ := cNUMSEQ
+				STL->TL_CUSTO  := SD3->D3_CUSTO1
+
+				If lMMoeda
+					STL->TL_MOEDA := "1"
+				EndIf
+
+				STL->(MsUnLock())
+			EndIf
+
+            //GRAVA O ITEM DE ENTRADA E SAIDA DO PRODUTO MANUTENCAO
+			cNumSeq := ProxNum()
+
+            //Pega o proximo numero sequencial do documento do SD3
+			cDocumSD3 := NextNumero("SD3",2,"D3_DOC",.T.)
+			cDocumSD3 := A261RetINV(cDocumSD3)
+
+            //+--------------------------------------------------+
+            //| Grava no SD3 o encerramento da OP gerada         |
+            //+--------------------------------------------------+
+
+			cCODPRO := IIf( FindFunction("NGProdMNT"), NGProdMNT("M")[1], Trim(GetMv("MV_PRODMNT"))) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+			dbSelectArea("SB1")
+			dbSeek(xFilial("SB1") + cCODPRO)
+
+			cB1APROP := SB1->B1_APROPRI
+
+			// Verifica se está com o fonte MNTUTIL e NGUTIL atualizado.
+			// Observação: Remover na versão 12.1.25
+			If FindFunction("MNTMOVTM") .And. FindFunction("NGREGRAEST")
+
+				If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+					cItemCont := NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_ITEMCTA")
+				EndIf
+
+				aAreaSTJ := STJ->(GetArea()) // Salva área da STJ.
+				aAreaSTL := STL->(GetArea()) // Salva área da STL.
+
+				// Realiza movimentação de estoque.
+				cNumSeq := MntMovEst('PR0', SB1->B1_LOCPAD, cCODPRO, 1, STL->TL_DTFIM, cDocumSD3, , STJ->TJ_CCUSTO, , cNumSeq, , , ,STJ->TJ_ORDEM+"OS001", cItemCont)
+
+				RestArea(aAreaSTJ) // Retorna área da STJ.
+				RestArea(aAreaSTL) // Retorna área da STJ.
+
+				// Altera campos específicos que não foram gravados através do ExecAuto.
+				If NGIFDBSEEK("SD3",cNumSeq,4)
+					RecLock("SD3",.F.)
+					SD3->D3_CUSTO1  := STL->TL_CUSTO
+					SD3->D3_ORDEM   := STJ->TJ_ORDEM
+					SD3->D3_PARCTOT := ""
+					SD3->D3_STSERV  := ""
+					SD3->D3_GARANTI := ""
+					SD3->D3_EMPOP   := ""
+					SD3->(MsUnLock())
+				EndIf
+
+			Else
+
+				dbSelectArea("SD3")
+				RecLock("SD3",.T.)
+				Replace d3_filial   With xFilial("SD3")
+				Replace d3_tm       With "499"
+				Replace d3_cod      With cCODPRO
+				Replace d3_um       With sb1->b1_um
+				Replace d3_quant    With 1
+				Replace d3_cf       With "PR0"
+				Replace d3_conta    With sb1->b1_conta
+				Replace d3_op       With stj->tj_ordem+"OS001"
+				Replace d3_local    With sb1->b1_locpad
+				Replace d3_doc      With cDocumSD3
+				Replace d3_emissao  With stl->tl_dtfim
+				Replace d3_custo1   With stl->tl_custo
+				Replace d3_segum    With sb1->b1_segum
+				Replace d3_qtsegum  With ConvUm(SB1->B1_COD,1,0,2)
+				Replace d3_tipo     With sb1->b1_tipo
+				Replace d3_usuario  With IIf( Len(SD3->D3_USUARIO) > 15, cUserName, Substr( cUsuario, 7, 15 ) )
+				Replace d3_numseq   With cNumSeq
+				Replace d3_chave    With SubStr(D3_CF,2,1)+If(D3_CF $ 'RE4|DE4','9','0')
+				Replace d3_cc       With stj->tj_ccusto
+				Replace d3_ordem    With stj->tj_ordem
+
+				If cB1APROP == "I"
+					SD3->D3_CHAVE   := Substr(sd3->d3_chave,1,1)+"3"
+				EndIf
+
+				If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+					SD3->D3_ITEMCTA := NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_ITEMCTA")
+				EndIf
+				SD3->(MsUnLock())
+
+			EndIf
+
+			If NGPRODESP(SD3->D3_COD,.F.,"M")
+				NGAtuErp("SD3","INSERT")
+			EndIf
+
+            // BAIXA PRODUTO MV_PRODMNT
+			cNumSeq := ProxNum()
+
+            //Pega o proximo numero sequencial do documento do SD3
+			cDocumSD3 := NextNumero( "SD3", 2, "D3_DOC", .T. )
+			cDocumSD3 := A261RetINV(cDocumSD3)
+
+	        //+---------------------------------------------------------------------+
+            //| Grava no SD3 o encerramento da OP gerada                            |
+            //+---------------------------------------------------------------------+
+
+			cCODPRO := If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], Trim(GetMv("MV_PRODMNT"))) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+			dbSelectArea("SB1")
+			dbSeek(xFilial("SB1") + cCODPRO)
+			cB1APROP := SB1->B1_APROPRI
+
+			// Verifica se está com o fonte MNTUTIL e NGUTIL atualizado.
+			// Observação: Remover na versão 12.1.25
+			If FindFunction("MNTMOVTM") .And. FindFunction("NGREGRAEST")
+
+				If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+					cItemCont := NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_ITEMCTA")
+				EndIf
+
+				aAreaSTJ := STJ->(GetArea()) // Salva área da STJ.
+				aAreaSTL := STL->(GetArea()) // Salva área da STL.
+
+				// Realiza movimentação do estoque.
+				cNumSeq := MntMovEst('RE0', SB1->B1_LOCPAD, cCODPRO, 1, STL->TL_DTFIM, cDocumSD3,, STJ->TJ_CCUSTO,, cNumSeq, , , , STJ->TJ_ORDEM+"OS001", cItemCont)
+
+				RestArea(aAreaSTJ) // Retorna área da STJ.
+				RestArea(aAreaSTL) // Retorna área da STL.
+
+				// Altera campos específicos que não foram gravados através do ExecAuto.
+				If NGIFDBSEEK("SD3",cNumSeq,4)
+					RecLock("SD3",.F.)
+					SD3->D3_CUSTO1  := STL->TL_CUSTO
+					SD3->D3_ORDEM   := STJ->TJ_ORDEM
+					SD3->D3_PARCTOT := ""
+					SD3->D3_STSERV  := ""
+					SD3->D3_GARANTI := ""
+					SD3->D3_EMPOP   := ""
+					SD3->(MsUnLock())
+				EndIf
+
+			Else
+
+				dbSelectArea("SD3")
+				RecLock("SD3",.T.)
+
+				Replace d3_filial   With xFilial("SD3")
+				Replace d3_tm       With "999"
+				Replace d3_cod      With cCODPRO
+				Replace d3_um       With sb1->b1_um
+				Replace d3_quant    With 1
+				Replace d3_cf       With "RE0"
+				Replace d3_conta    With sb1->b1_conta
+				Replace d3_op       With stj->tj_ordem+"OS001"
+				Replace d3_local    With sb1->b1_locpad
+				Replace d3_doc      With cDocumSD3
+				Replace d3_emissao  With stl->tl_dtfim
+				Replace d3_custo1   With stl->tl_custo
+				Replace d3_segum    With sb1->b1_segum
+				Replace d3_qtsegum  With ConvUm(SB1->B1_COD,1,0,2)
+				Replace d3_tipo     With sb1->b1_tipo
+				Replace d3_usuario  With If(Len(sd3->d3_usuario) > 15,cUsername,Substr(cUsuario,7,15))
+				Replace d3_numseq   With cNumSeq
+				Replace d3_chave    With SubStr(D3_CF,2,1)+If(D3_CF $ 'RE4|DE4','9','0')
+				Replace d3_cc       With stj->tj_ccusto
+				Replace d3_ordem    With stj->tj_ordem
+
+				If cB1APROP == "I"
+					SD3->D3_CHAVE   := Substr(sd3->d3_chave,1,1) + "3"
+				EndIf
+
+				If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+					SD3->D3_ITEMCTA := NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_ITEMCTA")
+				EndIf
+
+				SD3->(MsUnLock())
+
+			EndIf
+
+			If NGPRODESP(SD3->D3_COD,.F.,"M")
+				NGAtuErp("SD3","INSERT")
+			EndIf
+
+            // Inicio da orientacao do Microsiga
+            //+--------------------------------------------+
+            //| Pega os 5 custos medios atuais             |
+            //+--------------------------------------------+
+			aCM := PegaCMAtu(SD3->D3_COD,SD3->D3_LOCAL)
+
+            //+--------------------------------------------+
+            //| Grava o custo da movimentacao              |
+            //+--------------------------------------------+
+			C2AtuComD3(aCM)
+            // fim da orientacao do Microsiga
+
+		Else
+			dbSelectArea("STL")
+			RecLock("STL",.F.)
+
+			If lMMoeda .And. FindFunction("NGCALCUSMD")
+				aCstMoeda := NGCALCUSMD(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_QUANTID,;
+					STL->TL_LOCAL,STL->TL_TIPOHOR,,,STL->TL_QUANREC)
+				STL->TL_CUSTO := aCstMoeda[1]
+				STL->TL_MOEDA := aCstMoeda[2]
+			Else
+				STL->TL_CUSTO   := NGCALCUSTI(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_QUANTID,;
+					STL->TL_LOCAL,STL->TL_TIPOHOR,,,STL->TL_QUANREC)
+
+				If lMMoeda
+					STL->TL_MOEDA := "1"
+				EndIf
+			EndIf
+			STL->(MsUnLock())
+		EndIf
+
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		If dbSeek( xFilial("STJ") + cORDEM480 + cPLANO480 )
+			RecLock("STJ",.F.)
+			STJ->TJ_CUSTMDO :=  IIf( lMMoeda, xMoeda( STL->TL_CUSTO, Val(STL->TL_MOEDA), 1, STL->TL_DTINICI, 2), STL->TL_CUSTO )
+
+			If lMMoeda
+				STJ->TJ_MOEDA := "1"
+			EndIf
+
+			STJ->(MsUnLock())
+		EndIf
+
+		cTAREFAL := stl->tl_tarefa
+        // CRIA AS ETAPAS DA ORDEM DE SERVI€O
+		For xx := 1 to len(aCols)
+			dbSelectArea("TPC")
+			dbSetOrder(1)
+			dbSeek( xFilial("TPC") + M->TQ_ETAPA+aCols[xx][nnOPCA])
+
+			dbSelectArea("STQ")
+			dbSetOrder(01)
+			If !dbSeek(xFilial("STQ")+STJ->TJ_ORDEM+STJ->TJ_PLANO+cTAREFAL+M->TQ_ETAPA)
+				RecLock("STQ",.T.)
+				stq->tq_filial := xfilial("STQ")
+				stq->tq_ordem  := STJ->TJ_ORDEM
+				stq->tq_plano  := STJ->TJ_PLANO
+				stq->tq_ok     := 'XX'
+				stq->tq_tarefa := cTAREFAL
+				stq->tq_etapa  := M->TQ_ETAPA
+				STQ->(MsUnLock())
+			EndIf
+
+			dbSelectArea("TPD")
+			dbSetOrder(01)
+			If !dbSeek( xFilial("TPD") + STJ->TJ_CODBEM + M->TQ_ETAPA )
+				RecLock("TPD", .T.)
+				TPD->TPD_FILIAL := xFilial("TPD")
+				TPD->TPD_CODBEM := STJ->TJ_CODBEM
+				TPD->TPD_ETAPA  := STQ->TQ_ETAPA
+				TPD->TPD_DTULTM := STJ->TJ_DTPRFIM
+				TPD->TPD_POSCON := ST9->T9_POSCONT
+			ElseIf STJ->TJ_DTPRFIM > TPD->TPD_DTULTM
+				RecLock("TPD", .F.)
+				TPD->TPD_DTULTM := STJ->TJ_DTPRFIM
+			EndIf
+
+			TPD->(MsUnlock())
+
+            // CRIA AS ETAPAS EXECUTADAS DA ORDEM DE SERVI€O
+			If !Empty(aCols[xx][nRESPOS])
+				dbSelectArea("TPQ")
+				dbSetOrder(02)
+				If !dbSeek(xFilial("TPQ") + STJ->TJ_ORDEM + M->TQ_ETAPA + aCols[xx][nnOPCA] )
+					dbSelectArea("TPQ")
+					RecLock("TPQ",.T.)
+
+					tpq->tpq_filial := xfilial("TPQ")
+					tpq->tpq_ordem  := STJ->TJ_ORDEM
+					tpq->tpq_plano  := STJ->TJ_PLANO
+					tpq->tpq_tarefa := cTAREFAL
+					tpq->tpq_etapa  := M->TQ_ETAPA
+					tpq->tpq_opcao  := aCols[xx][nnOPCA]
+					tpq->tpq_respos := aCols[xx][nRESPOS]
+
+                    //Grava os campos de usuario
+					If Len(aCposAlter) > 0
+						For nI := 1 To Len(aCposAlter)
+							nPosCpo := aScan(aHeader,{|x| AllTrim(x[2])== Alltrim(aCposAlter[nI])})
+							TPQ->(FieldPut(FieldPos(aCposAlter[nI]),aCols[xx][nPosCpo]))
+						Next nI
+					EndIf
+
+					TPQ->(MsUnLock())
+
+					_Ordem := STJ->TJ_ORDEM
+				EndIf
+			EndIf
+		Next xx
+
+        // Gera OS com relação às respostas
+        // Cria um arquivo que será usado no NGGERAOS
+		aCAMPOS := {}
+		aCAMPOS := TPC->( dbStruct() )
+			aAdd( aCAMPOS, { "TPC_RESPOS"  , "C", 10, 0 })
+			aAdd( aCAMPOS, { "TPC_TAREFA"  , "C", 06, 0 })
+
+		//Cria Tabela Temporária
+		oTmpTbl := NGFwTmpTbl(cTRB3400,aCampos,{{"TPC_RESPOS","TPC_TAREFA"}})
+
+		(cTRB3400)->( dbAppend() )
+		(cTRB3400)->TPC_SERVIC := cServico
+		(cTRB3400)->TPC_TPMANU := 'C'
+		(cTRB3400)->TPC_ETAPA  := M->TQ_ETAPA
+		(cTRB3400)->TPC_TAREFA := STQ->TQ_TAREFA
+
+		cBEMSTJ := STJ->TJ_CODBEM
+		cSERSTJ := STJ->TJ_SERVICO
+		nSEQSTJ := STJ->TJ_SEQRELA
+
+		aTRBZ := {}
+		aTRBK := {}
+
+		NGTRBACRIA(1,@cTRBZ400,@cTRBK400,@oTmp480Z,@oTmp480K,@oTmpZ480)//Cria Tabela Temporária (chamada no MNTA400)
+
+		For xi := 1 To Len(aCols)
+
+			lTPGeraOS  := .F.
+			lTPGeraSS  := .F.
+			lGRAVOUSTQ := .F.
+
+			If !Empty(aCols[xi][nRESPOS])
+				dbSelectArea("TPC")
+				dbSetOrder(1)
+				If dbSeek( xFilial("TPC") + M->TQ_ETAPA + aCols[xi][nnOPCA])
+
+					//Verifica o tipo de serviço da Ação
+					If TPC->TPC_TPMANU == '1'
+						lTPGeraOs := .T.
+						cTipoMan  := NGSEEK( "ST4", TPC->TPC_SERVIC, 1, "T4_TIPOMAN")
+						cServCar  := NGSEEK( "STE", cTipoMan, 1, "TE_CARACTE")
+
+					ElseIf TPC->TPC_TPMANU == '2'
+						lTPGeraSS := .T.
+						cServCar  := TPC->TPC_SERVIC
+					EndIf
+
+                    //Identifica se gera para o próprio bem ou para outro
+					If TPC->TPC_PORBEM == '2'
+						cBemOr  := Space( TAMSX3("T9_CODBEM")[1] )
+						cSerSTJ := TPC->TPC_SERVIC
+
+						If !Empty(TPC->TPC_DESCRI)
+
+							cBemOr := SubStr( TPC->TPC_DESCRI, 1, TAMSX3("T9_CODBEM")[1] )
+
+							dbSelectArea("ST9")
+							dbSetOrder(1)
+							If !dbSeek(xFilial("ST9") + cBemOr)
+								cBemOr := Space( TAMSX3("T9_CODBEM")[1] )
+							Else
+								If lTpGeraOS
+									If cServCar == 'P' // O.S. Preventiva
+										nSeqSTJ := IIf( Alltrim(nSeqSTJ) == "0", "1  ", nSeqSTJ )
+										dbSelectArea("STF")
+										dbSetOrder(1)
+										If !dbSeek(xFilial("STF") + cBemOr + cSerSTJ + nSeqSTJ)
+											cBemOr := Space( TAMSX3("T9_CODBEM")[1] )
+										EndIf
+									EndIf
+								EndIf
+							EndIf
+						EndIf
+						cBemSTJ := IIf( Empty(cBemOr), cBemSTJ, cBemOr )
+					EndIf
+
+					lCondicao := .F.
+
+					cRespo480 := aCols[xi][nRespos]
+
+					Do Case
+						Case TPC->TPC_TIPCAM == "L"
+							cResp := AllTrim( cRESPO480 )
+						Case TPC->TPC_TIPCAM == "N"
+							cResp := cValToChar( Val( cRESPO480 ) )
+						Case TPC->TPC_TIPCAM == "D"
+							cResp := "'" + DToS( cToD( cRESPO480 ) ) + "'"
+						Case TPC->TPC_TIPCAM == "C"
+							cResp := "'" + AllTrim( cRESPO480 ) + "'"
+					EndCase
+
+					cForm     := StrTran( TPC->TPC_FORMUL, '#RESP#', cResp )
+					lCondicao := &( cForm )
+
+					If lCondicao
+						If lTPGeraOs
+							If cServCar $ 'P/O'
+								(cTRB3400)->TPC_SERVIC := TPC->TPC_SERVIC
+
+								aArrEta := {}
+
+								For Zx := 1 To Len(aCols)
+									aAdd(aArrEta,{aCols[Zx][1],'N'})
+								Next Zx
+
+								aGeraOS := NG400GPRE('2')
+
+								If aGeraOS[1]
+									dbSelectArea("TPQ")
+									dbSetOrder(02)
+									If dbSeek(xFilial("TPQ")+_Ordem+M->TQ_ETAPA+aCols[xi][nnOPCA])
+										RecLock("TPQ",.F.)
+										TPQ->TPQ_ORDEMG := aGeraOS[2]
+										TPQ->(MsUnlock())
+									EndIf
+								ElseIf !aGeraOS[1] .And. !Empty( aGeraOS[2] )
+									MsgInfo( STR0045 + aGeraOS[2]) //"Não foi possível gerar a OS. "
+								EndIf
+							ElseIf cServCar == 'C'
+								(cTRB3400)->TPC_SERVIC := TPC->TPC_SERVIC
+
+                                // Verifica se já tem uma O.S. para o bem + serviço + sequência
+                                // em aberto com a mesma etapa e opções
+
+								aArrEta := {}
+
+								For Zx := 1 To Len(aCols)
+									aAdd(aArrEta,{aCols[Zx][1],'N'})
+								Next Zx
+
+								lAchouOS := .F.
+								dbSelectArea("STJ")
+								dbSetOrder(6)
+								If dbSeek( xFilial("STJ") + "B" + cBEM480 + (cTRB3400)->TPC_SERVIC + "0  " + DToS(dORIGINAL) )
+									While !EoF() .And. xFilial("STJ") == STJ->TJ_FILIAL .And.;
+											STJ->TJ_TIPOOS == "B" .And. STJ->TJ_CODBEM == cBEM480 .And.;
+											STJ->TJ_SERVICO == (cTRB3400)->TPC_SERVIC .And. Val(STJ->TJ_SEQRELA) == 0 .And.;
+											STJ->TJ_DTORIGI == dORIGINAL .And. !lAchouOS
+
+										If STJ->TJ_SITUACA == 'L' .and. STJ->TJ_TERMINO == 'N'
+											lAchouOS := .T.
+											Exit
+										EndIf
+
+										dbSelectArea("STJ")
+										dbSkip()
+									End
+								EndIf
+
+								If !lAchouOS
+									aGeraOS := NG400GCOR( '2',aCols[xi][nnOPCA],aCols[xi][nRESPOS])
+
+									If aGeraOS[1]
+										dbSelectArea("TPQ")
+										dbSetOrder(02)
+										If dbSeek(xFilial("TPQ")+_Ordem+M->TQ_ETAPA+aCols[xi][nnOPCA])
+											RecLock("TPQ",.F.)
+											TPQ->TPQ_ORDEMG := aGeraOS[2]
+											TPQ->(MsUnlock())
+										EndIf
+									ElseIf !aGeraOS[1] .And. !Empty( aGeraOS[2] )
+										MsgInfo(STR0045 + aGeraOS[2]) //"Não foi possível gerar a OS. "
+									EndIf
+								EndIf
+							EndIf
+						ElseIf lTpGeraSS
+
+							cMsgSS := STR0046 + ": " + STJ->TJ_ORDEM     + Chr(13) + Chr(10)	//"O.S. Origem"
+							cMsgSS += STR0047 + ": " + M->TQ_ETAPA       + Chr(13) + Chr(10)	//"Etapa"
+							cMsgSS += STR0048 + ": " + aCols[xI][nnOpca] + Chr(13) + Chr(10)	//"Opção"
+							cMsgSS += STR0049 + ": " + cRESPO480							    //"Resposta"
+
+                            // aSolic := { Código do Bem, Ramal, Descrição da Solicitação, Serviço }
+							aSolic := {{ "TQB_CODBEM", cBemSTJ, Nil },;
+        							   { "TQB_RAMAL" , "0000" , Nil },;
+        						       { "TQB_DESCSS", cMsgSS , Nil },;
+        							   { "TQB_CDSERV", TPC->TPC_SERVIC, Nil } }
+
+							lMSHelpAuto := .T. // Não apresenta erro em tela
+							lMSErroAuto := .F. // Caso a variável torne-se .T. apos MsExecAuto, apresenta erro em tela
+
+							MSExecAuto( {|x,z,y,w| MNTA280(x,z,y,w)},,, aSolic )
+
+							If lMsErroAuto
+								MostraErro()
+							Else
+								MsgInfo( STR0050 ) //"Foi gerada uma S.S. conforme a resposta da etapa!"
+
+								dbSelectArea("TPQ")
+								dbSetOrder(2)
+								If dbSeek( xFilial("TPQ") + _Ordem + M->TQ_ETAPA + aCols[xi][nnOPCA])
+									RecLock("TPQ",.F.)
+									TPQ->TPQ_ORDEMG := TQB->TQB_SOLICI
+									TPQ->(MsUnlock())
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		Next xi
+
+		dbSelectArea(cTRBZ400)
+		dbGoTop()
+		If RecCount() > 0
+			NGMOSTTRBZ()
+		EndIf
+
+		dbSelectArea(cTRBK400)
+		dbGoTop()
+		If RecCount() > 0
+			NGTRBKMOST()
+		EndIf
+
+		dbSelectArea("ST9")
+        //GERAR O.S AUTOMATICA POR CONTADOR
+		If ( cGERAPREV == "S" .Or. cGERAPREV == "C" ) .And. ( !Empty(nCONTADOR1) .Or. !Empty(nCONTADOR2) )
+			If NGCONFOSAUT(cGERAPREV)
+				NGGEROSAUT( cBEMRET, IIf(!Empty(nCONTADOR1), nCONTADOR1, nCONTADOR2 ) )
+			EndIf
+		EndIf
+	EndIf
+
+	ConfirmSX8()
+
+	oTmpTbl:Delete()
+
+    NGTRBACRIA(2,@cTRBZ400,@cTRBK400,@oTmp480Z,@oTmp480K,@oTmpZ480)// Deleta
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480VALCA
+Funcao que v lida campos obrigatorios
+@author Elisangela Costa
+@since 12/04/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function NG480VALCA()
+
+    Local cMensa1 := STR0029 //" e campo obrigatorio"
+    Local cMensa2 := "  "
+
+    If Empty(cServico)
+        cMENSA2 := STR0006+cMENSA1  // "Servico e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. Empty(dORIGINAL)
+        cMENSA2 := STR0007+cMENSA1  // "Data Original e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. Empty(cFuncion)
+        cMENSA2 := STR0009+cMENSA1  // "Mao de Obra e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. Empty(cHORA480)
+        cMENSA2 := STR0008+cMENSA1  // "Hora e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. Empty(M->TQ_ETAPA)
+        cMENSA2 := STR0010+cMENSA1  // "Etapa e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. Empty(nTEMPODU)
+        cMENSA2 := STR0011+cMENSA1  // "Tempo Extimado e campo obrigatorio"
+    EndIf
+
+    If Empty(cMENSA2) .And. !NGFRHAFAST(cFuncion,dORIGINAL,dDataFim,.T.)
+        Return .F.
+    EndIf
+
+    If !Empty(cMENSA2)
+        MsgInfo(cMENSA2,STR0025)
+        Return .F.
+    EndIf
+
+    If !NGVDTINS(cFuncion,dORIGINAL,cHORA480,dDataFim,cHOR480F,"M")
+        Return .F.
+    EndIf
+
+    //MONTA O ACOLS COM OS DADOS DA ETAPA
+    NGA480ACOL()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480HOINI
+Valida e mostra a hora inicio
+@author Inacio Luiz Kolling
+@since 19/04/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG480HOINI()
+
+    If !NGVALHORA(cHORA480,.T.)
+        Return .F.
+    EndIf
+
+    M->TL_CODIGO  := cFuncion
+    M->TL_TIPOREG := "M"
+    M->TL_DTINICI := dORIGINAL
+    M->TL_HOINICI := cHORA480
+    M->TL_USACALE := If(cUsaCale = STR0031,"S","N")
+    M->TL_SEQRELA := '1'
+
+    If !NGSTLHORIN()
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480DTFIM
+Valida a data fim
+@author In cio Luiz Kolling
+@since 19/04/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG480DTFIM()
+
+    If Vazio(dDataFim)
+        Return .F.
+    Else
+        If dDataFim < dORIGINAL
+            MsgInfo(STR0037,STR0038)
+            Return .F.
+        EndIf
+    EndIf
+
+    If !NGFUNCRH(cFuncion,.T.,dDataFim)
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480CALE
+Valida o calendario
+@author Inácio Luiz Kolling
+@since 19/04/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG480CALE()
+
+    If cUsaCale = STR0031
+        If !ExistCpo("SH7",cCodCale)
+            Return .F.
+        EndIf
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG480HOFIM
+Atualiza hora fim quando digitado qtde de horas.
+@author Inácio Luiz Kolling
+@since 19/04/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG480HOFIM()
+
+    If !NGVALHORA(cHOR480F,.T.)
+        Return .F.
+    EndIf
+
+    If !COMPDATA(dORIGINAL,cHORA480,dDataFim,cHOR480F)
+        Return .F.
+    EndIf
+
+    If !NGVDTINS(cFuncion,dORIGINAL,cHORA480,dDataFim,cHOR480F,"M")
+        cHOR480F := '  :  '
+        oHORA480:SetFocus()
+        Return .T.
+    EndIf
+
+    M->TL_DTINICI := dORIGINAL
+    M->TL_TIPOREG := "M"
+    M->TL_HOINICI := cHORA480
+    M->TL_DTFIM   := dDataFim
+    M->TL_HOFIM   := cHOR480F
+    M->TL_USACALE := IIf( cUsaCale == STR0031, "S", "N" )
+    M->TL_UNIDADE := "H"
+    M->TL_CODIGO  := cFuncion
+    M->TL_QUANTID := 0.00
+
+    If !NGSTLHORFI()
+        Return .F.
+    EndIf
+
+    NGCALQUANT()
+    nTEMPODU := M->TL_QUANTID
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT480NTAR
+Consistencia da tarefa
+@author Inácio Luiz Kolling
+@since 08/02/2010
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT480NTAR()
+
+    Local lRet := .F.
+
+    If NGSTLTAR(,M->TQ_TAREFA)
+        cNomTar := Space( TAMSX3("TT9_DESCRI")[1] )
+        cNomTar := SubStr( NGSEEK("TT9", M->TQ_TAREFA, 1, "TT9_DESCRI"), 1, 35 )
+        lRet    := .T.
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT480TCAR()
+Consiste o campo de Resposta.
+
+@author Pedro Henrique Soares de Souza
+@since 02/08/2014
+@return lRet Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNT480TCAR()
+
+    Local lRet := .T.
+
+    If FindFunction("NGTPCONTCAR")
+        dbSelectArea("TPC")
+        dbSetOrder(1)
+        If dbSeek( xFilial("TPC") + M->TQ_ETAPA + aCols[n][nnOPCA] )
+            If !NGTPCONTCAR( TPC->TPC_TIPCAM, M->TPQ_RESPOS )
+                lRet := .F.
+            Endif
+        Endif
+    Endif
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA480CCB
+Carrega o valor do contador do bem se o campo estiver bloqueado
+
+@param cCobBem: Código do bem
+@param dData: Data
+@param cHora: Hora
+@author Wexlei Silveira
+@since 27/09/2016
+@version MP11
+@return True
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA480CCB(cCobBem, dData, cHora)
+
+	If FindFunction("NGBlCont") .And. !NGBlCont( cCobBem )
+		nCONTADOR1 := NGTpCont(cCobBem, dData, cHora)
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fMntCabec
+Monta dados do aHeader
+
+@author  Maicon André Pinheiro
+@since   04/05/2018
+@version P12
+/*/
+//-------------------------------------------------------------------
+Static Function fMntCabec(aAlterCols,aCposAlter)
+
+	Local aCampos  		:= {"TPC_OPCAO","TPC_DESOPC","TPQ_RESPOS"}
+	Local nTot     		:= 0
+	Local nInd     		:= 0
+	Local nTamanho 		:= 0
+	Local nDecimal 		:= 0
+	Local nTamUtil		:= 0
+	Local cCampo   		:= ""
+	Local cArquivo 		:= ""
+	Local cTitulo  		:= ""
+	Local cPicture 		:= ""
+	Local cValid   		:= ""
+	Local cUsado   		:= ""
+	Local cTipo    		:= ""
+	Local cF3      		:= ""
+	Local cContext 		:= ""
+	Local cCBox    		:= ""
+	Local cRelacao 		:= ""
+	Local cWhen    		:= ""
+	Local aUtil			:= {}
+	Local aNgHeader   	:= {}
+
+	aNgHeader := NGHeader("TPQ")
+	nTot := Len(aNgHeader)
+	For nInd := 1 To nTot
+
+		cCampo  := aNgHeader[nInd,2]
+		cPropri := Posicione("SX3",2,cCampo,"X3_PROPRI")
+		If cPropri == "U"
+
+			cTitulo  := aNgHeader[nInd,1]
+			cPicture := aNgHeader[nInd,3]
+			nTamanho := aNgHeader[nInd,4]
+			nDecimal := aNgHeader[nInd,5]
+			cValid   := aNgHeader[nInd,6]
+			cUsado   := aNgHeader[nInd,7]
+			cTipo    := aNgHeader[nInd,8]
+			cF3      := aNgHeader[nInd,9]
+			cContext := aNgHeader[nInd,10]
+			cCBox    := Posicione("SX3",2,cCampo,"X3CBox()")
+			cRelacao := Posicione("SX3",2,cCampo,"X3_RELACAO")
+			cWhen    := Posicione("SX3",2,cCampo,"X3_WHEN")
+
+			If cCampo == "TPQ_RESPOS"
+				cValid := "MNT480TCAR()"
+				cWhen  := ".T."
+			EndIf
+
+			nUsado++
+			aAdd(aUtil, {cTitulo, cCampo, cPicture, nTamanho, nDecimal, cValid, cUsado, cTipo, cF3, cContext, cCBox, cRelacao, cWhen})
+			aAdd(aAlterCols,cCampo)
+			aAdd(aCposAlter,cCampo)
+		EndIf
+	Next nInd
+
+	nTot := Len(aCampos)
+	For nInd := 1 To nTot
+
+		cCampo   := aCampos[nInd]
+		cArquivo := Posicione("SX3",2,cCampo,"X3_ARQUIVO")
+		If (cArquivo)->(FieldPos(cCampo)) > 0
+
+			cTitulo  := AllTrim(Posicione("SX3",2,cCampo,"X3Titulo()"))
+			cPicture := X3Picture(cCampo)
+			nTamanho := TAMSX3(cCampo)[1]
+			nDecimal := TAMSX3(cCampo)[2]
+			cValid   := Posicione("SX3",2,cCampo,"X3_VALID")
+			cUsado   := Posicione("SX3",2,cCampo,"X3_USADO")
+			cTipo    := Posicione("SX3",2,cCampo,"X3_TIPO")
+			cF3      := Posicione("SX3",2,cCampo,"X3_F3")
+			cContext := Posicione("SX3",2,cCampo,"X3_CONTEXT")
+			cCBox    := Posicione("SX3",2,cCampo,"X3CBox()")
+			cRelacao := Posicione("SX3",2,cCampo,"X3_RELACAO")
+			cWhen    := ".F."
+
+			If cCampo == "TPQ_RESPOS"
+				cValid := "MNT480TCAR()"
+				cWhen  := ".T."
+			EndIf
+
+			nUsado++
+        	aAdd(aHeader, {cTitulo, cCampo, cPicture, nTamanho, nDecimal, cValid, cUsado, cTipo, cF3, cContext, cCBox, cRelacao, cWhen })
+		EndIf
+
+	Next nInd
+
+	// Adiciona o que foi verificado
+	nTamUtil := Len(aUtil)
+	If nTamUtil > 0
+		For nInd := 1 To nTamUtil
+			aHeader := aAdd( aHeader,{ aUtil[nInd,1], aUtil[nInd,2], aUtil[nInd,3], aUtil[nInd,4], aUtil[nInd,5], aUtil[nInd,6], aUtil[nInd,7], aUtil[nInd,8], aUtil[nInd,9],;
+			 							aUtil[nInd,10], aUtil[nInd,11], aUtil[nInd,12], aUtil[nInd,1] } )
+		Next nInd
+	EndIf
+
+Return

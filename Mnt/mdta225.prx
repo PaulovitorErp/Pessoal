@@ -1,0 +1,921 @@
+#include "Mdta225.ch"
+#include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA225
+Programa de Laudo por medida de controle
+
+@author Thiago Machado
+@since 23/07/01
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA225
+
+	//---------------------------------------------------------------------
+	//Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	//---------------------------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private lMdtps := .F.
+	Private cCadastro
+
+	If SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+		lMdtps := .t.
+	Endif
+
+	//---------------------------------------------------------------------
+	// Define Array contendo as Rotinas a executar do programa
+	// ----------- Elementos contidos por dimensao ------------
+	// 1. Nome a aparecer no cabecalho
+	// 2. Nome da Rotina associada
+	// 3. Usado pela rotina
+	// 4. Tipo de Transação a ser efetuada
+	//    1 - Pesquisa e Posiciona em um Banco de Dados
+	//    2 - Simplesmente Mostra os Campos
+	//    3 - Inclui registros no Bancos de Dados
+	//    4 - Altera o registro corrente
+	//    5 - Remove o registro corrente do Banco de Dados
+	//---------------------------------------------------------------------
+	PRIVATE aRotina := MenuDef()
+	PRIVATE aCHKDEL := {}, bNGGRAVA
+
+	If lMdtps
+		//---------------------------------------------------------------------
+		// Define o cabecalho da tela de atualizacoes
+		//---------------------------------------------------------------------
+		PRIVATE nSizeCli,nSizeLoj
+		Private cPrograma := "MDTA225"
+		Private cCliMdtPs
+		cCadastro := OemtoAnsi(STR0006)
+
+		nSizeCli := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+		nSizeLoj := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+		DbSelectArea("SA1")
+		DbSetOrder(1)
+		mBrowse( 6, 1,22,75,"SA1")
+	Else
+		//---------------------------------------------------------------------
+		// Define o cabecalho da tela de atualizacoes
+		//---------------------------------------------------------------------
+		cCadastro := OemtoAnsi(STR0008)  //"Laudos"
+
+		//---------------------------------------------------------------------
+		//Endereca a funcao de BROWSE
+		//---------------------------------------------------------------------
+		DbSelectArea("TO0")
+		DbSetOrder(1)
+		mBrowse( 6, 1,22,75,"TO0")
+	Endif
+
+	//---------------------------------------------------------------------
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//---------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT225VAL
+Verifica se ja existe algum registro com a mesma chave unica.
+
+@author Andre E. Perez Alvarez
+@since 27/02/2006
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT225VAL(o)
+
+	Local xx := 0, npos, lRET := .T.
+	Local nX
+
+	nPOS := aSCAN( aHEADER, { |x| Trim( Upper(x[2]) ) == "TO3_CONTRO"})
+
+	If n > 1
+	For nX := 1 to Len(aCOLS)
+		If nX != n
+			If aCOLS[nX][1] == aCols[n][1]  .And. !aCols[nX][Len(aCols[nX])] .And. !aCols[n][Len(aCols[n])]
+				xx := xx + 1
+			Endif
+		EndIf
+	Next
+	Endif
+
+	If xx > 0
+	Help(" ",1,"JAEXISTINF")
+	lRet := .f.
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+	5. Nivel de acesso
+	6. Habilita Menu Funcional
+
+@author Rafael Diogo Richter
+@since 29/11/2006
+@version MP12
+@return aRotina
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+
+	If lSigaMdtPS
+		aRotina := { { STR0001 ,  "AxPesqui"  , 0 , 1},;  //"Pesquisar"
+					{ STR0002 ,  "NGCAD01"   , 0 , 2},;  //"Visualizar"
+					{ STR0008 ,  "MDT225CAD" , 0 , 4} }  //"Laudos"
+	Else
+		aRotina :=  { {STR0001 ,  "AxPesqui"   , 0 , 1},; //"Pesquisar"
+					{STR0002 ,  "NGCAD01"    , 0 , 2},; //"Visualizar"
+					{STR0009 ,  "MDT225CON"  , 0 , 4} } //"Controles"
+	Endif
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT225CON
+Mostra um browse com as medidas de controle do laudo
+
+@author Andre E. Perez Alvarez
+@since 08/08/2007
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT225CON(cAlias,nReg,nOpcx)
+
+	Local i, oPanel, oPanelCmps
+	Private aTELA[0][0],aGETS[0],aHeader[0],Continua,nUsado:=0
+	Private oMenu
+	Private aSize := MsAdvSize(,.f.,430)
+	bCampo   := {|nCPO| Field(nCPO) }
+
+	Private cFilTO3 := xFilial("TO3")
+
+	DbSelectArea("TO3")
+	FOR i := 1 TO FCount()
+		M->&(EVAL(bCampo,i)) := &(EVAL(bCampo,i))
+
+		If nOPCX == 3    //INCLUIR
+			IF      ValType(M->&(EVAL(bCampo,i))) == "C"
+					M->&(EVAL(bCampo,i)) := SPACE(LEN(M->&(EVAL(bCampo,i))))
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "N"
+					M->&(EVAL(bCampo,i)) := 0
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "D"
+					M->&(EVAL(bCampo,i)) := cTod("  /  /  ")
+			ELSEIF ValType(M->&(EVAL(bCampo,i))) == "L"
+					M->&(EVAL(bCampo,i)) := .F.
+			ENDIF
+		Endif
+	Next i
+
+	M->TO3_LAUDO   := TO0->TO0_LAUDO
+
+	aHEAINS := {}
+	aGETINS := {}
+
+	MDTA225IN(nOPCX)
+
+	aHeader  := aCLONE(aHEAINS)
+	aCOLS    := aCLONE(aGETINS)
+	cTUDOOK  := "TUDOK225"
+	cLINOK   := "MDT225VAL"
+
+	nOPCAP := 0
+
+	IF lMdtps
+		DEFINE MSDIALOG oDlg5 TITLE Ccadastro From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd Pixel
+			oDlg5:lMaximized := .T.
+			oPanel := TPanel():New(0, 0, Nil, oDlg5, Nil, .T., .F., Nil, Nil, 0, 70, .T., .F. )
+				oPanel:Align := CONTROL_ALIGN_TOP
+
+				@ 0.3,01 SAY OemToAnsi(STR0010) OF oPanel //"Laudo"
+				@ 0.2,04.5 MSGET TO0->TO0_LAUDO When .f. OF oPanel
+
+				@ 1.3,01 SAY OemToAnsi(STR0016) OF oPanel //"Nome"
+				@ 1.2,04.5 MSGET TO0->TO0_NOME When .f. SIZE 180,7 OF oPanel
+
+				@ 2.3,01 SAY OemToAnsi(STR0012) OF oPanel //"Data Início"
+				@ 2.2,04.5 MSGET TO0->TO0_DTINIC Size 45,9 When .f. OF oPanel HASBUTTON
+
+				@ 2.3,18 SAY OemToAnsi(STR0013) OF oPanel //"Data Fim"
+				@ 2.2,21 MSGET TO0->TO0_DTFIM Size 45,9 When .f. OF oPanel HASBUTTON
+
+				@ 3.3,01 SAY OemToAnsi(STR0022) OF oPanel //"Cliente"
+				@ 3.2,04.5 MSGET SA1->A1_COD When .f. SIZE 30,7 OF oPanel
+
+				@ 3.3,10 SAY OemToAnsi(STR0023) OF oPanel //"Loja"
+				@ 3.2,12 MSGET SA1->A1_LOJA When .f. SIZE 25,7 OF oPanel
+
+				@ 3.3,18 SAY OemToAnsi(STR0016) OF oPanel //"Nome"
+				@ 3.2,21 MSGET SA1->A1_NOME When .f. SIZE 140,7 OF oPanel
+
+				@ 57,5 BUTTON "&"+STR0014 SIZE 49,12 PIXEL ACTION ( MDT225BU() ) OF oPanel  //"Controles"
+
+			oGet := MSGetDados():New(0,0,225,315,nOpcx,"MDT225VAL","TUDOK225","",.T.,,,,9999)
+
+	Else
+
+		DEFINE MSDIALOG oDlg5 TITLE Ccadastro From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd Pixel
+
+			//Painel de Fundo
+			oPanel := TPanel():New(00,00,,oDlg5,,,,,,0,0,.F.,.F.)
+			oPanel:Align   := CONTROL_ALIGN_ALLCLIENT
+
+				//Painel dos campos
+				oPanelCmps := TPanel():New(00,00,,oPanel,,,,,,0,70,.F.,.F.)
+				oPanelCmps:Align:= CONTROL_ALIGN_TOP
+
+				@ 7,6 SAY OemToAnsi(STR0010) OF oPanelCmps Pixel //"Laudo"
+				@ 5,33 MSGET TO0->TO0_LAUDO When .f. OF oPanelCmps Pixel
+
+				@ 21,6 SAY OemToAnsi(STR0011) OF oPanelCmps Pixel //"Nome"
+				@ 19,33 MSGET TO0->TO0_NOME When .f. SIZE 180,7 OF oPanelCmps Pixel
+
+				@ 33,6 SAY OemToAnsi(STR0012) OF oPanelCmps Pixel //"Data Início"
+				@ 31,33 MSGET TO0->TO0_DTINIC Size 45,9 When .f. OF oPanelCmps HASBUTTON Pixel
+				@ 33,144 SAY OemToAnsi(STR0013) OF oPanelCmps Pixel //"Data Fim"
+				@ 31,169 MSGET TO0->TO0_DTFIM Size 45,9 When .f. OF oPanelCmps HASBUTTON Pixel
+
+				@ 50,5 BUTTON "&"+STR0014 SIZE 49,12 PIXEL ACTION ( MDT225BU() ) OF oPanelCmps  //"Controles"
+
+			oPanel2 := TPanel():New(0, 0, Nil, oPanel, Nil, .T., .F., Nil, Nil, 0, 300, .T., .F. )
+			oPanel2:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oGet := MSGetDados():New(0,0,9999,9999,nOpcx,"MDT225VAL","TUDOK225","",.T.,,,,9999,,,,,oPanel2)
+	Endif
+
+			NGPOPUP(asMenu,@oMenu,oPanel)
+			oPanel:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPanel)}
+
+		ACTIVATE MSDIALOG oDLG5 ON INIT EnchoiceBar(oDlg5,{||nOpcap:=1,if(TUDOK225(),oDlg5:End(),nOpcap := 0)},{||oDlg5:End(),nOpcap := 0})
+
+	If nOpcap = 1
+	NG225GRAVA()
+	EndIf
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA225IN
+Cria aCols dos equipamentos
+
+@author Thiago Olis Machado
+@since 14/08/2001
+@version MP12
+@return nil
+/*/
+//---------------------------------------------------------------------
+Function MDTA225IN(nOPCX)
+
+	Local aNAO := {}, cKEY, cGETWHILE
+
+	cKEY      := "M->TO3_LAUDO"
+	cGETWHILE := "TO3_LAUDO == TO0->TO0_LAUDO .AND. TO3_FILIAL == xFilial('TO3')"
+	AAdd(aNAO,"TO3_LAUDO")
+	If lMdtps
+		cKEY      := "SA1->A1_COD + SA1->A1_LOJA + M->TO3_LAUDO"
+		cGETWHILE := "TO3_LAUDO == TO0->TO0_LAUDO .AND. TO3_FILIAL == xFilial('TO3') .AND. "
+		cGETWHILE += "TO3_CLIENT == SA1->A1_COD .AND. TO3_LOJA == SA1->A1_LOJA"
+		AAdd(aNAO,"TO3_CLIENT")
+		AAdd(aNAO,"TO3_LOJA")
+		DbSelectArea("TO3")
+		DbSetOrder(3)
+	Else
+		DbSelectArea("TO3")
+		DbSetOrder(1)
+	Endif
+
+	aHEAINS := CABECGETD("TO3", aNAO)
+	aGETINS :=MAKE225("TO3", cKEY,aHeaIns, cGETWHILE)
+	If Empty(aGETINS)
+	aGETINS :=BLANKGETD(aHeaIns)
+	Else
+	M->TO3_CONTRO  := TO3->TO3_CONTRO
+	Endif
+
+	DbSelectArea("TO3")
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT225BU
+Mostra um markbrowse com todos os Riscos para o usuario
+poder seleciona-los de uma só vez.
+
+@author Andre Perez Alvarez
+@since 04/08/07
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MDT225BU()
+
+	Local nCnt2 := 0, x, y, xx
+	Local aArea := GetArea()
+	Local aAreaTO4 := TO4->(GetArea())
+	Local oDlgF,oPnlTop,oFont
+	Local oMARK1
+	Local nSizeTO4 := If((TAMSX3("TO4_NOMCTR")[1]) < 1,20,(TAMSX3("TO4_NOMCTR")[1]))
+	Local nOld
+	Local cFilTO4 := xFilial("TO4")
+	Local aDescIdx	:= {}
+	Local cPesquisar:=Space( 200 )
+	Local nCols, nPosCod
+	Local aColsOk := {}
+	Local aHeadOk := {}
+	Local aColsTp := {}
+
+	Private oTempTRB
+	Private cAliasTRB1	:= GetNextAlias()
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	Private cMarca := GetMark()
+	Private nUsed
+	Private lGrava := .f.
+	Private nColumn
+	Private nContador := 0
+	Private nVazio := 0
+	Private OldCols := aCLONE(aCols)
+	Private aCbxPesq //ComboBox com indices de pesquisa
+	Private cCbxPesq   := ""
+	Private oCbxPesq //ComboBox de Pesquisa
+
+	lInverte:= .f.
+
+	lQuery := .t.
+
+	aDBF := {}
+	AADD(aDBF,{ "TO4_OK"    , "C" ,02      , 0 })
+	AADD(aDBF,{ "TO4_CONTRO", "C" ,06      , 0 })
+	AADD(aDBF,{ "TO4_NOMCTR", "C" ,nSizeTO4, 0 })
+
+	aTRB1 := {}
+	AADD(aTRB1,{ "TO4_OK"    ,NIL," "    ,})
+	AADD(aTRB1,{ "TO4_CONTRO",NIL,STR0030,})  //"Controle"
+	AADD(aTRB1,{ "TO4_NOMCTR",NIL,STR0016,})  //"Nome"
+
+	oTempTRB := FWTemporaryTable():New( cAliasTRB1, aDBF )
+	oTempTRB:AddIndex( "1", {"TO4_CONTRO"} )
+	oTempTRB:AddIndex( "2", {"TO4_NOMCTR"} )
+	oTempTRB:AddIndex( "3", {"TO4_OK"} )
+	oTempTRB:Create()
+
+	dbSelectArea("TO4")
+
+	dbSelectArea(cAliasTRB1)
+	Processa({|lEnd| fBuscaReg( cAliasTRB1 , oGet , cFilTO4 )},STR0031,STR0032)
+
+	Dbselectarea(cAliasTRB1)
+	Dbgotop()
+	If (cAliasTRB1)->(Reccount()) <= 0
+		oTempTRB:Delete()
+		RestArea(aAreaTO4)
+		RestArea(aArea)
+		lRefresh := .t.
+		Msgstop(STR0017,STR0018)  //"Não existem medidas de controle cadastradas." //"ATENÇÃO"
+		Return .t.
+	Endif
+
+	nOpt := 2
+	DEFINE FONT oFont NAME "Arial" SIZE 0,-12
+	DEFINE MSDIALOG oDlgF TITLE OemToAnsi(STR0019) From 08,15 To 490,560 OF oMainWnd Pixel //"Medidas de Controle"
+
+	oPnl 		:= TPanel():New( 01 , 01 , , oDlgF , , , , CLR_BLACK , CLR_WHITE , 0 , 55 , .T. , .F. )
+	oPnl:Align	:= CONTROL_ALIGN_TOP
+
+	@ 10,08 TO 45 , 265 OF oPnl Pixel
+	@ 18,15 SAY STR0020 SIZE 200,10 of oPnl PIXEL FONT oFont //"Estas são as medidas de controle cadastradas no sistema."
+	@ 28,15 SAY STR0021 SIZE 200,10 of oPnl PIXEL FONT oFont //"Selecione aquelas que deseja associar ao laudo."
+
+	//--- PESQUISAR
+	//Define as opcoes de Pesquisa
+	aCbxPesq := aClone( aDescIdx )
+	aAdd( aCbxPesq , STR0024 ) //"Código+Descrição"
+	aAdd( aCbxPesq , STR0025 ) //"Descrição+Código"
+	aAdd( aCbxPesq , STR0026 ) //"Marcados"
+	cCbxPesq := aCbxPesq[ 1 ]
+
+	oPnlTop := TPanel():New(0, 0, Nil, oDlgF, Nil, .T., .F., Nil, Nil, 0, 55, .T., .F. )
+	oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	oCbxPesq := TComboBox():New( 010 , 002 , { | u | If( PCount() > 0 , cCbxPesq := u , cCbxPesq ) } , ;
+	aCbxPesq , 200 , 08 , oPnlTop , , { | | } ;
+	, , , , .T. , , , , , , , , , "cCbxPesq" )
+	oCbxPesq:bChange := { | | fIndexSet( cAliasTRB1 , aCbxPesq , @cPesquisar , oMARK1 ) }
+
+	oPesquisar := TGet():New( 025 , 002 , { | u | If( PCount() > 0 , cPesquisar := u , cPesquisar ) } , oPnlTop , 200 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+	.F. , , .T. /*lPixel*/ , , .F. , { | | cCbxPesq <> aCbxPesq[ Len( aCbxPesq ) ] }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "cPesquisar" , , , , .F. /*lHasButton*/ )
+
+	oBtnPesq := TButton():New( 010 , 210 , STR0001 , oPnlTop , { | | fTRBPes( cAliasTRB1 , oMARK1 , cPesquisar ) } , ;//"Pesquisar"
+	60 , 10 , , , .F. , .T. , .F. , , .F. , , , .F. )
+
+	oMARK1 := MsSelect():NEW(cAliasTRB1,"TO4_OK",,aTRB1,@lINVERTE,@cMARCA,{45,5,254,281})
+	oMARK1:oBROWSE:ALIGN			:= CONTROL_ALIGN_ALLCLIENT
+	oMARK1:bMARK := {|| MDT225MK(cMarca,lInverte)}
+	oMARK1:oBROWSE:lHASMARK := .T.
+	oMARK1:oBROWSE:lCANALLMARK := .T.
+	oMARK1:oBROWSE:bALLMARK := {|| MDTA225INV(cMarca) }
+	ACTIVATE MSDIALOG oDlgF ON INIT EnchoiceBar(oDlgF,{|| nOpt := 1,oDlgf:End()},{|| nOpt := 2,oDlgf:End()})
+
+	aColsOk := aCLONE(aCols)
+	aHeadOk := aClone(aHeader)
+	aColsTp := BLANKGETD(aHeadOk)
+
+	nPosCod := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TO3_CONTRO"})
+	nPosDes := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TO3_NOMCTR"})
+
+	For nCols := Len(aColsOk) To 1 Step -1 //Deleta do aColsOk os registros - não marcados; não estiver encontrado
+		dbSelectArea(cAliasTRB1)
+		dbSetOrder(1)
+		If !dbSeek(aColsOK[nCols,nPosCod]) .OR. Empty((cAliasTRB1)->TO4_OK)
+			aDel(aColsOk,nCols)
+			aSize(aColsOk,Len(aColsOk)-1)
+		EndIf
+	Next nCols
+
+	dbSelectArea(cAliasTRB1)
+	dbGoTop()
+	While (cAliasTRB1)->(!Eof())
+		If !Empty((cAliasTRB1)->TO4_OK) .AND. aScan( aColsOk , {|x| x[nPosCod] == (cAliasTRB1)->TO4_CONTRO } ) == 0
+			aAdd(aColsOk,aClone(aColsTp[1]))
+			aColsOk[Len(aColsOk),nPosCod] := (cAliasTRB1)->TO4_CONTRO
+			aColsOk[Len(aColsOk),nPosDes] := (cAliasTRB1)->TO4_NOMCTR
+		EndIf
+		(cAliasTRB1)->(dbSkip())
+	End
+
+	If Len(aColsOK) <= 0
+		aColsOK := aClone(aColsTp)
+	EndIf
+
+	aSort(aColsOK,,,{ |x, y| x[1] < y[1] }) //Ordena por plano
+	aCols := aClone(aColsOK)
+
+	oTempTRB:Delete()
+
+	RestArea(aAreaTO4)
+	RestArea(aArea)
+	lRefresh := .t.
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT225MK
+
+
+@author Andre Perez Alvarez
+@since 19/07/07
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT225MK(cMarca,lInverte)
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA225INV
+Inverte a marcacao do browse
+
+@author Andre Perez Alvarez
+@since 19/07/07
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA225INV(cMarca)
+
+	Local aArea := GetArea()
+
+	Dbselectarea(cAliasTRB1)
+	Dbgotop()
+	While !eof()
+		(cAliasTRB1)->TO4_OK := IF(TO4_OK == "  ",cMARCA,"  ")
+		Dbskip()
+	End
+
+	RestArea(aArea)
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG225GRAVA
+Grava os controles utilizados no laudo
+
+@author Andre Perez Alvarez
+@since 08/08/2007
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function NG225GRAVA()
+
+	Local aBACK := aCLONE(aCOLS)
+	Local x
+	Local nPOSDES  := aSCAN( aHEADER, { |x| Trim( Upper(x[2]) ) == "TO3_DESCRI"})
+	Local nX
+	Local nPos := 0
+	If lMDTPS
+		DbSelectArea("TO3")
+		DbSetOrder(3)
+		For x := 1 To Len(aCols)
+
+			If aCols[x][Len(aCols[x])]
+			dbSelectArea("TO3")
+			If DbSeek(cFilTO3+SA1->A1_COD+SA1->A1_LOJA+TO0->TO0_LAUDO+aCols[x][1])
+				RecLock("TO3",.F.,.T.)
+				dbDelete()
+				MSUNLOCK("TO3")
+			EndIf
+			dbSelectArea("TO3")
+			Loop
+			Endif
+			If !empty(aCols[x][1])
+			dbSelectArea("TO3")
+			If !DbSeek(cFilTO3+SA1->A1_COD+SA1->A1_LOJA+TO0->TO0_LAUDO+aCols[x][1])
+				RecLock("TO3",.T.)
+				TO3->TO3_FILIAL := cFilTO3
+				TO3->TO3_LAUDO  := TO0->TO0_LAUDO
+				TO3->TO3_CONTRO := aCols[x][1]
+				TO3->TO3_DESCRI := aCols[x][nPOSDES]
+				TO3->TO3_CLIENT := SA1->A1_COD
+				TO3->TO3_LOJA   := SA1->A1_LOJA
+				MsUnlock("TO3")
+			Else
+				If TO3->TO3_DESCRI != aCols[x][nPOSDES]
+					RecLock("TO3",.F.)
+					TO3->TO3_DESCRI := aCols[x][nPOSDES]
+					MsUnlock("TO3")
+				Endif
+			Endif
+			Endif
+		Next x
+
+		Dbselectarea("TO3")
+		Dbsetorder(3)
+		DbSeek(cFilTO3+SA1->A1_COD+SA1->A1_LOJA+TO0->TO0_LAUDO)
+		While !eof() .and. cFilTO3 == TO3->TO3_FILIAL .and. TO0->TO0_LAUDO == TO3->TO3_LAUDO  .and.;
+			SA1->A1_COD+SA1->A1_LOJA == TO3->TO3_CLIENT+TO3->TO3_LOJA
+
+			lDelete := .t.
+			For x := 1 To Len(aCols)
+				If trim(TO3->TO3_CONTRO) == trim(aCols[x][1])
+					lDelete := .f.
+				Endif
+			Next x
+
+			If lDelete
+				Reclock("TO3",.f.,.t.)
+				Dbdelete()
+				MsunLock("TO3")
+			Endif
+
+			Dbselectarea("TO3")
+			Dbskip()
+		End
+	Else
+
+		DbSelectArea("TO3")
+		DbSetOrder(1)
+		For nX := 1 To Len(aCols)
+
+			If aCols[nX][Len(aCols[nX])]
+
+				nPos:= aSCAN(aCols,{|x| x[1] == aCols[nX][1]})
+				If nPos > 0
+					If !aCols[nPos][Len(aCols[nPos])]
+						Loop
+					Endif
+				EndIf
+				dbSelectArea("TO3")
+				If DbSeek(cFilTO3+TO0->TO0_LAUDO+aCols[nX][1])
+					RecLock("TO3",.F.,.T.)
+					dbDelete()
+					MSUNLOCK("TO3")
+				EndIf
+				dbSelectArea("TO3")
+				Loop
+			Endif
+			If !empty(aCols[nX][1])
+			dbSelectArea("TO3")
+			If !DbSeek(cFilTO3+TO0->TO0_LAUDO+aCols[nX][1])
+				RecLock("TO3",.T.)
+				TO3->TO3_FILIAL := cFilTO3
+				TO3->TO3_LAUDO  := TO0->TO0_LAUDO
+				TO3->TO3_CONTRO := aCols[nX][1]
+				TO3->TO3_DESCRI := aCols[nX][nPOSDES]
+				MsUnlock("TO3")
+			Else
+				If TO3->TO3_DESCRI != aCols[nX][nPOSDES]
+					RecLock("TO3",.F.)
+					TO3->TO3_DESCRI := aCols[nX][nPOSDES]
+					MsUnlock("TO3")
+				Endif
+			Endif
+			Endif
+		Next x
+
+		Dbselectarea("TO3")
+		Dbsetorder(1)
+		DbSeek(cFilTO3+TO0->TO0_LAUDO)
+		While !eof() .and. cFilTO3 == TO3->TO3_FILIAL .and. TO0->TO0_LAUDO == TO3->TO3_LAUDO
+
+			lDelete := .t.
+			For x := 1 To Len(aCols)
+				If trim(TO3->TO3_CONTRO) == trim(aCols[x][1])
+					lDelete := .f.
+				Endif
+			Next x
+
+			If lDelete
+				Reclock("TO3",.f.,.t.)
+				Dbdelete()
+				MsunLock("TO3")
+			Endif
+
+			Dbselectarea("TO3")
+			Dbskip()
+		End
+	Endif
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT225CAD
+Monta browse com os laudos do cliente
+
+@author Andre Perez Alvarez
+@since 08/08/2007
+@version MP12
+@return uRet
+/*/
+//---------------------------------------------------------------------
+Function MDT225CAD()
+
+	Local aArea			:= GetArea()
+	Local oldROTINA := aCLONE(aROTINA)
+	LOCAL cFiltraSRJ			//Variavel para filtro
+	LOCAL aIndexSRJ	:= {}		//Variavel Para Filtro
+	Local uRet
+	Local oldCad := cCadastro
+
+	cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+
+	Private aTROCAF3 := {}
+	Private aRotina := { { STR0001, "AxPesqui"    , 0 , 1},;  //"Pesquisar"
+						{ STR0002, "NGCAD01"     , 0 , 2},;  //"Visualizar"
+						{ STR0009, "MDT225CON"   , 0 , 4}}   //"Controles"
+
+	Private lCheckMsg
+	Private aSMENU    := {}, aCHKDEL := {}, bNGGRAVA
+
+	DbSelectArea("TO0")
+	Set Filter To TO0->TO0_CLIENT+TO0->TO0_LOJA == SA1->A1_COD+SA1->A1_LOJA
+	DbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TO0")
+
+	aROTINA := aCLONE(oldROTINA)
+	RestArea(aArea)
+	cCadastro := oldCad
+
+Return uRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MAKE225
+Monta aCols dos controles
+
+@author Andre Perez Alvarez
+@since 08/08/2007
+@version MP12
+@return aRET
+/*/
+//---------------------------------------------------------------------
+Function MAKE225(cAli,cKey,aVETOR,cWhile)
+
+	Local i, aRET := {}, cOLD := Alias(), xx, nv:=1
+
+	dbSelectArea(cALI)
+	DbSeek(xFilial(cALI)+&cKEY)
+
+	DO While !eof() .and. &cWhile.
+	AADD(aRET, {})
+
+	For i := 1 to Len(aVETOR)
+		If aVETOR[i][10] == "V"
+			AAdd(aRET[nv],  CriaVar(Alltrim(aVETOR[i][2])) )
+		Else
+			xx :=  aVETOR[i][2]
+			AADD(aRET[nv], &xx.)
+		Endif
+	Next
+
+		Aadd(aRET[nv],cAli)
+		Aadd(aRET[nv],(cALI)->(Recno()))
+		AADD(aRET[nv], .f.)
+
+	DbSkip()
+	nv++
+	Enddo
+
+	dbSelectArea(cOLD)
+
+Return aRET
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} TUDOK225
+Valida chave unica.
+
+@author Andre Perez Alvarez
+@since 08/08/2007
+@version MP12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function TUDOK225()
+
+	Local lRET := .T.
+	Local nX
+	Local xx := 0
+
+	If n > 1
+	For nX := 1 to Len(aCOLS)
+		If nX != n
+			If aCOLS[nX][1] == aCols[n][1].And. !aCols[nX][Len(aCols[nX])] .And. !aCols[n][Len(aCols[n])]
+				xx := xx + 1
+			Endif
+		EndIf
+	Next
+	Endif
+
+	If xx > 0
+	Help(" ",1,"JAEXISTINF")
+	lRet := .f.
+	Endif
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTRBPes
+Funcao de Pesquisar no Browse.
+
+@samples fTRBPes()
+
+@return Sempre verdadeiro
+
+@param cAliasTRB1	- Alias do MarkBrowse ( Obrigatório )
+@param oMark 		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fTRBPes(cAliasTRB , oMark , cPesquisar )
+
+	Local nRecNoAtu := 1//Variavel para salvar o recno
+	Local lRet		:= .T.
+
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( cPesquisar ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		ApMsgInfo( STR0027 , STR0018 ) //"Valor não encontrado."###"Atenção"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh(.T.)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIndexSet
+Seta o indice para pesquisa.
+
+@return
+
+@param cAliasTRB	- Alias do TRB ( Obrigatório )
+@param aCbxPesq	- Indices de pesquisa do markbrowse. ( Obrigatório )
+@param cPesquisar	- Valor da Pesquisa ( Obrigatório )
+@param oMark		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fIndexSet( cAliasTRB , aCbxPesq , cPesquisar , oMark )
+
+	Local nIndice := fIndComb( aCbxPesq ) // Retorna numero do indice selecionado
+
+	// Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoTop()
+
+	// Se o indice selecionado for o ultimo [Marcados]
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) // Limpa campo de pesquisa
+		oPesquisar:Disable()              // Desabilita campo de pesquisa
+		oBtnPesq:Disable()              // Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus()     // Define foco no markbrowse
+	Else
+		oPesquisar:Enable()               // Habilita campo de pesquisa
+		oBtnPesq:Enable()               // Habilita botao de pesquisa
+		oBtnPesq:SetFocus()             // Define foco no campo de pesquisa
+	Endif
+
+	oMark:oBrowse:Refresh()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIndComb
+Retorna o indice, em numero, do item selecionado no combobox
+
+@return nIndice - Retorna o valor do Indice
+
+@param aIndMrk - Indices de pesquisa do markbrowse. ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fIndComb( aIndMrk )
+
+	Local nIndice := aScan( aIndMrk , { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0018 ,	{ STR0028 } , 1 , ; //"Atenção"###"Índice não encontrado."
+									{ STR0029 } , 1 ) //"Contate o administrador do sistema."
+		nIndice := 1
+	Endif
+
+Return nIndice
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaReg
+Funcao para retornar todos os Ambientes
+
+@author Guilherme Freudenburg
+@since 13/03/2014
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaReg( cAliasTRB , oGet , cFilTO4 )
+
+	Local nPosCod := 1
+	Local nIndex  := 1
+	Local cSeek   := cFilTO4
+	Local cWhile  := " TO4->TO4_FILIAL == '" + cFilTO4 + "'"
+	Local aArea   := GetArea()
+	Local aColsOK := aClone(aCols)
+	Local aHeadOk := aClone(aHeader)
+
+	If lSigaMdtPs
+		nIndex := 3
+		cSeek  += cCliMdtPs
+		cWhile += " TO4->TO4_CONTRO == SA1->A1_COD .And. TO4->TO4_LOJACL == SA1->A1_LOJA"
+	EndIf
+	nPosCod	:= aSCAN( aHEADER, { |x| Trim( Upper(x[2]) ) == "TO3_CONTRO"})
+
+	dbSelectArea( "TO4" )
+	dbSetOrder( nIndex )
+	If dbSeek( cSeek )
+		While TO4->(!Eof()) .AND. &( cWhile )
+			RecLock( cAliasTRB , .T. )
+			(cAliasTRB)->TO4_OK			:= If( aScan( aColsOk , {|x| x[nPosCod] == TO4->TO4_CONTRO } ) > 0, cMarca , " " )
+			(cAliasTRB)->TO4_CONTRO		:= TO4->TO4_CONTRO
+			(cAliasTRB)->TO4_NOMCTR		:= TO4->TO4_NOMCTR
+			(cAliasTRB)->(MsUnLock())
+			TO4->(dbSkip())
+		End
+	EndIf
+
+	RestArea(aArea)
+
+Return

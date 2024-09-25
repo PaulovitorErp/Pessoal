@@ -1,0 +1,925 @@
+#include "Protheus.ch"
+#include "MNTC830.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC830
+	Consulta/relatorio de abastecimento por data e posto
+	@param
+	@return
+	@sample MNTC830()
+	@author Alexandre Santos
+	@since 31/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830()
+	/*------------------------------------------------
+	| Armazena variaveis p/ devolucao (NGRIGHTCLICK)|
+	------------------------------------------------*/
+	Local aNGBEGINPRM 	:= NGBEGINPRM()
+	Local aInd 			:= {}
+	Local aArea 		:= GetArea()
+	// [LGPD] Se as funcionalidades, referentes à LGPD, podem ser utilizadas
+	Local lLgpd := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. )
+	Local aOfusc := {}
+	Local lCidade := .F. 
+	Local lEstado := .F. 
+	Local lNomeFan := .F.
+	Local lCnpj := .F.
+
+	Private cTRBB 		:= GetNextAlias()
+	Private cCadastro 	:= OemtoAnsi(STR0032)
+	Private cPerg     	:= PadR( "MNT83C" , Len(Posicione("SX1", 1, "MNT83C", "X1_GRUPO")) )
+	Private aPerg     	:= {}, ntotaln := 0.00, ntotala := 0.00
+	Private oTmpTable
+
+	If lLgpd
+		// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+		aOfusc := FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'TQF_CIDADE', 'TQF_ESTADO', 'A2_NOME',;
+																	   'TQN_CNPJ'} )
+
+		lCidade := Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_CIDADE' } ) == 0
+		lEstado := Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_ESTADO' } ) == 0
+		lNomeFan := Ascan( aOfusc, { |x| AllTrim(x) == 'A2_NOME' } ) == 0
+		lCnpj := Ascan( aOfusc, { |x| AllTrim(x) == 'TQN_CNPJ' } ) == 0
+
+	EndIf
+
+	dbSelectArea("SX1")
+	dbSetOrder(01)
+	If !dbSeek(cPerg+"12")
+		ShowHelpDlg( STR0075 ,     ; // "ATENÇÃO!"
+					{ STR0076 }, 2,; // "O dicionário de dados está desatualizado, o que pode comprometer a utilização de algumas rotinas."
+					{ STR0077 }, 2 )  // "Favor aplicar as atualizações contidas no pacote da issue DNG-2319"
+	Else
+
+		If Pergunte("MNT83C",.T.)
+
+			cCLASSI := If(MV_PAR11 = 1,'( '+STR0016+'/'+STR0035+'/'+STR0036+' )',;
+								'( '+STR0035+'/'+STR0036+'/'+STR0016+' )')
+
+			aDBFB := {}
+				Aadd(aDBFB, {"USUARIO", "C", TAMSX3("TQN_USUARI")[1], 0})
+				Aadd(aDBFB, {"NFABAST", "C", TAMSX3("TQN_NOTFIS")[1], 0})
+				Aadd(aDBFB, {"VLRABAS", "N", TAMSX3("TQN_VALTOT")[1], TAMSX3("TQN_VALTOT")[2]})
+				Aadd(aDBFB, {"DTABAST", "D", TAMSX3("TQN_DTABAS")[1], 0})
+				Aadd(aDBFB, {"HORAABS", "C", TAMSX3("TQN_HRABAS")[1], 0})
+				Aadd(aDBFB, {"QTDABAS", "N", TAMSX3("TQN_QUANT")[1],  TAMSX3("TQN_QUANT")[2]})
+				Aadd(aDBFB, {"KMABAST", "N", TAMSX3("TQN_HODOM" )[1], 0})
+				Aadd(aDBFB, {"CIDABAS", "C", TAMSX3("TQF_CIDADE")[1], 0})
+				Aadd(aDBFB, {"UFABAST", "C", TAMSX3("TQF_ESTADO")[1], 0})
+				Aadd(aDBFB, {"PLACAAB", "C", TAMSX3("TQN_PLACA" )[1], 0})
+				Aadd(aDBFB, {"FROTA"  , "C", TAMSX3("TQN_FROTA" )[1], 0})
+				Aadd(aDBFB, {"CNPJABA", "C", TAMSX3("TQN_CNPJ"  )[1], 0})
+				Aadd(aDBFB, {"MOTABAS", "C", TAMSX3("TQN_CODMOT")[1], 0})
+				Aadd(aDBFB, {"POSTOAB", "C", TAMSX3("TQF_CODIGO")[1], 0,})
+				Aadd(aDBFB, {"LOJAABA", "C", TAMSX3("TQF_LOJA")[1]  , 0,})
+				Aadd(aDBFB, {"VLRUNAB", "N", TAMSX3("TQN_VALUNI")[1], TAMSX3("TQN_VALUNI")[2]})
+				Aadd(aDBFB, {"NOMEPOS", "C", TAMSX3("A2_NOME"   )[1], 0})
+				Aadd(aDBFB, {"FILIAL" , "C", TAMSX3("TQN_FILIAL")[1], 0})
+				Aadd(aDBFB, {"CODCOMB", "C", TAMSX3("TQN_CODCOM")[1], 0})
+				Aadd(aDBFB, {"COMBUST", "C", TAMSX3("TQM_NOMCOM")[1], 0})
+
+			// Definicao dos indice(s) temporario(s)
+			If MV_PAR11 == 1
+				aInd := {"CIDABAS","DTABAST","POSTOAB","PLACAAB","FROTA","NFABAST"}
+			Else
+				aInd := {"DTABAST","POSTOAB","CIDABAS","PLACAAB","FROTA","NFABAST"}
+			EndIf
+
+			oTmpTable := FWTemporaryTable():New(cTRBB, aDBFB)
+			oTmpTable:AddIndex("01", aInd)
+			oTmpTable:Create()
+
+			Processa({ |lEnd| MNTC830PRO()},STR0041,STR0009)
+
+			dbSelectArea(cTRBB)
+			dbGoTop()
+			If Reccount() > 0
+				Define DIALOG oDlg1 FROM 0,0 To 35,100 TITLE STR0004+" "+cCLASSI
+				oDlg1:lMaximized := .T.
+
+				oPanel:= tPanel():New(01,01,,oDlg1,,.T.,,,)
+				oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+					oPanelT:= tPanel():New(01,01,,oPanel,,.T.,,,,80,80)
+					oPanelT:Align := CONTROL_ALIGN_ALLCLIENT
+						@ 0.1,0.1 ListBox oList Fields 	FILIAL, DTABAST, NOMEPOS, LOJAABA, NFABAST, FROTA, PLACAAB, PADL(Transform(KMABAST,"@E 999,999,999"),11),;
+												PADL(Transform(QTDABAS,"@E 99,999.999"),10), PADL(Transform(VLRABAS,"@E 999,999,999,999.999"),18), COMBUST,;
+												If(!Empty(CNPJABA), PADL(Transform(CNPJABA,"@R 99.999.999/9999-99"),18 ),CNPJABA), CIDABAS, UFABAST, USUARIO;
+												FieldSizes 50,30,40,30,40,35,45,10,30,50,165 Size 678,279;
+												HEADERS STR0052, STR0013, STR0036, STR0038, STR0011, STR0044, STR0018, STR0015, STR0014, STR0012, STR0050, STR0019,;
+																STR0016, STR0017, STR0010 OF oPanelT
+
+				// oList:aObfuscatedCols é um array para setar quais campos devem ser ofuscados conforme a ListBox
+				If lLgpd
+					// Inicialmente aObfuscatedCols apresenta valor nil para o array, portanto, precisa indicar os valores
+					oList:aObfuscatedCols := {.F., .F., lNomeFan, .F., .F., .F., .F., .F., .F., .F., .F., lCnpj, lCidade, lEstado, .F.}
+				EndIf
+	
+				oFont 	:= TFont():New(, , 16, , .F.)
+					oList:Align := CONTROL_ALIGN_ALLCLIENT
+				oPanelC:= tPanel():New(01,01,,oPanel,,.T.,,,,20,20)
+				oPanelC:Align := CONTROL_ALIGN_BOTTOM
+					oGroup1 := TGroup():New(1, 5, 18, 180, STR0071,oPanelC,,,.T.)
+
+					TSay():New(9, 10	, {||STR0073}, oGroup1,						  , oFont,,,,.T., CLR_RED,CLR_WHITE, 55, 10)
+					TSay():New(9, 45	, {||ntotaln}, oGroup1,'@E 999,999,999,999.99', oFont,,,,.T., CLR_RED,CLR_WHITE, 55, 10)
+					TSay():New(9, 120	, {||STR0031}, oGroup1,						  , oFont,,,,.T., CLR_RED,CLR_WHITE, 55, 10)
+					TSay():New(9, 130	, {||ntotala}, oGroup1,'@E 999,999,999,999.99', oFont,,,,.T., CLR_RED,CLR_WHITE, 55, 10)
+
+				oBtVisu := TButton():New( 4, 532, STR0002, oPanelC,{||MNTC830VI()}, 40, 15,,oFont,.F.,.T.,.F.,,.F.,,,.F. )
+				oBtVisu:Align := CONTROL_ALIGN_RIGHT
+				oBtImp := TButton():New( 4, 582, STR0003, oPanelC,{||MNTC830IMP()}, 40, 15,,oFont,.F.,.T.,.F.,,.F.,,,.F. )
+				oBtImp:Align := CONTROL_ALIGN_RIGHT
+				oBtPesq := TButton():New( 4, 482, STR0001, oPanelC,{||MNTC830PE()}, 40, 15,,oFont,.F.,.T.,.F.,,.F.,,,.F. )
+				oBtPesq:Align := CONTROL_ALIGN_RIGHT
+
+				ACTIVATE DIALOG oDlg1
+
+			Else
+				MsgInfo(STR0020,STR0021)
+			EndIf
+
+			// deleta arquivos temporarios
+			oTmpTable:Delete()
+
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+	/*------------------------------------------------
+	|  Devolve variaveis armazenadas (NGRIGHTCLICK) |
+	------------------------------------------------*/
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC830PRO
+	Monta o arquivo temporario
+	@param
+	@return
+	@sample MNTC830PRO()
+	@author Alexandre Santos
+	@since 31/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830PRO()
+	Local cLayout 	:= ""
+	Local cFilter 	:= ""
+	Local nInd		:= 0
+	Local cFilial1	:= MV_PAR01
+	Local cFilial2	:= MV_PAR02
+	Local nTamFil	:= TAMSX3("TQN_FILIAL")[1]
+	Local cLayout	:= FWSM0Layout()
+
+	//Loop para verificação do modo de compatilhamento da tabela TQN
+	For nInd := 1 To 3
+		If FWModeAccess("TQN",nInd) == "C"
+			If nInd == 1
+				nNivComp := FwSizeFilial()
+				cFilial1 := Space(nTamFil)
+				cFilial2 := Space(nTamFil)
+				Exit
+			ElseIf nInd == 2
+				nNivComp := RAt("U", cLayout)
+				If nNivComp > 0
+					cFilial1 := PadR(SubStr(cFilial1, 1, nNivComp),nTamFil)
+					cFilial2 := PadR(SubStr(cFilial2, 1, nNivComp),nTamFil)
+				EndIf
+			ElseIf nInd == 3
+				nNivComp := RAt("E", cLayout)
+				cFilial1 := PadR(SubStr(cFilial1, 1, nNivComp),nTamFil)
+				cFilial2 := PadR(SubStr(cFilial2, 1, nNivComp),nTamFil)
+			EndIf
+		EndIf
+	Next nInd
+
+	cFilter	:= "TQN->TQN_FILIAL >= Upper(cFilial1) .And. TQN->TQN_FILIAL <= Upper(cFilial2) .And. "
+
+	If Empty(MV_PAR05) .And. Empty(MV_PAR08)
+		cFilter += "TQN->TQN_CODCOM >= Upper(MV_PAR09) .And. TQN->TQN_CODCOM <= Upper(MV_PAR10)"
+	ElseIf !Empty(MV_PAR05)
+		cFilter += "TQN->TQN_POSTO == Upper(MV_PAR05) .And. TQN->TQN_LOJA = Upper(MV_PAR06) .And. TQN->TQN_CODCOM >= Upper(MV_PAR09) .And. TQN->TQN_CODCOM <= Upper(MV_PAR10)"
+	Else
+		cFilter += "SubStr(TQN->TQN_CNPJ,1,14) = Upper(MV_PAR08) .And. TQN->TQN_CODCOM >= Upper(MV_PAR09) .And. TQN->TQN_CODCOM <= Upper(MV_PAR10)"
+	EndIf
+
+	DbselectArea("TQN")
+	DbSetorder(11)
+	dbSeek(Dtos(MV_PAR03),.T.)
+	ProcRegua(Reccount())
+	While !EoF() .And. TQN->TQN_DTABAS <= MV_PAR04
+
+   		IncProc()
+		If &cFilter
+      		DbselectArea("TQF")
+			DbSetorder(01)
+      		dbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+
+			RecLock((cTRBB), .T.)
+			(cTRBB)->USUARIO 	:= TQN->TQN_USUARI
+			(cTRBB)->NFABAST 	:= TQN->TQN_NOTFIS
+			(cTRBB)->VLRABAS 	:= TQN->TQN_VALTOT
+			(cTRBB)->DTABAST 	:= TQN->TQN_DTABAS
+			(cTRBB)->HORAABS 	:= TQN->TQN_HRABAS
+			(cTRBB)->QTDABAS 	:= TQN->TQN_QUANT
+			(cTRBB)->KMABAST 	:= TQN->TQN_HODOM
+			(cTRBB)->CIDABAS 	:= TQF->TQF_CIDADE
+			(cTRBB)->UFABAST 	:= TQF->TQF_ESTADO
+			(cTRBB)->PLACAAB 	:= TQN->TQN_PLACA
+			(cTRBB)->FROTA   	:= TQN->TQN_FROTA
+			(cTRBB)->CNPJABA 	:= TQN->TQN_CNPJ
+			(cTRBB)->MOTABAS 	:= TQN->TQN_CODMOT
+			(cTRBB)->POSTOAB 	:= TQN->TQN_POSTO
+			(cTRBB)->LOJAABA 	:= TQN->TQN_LOJA
+			(cTRBB)->VLRUNAB 	:= TQN->TQN_VALUNI
+			(cTRBB)->NOMEPOS 	:= NGSEEK("SA2",TQF->TQF_CODIGO+TQF->TQF_LOJA,1,'A2_NOME')
+			(cTRBB)->FILIAL		:= TQN->TQN_FILIAL
+			(cTRBB)->CODCOMB	:= TQN->TQN_CODCOM
+			(cTRBB)->COMBUST	:= NGSEEK("TQM",TQN->TQN_CODCOM,1,'TQM_NOMCOM')
+			MsUnLock(cTRBB)
+      		ntotaln += TQN->TQN_VALTOT
+			ntotala += TQN->TQN_QUANT
+   		EndIf
+   		DbselectArea("TQN")
+   		DbSkip()
+	EndDo
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC830PE
+	Pesquisa especifica de abastecimento
+	@param
+	@return
+	@sample MNTC830PE()
+	@author Alexandre Santos
+	@since 31/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830PE()
+	Local cCidade	:= Space(TAMSX3("TQF_CIDADE")[1])
+	Local dDataAb 	:= cToD("  /  /    ")
+	Local cPosto	:= Space(TAMSX3("TQN_POSTO")[1] )
+	Local cPlaca	:= Space(TAMSX3("TQN_PLACA")[1] )
+	Local cFrota	:= Space(TAMSX3("TQN_FROTA")[1] )
+	Local cNota		:= Space(TAMSX3("TQN_NOTFIS")[1])
+
+	Private oDlg5
+
+	Define MsDialog oDlg5 From 300,120 To 490,400 Title OemToAnsi(STR0001) Pixel
+
+	@ 0.5,1 Say OemtoAnsi(STR0013)
+	@ 0.5,6 MsGet dDataAb Picture "" SIZE 45,10 HasButton
+	@ 1.5,1 Say OemtoAnsi(STR0018)
+	@ 1.5,6 MsGet cPlaca Picture '@!' SIZE 45,10
+	@ 2.5,1 Say OemtoAnsi(STR0044)
+	@ 2.5,6 MsGet cFrota Picture '@!' SIZE 45,10
+	@ 3.5,1 Say OemtoAnsi(STR0011)
+	@ 3.5,6 MsGet cNota Picture '@!' SIZE 45,10
+	@ 4.5,1 Say OemtoAnsi(STR0016)
+	@ 4.5,6 MsGet cCidade  Picture '@!' SIZE 45,10
+	@ 5.5,1 Say OemtoAnsi(STR0036)
+	@ 5.5,6 MsGet cPosto Picture '@!' SIZE 45,10
+
+	@ 8,25 Button "&OK" Size 30,10 Action MNTC830POS(cCidade,dDataAb,cPosto,cPlaca,cFrota,cNota)
+
+	Activate MsDialog oDlg5 Centered
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC830POS
+	Posiciona no registro.
+	@param	cCidade	, Caracter	, Cidade do abastecimento
+			dDataAb	, Date		, Data do abastecimento
+			cPosto	, Caracter	, Código do posto
+			cPlaca	, Caracter	, Placa do equipamento abastecido
+			cFrota	, Caracter	, Código do veículo/bem
+			cNota	, Caracter	, Nota fiscal do abastecimento
+	@return
+	@sample MNTC830POS(cCidade,dDataAb,cPosto,cPlaca,cFrota,cNota)
+	@author Alexandre Santos
+	@since 30/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830POS(cCidade,dDataAb,cPosto,cPlaca,cFrota,cNota)
+
+	Local cQuery 	:= ""
+	Local cData		:= ""
+	Local cTmpTrb	:= "TmpTrb"
+	Local cGetDB 	:= Upper(TCGetDB())
+	Local nInd		:= 0
+
+	If AllTrim(cGetDB) == "ORACLE"
+		cQuery := "SELECT * FROM "+ oTmpTable:GetRealName()
+	Else //CASO SEJA SQL SERVER
+		cQuery := "SELECT TOP(1) * FROM "+ oTmpTable:GetRealName()
+	EndIf
+
+	If !Empty(cCidade)
+		cQuery += " WHERE CIDABAS = " + ValToSql(cCidade)
+		nInd++
+	EndIf
+	If !Empty(dDataAb)
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " DTABAST = " + ValToSql(dDataAb)
+		nInd++
+	EndIf
+	If !Empty(cPlaca)
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " PLACAAB = " + ValToSql(cPlaca)
+		nInd++
+	EndIf
+	If !Empty(cPosto)
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " POSTOAB = " + ValToSql(cPosto)
+		nInd++
+	EndIf
+	If !Empty(cFrota)
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " FROTA = " + ValToSql(cFrota)
+		nInd++
+	EndIf
+	If !Empty(cNota)
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " NFABAST = " + ValToSql(cNota)
+		nInd++
+	EndIf
+
+	If AllTrim(cGetDB) == "ORACLE"
+		If nInd > 0
+			cQuery += " AND"
+		Else
+			cQuery += " WHERE"
+		EndIf
+		cQuery += " ROWNUM < 2"
+	EndIf
+
+	MPSysOpenQuery(cQuery, cTmpTrb)
+	dbSelectArea(cTmpTrb)
+
+	cCidade := (cTmpTrb)->CIDABAS
+	cData 	:= (cTmpTrb)->DTABAST
+	cPlaca 	:= (cTmpTrb)->PLACAAB
+	cPosto 	:= (cTmpTrb)->POSTOAB
+	cFrota 	:= (cTmpTrb)->FROTA
+	cNota 	:= (cTmpTrb)->NFABAST
+
+	If MV_PAR11 == 1
+		cChave := cCidade + cData + cPosto + cPlaca + cFrota + cNota
+	Else
+		cChave := cData + cPosto + cCidade + cPlaca + cFrota + cNota
+	EndIf
+
+	dbSelectArea(cTRBB)
+	dbSetOrder(1)
+	If dbSeek(cChave)
+		oDlg5:End()
+	Else
+		MsgAlert(STR0020, STR0021)
+	EndIf
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC830VI
+	Visualiza cadastro abastecimento
+	@param
+	@return
+	@sample MNTC830VI()
+	@author Alexandre Santos
+	@since 31/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830VI()
+	Local cCADAX 	:= cCadastro
+
+	Private cPosto		:= ""
+	Private cLoja		:= ""
+	Private cTanque		:= ""
+
+	//-------Variaveis utilizadas na função MNT655SC-------//
+	Private lDtvSgCnt	:= NGCADICBASE("TPE_SITUAC","A","TPE",.F.) //Indica se permite desativar segundo contador
+	Private lSegCont   	:= NGCADICBASE("TQN_POSCO2","A","TQN",.F.)
+	Private INCLUI		:= .F.
+
+	cCadastro := NGSX2NOME("TQN")+' - '+STR0002
+
+	dbSelectArea("TQN")
+	dbSetOrder(01)
+	dbSeek(xFilial("TQN", (cTRBB)->FILIAL)+(cTRBB)->FROTA+Dtos((cTRBB)->DTABAST)+(cTRBB)->HORAABS)
+	cPosto  := TQN->TQN_POSTO
+	cLoja   := TQN->TQN_LOJA
+	cTanque := TQN->TQN_TANQUE
+	MNT655SC("TQN",Recno(),2)
+
+	dbSelectArea(cTRBB)
+	cCadastro := cCADAX
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+	Carrega impressão do Relatorio Personalizavel
+	@return
+	@param
+	@sample MNTC830IMP()
+	@author Alexandre Santos
+	@since 30/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTC830IMP()
+	Local oReport
+	Local aArea := GetArea()
+
+	oReport  := ReportDef()
+	oReport:SetLandscape() //Default Paisagem
+	oReport:ParamReadOnly(.T.)
+	oReport:PrintDialog()
+
+	dbSelectArea(cTRBB)
+	RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+	Definições do Relatorio Personalizavel
+	@return oReport, Objeto, Objeto de impressão
+	@param
+	@sample ReportDef()
+	@author Alexandre Santos
+	@since 30/10/2017
+/*/
+//---------------------------------------------------------------------
+Static Function ReportDef()
+
+	Local oSecData
+	Local oSecPosto
+	Local oSecCombust
+	Local oSecFrota
+	Local oSecAbast
+	Local oReport
+	Local oBreak
+	Local nEspIni := 0
+	// [LGPD] Se as funcionalidades, referentes à LGPD, podem ser utilizadas
+	Local lLgpd := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. )
+	Local aOfusc := {}
+	// Array dos campos a serem ofuscados para a seção de abastecimento
+	Local aCellsAbs := {}
+	// Array dos campos a serem ofuscados para a seção de posto
+	Local aCellsPos := {}
+	// Array dos campos a serem ofuscados para a seção de cidade
+	Local aCellsCid := {}
+
+	// LGPD - Lei geral de Proteção de Dados.
+	If lLgpd
+		// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+		aOfusc := FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'TQF_CIDADE', 'DA4_NOME', 'A2_NOME',;
+														'TQN_CNPJ'} )
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'TQF_CIDADE' } ) == 0
+			Aadd( aCellsCid, '(cTRBB)->CIDABAS' )
+			aAdd( aCellsPos, "(cTRBB)->CIDABAS" )
+			aAdd( aCellsAbs, "(cTRBB)->CNPJABA")
+		EndIf
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'A2_NOME' } ) == 0
+			aAdd( aCellsPos, "(cTRBB)->NOMEPOS" )
+			aAdd( aCellsAbs, "(cTRBB)->NOMEPOS") 
+		EndIf
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'TQN_CNPJ' } ) == 0
+			aAdd( aCellsPos, "(cTRBB)->CNPJABA" )
+		EndIf
+
+		If Ascan( aOfusc, { |x| AllTrim(x) == 'DA4_NOME' } ) == 0
+			aAdd( aCellsAbs, "DA4_NOME")
+		EndIf
+
+	EndIf
+
+	oReport := TReport():New("MNTC830", OemToAnsi(STR0032), "MNT83C", {|oReport| ReportPrint(oReport)}, STR0032+". "+cClassi,,"Total Geral",,,,,5)
+
+	/*______________________________________________
+	| Variaveis utilizadas para parametros!         |
+	| MV_PAR01 - De Filial                          |
+	| MV_PAR02 - Ate Filial                         |
+	| MV_PAR03 - De Data                            |
+	| MV_PAR04 - Ate Data                           |
+	| MV_PAR05 - Posto                       		|
+	| MV_PAR06 - Loja                       		|
+	| MV_PAR07 - Nome Posto                         |
+	| MV_PAR08 - CNPJ                               |
+	| MV_PAR09 - De Combustível                     |
+	| MV_PAR10 - Ate Combustível                    |
+	| MV_PAR11 - Classificar	                    |
+	|______________________________________________*/
+
+	If MV_PAR11 == 1
+		nEspIni := 3
+		//CIDADE
+		oSecCidade := TRSection():New(oReport, STR0013, {cTRBB})
+			TRCell():New(oSecCidade, "(cTRBB)->CIDABAS"	, "cTRB", STR0016, "@!"	, TAMSX3("TQF_CIDADE")[1]+15) //CIDADE
+			
+			If lLgpd .And. Len( aCellsCid ) != 0
+				// SetObfuscCells ofusca a células determinadas dentro do array
+				oSecCidade:SetObfuscCells( aCellsCid )
+			EndIf
+
+		//DATA ABASTECIMENTO
+		oSecData 	:= TRSection():New(oReport, STR0013, {cTRBB},,,,,,,,,,nEspIni)
+			TRCell():New(oSecData, "(cTRBB)->DTABAST"	, "cTRB", STR0013, ""	, TAMSX3("TQN_DTABAS")[1]) //Dt. Abast.
+			nEspIni += 3
+		If MV_PAR11 == 1 .And. MV_PAR12 == 2
+			//POSTO
+			oSecPosto 	:= TRSection():New(oReport, STR0036, {cTRBB},,,,,,,,,,nEspIni)
+				TRCell():New(oSecPosto, "(cTRBB)->POSTOAB", "cTRB", STR0036, "@!"					, TAMSX3("TQN_POSTO")[1]+2 ) //CÓDIGO POSTO
+				TRCell():New(oSecPosto, "(cTRBB)->NOMEPOS", "cTRB", STR0049, "@!"					, TAMSX3("TQF_NREDUZ")[1]+2) //NOME FANTÁSIA
+				TRCell():New(oSecPosto, "(cTRBB)->CNPJABA", "cTRB", STR0019, "@R 99.999.999/9999-99", TAMSX3("TQN_CNPJ")[1]+6  ) //CNPJ
+ 				nEspIni += 3
+
+			If lLgpd .And. Len( aCellsPos ) != 0
+				// SetObfuscCells ofusca a células determinadas dentro do array
+				oSecPosto:SetObfuscCells( aCellsPos )
+			EndIf
+
+		EndIf
+	Else
+		nEspIni := 3
+		//DATA ABASTECIMENTO
+		oSecData 	:= TRSection():New(oReport, STR0013, {cTRBB})
+			TRCell():New(oSecData, "(cTRBB)->DTABAST", "cTRB", STR0013, "", TAMSX3("TQN_DTABAS")[1]) //Dt. Abast.
+		If MV_PAR12 == 2
+			//POSTO
+			oSecPosto 	:= TRSection():New(oReport, STR0036, {cTRBB},,,,,,,,,,nEspIni)
+				TRCell():New(oSecPosto, "(cTRBB)->POSTOAB", "cTRB", STR0036, "@!"					, TAMSX3("TQN_POSTO")[1]+2 ) //CÓDIGO POSTO
+				TRCell():New(oSecPosto, "(cTRBB)->NOMEPOS", "cTRB", STR0049, "@!"					, TAMSX3("TQF_NREDUZ")[1]+2) //NOME FANTÁSIA
+				TRCell():New(oSecPosto, "(cTRBB)->CNPJABA", "cTRB", STR0019, "@R 99.999.999/9999-99", TAMSX3("TQN_CNPJ")[1]+6  ) //CNPJ
+				TRCell():New(oSecPosto, "(cTRBB)->CIDABAS", "cTRB", STR0016, "@!"					, TAMSX3("TQF_CIDADE")[1]) //CIDADE
+				nEspIni += 3
+
+			If lLgpd .And. len( aCellsPos ) != 0
+				// SetObfuscCells ofusca a células determinadas dentro do array
+				oSecPosto:SetObfuscCells( aCellsPos )
+			EndIf
+
+		EndIf
+	EndIf
+
+	If MV_PAR12 == 2
+		//COMBUSTÍVEL
+		oSecCombust := TRSection():New(oReport, STR0050, {cTRBB},,,,,,,,,,nEspIni)
+			TRCell():New(oSecCombust, "(cTRBB)->CODCOMB", "cTRB", STR0050, "@!", TAMSX3("TQN_CODCOM")[1]+5) //COMBUSTÍVEL
+			TRCell():New(oSecCombust, "(cTRBB)->COMBUST", "cTRB", STR0051, "@!", TAMSX3("TQM_NOMCOM")[1])   //DESCRIÇÃO
+			nEspIni += 3
+		//FROTA
+		oSecFrota	:= TRSection():New(oReport, STR0044, {cTRBB},,,,,,,,,,nEspIni)
+			TRCell():New(oSecFrota, "(cTRBB)->FILIAL"	, "cTRB", STR0052, "@!", TAMSX3("TQN_FILIAL")[1]+2) //FILIAL
+			TRCell():New(oSecFrota, "(cTRBB)->PLACAAB"	, "cTRB", STR0018, "@!", TAMSX3("TQN_PLACA")[1]+2 ) //PLACA
+			TRCell():New(oSecFrota, "(cTRBB)->FROTA"	, "cTRB", STR0044, "@!", TAMSX3("TQN_FROTA")[1] )   //FROTA
+			nEspIni += 3
+		//ABASTECIMENTO
+		oSecAbast	:= TRSection():New(oReport, STR0058, {cTRBB},,,,,,,,,,nEspIni)
+			TRCell():New(oSecAbast, "(cTRBB)->NFABAST", "cTRB", STR0011, "@!"					, TAMSX3("TQN_NOTFIS")[1] + 10) //N° NF
+			TRCell():New(oSecAbast, "(cTRBB)->KMABAST", "cTRB", STR0015, "@E 999,999,999"		, TAMSX3("TQN_HODOM")[1]  + 05) //KM
+			TRCell():New(oSecAbast, "(cTRBB)->QTDABAS", "cTRB", STR0053, "@E 999,999,999.999"	, TAMSX3("TQN_QUANT")[1]  + 15) //QNTD. ABAST.
+			TRCell():New(oSecAbast, "(cTRBB)->VLRUNAB", "cTRB", STR0054, "@E 999,999,999,999." +;//VALOR UNIT.
+					Replicate('9',TAMSX3("TQN_VALUNI")[2]), TAMSX3("TQN_VALUNI")[1]+2)
+			TRCell():New(oSecAbast, "(cTRBB)->VLRABAS", "cTRB", STR0055, "@E 999,999,999,999.999", TAMSX3("TQN_VALTOT")[1] + 15) //VALOR ABAST.
+			TRCell():New(oSecAbast, "(cTRBB)->MOTABAS", "cTRB", STR0056, "@!"					 , TAMSX3("TQN_CODMOT")[1] + 05) //MOTORISTA
+			TRCell():New(oSecAbast, "DA4_NOME"		  , "DA4" , STR0057, "@!"					 , TAMSX3("DA4_NOME")[1]  )   	 //NOME
+
+			oSecAbast:Cell("(cTRBB)->KMABAST"):SetHeaderAlign("RIGHT")
+			oSecAbast:Cell("(cTRBB)->QTDABAS"):SetHeaderAlign("RIGHT")
+			oSecAbast:Cell("(cTRBB)->VLRUNAB"):SetHeaderAlign("RIGHT")
+			oSecAbast:Cell("(cTRBB)->VLRABAS"):SetHeaderAlign("RIGHT")
+
+			If lLgpd .And. Len( aCellsAbs ) != 0
+				// SetObfuscCells ofusca a células determinadas dentro do array
+				oSecAbast:SetObfuscCells(aCellsAbs)
+			EndIf
+			
+	ElseIf MV_PAR12 == 1
+		//ABASTECIMENTO
+		oSecAbast	:= TRSection():New(oReport, STR0058, {cTRBB},,,,,,,,,,nEspIni)
+			TRCell():New(oSecAbast, "(cTRBB)->PLACAAB", "cTRB", STR0018, "@!"					, TAMSX3("TQN_PLACA")[1]  + 08) //PLACA
+			TRCell():New(oSecAbast, "(cTRBB)->FROTA"  , "cTRB", STR0044, "@!"					, TAMSX3("TQN_FROTA")[1]  + 05) //FROTA
+			TRCell():New(oSecAbast, "(cTRBB)->NFABAST", "cTRB", STR0011, "@!"					, TAMSX3("TQN_NOTFIS")[1] + 10)//N° NF
+			TRCell():New(oSecAbast, "(cTRBB)->POSTOAB", "cTRB", STR0036, "@!"					, TAMSX3("TQN_POSTO")[1]  + 08) //CÓDIGO POSTO
+			TRCell():New(oSecAbast, "(cTRBB)->NOMEPOS", "cTRB", STR0049, "@!"					, TAMSX3("TQF_NREDUZ")[1] + 05) //NOME FANTÁSIA
+			TRCell():New(oSecAbast, "(cTRBB)->CNPJABA", "cTRB", STR0019, "@R 99.999.999/9999-99", TAMSX3("TQN_CNPJ")[1]+ 18 ) //CNPJ
+			TRCell():New(oSecAbast, "(cTRBB)->KMABAST", "cTRB", STR0015, "@E 999,999,999"		, TAMSX3("TQN_HODOM")[1]  + 05) //KM
+			TRCell():New(oSecAbast, "(cTRBB)->QTDABAS", "cTRB", STR0053, "@E 999,999,999.999"	, TAMSX3("TQN_QUANT")[1]  + 15)  //QNTD. ABAST.
+			TRCell():New(oSecAbast, "(cTRBB)->VLRUNAB", "cTRB", STR0054, "@E 999,999,999,999." +;//VALOR UNIT.
+					Replicate('9',TAMSX3("TQN_VALUNI")[2]), TAMSX3("TQN_VALUNI")[1]+2)
+			TRCell():New(oSecAbast, "(cTRBB)->VLRABAS", "cTRB", STR0055, "@E 999,999,999,999.999", TAMSX3("TQN_VALTOT")[1] + 16) //VALOR ABAST.
+			TRCell():New(oSecAbast, "(cTRBB)->MOTABAS", "cTRB", STR0056, "@!"					 , TAMSX3("TQN_CODMOT")[1] + 14) //MOTORISTA
+			TRCell():New(oSecAbast, "DA4_NOME"		  , "DA4",  STR0057, "@!"					 , TAMSX3("DA4_NOME")[1]  )    	 //NOME
+		
+		If lLgpd .And. len( aCellsAbs ) != 0
+			// SetObfuscCells ofusca a células determinadas dentro do array
+			oSecAbast:SetObfuscCells(aCellsAbs)
+		EndIf
+	EndIf
+
+	TRPosition():New(oSecAbast,"DA4",1,{|| xFilial("DA4") + (cTRBB)->MOTABAS})
+	oBreak := TRBreak():New(oSecAbast,".T.", "Total de Abastecimentos",.F.)
+	TRFunction():New(oSecAbast:Cell("(cTRBB)->QTDABAS"),,"SUM",oBreak,,"@E 99,999,999.999"	   ,,.F.,.F.,.F.)
+	TRFunction():New(oSecAbast:Cell("(cTRBB)->VLRABAS"),,"SUM",oBreak,,"@E 999,999,999,999.999",,.F.,.F.,.F.)
+
+Return oReport
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+	Realiza a impressão do relatorio no modelo TReport.
+	@param 		oReport, Objeto, Instancia de objeto oReport.
+	@return  	.T. -> Impressao concluida.
+				.F. -> Nao imprimiu.
+	@sample ReportPrint(oReport)
+	@author Alexandre Santos
+	@since 30/10/2017
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oReport)
+	Local oSecData
+	Local oSecPosto
+	Local oSecCidade
+	Local oSecCombust
+	Local oSecFrota
+	Local oSecAbast
+	Local cCidade 		:= ""
+	Local cData			:= ""
+	Local cPosto		:= ""
+	Local cCombust		:= ""
+	Local cFrota		:= ""
+
+	dbSelectArea(cTRBB)
+	dbGoTop()
+
+	If MV_PAR11 == 1 .And. MV_PAR12 == 2//CIDADE//DATA//POSTO
+
+		oSecCidade	:= oReport:Section(1)
+		oSecData 	:= oReport:Section(2)
+		oSecPosto 	:= oReport:Section(3)
+		oSecCombust := oReport:Section(4)
+		oSecFrota 	:= oReport:Section(5)
+		oSecAbast 	:= oReport:Section(6)
+
+		oReport:SetMeter(RecCount())
+		Do While !EoF() .And. !oReport:Cancel()
+			cCidade := (cTRBB)->CIDABAS
+			oSecCidade:Init()
+			oSecCidade:PrintLine()
+			Do While !EoF() .And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+				cData := (cTRBB)->DTABAST
+				oSecData:Init()
+				oSecData:PrintLine()
+				Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+					cPosto := (cTRBB)->POSTOAB
+					oSecPosto:Init()
+					oSecPosto:PrintLine()
+
+					Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB;
+							.And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+						cCombust := (cTRBB)->CODCOMB
+						oSecCombust:Init()
+						oSecCombust:PrintLine()
+
+						Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB;
+								.And. cCombust == (cTRBB)->CODCOMB .And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+
+							cFrota := (cTRBB)->FROTA
+							oSecFrota:Init()
+							oSecFrota:PrintLine()
+
+							Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB;
+									.And. cCombust == (cTRBB)->CODCOMB .And. cFrota == (cTRBB)->FROTA;
+									.And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+
+								oSecAbast:Init()
+								oSecAbast:PrintLine()
+
+								dbSelectArea(cTRBB)
+            					Dbskip()
+
+							EndDo
+							oSecAbast:Finish()
+							oSecFrota:Finish()
+						EndDo
+						oSecCombust:Finish()
+					EndDo
+					oSecPosto:Finish()
+				EndDo
+				oSecData:Finish()
+			EndDo
+			oSecCidade:Finish()
+		EndDo
+    ElseIf MV_PAR11 == 2 .And. MV_PAR12 == 2
+		oSecData 	:= oReport:Section(1)
+		oSecPosto 	:= oReport:Section(2)
+		oSecCombust := oReport:Section(3)
+		oSecFrota 	:= oReport:Section(4)
+		oSecAbast 	:= oReport:Section(5)
+
+		oReport:SetMeter(RecCount())
+		Do While !EoF() .And. !oReport:Cancel()
+			cData := (cTRBB)->DTABAST
+			oSecData:Init()
+			oSecData:PrintLine()
+
+			Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. !oReport:Cancel()
+				cPosto := (cTRBB)->POSTOAB
+				oSecPosto:Init()
+				oSecPosto:PrintLine()
+
+				Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB .And. !oReport:Cancel()
+					cCombust := (cTRBB)->CODCOMB
+					oSecCombust:Init()
+					oSecCombust:PrintLine()
+
+					Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB;
+							.And. cCombust == (cTRBB)->CODCOMB .And. !oReport:Cancel()
+
+						cFrota := (cTRBB)->FROTA
+						oSecFrota:Init()
+						oSecFrota:PrintLine()
+
+						Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cPosto == (cTRBB)->POSTOAB;
+								.And. cCombust == (cTRBB)->CODCOMB .And. cFrota == (cTRBB)->FROTA .And. !oReport:Cancel()
+
+							oSecAbast:Init()
+							oSecAbast:PrintLine()
+
+							dbSelectArea(cTRBB)
+               				Dbskip()
+						EndDo
+						oSecAbast:Finish()
+						oSecFrota:Finish()
+					EndDo
+					oSecCombust:Finish()
+				EndDo
+				oSecPosto:Finish()
+			EndDo
+			oSecData:Finish()
+		EndDo
+	ElseIf MV_PAR12 == 1 .And. MV_PAR11 == 2
+		oSecData	:= oReport:Section(1)
+		oSecAbast	:= oReport:Section(2)
+		oReport:SetMeter(RecCount())
+		Do While !EoF() .And. !oReport:Cancel()
+			cData := (cTRBB)->DTABAST
+			oSecData:Init()
+			oSecData:PrintLine()
+			Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. !oReport:Cancel()
+				oSecAbast:Init()
+				oSecAbast:PrintLine()
+				dbSelectArea(cTRBB)
+            	dbSkip()
+			EndDo
+		EndDo
+		oSecAbast:Finish()
+		oSecData:Finish()
+    ElseIf MV_PAR12 == 1 .And. MV_PAR11 == 1
+		oSecCidade	:= oReport:Section(1)
+		oSecData 	:= oReport:Section(2)
+		oSecAbast 	:= oReport:Section(3)
+		oReport:SetMeter(RecCount())
+		Do While !EoF() .And. !oReport:Cancel()
+			cCidade := (cTRBB)->CIDABAS
+			oSecCidade:Init()
+			oSecCidade:PrintLine()
+			Do While !EoF() .And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+				cData := (cTRBB)->DTABAST
+				oSecData:Init()
+				oSecData:PrintLine()
+				Do While !EoF() .And. cData == (cTRBB)->DTABAST .And. cCidade == (cTRBB)->CIDABAS .And. !oReport:Cancel()
+					oSecAbast:Init()
+					oSecAbast:PrintLine()
+					dbSelectArea(cTRBB)
+            		dbSkip()
+				EndDo
+				oReport:PrintText("")
+			EndDo
+		EndDo
+		oSecAbast:Finish()
+		oSecData:Finish()
+		oSecCidade:Finish()
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830VLD
+	Valida perguntas
+	@param	cDe		, Caracter, Parametro De?
+			cAte	, Caracter, Parametro Ate?
+			nPerg	, Numerico, Numero do parametro para validação especifica.
+					1 - De
+					2 - Ate
+					3 - Nome Fantasia
+					4 - CNPJ
+					5 - Posto
+					6 - Loja
+
+	@return  	.T. -> OK.
+				.F. -> Inválido.
+	@sample MNTA830VLD()
+	@author Alexandre Santos
+	@since 31/10/2017
+/*/
+//---------------------------------------------------------------------
+Function MNTA830VLD(cDe, cAte, nPerg)
+	Local lRet := .T.
+
+	Default cDe 	:= ""
+	Default cAte 	:= ""
+
+	If ValType(cDe) <> 'D' .And. ValType(cAte) <> 'D'
+		cDe 	:= Upper(cDe)
+		cAte 	:= Upper(cAte)
+	EndIf
+	If nPerg == 3 //NOME FANTASIA
+		If Empty(MV_PAR07)
+			lRet := .T.
+		ElseIf !ExistCpo('TQF',MV_PAR07,3)
+			lRet := .F.
+		EndIf
+   	EndIf
+
+	If nPerg == 4 //CNPJ
+		If Empty(MV_PAR08)
+			lRet := .T.
+		ElseIf !CGC(MV_PAR08)
+			lRet := .F.
+   		EndIf
+	EndIf
+
+	If nPerg == 5 //POSTO
+		If (Empty(MV_PAR05) .AND. Empty(MV_PAR06)) .OR. Empty(MV_PAR06)
+			MV_PAR06 := Space(TAMSX3("TQF_LOJA")[1])
+			lRet := .T.
+		EndIf
+
+		If !Empty(MV_PAR05) .And. !ExistCpo("TQF",MV_PAR05)
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If nPerg == 6 //LOJA
+		If (Empty(MV_PAR05) .AND. Empty(MV_PAR06)) .OR. Empty(MV_PAR06)
+			MV_PAR05 := Space(TAMSX3("TQF_CODIGO")[1])
+			lRet := .T.
+		EndIf
+
+		If !Empty(MV_PAR05) .And. !ExistCpo("TQF",MV_PAR05+MV_PAR06,1)
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If nPerg == 1 //DE?
+
+		If !Empty(cAte) .And. lRet
+			If cAte < cDe
+				Help(" ",1,"DEATEINVAL")
+				lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf nPerg == 2 //ATE?
+
+		If !Empty(cDe) .And. !Empty(cDe)
+			If cAte < cDe
+				Help(" ",1,"ATEINVALID")
+				lRet := .F.
+			EndIf
+		EndIf
+
+		If Empty(cDe) .And. Empty(cAte)
+			Help(" ",1,"DEATEINVAL")
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet

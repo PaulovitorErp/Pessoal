@@ -1,0 +1,345 @@
+#INCLUDE "MNTC850.ch"
+#include "PROTHEUS.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC850
+Consulta de divergencias entre o estoque fisico e contabil
+@author Soraia de Carvalho
+@since 30/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC850()
+	//+---------------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  	  |
+	//+---------------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local oTempTable
+
+	Private aRotina   	:= MenuDef()
+	Private cCadastro 	:= OemtoAnsi(STR0003)  //"Consulta de divergencias entre estoque fisico e contabil"
+	Private cPerg     	:= "MNC850"
+	Private aPesq	  	:= {}
+	Private cP850     	:= PadR( cPerg, Len(Posicione("SX1", 1, cPerg, "X1_GRUPO")) )
+	Private lTabTTH   	:= NGCADICBASE("TTH_POSTO","A","TTH",.F.)
+	Private cEstHome  	:= AllTrim(GetMv("MV_ESTHOME"))
+	Private cPosto		:= ""
+	Private cLoja		:= ""
+	Private cTanque		:= ""
+	Private cTRBB := GetNextAlias()
+
+
+	If cEstHome == 'N'
+		MsgStop(STR0030,STR0031) //"O parâmetro MV_ESTHOME está desabilitado, por isso a rotina perde a funcionalidade." ## "NÃO CONFORMIDADE"
+		Return
+	EndIf
+
+	aPos1 := {15,1,95,315}
+
+	aDBFB := {}
+	Aadd(aDBFB,{"COD"    ,"C", TAMSX3("TQK_POSTO")[1],0,})
+	Aadd(aDBFB,{"HOMEB"  ,"C", 40,0})
+	Aadd(aDBFB,{"LOJA"   ,"C", TAMSX3("TQK_LOJA")[1],0})
+	Aadd(aDBFB,{"TANQUE" ,"C", TAMSX3("TQK_TANQUE")[1],0})
+		Aadd(aDBFB,{"DTMED"  ,"D", 08,0})
+	Aadd(aDBFB,{"QTDSIS" ,"N", 14,2})
+	Aadd(aDBFB,{"VLSIS"  ,"N", 20,2})
+		Aadd(aDBFB,{"QTDMED" ,"N", 08,2})
+	Aadd(aDBFB,{"VLMED"  ,"N", 12,3})
+	If lTabTTH
+		Aadd(aDBFB,{"QTDOUT" ,"N", 14,2})
+	Endif
+	Aadd(aDBFB,{"DIFLT"  ,"N", 14,2})
+	Aadd(aDBFB,{"DIFVL"  ,"N", 14,2})
+	Aadd(aDBFB,{"PERCDIF","N", 20,2})
+		Aadd(aDBFB,{"HORAMED","C", 05,0})
+
+	//Intancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRBB, aDBFB )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"COD","TANQUE"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aTRBB := {{STR0018 ,"COD"	, "C", TAMSX3("TQK_POSTO")[1], 0,"@!" },; 		//"Cod.Posto"
+			  {STR0007 ,"LOJA"  , "C", TAMSX3("TQK_LOJA")[1],  0,"@!" },;			//"Loja"
+			  {STR0008 ,"TANQUE", "C", TAMSX3("TQK_TANQUE")[1],0,"@!" },;	    //"Tanque"
+			  {STR0019 ,"HOMEB" , "C", 40,0,"@!" },;      						//"Posto Interno"
+			  {STR0020 ,"DTMED" , "D", 08,0,"@99/99/9999" },;  				    //"Data Medicao"
+			  {STR0021 ,"QTDSIS", "N", 14,2,"@E 99,999,999,999.99" },;    	    //"Qtde.Sist."
+			  {STR0022 ,"VLSIS" , "N", 20,2,"@E 99,999,999,999,999,999.99" },;   //"Vl.Sist."
+		   	  {STR0023 ,"QTDMED", "N", 08,2,"@@E 99,999.99" },;      	   	    //"Qtde.Medida"
+			  {STR0024 ,"VLMED" , "N", 09,3,"@E 9,999,999.999" }}               //"Vl.Medido"
+
+	If lTabTTH
+		aAdd(aTRBB, {STR0025,"QTDOUT","N",14,2,"@E 99,999,999,999.99" })        //"Outras Saídas"
+	Endif
+	aAdd(aTRBB, {STR0016 ,"DIFLT"  ,"N",14,2,"@E 99,999,999,999.99" })          //"Dif.Litros"
+	aAdd(aTRBB, {STR0015 ,"DIFVL"  ,"N",14,2,"@E 99,999,999,999.99" })          //"Dif.Valor"
+	aAdd(aTRBB, {STR0014 ,"PERCDIF","N",20,2,"@E 99,999,999,999,999,999.99" })  //"%Diferenca"
+
+
+	If pergunte("MNC850",.T.)
+		Processa({ |lEnd| MNC850INI()}, STR0013)
+		DbSelectArea(cTRBB)
+		DbGotop()
+		If RecCount() == 0
+			MsgInfo(STR0009,STR0010)//"Não existem dados para montar a tela de consulta"##"ATENÇÃO"
+		Else
+			aAdd( aPesq , {STR0018+ " + " + STR0008, {{"","C" , 255 , 0 ,"","@!"}} } ) // Indices de pesquisa
+
+			oBrowse:= FWMBrowse():New()
+			oBrowse:SetDescription(cCadastro)
+			oBrowse:SetTemporary(.T.)
+			oBrowse:SetAlias(cTRBB)
+			oBrowse:SetFields(aTRBB)
+			oBrowse:SetSeek(.T.,aPesq)
+			oBrowse:Activate()
+
+		EndIf
+	EndIf
+
+	oTempTable:Delete()
+
+	DbSelectArea("TQI")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQI"))
+
+	//+---------------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                              |
+	//+---------------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//+---------------------------------------------------------------------------+
+/*/{Protheus.doc} MNC850INI
+Monta o arquivo temporario inicial mostrado no browse
+@author Soraia de Carvalho
+@since 31/01/06
+@version undefined
+@type function
+/*/
+//+---------------------------------------------------------------------------+
+Function MNC850INI()
+	Local nQTDMED  := 0.00
+	Local dDATA := Ctod("  /  /  ")
+
+	DbselectArea("TQI")
+	DbSetorder(01)
+	Dbseek(xFilial("TQI")+MV_PAR01+MV_PAR02)
+	ProcRegua(LastRec())
+	While !EoF() .and. xFilial("TQI") == TQI->TQI_FILIAL .and. TQI->TQI_CODPOS == Mv_Par01 ;
+	.and. TQI->TQI_LOJA == Mv_Par02
+		IncProc()
+		If TQI->TQI_CODCOM = MV_PAR03
+
+			// Ultima medicao
+			nQTDMED := 0.00
+			dDATA   := Ctod("  /  /  ")
+			cHoraM  := Space(5)
+			DbSelectArea('TQK')
+			DbSetOrder(1)
+			DbSeeK(XFilial("TQK")+TQI->TQI_CODPOS+TQI->TQI_LOJA+TQI->TQI_TANQUE+Dtos(date())+'24:00',.T.)
+			If Eof()
+				DbSkip(-1)
+				If !Bof() .And. TQK->TQK_FILIAL = XFilial("TQK")
+					If TQK->TQK_FILIAL = xFilial("TQK") .And. TQK->TQK_POSTO = TQI->TQI_CODPOS;
+					.And. TQK->TQK_LOJA = TQI->TQI_LOJA .And. TQK->TQK_TANQUE = TQI->TQI_TANQUE
+						dDATA   := TQK->TQK_DTMEDI
+						nQTDMED := TQK->TQK_QTDMED
+						cHoraM  := TQK->TQK_HRMEDI
+					Endif
+				Endif
+			Else
+				If TQK->TQK_FILIAL <> XFilial("TQK") .Or. (TQK->TQK_POSTO <> TQI->TQI_CODPOS);
+				.Or. (TQK->TQK_LOJA = TQI->TQI_LOJA) .Or. (TQK->TQK_TANQUE <> TQI->TQI_TANQUE)
+					DbSkip(-1)
+				Endif
+				If TQK->TQK_FILIAL = xFilial("TQK") .And. TQK->TQK_POSTO = TQI->TQI_CODPOS;
+				.And. TQK->TQK_LOJA = TQI->TQI_LOJA .And. TQK->TQK_TANQUE = TQI->TQI_TANQUE
+					dDATA   := TQK->TQK_DTMEDI
+					nQTDMED := TQK->TQK_QTDMED
+					cHoraM  := TQK->TQK_HRMEDI
+				Endif
+			EndIf
+
+			// Ultimo preco
+			nPRECO := 0.00
+			dbSelectArea("SB2")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SB2")+TQI->TQI_PRODUT+TQI->TQI_TANQUE)
+				nPRECO := SB2->B2_CM1
+			EndIf
+
+			//Outras Saidas
+			nOutSai := 0.00
+			If lTabTTH
+				dbSelectArea("TTH")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TTH")+Mv_par01+Mv_par02+TQI->TQI_TANQUE+Mv_par03)
+					While !Eof() .and. TTH->(TTH_FILIAL+TTH_POSTO+TTH_LOJA+TTH_TANQUE+TTH_CODCOM) == xFilial("TTH")+Mv_par01+Mv_par02+TQI->TQI_TANQUE+Mv_par03
+						If TTH->TTH_MOTIVO <> "5"
+							nOutSai += TTH->TTH_QUANT
+						Endif
+						dbSelectArea("TTH")
+						dbSkip()
+					End
+				Endif
+			Endif
+
+			nQtdEs := NGSEEK("SB2",TQI->TQI_PRODUT+TQI->TQI_TANQUE,1,'SB2->B2_QATU')
+
+			dbSelectArea(cTRBB)
+			dbSetOrder(1)
+			If !dbSeek(TQI->TQI_CODPOS+TQI->TQI_TANQUE)
+				RecLock((cTRBB),.T.)
+				(cTRBB)->COD     := TQI->TQI_CODPOS
+				(cTRBB)->TANQUE  := TQI->TQI_TANQUE
+				(cTRBB)->LOJA    := TQI->TQI_LOJA
+				(cTRBB)->QTDMED  := nQTDMED
+				(cTRBB)->DTMED   := dDATA
+				(cTRBB)->QTDSIS  := If(!Empty(nQtdEs),nQtdEs,0.00)
+				If lTabTTH
+					(cTRBB)->QTDOUT := nOutSai
+				Endif
+				(cTRBB)->DIFLT   := (cTRBB)->QTDSIS - ((cTRBB)->QTDMED + nOutSai)
+				(cTRBB)->PERCDIF := ((cTRBB)->DIFLT * 100) / (cTRBB)->QTDSIS
+				(cTRBB)->VLSIS   := (cTRBB)->QTDSIS * nPRECO
+				(cTRBB)->VLMED   := (cTRBB)->QTDMED * nPRECO
+				(cTRBB)->DIFVL   := (cTRBB)->DIFLT  * nPRECO
+				(cTRBB)->HOMEB   := NGSEEK("TQF",TQI->TQI_CODPOS+TQI->TQI_LOJA,1,'TQF->TQF_NREDUZ')
+				(cTRBB)->HORAMED := cHoraM
+				MsUnLock(cTRBB)
+			EndIf
+		Endif
+		DbselectArea("TQI")
+		DbSkip()
+	End
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC850PA
+Reprocessa o browse de acordo com os parametros
+@author Soraia de Carvalho
+@since 31/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC850PA()
+	If !Pergunte("MNC850",.T.)
+		Return
+	EndIf
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNC850INI() }, STR0013 )  //"Aguarde ..Processando Arquivo de Postos"
+	DbSelectArea(cTRBB)
+	DbGotop()
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC850VI
+Visualiza consulta  .
+@author Soraia de carvalho
+@since 31/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC850VI()
+	Local cCadAnt := cCadastro
+
+	cCadastro := NGSX2NOME("TQK")
+	DbSelectArea("TQK")
+	DbSetOrder(01)
+	If DbSeek(xFilial("TQK")+(cTRBB)->COD+(cTRBB)->LOJA+(cTRBB)->TANQUE+Dtos((cTRBB)->DTMED)+(cTRBB)->HORAMED)
+
+		cPosto := TQK->TQK_POSTO
+		cLoja := TQK->TQK_LOJA
+
+		NGCAD01("TQK",Recno(),1)
+		cCadastro := cCadAnt
+	Else
+		MsgAlert(STR0033,STR0010) //Não foram realizadas medições para esse posto/tanque # Atenção
+	EndIf
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT850LOJA
+Valida o parametro de Loja
+@author Elisangela Costa
+@since 06/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function  MNT850LOJA()
+	If Empty(MV_PAR01)
+		MsgStop(STR0011)//"Informe o Codigo do Posto"
+		Return .F.
+	Endif
+	If !ExistCpo("TQF",MV_PAR01+MV_PAR02)
+		Return .F.
+	EndIf
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC850OUT
+Visualiza consulta
+@author Denis
+@since 31/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC850OUT()
+	Local OldRot := aCLONE(aROTINA)
+	Local aArea := GetArea()
+
+	aRotina := {{ STR0026  ,"AXPesqui"   , 0 , 1},; //"Pesquisar"
+				{ STR0001  ,"NGCAD01"    , 0 , 2}}    //"Visualizar"
+
+	aNGFIELD := {}
+	dbSelectArea("TTH")
+	cKey := Mv_par01+Mv_par02+(cTRBB)->TANQUE+Mv_par03
+	bWHILE := {|| !eof() .AND. Mv_par01+Mv_par02+(cTRBB)->TANQUE+Mv_par03 == TTH->(TTH_POSTO+TTH_LOJA+TTH_TANQUE+TTH_CODCOM) }
+	bFOR   := {|| TTH->(TTH_FILIAL+TTH_POSTO+TTH_LOJA+TTH_TANQUE+TTH_CODCOM) == xFilial("TTH")+Mv_par01+Mv_par02+(cTRBB)->TANQUE+Mv_par03 }
+
+	dbSelectArea("TTH")
+	dbSetOrder(1) //TTH_FILIAL+TTH_POSTO+TTH_LOJA+TTH_TANQUE+TTH_CODCOM+TTH_BOMBA+DTOS(TTH_DTABAS)+TTH_HRABAS
+	If dbSeek(xFilial("TTH")+(cTRBB)->COD+(cTRBB)->LOJA+(cTRBB)->TANQUE)
+
+		cPosto 	:= TTH->TTH_POSTO
+		cLoja 	:= TTH->TTH_LOJA
+		cTanque := TTH->TTH_TANQUE
+
+		NGCONSULTA("TRBTTH", cKey, bWHILE, bFOR, aRotina,{}, aNGFIELD)
+	Else
+		MsgAlert(STR0009,STR0010) //Não existem dados para montar a tela de consulta # Atenção
+	EndIf
+	aRotina := aCLONE(OldRot)
+	RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+@author Rafael Diogo Richter
+@since 02/02/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina :=	{{STR0032 ,"MNC850VI" ,0,1},; //"Medição de Posto Interno
+						 {STR0002 ,"MNC850PA" ,0,3,0},; //"Parametros"
+						 {STR0025 ,"MNC850OUT" ,0,2,0}} //"Outras Saídas"
+
+Return aRotina

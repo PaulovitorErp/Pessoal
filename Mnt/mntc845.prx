@@ -1,0 +1,550 @@
+#include "Protheus.ch"
+#INCLUDE "Mntc845.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC845
+Consulta de abastecimentos realizados.
+@author Soraia de Carvalho
+@since 09/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC845()
+
+	//+-----------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  |
+	//+-----------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local oTempTable
+
+	Private aRotina := MenuDef()
+
+	Private cCadastro  := OemtoAnsi(STR0021)  //"Consulta de Posto Interno"
+	Private cPerg := "MNC845", cGrupo := ""
+	Private aPesq := {}
+	Private cTRBB := GetNextAlias()
+
+	aPos1      := {15,1,95,315 }
+
+	aDBFB := {}
+		aAdd(aDBFB,{"CODPOS" ,"C",  TAMSX3("TQF_CODIGO")[1],0,})
+		aAdd(aDBFB,{"LOJA"   ,"C", 4,0})
+		aAdd(aDBFB,{"HOMEB"  ,"C",40,0})
+		aAdd(aDBFB,{"FROTA"  ,"C",16,0})
+		aAdd(aDBFB,{"HODOM"  ,"N", 9,0})
+		aAdd(aDBFB,{"DTABAS" ,"D", 8,0})
+		aAdd(aDBFB,{"QUANT"  ,"N", 9,2})
+		aAdd(aDBFB,{"VALTOT" ,"N",15,3})
+		aAdd(aDBFB,{"VALUNI" ,"N", TAMSX3("TQN_VALUNI")[1]/*9*/,TAMSX3("TQN_VALUNI")[2]/*3*/})
+		aAdd(aDBFB,{"NUABAS" ,"C",15,0})
+
+	//Intancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRBB, aDBFB )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"CODPOS","LOJA","FROTA","DTABAS"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aTRBB := {{STR0027 ,"CODPOS" ,"C",TAMSX3("TQF_CODIGO")[1],0,"@!" },; //"Cod.Posto"
+			  {STR0028 ,"LOJA"   ,"C",04,0, "@!" },;     		//"Loja"
+			  {STR0029 ,"HOMEB"  ,"C",40,0, "@!" },;     		//"Posto Interno"
+			  {STR0011 ,"FROTA"  ,"C",16,0, "@!" },;     		//"Frota"
+			  {STR0012 ,"HODOM"  ,"C",09,0, "@!" },;     		//"KMs"
+			  {STR0013 ,"DTABAS" ,"D",08,0, "@ 99/99/9999" },;  //"Data Abast."
+			  {STR0014 ,"QUANT"  ,"N",12,3, "@E 99,999,999.999" },; //"Qtde Litros"
+			  {STR0015 ,"VALTOT" ,"N",12,2, "@E 99,999,999,999.999" },;   //"Val.Total"
+			  {STR0016 ,"VALUNI" ,"N",09,3, '@E 99,999.'+Replicate('9',TAMSX3("TQN_VALUNI")[2]) }} //"Val.Unit"
+
+	If pergunte("MNC845",.T.)
+		Processa({ |lEnd| MNC845INI()}, STR0030,STR0031 ) //"Aguarde..."###"Processando Arquivo de Postos"
+		DbSelectarea(cTRBB)
+		DbGotop()
+
+		aAdd( aPesq , { STR0027 + " + " + STR0028 + " + " + STR0011 + " + " + STR0013,{{"","C" , 255 , 0 ,"","@!"} }} ) // Indices de pesquisa
+
+		oBrowse:= FWMBrowse():New()
+		oBrowse:SetDescription(cCadastro)
+		oBrowse:SetTemporary(.T.)
+		oBrowse:SetAlias(cTRBB)
+		oBrowse:SetFields(aTRBB)
+		oBrowse:SetSeek(.T.,aPesq)
+		oBrowse:Activate()
+	Endif
+
+	oTempTable:Delete()
+
+	DbSelectArea("TQN")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQN"))
+
+	//+-----------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                          |
+	//+-----------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ATECD845
+Validaçao do codigo do Posto Interno
+@author Heverson Vitoreti
+@since 18/04/06
+@version undefined
+@param ALIAS, , descricao
+@param PAR1, , descricao
+@param PAR2, , descricao
+@param TAM, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function ATECD845(ALIAS,PAR1,PAR2,TAM)
+
+	Local nTQFLOJA := TAMSX3("TQF_LOJA")[1]
+
+	If Empty(par2)
+		Help(" ",1,STR0032,,STR0033,3,1) //"ATENÇÃO"###"Posto Interno final não pode ser vazio."
+		Return .F.
+	Elseif par2 < par1
+		Help(" ",1,STR0032,,STR0034,3,1) //"ATENÇÃO"###"Posto Interno final informado é inválido."
+		Return .F.
+	Endif
+
+	If par2 = replicate('Z',Len(PAR2))
+		If (MV_PAR05 = REPLICATE("Z",Len(MV_PAR05)))
+			MV_PAR06 := Replicate("Z",nTQFLOJA)
+		EndIf
+		Return .t.
+	Else
+		If !Atecodigo('TQF',Par1+Mv_Par04,Par2+Mv_Par06,08)
+			Return .F.
+		Endif
+	Endif
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC845INI
+Monta o arquivo temporario inicial mostrado no browse
+@author Soraia de Carvalho
+@since 10/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC845INI()
+
+	DbselectArea("TQN")
+	DbSetorder(03)
+	Dbseek(xFilial("TQN")+Mv_Par03+Mv_Par04,.t.)
+	ProcRegua(Reccount())
+
+	While !EoF() .and. xFilial("TQN") == TQN->TQN_FILIAL .and.;
+	TQN->TQN_POSTO+TQN->TQN_LOJA <= mv_par05+mv_par06
+
+		/*TQN->TQN_POSTO <= Mv_Par05        .And.;
+		TQN->TQN_LOJA <= Mv_Par06  */
+
+		IncProc()
+		DbselectArea("TQF")
+		DbSetorder(01)
+		Dbseek(xFilial("TQF")+TQN->TQN_POSTO )
+		If TQF->TQF_TIPPOS <> "2"
+			DbSelectArea("TQN")
+			DbSkip()
+			Loop
+		Endif
+
+		If !empty(Mv_par01) .and. !empty(Mv_par02)
+			If TQN->TQN_DTABAS <Mv_Par01 .or. TQN->TQN_DTABAS > Mv_par02
+				DbSelectArea("TQN")
+				DbSkip()
+				Loop
+			EndIf
+
+		Else
+			DbSelectArea("TQN")
+			DbSkip()
+			Loop
+		EndIf
+
+		RecLock((cTRBB), .T.)
+		(cTRBB)->CODPOS := TQN->TQN_POSTO
+		(cTRBB)->LOJA   := TQN->TQN_LOJA
+		(cTRBB)->FROTA  := TQN->TQN_FROTA
+		(cTRBB)->HODOM  := TQN->TQN_HODOM
+		(cTRBB)->DTABAS := TQN->TQN_DTABAS
+		(cTRBB)->QUANT  := TQN->TQN_QUANT
+		(cTRBB)->VALTOT := TQN->TQN_VALTOT
+		(cTRBB)->VALUNI := TQN->TQN_VALUNI
+		(cTRBB)->NUABAS := TQN->TQN_NABAST
+
+		DbSelectArea("TQF")
+		DbSetOrder(01)
+		If DbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+			(cTRBB)->HOMEB := TQF->TQF_NREDUZ
+		EndIf
+		MsUnLock(cTRBB)
+
+		DbselectArea("TQN")
+		DbSkip()
+	End
+
+	DbSelectArea(cTRBB)
+	DbGoTop()
+	If Reccount() = 0
+		MsgInfo(STR0035,STR0032) //"Não existem dados para montar a tela de consulta."###"ATENÇÃO"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC845PA
+Reprocessa o browse de acordo com os parametros
+@author Soraia de Carvalho
+@since 10/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC845PA()
+
+	If !Pergunte("MNC845",.T.)
+		Return
+	EndIf
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNC845INI() }, STR0030,STR0031 )  //"Aguarde..."###"Processando Arquivo de Postos"
+	DbSelectArea(cTRBB)
+	DbGotop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC845VI
+Visualiza consulta
+@author Soraia de carvalho
+@since 10/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC845VI()
+
+	DbSelectArea("TQN")
+	DbSetOrder(04)
+	DbSeek(xFilial("TQN")+(cTRBB)->NUABAS)
+	NGCAD01("TQN",Recno(),1)
+
+	DbSelectArea(cTRBB)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC845IM
+Impressao de Evolucao de Precos
+@author Evaldo Cevinscki Jr.
+@since 19/04/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC845IM()
+
+	Local cString    := (cTRBB)
+	Local cDesc1     := STR0036 //"Abastecimentos Realizados no Posto Interno"
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTC845"
+
+	Private aReturn  := {STR0037, 1,STR0038, 1, 2, 1, "",1 } //"Zebrado"###"Administracao" //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "G"
+
+	DbSelectArea(cTRBB)
+	nRegTRBB := Recno()
+	DbGoTop()
+
+	If Reccount() = 0
+		nDel := Help(" ",1,"NGTDADIMP") //"Nao existem dados para imprimir..."###"ATENCAO"
+		Return .T.
+	EndIf
+
+	//+-----------------------------------------------------------------------+
+	//| Envia controle para a funcao SETPRINT                        	  	  |
+	//+-----------------------------------------------------------------------+
+	If Reccount() > 0
+		wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+		If nLastKey = 27
+			Set Filter To
+			Return
+		Endif
+		SetDefault(aReturn,cString)
+		RptStatus({|lEnd| C845Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+		DbSelectArea(cTRBB)
+		DbSetOrder(01)
+		DbGoto(nRegTRBB)
+	Else
+		MsgInfo(STR0039,STR0032) //"Nao exite dados para imprimir o relatório."###"ATENÇÃO"
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C845Imp
+Impressao do Relatorio
+@author Evaldo Cevinscki Jr.
+@since 19/04/06
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param titulo, , descricao
+@param tamanho, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function C845Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	Private li := 80
+	Private m_pag := 1
+	Private nTOTLIT   := 0000.00
+	Private nTOTVLABA := 000.00
+
+	//+------------------------------------------+
+	//| Verifica se deve comprimir ou nao        |
+	//+------------------------------------------+
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	Private Cabec1   := STR0040 //" Posto     Loja  Posto Interno                   Frota                   Hodometro    Dt.Abast.   Qtd.Litros           Val.Total    Val.Uni."
+	Private Cabec2   := " "
+	Private nomeprog := "MNTC845"
+
+	/*
+	1         2         3         4         5         6         7         8         9       100       110       120       130       140
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	_____________________________________________________________________________________________________________________________________________
+	Posto     Loja  Posto Interno                   Frota                   Hodometro    Dt.Abast.   Qtd.Litros           Val.Total    Val.Uni.
+	_____________________________________________________________________________________________________________________________________________
+
+
+	xxxxxxxx  xxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx     xxxxxxxxxxxxxxxx   999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	xxxxxxxx  xxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxx      999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+	999,999,999     99/99/99   99,999.999  99,999,999,999.999  99,999.999
+
+	Valor Total Posto Interno:   99,999.999  99,999,999,999.999
+	*/
+
+	//+-----------------------------------------------------+
+	//| Define o indice de leitura do arquivo de Bens       |
+	//+-----------------------------------------------------+
+	DbSelectArea(cTRBB)
+	DbSetOrder(01)
+	DbGoTop()
+	SetRegua(LastRec())
+	While !Eof()
+
+		cPOSLOJ := (cTRBB)->CODPOS+(cTRBB)->LOJA
+		cPOSTO  := (cTRBB)->CODPOS
+		nTOTLIT   := 0000.00
+		nTOTVLABA := 000.00
+
+		NGSOMALI(58)
+		@LI,001 Psay (cTRBB)->CODPOS Picture "@!"
+		@LI,011 Psay (cTRBB)->LOJA  Picture "@!"
+		@LI,017 Psay SubStr((cTRBB)->HOMEB,1,30)   Picture "@!"
+
+
+		While !Eof() .And. ((cTRBB)->CODPOS+(cTRBB)->LOJA) == cPOSLOJ
+
+			IncRegua()
+			@LI,049 Psay (cTRBB)->FROTA  Picture "@!"
+			@LI,070 Psay (cTRBB)->HODOM  Picture "@E 999,999,999"
+			@LI,086 Psay (cTRBB)->DTABAS Picture "99/99/99"
+			@LI,098 Psay (cTRBB)->QUANT  Picture "@E 999,999.99"
+			@LI,110 Psay (cTRBB)->VALTOT Picture "@E 99,999,999,999.999"
+			@LI,130 Psay (cTRBB)->VALUNI Picture '@E 99,999.'+Replicate('9',TAMSX3("TQN_VALUNI")[2])
+
+			nTOTLIT   += (cTRBB)->QUANT
+			nTOTVLABA += (cTRBB)->VALTOT
+
+			NGSOMALI(58)
+			DbSelectArea(cTRBB)
+			DbSkip()
+		End
+		If (cTRBB)->CODPOS <> cPOSTO
+			NGSOMALI(58)
+			@LI,069 Psay STR0041 //"Valor Total doPosto Interno:"
+			@LI,098 Psay nTOTLIT   Picture "@E 999,999.99"
+			@LI,110 Psay nTOTVLABA Picture "@E 99,999,999,999.999"
+			NGSOMALI(58)
+		EndIf
+		DbSelectArea(cTRBB)
+		Loop //DbSkip()
+	End
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT845LOJA
+Valida o parametro de Loja
+@author Elisangela Costa
+@since 06/01/06
+@version undefined
+@param nTip, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function  MNT845LOJA(nTip)
+
+	If nTip == 1
+		If Empty(MV_PAR03)
+			Return .T.
+		ElseIf !ExistCpo("TQF",MV_PAR03+MV_PAR04)
+			Return .F.
+		EndIf
+	Else
+		If MV_PAR05 == Replicate("Z",Len(MV_PAR05))
+			Return .T.
+		ElseIf MV_PAR05+MV_PAR06 <> Replicate("Z",Len(MV_PAR05))+Replicate("Z",Len(MV_PAR06))
+			If !ExistCpo("TQF",MV_PAR05+MV_PAR06)
+				Return .F.
+			Endif
+		EndIf
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT845DT
+Valida o parametro ate data
+@author Soraia de Carvalho
+@since 25/07/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT845DT()
+
+	If  MV_PAR02 < MV_PAR01
+		MsgStop(STR0044)  //"Data final não pode ser inferior à data inicial!"
+		Return .F.
+	EndIf
+
+Return .T.
+
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+@author Rafael Diogo Richter
+@since 02/02/2008
+@version undefined
+@type function
+/*/
+Static Function MenuDef()
+	Local aRotina :=	{{STR0002   ,"MNC845VI"  ,0,1,0},;  //"Visualizar"
+	{STR0003   ,"MNC845PA"  ,0,3,0},;  //"Parametros"
+	{STR0020   ,"MNTC845IM" ,0,3,0}}   //"Imprimir"
+
+	//+-----------------------------------------------------------------------------+
+	//|	Parametros do array aRotina:                             					|
+	//|	          		 1. Nome a aparecer no cabecalho                            |
+	//|	         		 2. Nome da Rotina associada                                |
+	//|	          		 3. Reservado                                               |
+	//|	         		 4. Tipo de Transa‡„o a ser efetuada:                       |
+	//|	          			1 - Pesquisa e Posiciona em um Banco de Dados           |
+	//|	            	       2 - Simplesmente Mostra os Campos                    |
+	//|	              		   3 - Inclui registros no Bancos de Dados              |
+	//|	             		   4 - Altera o registro corrente                       |
+	//|	              		   5 - Remove o registro corrente do Banco de Dados     |
+	//|	        		  5. Nivel de acesso                                        |
+	//|	        		  6. Habilita Menu Funcional                                |
+	//+-----------------------------------------------------------------------------+
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC845POS
+Valida o parametro de/ate posto
+@author Pedro Cardoso Furst
+@since 04/10/2011
+@version undefined
+@param nPar, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC845POS(nPar)
+
+	If nPar == 1 // validacao para MV_PAR03
+		If Empty(mv_par03)
+			Return .t.
+		ElseIf !ExistCpo('TQF',Mv_par03) // se nao existir na tabela
+			Return .F.
+		ElseIf TQF->TQF_TIPPOS <> '2'   // se nao for interno
+			ShowHelpDlg(STR0032,{STR0045},2,{STR0046},2)// Atenção, O posto informado não é um posto interno., Informar um posto do tipo Interno
+			Return .F.
+		EndIf
+	Else
+		If MV_PAR05 <> Replicate("Z",Len(MV_PAR05)) // validacao para MV_PAR05
+			DbSelectArea("TQF")
+			DbSetOrder(1)
+			If !Empty(MV_PAR06) .and. MV_PAR06 <> Replicate("Z",Len(MV_PAR06))
+				cChave := "MV_PAR05+MV_PAR06"
+			Else
+				cChave := "MV_PAR05"
+			Endif
+			If DbSeek(xFilial("TQF")+&(cChave))
+				If !("MV_PAR06" $ cChave)
+					MV_PAR06 := TQF->TQF_LOJA
+				Endif
+				If TQF->TQF_TIPPOS <> '2'   // se o posto nao for interno
+					ShowHelpDlg(STR0032,{STR0045},2,{STR0046},2)    // Atenção, O posto informado não é um posto interno., Informar um posto do tipo Interno
+					Return .F.
+				Endif
+			Else
+				If "MV_PAR06" $ cChave
+					If !DbSeek(xFilial("TQF")+MV_PAR05)
+						Help(" ",1,"REGNOIS")
+						Return .F.
+					Else
+						If TQF->TQF_TIPPOS <> '2'   // se o posto nao for interno
+							ShowHelpDlg(STR0032,{STR0045},2,{STR0046},2)    // Atenção, O posto informado não é um posto interno., Informar um posto do tipo Interno
+							Return .F.
+						Else
+							MV_PAR06 := TQF->TQF_LOJA
+						Endif
+					Endif
+				Else
+					Help(" ",1,"REGNOIS")
+					Return .F.
+				Endif
+			EndIf
+		Else
+			MV_PAR06 := Replicate("Z",Len(MV_PAR06))
+		EndIf
+
+	EndIf
+
+Return .T.

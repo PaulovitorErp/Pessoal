@@ -1,0 +1,732 @@
+#INCLUDE "mntc910.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTC910
+Impressão Gráfica de Movimento da O.S
+
+@author Inacio Luiz Kolling
+@since 16/03/98
+/*/
+//------------------------------------------------------------------------------
+Function MNTC910()
+
+	//Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oDlg, oMenu
+	Local nF,nTAbr,nTTer,nTCan
+	Local oTmpTemv
+
+	Private cCadastro := OemToAnsi(STR0001) //"Movimentacao das Ordens de Servico"
+	Private armes     := {STR0002,STR0003,STR0004,STR0005,STR0006,STR0007,STR0008,STR0009,STR0010,STR0011,STR0012,STR0013} //"JAN"###"FEV"###"MAR"###"ABR"###"MAI"###"JUN"###"JUL"###"AGO"###"SET"###"OUT"###"NOV"###"DEZ"
+	Private aVETINR   := {},aArOSF := {},nTotabe,nTotcon,nTotcan
+	Private lPrimeiro := .t.
+	Private nTotpen   := 0
+	Private aAnoAnt   := {}
+	Private aAbertas  := Array(12)
+	Private aConcluida:= Array(12)
+	Private aPendentes:= Array(12)
+	Private aCancelada:= Array(12)
+	Private aArOS     := Array(12,3)
+	Private cTRB      := GetNextAlias()
+
+	For nF := 1 To 12
+		aArOS[nF]      := {0,0,0,0,0} // {Abertas,Terminadas,pendente no mes,Canceladas,Terminadas <> mes}
+		aAbertas[nF]   := {}
+		aConcluida[nF] := {}
+		aPendentes[nF] := {}
+		aCancelada[nF] := {}
+	Next nF
+
+	//|--------------------------------------------------------------|
+	//| Variaveis utilizadas para parametros                         |
+	//| mv_par01     // Ano                                          |
+	//| mv_par02     // De Centro Custo                              |
+	//| mv_par03     // Ate Centro Custo                             |
+	//| mv_par04     // De Plano                                     |
+	//| mv_par05     // Ate Plano                                    |
+	//|--------------------------------------------------------------|
+
+	If Pergunte("MNT91G",.T.)
+
+		Store 0 To nTotabe,nTotcon,nTotcan,nF,nTAbr,nTTer,nTCan,nAberta,nCancelada,nConcluida,nPendente,nTermina,nAno
+
+		aRotina := {{STR0014 ,"AxPesqui" ,0 ,1},; //"Pesquisar"
+					{STR0015 ,"NGCAD01" ,0 ,2}}  //"Visualizar"
+
+		cCadastro := OemToAnsi(STR0001) //"Movimentacao das Ordens de Servico"
+
+		Processa({|| G020PRCO()})   // STJ & STS - HISTORICO
+		For nF := 1 To Len(aArOS)
+			If aArOS[nF,1] <> 0 .Or. aArOS[nF,2] <> 0 .Or. aArOS[nF,3] <> 0 .Or.;
+			aArOS[nF,4] <> 0 .Or. aArOS[nF,5] <> 0
+				Aadd(aArOSF,{aArOS[nF,1],aArOS[nF,2],aArOS[nF,3],aArOS[nF,4],aArOS[nF,5],nF})
+			Else
+				//DEVE SEMPRE APARECER O MES CORRENTE
+				If nF == Month(dDATABASE) .And. (MV_PAR01 == Year(dDATABASE))
+					Aadd(aArOSF,{aArOS[nF,1],aArOS[nF,2],aArOS[nF,3],aArOS[nF,4],aArOS[nF,5],nF})
+				EndIf
+			Endif
+		Next nF
+
+		If Len(aArOSF) = 0
+			MsgInfo(STR0027,STR0028)
+			Return
+		Endif
+
+		aDBF := {{"MES"     , "N", 02,0} ,;
+				{"MESEXN"  , "C", 10,0} ,;
+				{"ABERTAS" , "N", 07,0} ,;
+				{"CONCLUI" , "N", 07,0} ,;
+				{"PENDENT" , "N", 07,0} ,;
+				{"CANCEL"  , "N", 07,0}}
+
+		// Cria arquivos temporarios
+		oTmpTemv := FWTemporaryTable():New(cTRB, aDBF)
+		oTmpTemv:AddIndex("Ind01", {"MES"})
+		oTmpTemv:Create()
+
+		// Processo de calculo das pendencias
+		aArOSF := aSORT(aArOSF,,,{|x,y| x[6] < y[6]})
+		For nF := 1 To Len(aArOSF)
+			If lPrimeiro .AND. nAberta != 0
+				DbSelectArea(cTRB)
+				(cTRB)->(DbAppend())
+				(cTRB)->MES     := 00
+				(cTRB)->MESEXN  := STR0043+Str(MV_PAR01,4) //"ANT "
+				(cTRB)->ABERTAS := nAberta
+				(cTRB)->CONCLUI := nConcluida  + nTermina
+				(cTRB)->PENDENT := nPendente
+				(cTRB)->CANCEL  := nCancelada
+				lPrimeiro := .F.
+			Endif
+			
+			nTAbr   += aArOSF[nF,1]
+			nTTer   += aArOSF[nF,2]
+			nTCan   += aArOSF[nF,4]
+			nTotCon += aArOSF[nF,2]
+			nTotPen += aArOSF[nF,3]
+
+			MNTC910GTR( aArOSF[nF,6], aArOSF[nF,1], aArOSF[nF,2], aArOSF[nF,3], aArOSF[nF,4] )
+			
+		Next nF
+
+		(cTRB)->(DbAppend())
+		(cTRB)->MESEXN  := STR0024 // "TOTAL"
+		(cTRB)->MES     := 13
+		(cTRB)->ABERTAS := nTotabe + nAberta
+		(cTRB)->CONCLUI := nTotcon + nConcluida + nTermina
+		(cTRB)->PENDENT := nTotPen + nPendente
+		(cTRB)->CANCEL  := nTotcan + nCancelada
+
+		NGSETIFARQUI(cTRB)
+		Define DIALOG oDlg FROM 6,0 TO 34,100 TITLE STR0017 + Str(MV_PAR01,4) COLOR CLR_BLACK,CLR_WHITE
+		@ 04,020 Button STR0018 Of oDlg Size 40,09 Pixel Action (G020GRAFI()) //"&Grafico"
+		@ 04,060 Button oBtnImp Prompt STR0019 Of oDlg Size 40,09 Pixel //"&Imprimir"
+
+		oMenu := TMenu():New(0,0,0,0,.T.)
+		oMenu:Add(TMenuItem():New(oDlg,"Sintético",,,,{|| ImpRel(1)},,,,,,,,,.T.))
+		oMenu:Add(TMenuItem():New(oDlg,"Analítico",,,,{|| ImpRel(2)},,,,,,,,,.T.))
+		oBtnImp:SetPopupMenu(oMenu)
+
+		@ 1,0.3 ListBox oList Fields MESEXN                                   ,;
+		PADL(Transform(ABERTAS,"@E 9,999,999"),12) ,;
+		PADL(Transform(CONCLUI,"@E 9,999,999"),12) ,;
+		PADL(Transform(PENDENT,"@E 9,999,999"),12) ,;
+		PADL(Transform(CANCEL ,"@E 9,999,999"),12)  ;
+		FieldSizes 40,80,80,80,80                   ;
+		Size 392.5,195                              ;
+		HEADERS STR0020                            ,; //"Mes"
+		STR0021                            		   ,; //"Abertas"
+		STR0022                            		   ,; //"Concluidas"
+		STR0023                            		   ,; //"Pendentes"
+		STR0037                               		  //"Caceladas
+
+		ACTIVATE DIALOG oDlg CENTERED
+
+		//Deleta arquivos temporarios
+		oTmpTemv:Delete()
+
+	EndIf
+
+	//Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} G020PRCO
+Processa as O.S. atual e O.S. historico
+
+@author Inacio Luiz Kolling
+@since XX/06/1997
+/*/
+//------------------------------------------------------------------------------
+Static Function G020PRCO()
+	NGDBAREAORDE("STJ",7)
+	DbSeek(xFilial("STJ")+MV_PAR02,.T.)
+	nReg := LastRec()
+	ProcRegua(nReg)
+	While !Eof() .And. STJ->TJ_FILIAL == xFILIAL("STJ") .And.;
+	STJ->TJ_CCUSTO <= MV_PAR03
+		IncProc()
+		If STJ->TJ_TIPOOS = "B" .And. (STJ->TJ_PLANO >= MV_PAR04 .And. STJ->TJ_PLANO <= MV_PAR05)
+			MNTC910AR(STJ->TJ_DTMPINI,STJ->TJ_DTMRFIM,STJ->TJ_SITUACA,STJ->TJ_ORDEM,STJ->TJ_PLANO,STJ->TJ_CODBEM,STJ->TJ_SERVICO,STJ->TJ_SEQRELA,STJ->TJ_TERMINO)
+		Endif
+		NGDBSELSKIP("STJ")
+	End
+
+	NGDBAREAORDE("STS",4)
+	DbSeek(xFilial("STS")+MV_PAR02,.T.)
+	nReg := LastRec()
+	While !Eof() .And. STS->TS_FILIAL == xFILIAL("STS") .And.;
+	STS->TS_CCUSTO <= MV_PAR03
+		IncProc()
+		If STS->TS_TIPOOS = "B" .And. (STS->TS_PLANO >= MV_PAR04 .And. STS->TS_PLANO <= MV_PAR05)
+			MNTC910AR(STS->TS_DTMPINI,STS->TS_DTMRFIM,STS->TS_SITUACA,STS->TS_ORDEM,STS->TS_PLANO,STS->TS_CODBEM,STS->TS_SERVICO,STS->TS_SEQRELA,STS->TS_TERMINO)
+		Endif
+		NGDBSELSKIP("STS")
+	End
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} G020GRAFI
+Impressão Gráfica de Movimento da O.S
+
+@author Inacio Luiz Kolling
+@since XX/XX/XXXX
+/*/
+//------------------------------------------------------------------------------
+Static Function G020GRAFI()
+
+	Local nCount := 0
+	Local nX := 0
+	Local cTRBV := GetNextAlias()
+	Local oTmpTem2
+
+	ctilucen := "   "+STR0017+str(mv_par01,4) //"Movimento das Ordens de Servico no Ano de "
+
+	aDBF3 := {{"CODIGO" , "C", 10,0},;
+			  {"NOMECOD", "C", 30,0},;
+			  {"VALOR1" , "N", 06,0},;
+			  {"VALOR2" , "N", 06,0},;
+			  {"VALOR3" , "N", 06,0},;
+			  {"VALOR4" , "N", 06,0}}
+
+	// Cria arquivos temporarios
+	oTmpTem2 := FWTemporaryTable():New(cTRBV, aDBF3)
+	oTmpTem2:AddIndex("Ind01", {"CODIGO"})
+	oTmpTem2:Create()
+
+	//Preenche os meses faltantes para construção do gráfico
+	For nX := 1 to 12
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := StrZero(nX,2)
+		(cTRBV)->NOMECOD := MESEXTENSO(nCount)
+		(cTRBV)->VALOR1  := 0
+		(cTRBV)->VALOR2  := 0
+		(cTRBV)->VALOR3  := 0
+		(cTRBV)->VALOR4  := 0
+	Next nX
+
+	NGSETIFARQUI(cTRB)
+	While !Eof()
+
+		If (cTRB)->MES > 00 .And. (cTRB)->MES < 13
+			nCount ++
+			While (nCount <> (cTRB)->MES)
+				dbSelectArea(cTRBV)
+				dbSetOrder(1)
+				If dbSeek(StrZero(nCount,2))
+					RecLock((cTRBV),.F.)
+				Else
+					RecLock((cTRBV),.T.)
+				EndIf
+
+				(cTRBV)->CODIGO  := StrZero(nCount,2)
+				(cTRBV)->NOMECOD := MESEXTENSO(nCount)
+				(cTRBV)->VALOR1  := 0
+				(cTRBV)->VALOR2  := 0
+				(cTRBV)->VALOR3  := 0
+				(cTRBV)->VALOR4  := 0
+				(cTRBV)->(MsUnlock())
+				nCount ++
+
+			End
+
+			dbSelectArea(cTRBV)
+			dbSetOrder(1)
+			If dbSeek(StrZero(nCount,2))
+				RecLock((cTRBV),.F.)
+			Else
+				RecLock((cTRBV),.T.)
+			EndIf
+
+			(cTRBV)->CODIGO  := StrZero((cTRB)->MES,2)
+			(cTRBV)->NOMECOD := MESEXTENSO((cTRB)->MES)
+			(cTRBV)->VALOR1  := (cTRB)->ABERTAS
+			(cTRBV)->VALOR2  := (cTRB)->CONCLUI
+			(cTRBV)->VALOR3  := (cTRB)->PENDENT
+			(cTRBV)->VALOR4  := (cTRB)->CANCEL
+			(cTRBV)->(MsUnlock())
+
+		EndIf
+		NGDBSELSKIP(cTRB)
+	End
+
+	// 1§ linha titulo do grafico (janela)
+	// 2§ linha titulo da direita do grafico
+	// 3§ linha titulo superior do grafico
+	// 4§ linha titulo da direita do grafico
+	// 5§ linha titulo da inferior do grafico
+	// 6§ linha series do grafico
+	// 7§ leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8§ alias doa arquivo temporario com os dados /ou
+	// 9§ matriz com os dados
+
+	vCRIGTXT := NGGRAFICO(ctilucen," ",STR0025,ctilucen,STR0026,;
+	{STR0021,STR0022,STR0023,STR0037},"A",(cTRBV))
+
+	//Deleta arquivo temporario
+	oTmpTem2:Delete()
+	NGSETIFARQUI(cTRB)
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} G020PRCO
+Impressao do Movimento das O.S.
+
+@author Inacio Luiz Kolling
+@since XX/06/1997
+@param nType - Numérico - Define o tipo de impressão
+					  1 - Sintético
+					  2 - Analítico
+/*/
+//------------------------------------------------------------------------------
+Static Function ImpRel(nType)
+
+	Local cString := (cTRB)
+	Local cDesc1  := STR0017+str(mv_par01,4) //"Movimento das Ordens de Servico no Ano de "
+	Local cDesc2  := ""
+	Local cDesc3  := ""
+	Local wnrel   := "MNTC910"
+
+	Private aReturn  := { STR0029, 1,STR0030, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "P"
+	Private cPerg    := "MNT91G"
+
+	//---------------------------------------------------
+	//  Envia controle para a funcao SETPRINT
+	//---------------------------------------------------
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+	If nType == 1
+		RptStatus({|lEnd| Sintetico(@lEnd,wnRel,titulo,tamanho)},titulo)
+	Else
+		Tamanho  := "M"
+		RptStatus({|lEnd| Analitico(@lEnd,wnRel,titulo,tamanho)},titulo)
+	EndIf
+
+	//Seta o ListBox para o primieiro registro, para recarregar os dados.
+	oList:nRowPos := 1
+
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Sintetico
+Chamada do Relat¢rio Sintetico
+
+@author Inacio Luiz Kolling
+@since 26/06/1997
+@param  lEND	- Lógico   - Verfica se chegou ao fim
+		WNREL	- Caracter - Configurações estabelecidas para o relatório.
+		TITULO	- Caracter - Titulo do relatório
+		TAMANHO	- Numérico - Tamanho da impressão
+/*/
+//------------------------------------------------------------------------------
+Static Function Sintetico(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	//Contadores de linha e pagina
+	Private li       := 80
+	Private Cabec1   := STR0032 //"Quantidade de ordens de Servico"
+	Private Cabec2   := STR0033 //"MES         ABERTAS   CONCLUIDAS   PENDENTES   CANCELADAS"
+	Private nomeprog := "MNTC910"
+	m_pag := 1
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	************************************************************************************************************************************
+	*<empresa>                                                                                                        Folha..: xxxxx   *
+	*SIGA /<nome .04                                 <     titulo do relatorio    >                                   DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                Emissao: dd/mm/aa*
+	************************************************************************************************************************************
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	************************************************************************************************************************************
+	MES         ABERTAS   CONCLUIDAS   PENDENTES   CANCELADAS
+	************************************************************************************************************************************
+	XXXXXXXXX    999999       999999      999999       999999
+	XXXXXXXXX    999999       999999      999999       999999
+	999999
+	TOTAL        999999       999999      999999       999999
+
+	*/
+
+	NGSETIFARQUI(cTRB)
+	SetRegua(LastRec())
+	While !(cTRB)->(Eof())
+		IncRegua()
+		NGSOMALI(58)
+		If (cTRB)->MES == 00
+			@li,000 Psay STR0042+Str(MV_PAR01,4) //"Saldo anterior à "
+			@li,038 Psay (cTRB)->PENDENT Picture '@E 999999'
+		ElseIf (cTRB)->MES == 13
+			Exit
+		Else
+			@li,000 Psay MESEXTENSO((cTRB)->MES)
+			@li,013 Psay (cTRB)->ABERTAS Picture '@E 999999'
+			@li,026 Psay (cTRB)->CONCLUI Picture '@E 999999'
+			@li,038 Psay (cTRB)->PENDENT Picture '@E 999999'
+			@li,051 Psay (cTRB)->CANCEL  Picture '@E 999999'
+		Endif
+		(cTRB)->(DbSkip())
+	End
+	NGSOMALI(58)
+	NGSOMALI(58)
+	@li,000 Psay STR0035 //"TOTAL"
+	@li,013 Psay nTotabe Picture '999999'
+	@li,026 Psay nTotcon Picture '999999'
+	@li,038 Psay nTotpen Picture '999999'
+	@li,051 Psay nTotcan Picture '@E 999999'
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+	NGSETIFARQUI(cTRB)
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Analitico
+Chamada do Relatório Analitico
+
+@author Vitor Emanuel Batista
+@since 31/05/2010
+@param  lEND	- Lógico   - Verfica se chegou ao fim
+		WNREL	- Caracter - Configurações estabelecidas para o relatório.
+		TITULO	- Caracter - Titulo do relatório
+		TAMANHO	- Numérico - Tamanho da impressão
+/*/
+//------------------------------------------------------------------------------
+Static Function Analitico(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local nX, nY
+
+	//Contadores de linha e pagina
+	Private li       := 80
+	Private Cabec1   := STR0044 //"    Data       O.S     Plano  Código Bem       Nome                                Serviço  Nome                          Seq."
+	Private Cabec2   := ""
+	Private nomeprog := "MNTC910"
+	m_pag := 1
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	************************************************************************************************************************************
+	*<empresa>                                                                                                        Folha..: xxxxx   *
+	*SIGA /<nome .04                                 <     titulo do relatorio    >                                   DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                Emissao: dd/mm/aa*
+	************************************************************************************************************************************
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	************************************************************************************************************************************
+	Data       O.S     Plano  Código Bem       Nome                                Serviço  Nome                          Seq.
+	************************************************************************************************************************************
+	ANO ANTERIOR - TOTAL: XXX
+	--------------------------
+	PENDENTES
+	-----------
+	XX/XX/XXXX XXXXXX  XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXX
+
+	JANEIRO
+	-------------
+	ABERTAS - TOTAL: XXX
+	------------------------
+	XX/XX/XXXX XXXXXX  XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  XXX
+	XX/XX/XXXX XXXXXX  XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  XXX
+
+	CONCLUIDAS
+	XX/XX/XXXX XXXXXX  XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  XXX
+
+
+	*/
+
+	Somalinha()
+	SetRegua(13)
+	If Len(aAnoAnt) > 0
+		aSort(aAnoAnt,1,,{|x,y| y[1] > x[1]})
+		@li,000 Psay STR0045 + " - " + STR0024 + cValToChar(Len(aAnoAnt))//"ANO ANTERIOR"
+		Somalinha()
+		@li,000 Psay Replicate('-',26)
+		Somalinha()
+		For nX := 1 To Len(aAnoAnt)
+			If lEnd
+				Exit
+			EndIf
+			@li,004 Psay aAnoAnt[nX][1]
+			@li,015 Psay aAnoAnt[nX][2]
+			@li,023 Psay aAnoAnt[nX][3]
+			@li,030 Psay aAnoAnt[nX][4]
+			@li,047 Psay Substr(NGSEEK("ST9",aAnoAnt[nX][4],1,"ST9->T9_NOME"),1,35)
+			@li,083 Psay aAnoAnt[nX][5]
+			@li,092 Psay Substr(NGSEEK("ST4",aAnoAnt[nX][5],1,"ST4->T4_NOME"),1,30)
+			@li,123 Psay PADL(AllTrim(aAnoAnt[nX][6]),3," ")
+			Somalinha()
+		Next nX
+		Somalinha()
+	EndIf
+	IncRegua()
+
+	For nX := 1 To 12
+		IncRegua()
+		If lEnd
+			Exit
+		EndIf
+		If Len(aAbertas[nX])+Len(aConcluida[nX])+Len(aPendentes[nX])+Len(aCancelada[nX]) > 0
+			@li,000 Psay Upper(MESEXTENSO(nX))
+			Somalinha()
+			@li,000 Psay Replicate('-',13)
+			Somalinha()
+			If Len(aAbertas[nX]) > 0
+				aSort(aAbertas[nX],1,,{|x,y| y[1] > x[1]})
+				@li,002 Psay Upper(STR0021) + " - " + STR0024 + cValToChar(Len(aAbertas[nX])) //"ABERTAS"
+				Somalinha()
+				@li,002 Psay Replicate('-',24)
+				Somalinha()
+				For nY := 1 To Len(aAbertas[nX])
+					@li,004 Psay aAbertas[nX][nY][1] //Data
+					@li,015 Psay aAbertas[nX][nY][2] //O.S
+					@li,023 Psay aAbertas[nX][nY][3] //Plano
+					@li,030 Psay aAbertas[nX][nY][4] //Codigo Bem
+					@li,047 Psay Substr(NGSEEK("ST9",aAbertas[nX][nY][4],1,"ST9->T9_NOME"),1,35) //Nome Bem
+					@li,083 Psay aAbertas[nX][nY][5] //Servico
+					@li,092 Psay Substr(NGSEEK("ST4",aAbertas[nX][nY][5],1,"ST4->T4_NOME"),1,30) //Nome servico
+					@li,123 Psay PADL(AllTrim(aAbertas[nX][nY][6]),3," ") //Sequencia
+					Somalinha()
+				Next nY
+				Somalinha()
+			EndIf
+
+			If Len(aConcluida[nX]) > 0
+				aSort(aConcluida[nX],1,,{|x,y| y[1] > x[1]})
+				@li,002 Psay Upper(STR0022) + " - " + STR0024 + cValToChar(Len(aConcluida[nX]))  //"CONCLUÍDAS"
+				Somalinha()
+				@li,002 Psay Replicate('-',24)
+				Somalinha()
+				For nY := 1 To Len(aConcluida[nX])
+					@li,004 Psay aConcluida[nX][nY][1] //Data
+					@li,015 Psay aConcluida[nX][nY][2] //O.S
+					@li,023 Psay aConcluida[nX][nY][3] //Plano
+					@li,030 Psay aConcluida[nX][nY][4] //Codigo Bem
+					@li,047 Psay Substr(NGSEEK("ST9",aConcluida[nX][nY][4],1,"ST9->T9_NOME"),1,35) //Nome Bem
+					@li,083 Psay aConcluida[nX][nY][5] //Servico
+					@li,092 Psay Substr(NGSEEK("ST4",aConcluida[nX][nY][5],1,"ST4->T4_NOME"),1,30) //Nome servico
+					@li,123 Psay PADL(AllTrim(aConcluida[nX][nY][6]),3," ") //Sequencia
+					Somalinha()
+				Next nY
+				Somalinha()
+			EndIf
+
+			If Len(aPendentes[nX]) > 0
+				aSort(aPendentes[nX],1,,{|x,y| y[1] > x[1]})
+				@li,002 Psay Upper(STR0023) + " - " + STR0024 + cValToChar(Len(aPendentes[nX])) //"PENDENTES"
+				Somalinha()
+				@li,002 Psay Replicate('-',24)
+				Somalinha()
+				For nY := 1 To Len(aPendentes[nX])
+					@li,004 Psay aPendentes[nX][nY][1] //Data
+					@li,015 Psay aPendentes[nX][nY][2] //O.S
+					@li,023 Psay aPendentes[nX][nY][3] //Plano
+					@li,030 Psay aPendentes[nX][nY][4] //Codigo Bem
+					@li,047 Psay Substr(NGSEEK("ST9",aPendentes[nX][nY][4],1,"ST9->T9_NOME"),1,35) //Nome Bem
+					@li,083 Psay aPendentes[nX][nY][5] //Servico
+					@li,092 Psay Substr(NGSEEK("ST4",aPendentes[nX][nY][5],1,"ST4->T4_NOME"),1,30) //Nome servico
+					@li,123 Psay PADL(AllTrim(aPendentes[nX][nY][6]),3," ") //Sequencia
+					Somalinha()
+				Next nY
+				Somalinha()
+			EndIf
+
+			If Len(aCancelada[nX]) > 0
+				aSort(aCancelada[nX],1,,{|x,y| y[1] > x[1]})
+				@li,002 Psay Upper(STR0037) + " - " + STR0024 + cValToChar(Len(aCancelada[nX])) //"CANCELADAS"
+				Somalinha()
+				@li,002 Psay Replicate('-',24)
+				Somalinha()
+				For nY := 1 To Len(aCancelada[nX])
+					@li,004 Psay aCancelada[nX][nY][1] //Data
+					@li,015 Psay aCancelada[nX][nY][2] //O.S
+					@li,023 Psay aCancelada[nX][nY][3] //Plano
+					@li,030 Psay aCancelada[nX][nY][4] //Codigo Bem
+					@li,047 Psay Substr(NGSEEK("ST9",aCancelada[nX][nY][4],1,"ST9->T9_NOME"),1,35) //Nome Bem
+					@li,083 Psay aCancelada[nX][nY][5] //Servico
+					@li,092 Psay Substr(NGSEEK("ST4",aCancelada[nX][nY][5],1,"ST4->T4_NOME"),1,30) //Nome servico
+					@li,123 Psay PADL(AllTrim(aCancelada[nX][nY][6]),3," ") //Sequencia
+					Somalinha()
+				Next nY
+				Somalinha()
+			EndIf
+		EndIf
+	Next nX
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+	NGSETIFARQUI(cTRB)
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Somalinha
+Soma Linha para impressãod o relatório.
+
+@author NG Informática
+@since XX/XX/XXXX
+/*/
+//------------------------------------------------------------------------------
+Static Function Somalinha()
+	Local nVerif := If(nTIPO==15,75,58)
+	Li++
+	If Li > nVerif .And. Li <> 81
+		Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo)
+		Somalinha()
+	EndIf
+	If Li == 81
+		Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo)
+	EndIf
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTC910AR
+Verifica as O.S.'s e soma a quantidade de cada.
+* Abertas, Concluidas, Canceladas e Pendentes *
+
+@author Inacio Luiz Kolling
+@since 13/07/2009
+@param  dDTMPI	 - Data     - Data real prevista inicio O.S.
+		dDTMFI	 - Date     - Data real Fim O.S.
+		cSITUA	 - Caracter - Situação da O.S.
+		cOrdem	 - Caracter - O.S.
+		cPlano	 - Caracter - Plano da O.S.
+		cCodBem	 - Caracter - Código do Bem
+		cServico - Caracter - Serviço da O.S.
+		cSeqRela - Caracter - Sequencia.
+		cTerm	 - Caracter - Indica se a O.S. está finalizada.
+/*/
+//------------------------------------------------------------------------------
+Static Function MNTC910AR(dDTMPI,dDTMFI,cSITUA,cOrdem,cPlano,cCodBem,cServico,cSeqRela,cTerm)
+
+	Local nF := 0
+
+	If Year(dDTMPI) = mv_par01
+		aArOS[Month(dDTMPI),1] ++  // Aberta
+		aAdd(aAbertas[Month(dDTMPI)],{dDTMPI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+		nTotAbe++
+		If Month(dDTMPI) <= IIF(MV_PAR01==Year(dDTMPI),12,Month(dDATABASE))
+			If cSITUA = "C"
+				aArOS[Month(dDTMPI),4] ++ // Cancelada
+				aAdd(aCancelada[Month(dDTMPI)],{dDTMPI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+				nTotCan++
+				Return
+			Else
+				If !Empty(dDTMFI)      // Terminada em outro mes e/ou ano
+					If Year(dDTMFI) > Year(dDTMPI)
+						For nF := Month(dDTMPI) To 12
+							aArOS[nF,5] += 1
+						Next nF
+					ElseIf Year(dDTMFI) = Year(dDTMPI)
+						For nF := Month(dDTMPI) To Month(dDTMFI)-1
+							aArOS[nF,5] += 1
+						Next nF
+					Endif
+				Else
+					aArOS[Month(dDTMPI),3] += 1 //Pendetes
+					aAdd(aPendentes[Month(dDTMPI)],{dDTMPI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+				Endif
+			Endif
+
+			If Year(dDTMFI) = mv_par01
+				aArOS[Month(dDTMFI),2] ++ // Terminada no ano
+				aAdd(aConcluida[Month(dDTMFI)],{dDTMPI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+			Endif
+		Endif
+	ElseIf Year(dDTMPI) < MV_PAR01 .And. (Year(dDTMFI) == MV_PAR01 .OR. cSITUA == "C" .OR. Empty(dDTMFI) .Or. cTerm == "S")
+		nAberta ++
+		aAdd(aAnoAnt,{dDTMPI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+        If cSITUA == "C"
+            nCancelada ++
+            Return
+        Else
+			If !Empty(dDTMFI)
+				aAdd(aConcluida[Month(dDTMFI)],{dDTMFI,cOrdem,cPlano,cCodBem,cServico,cSeqRela})
+				nConcluida++
+			Else
+				nPendente++
+			EndIf
+		EndIf
+
+        If Year(dDTMFI) == (nAno - 1)
+            nTermina ++
+        EndIf
+
+	Endif
+
+Return
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTC910GTR
+Grava no arquivo temporario
+
+@author Inacio Luiz Kolling
+@since 13/07/2009
+@param  nMes	 - Numérico - Mês da impressão
+		nAber	 - Numérico - Quantidade de O.S Abertas.
+		nTerm	 - Numérico - Quantidade de O.S Terminadas.
+		nCanc	 - Numérico - Quantidade de O.S Canceladas.
+/*/
+//------------------------------------------------------------------------------
+Function MNTC910GTR(nMes,nAber,nTerm,nPend,nCanc)
+	DbSelectArea(cTRB)
+	If !DbSeek(nMes)
+		(cTRB)->(DbAppend())
+		(cTRB)->MES    := nMes
+		(cTRB)->MESEXN := Upper(MESEXTENSO(nMes)) //armes[nMes]
+	Endif
+	(cTRB)->ABERTAS += nAber
+	(cTRB)->CONCLUI += nTerm
+	(cTRB)->PENDENT += nPend
+	(cTRB)->CANCEL  += nCanc
+Return

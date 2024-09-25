@@ -1,0 +1,219 @@
+#Include "MDTA155.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA155B
+Direciona para a montagem do browse de Disgnósticos Médicos
+
+@return Nil
+
+@sample MDTA155B()
+
+@author Marcio Luiz da Costa; Refeito por: Jackson Machado
+@since 21/03/2000; Refeito em: 28/01/2015
+/*/
+//---------------------------------------------------------------------
+Function MDTA155B()
+
+	Local bFiltraBrw
+	Local nIndice 		:= TM0->(indexord())
+	Local aNGBEGINPRM 	:= NGBEGINPRM(,"MDTA155")
+	Local OldbNGGRAVA	:= If( Type("bNGGrava") == "B", bNGGrava, Nil)
+	Local lRet          := .T.
+	Local cFunCall      := FunName()
+
+	//Utilização em X3_RELACAO
+	Private nSizeCli   := If( ( TAMSX3( "A1_COD" )[ 1 ] ) < 1 , 6 , ( TAMSX3( "A1_COD" )[ 1 ] ) )
+	Private nSizeLoj   := If( ( TAMSX3( "A1_LOJA" )[ 1 ] ) < 1 , 2 , ( TAMSX3( "A1_LOJA" )[ 1 ] ) )
+	Private nSizeSI3   := If( ( TAMSX3( "I3_CUSTO" )[ 1 ] ) < 1 , 9 , ( TAMSX3( "I3_CUSTO" )[ 1 ] ) )
+	Private cCadastro  := STR0010//"Diagnostico Medico"
+	Private aCHKDEL	   := {}
+	Private bNGGRAVA
+	Private aRotina	   := MenuDef( .F. )
+	Private lSigaMdtPS := SuperGetMv( "MV_MDTPS" , .F. , "N" ) == "S"
+	Private aNgButton  := {}
+	Private aSMenuOld  := aClone( aSMenu )
+	Private aNgButOld  := If( Type( "aNgButton" ) == "A" , aClone( aNgButton ) , Nil )
+	Private cCliMdtPs  := ""
+
+	If !(IsInCallStack( "MDTA110" ) .Or. IsInCallStack( "MDTA005" ) .Or. IsInCallStack( "MDTA155" )) .And. !IsBlind()
+		ShowHelpDlg( STR0119,;           //"ATENÇÃO"
+					{ STR0122 }, 1,;     //"Execução não permitida."
+					{ STR0123, "" }, 1 ) //"Rotina somente pode ser executada pelo menu de Ocorrências Ficha (MDTA110), Ficha Médica (MDTA005) ou Diagnósticos (MDTA055)."
+		Return .F.
+	EndIf
+
+	SetFunName("MDTA155A")
+
+	If IsInCallStack( "MDTA005" ) .Or. IsInCallStack( "MDTA110" )
+
+		If FindFunction("MDTRESTRI") .And. !MDTRESTRI("MDTA155")
+			lRet := .F.
+		Endif
+
+		//Verifica se o funcionario esta demitido
+		If lRet .And. !SitFunFicha(TM0->TM0_NUMFIC,.F.,.T.,.T.)
+			lRet := .F.
+		EndIf
+
+		If lRet
+			dbSelectarea("TM0")
+			dbSetorder(01)
+			bNGGRAVA  := {}
+
+			fBrowseDiag()
+
+			If lSigaMdtPS
+				bNGGRAVA  := {|| CHK2TA005()}
+				cCliMdtPs := cCliMdtSv
+			Else
+				bNGGRAVA  := {|| CHKTA005() }
+			EndIf
+
+			dbSelectarea("TM0")
+			dbSetorder(nIndice)
+			NGRETURNPRM(aNGBEGINPRM)
+			If Type("OldbNGGRAVA") == "B"
+				bNGGRAVA := OldbNGGRAVA
+			EndIf
+		EndIf
+
+	ElseIf IsInCallStack( "MDTA155" )
+		fBrowseDiag()
+	EndIf
+
+	SetFunName(cFunCall)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBrowseDiag
+Avaliar condições para montagem do Browse
+
+@sample fBrowseDiag()
+@author Marcio Luiz da Costa; Refeito por: Jackson Machado
+@since 21/03/2000; Refeito em: 28/01/2015
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fBrowseDiag()
+
+	If IsInCallStack( "MDTA005" )
+		lFicha := .F.
+		cPrograma := "MDTA005"
+	EndIf
+
+	aAdd( aNgButton , { "BMPCONS" , { | | MdtPesqCid() } , STR0036 , STR0037 } )//"Pesquisar C.I.D."###"C.I.D."
+
+	If Len( aSMenu ) <= 0
+		aSMenu  :=	{	{ STR0011 , "NG155PREP()" 													  , ""} , ;//"Exames do Funcionario"
+						{ STR0012 , "MDTR407(M->TMT_NUMFIC,M->TMT_DTCONS,M->TMT_HRCONS,M->TMT_CODUSU)", ""} , ;//"Receita Medica"
+						{ STR0024 , "MDT160FWEX()" 													  , ""} , ;//"Encaminhamento de Exames"
+						{ STR0014 , "MDTAHIS()" 													  , ""} , ;//"Historico corrido do Paciente"
+						{ STR0038 , "NG160ATES()" 													  , ""} }  //"Atestados Medicos"
+	EndIf
+
+	//Não deverá ser apresentado se entrar pelo MDTA110
+	If !IsInCallStack( "MDTA110" )
+		aAdd( aSMenu ,{ STR0013 , "MDTA110P('MDTA155')" , ""} )//"Ocorrencias da Ficha Medica"
+	EndIf
+
+	// Função que define o Clique da direita na barra de aButton da EnchoiceBar
+	// Adiciona no array do parametro as funções do aSMenu
+	If FindFunction( "NGClickBar" )
+		//Não define visualização da Enchoice no padrao das versoes anteriores a P11
+		If SuperGetMv( "MV_ENCHOLD" , .F. , "1" ) == "2"
+			NGClickBar( @aNgButton )
+		EndIf
+	EndIf
+
+	//Avalia condições para Montagem do Browse
+
+	If !lSigaMdtPS
+		MDT155BRW()
+	ElseIf IsInCallStack( "MDTA005" ) .Or. IsInCallStack( "MDTA110" )
+		Old_bFil := bFiltraBrw
+		MDT155BRW()
+		bFiltraBrw := Old_bFil
+		dbSelectArea( "TM0" )
+		Eval( bFiltraBrw )
+	Else
+		dbSelectArea("SA1")
+		dbSetOrder(1)
+		mBrowse( 6 , 1 , 22 , 75 , "SA1" )
+	EndIf
+
+	aSMenu   := aClone( aSMenuOld )
+	If ValType( aNgButOld ) == "A"
+		aNgButton := aClone( aNgButOld )
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample
+MenuDef()
+
+@author Jackson Machado
+@since 28/01/2015
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local lSigaMdtPS  := SuperGetMv( "MV_MDTPS" , .F. , "N" ) == "S"
+	Local lAudit	  := SuperGetMv( "MV_NG2AUDI", .F., "2" ) == "1"
+	Local lPyme		  := If( Type( "__lPyme" ) <> "U" , __lPyme , .F. )
+	Local aRotina
+
+	Default lMdtPs	:= lSigaMdtPS
+	Default nRotina	:= 1
+
+	If lSigaMdtPS
+		aRotina := {	{ STR0004, "AxPesqui" , 0, 1 } , ; //"Pesquisar"
+						{ STR0005, "NGCAD01"  , 0, 2 } , ; //"Visualizar"
+						{ STR0082, "MDT155BRW", 0, 4 } }   //"Diagnósticos"
+	Else
+		aRotina := {	{ STR0004, "AxPesqui" , 0, 1    }, ; //"Pesquisar"
+						{ STR0005, "NGCAD01"  , 0, 2    }, ; //"Visualizar"
+				        { STR0006, "NG155CHKD", 0, 3    }, ; //"Incluir"
+				        { STR0007, "NG155CHKD", 0, 4    }, ; //"Alterar"
+				        { STR0008, "NG155CHKD", 0, 5, 3 }, ; //"Excluir"
+				        { STR0009, "NG155MED" , 0, 6, 3 } }  //"Medicamentos"
+
+		If !lPyme
+			aAdd( aRotina, { STR0035, "MsDocument" , 0 , 4 } )//"Conhecimento"
+		EndIf
+		If !lSigaMdtPs .And. lAudit
+			aAdd( aRotina , {  STR0103,"MDTA991('TMT')" , 0 , 3 } )//"Hist. Exc."
+		EndIf
+	EndIf
+
+	If ExistBlock( "Mdta1555" )
+		aOldRot := aClone( aRotina )
+		aRotina := ExecBlock( "Mdta1555", , , aRotina )
+
+		If ValType( aRotina ) <> "A"
+			MsgStop( "Ponto de entrada com retorno inválido", "Atenção" )
+			aRotina := aClone( aOldRot )
+		EndIf
+	EndIf
+
+Return aRotina

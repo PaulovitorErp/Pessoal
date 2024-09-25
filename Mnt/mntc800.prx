@@ -1,0 +1,302 @@
+#INCLUDE "mntc800.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC800
+Consulta gerencial de Custo de Plano de Manutenção
+@author Inacio Luiz Kolling
+@since 20/01/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC800()
+
+	//---------------------------------------------------------------------
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 					  |
+	//---------------------------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+
+	Local aAlias:={},cSavRegua
+
+	Private aRotina := MenuDef()
+	Private nCusto := 0.00
+	Private nQTD1  := 0.00
+	Private cPROD  := Space(30)
+	Private cDesc  := Space(13)
+
+	lCORRET   := .F.
+	cCadastro := OemToAnsi(STR0003) //"Custo do Plano Manutencao"
+
+	DbSelectArea("STI")
+	Set Filter To STI->TI_FILIAL == xFilial("STI") .And. ;
+	STI->TI_PLANO  != "000000"        .And. ;
+	STI->TI_PLANO  != "000001"
+
+	DbSelectArea("STI")
+	DbSeek(xFilial("STI"))
+	mBrowse(6,1,22,75,"STI")
+
+	//---------------------------------------------------------------------
+	//| Devolve a condicao original do arquivo principal             	  |
+	//---------------------------------------------------------------------
+	DbSelectArea("STI")
+	Set Filter To
+
+	DbSelectArea("STI")
+	DbSetOrder(01)
+	DbSeek("STI")
+
+	//---------------------------------------------------------------------
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK) 					  |
+	//---------------------------------------------------------------------
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC800CON
+Processa o Custo do Plano
+@author Inacio Luiz Kolling
+@since  20/01/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC800CON()
+
+	Local OldRot := aCLONE(aROTINA)
+	Local oTempTable	//Objeto Tabela Temporária
+	Local aPesq := {}
+
+	Private cCadastro 	:= OemToAnsi(STR0005) //"Custo do Plano Manutencao"
+	Private nTempo    	:= 0
+	Private nSem      	:= 0
+	Private nFol      	:= 0.00
+	Private cPROD     	:= Space(30)
+	Private cDesc     	:= Space(13)
+	Private cAliasTRB	:= GetNextAlias()   //Alias Tabela Temporária
+
+	aRotina := {}
+
+	aDBF    := {{"ORDEM"   , "C", 06,0},;
+				{"CODBEM"  , "C", 16,0},;
+				{"NOMBEM"  , "C", 20,0},;
+				{"PREVIST" , "N", 12,2},;
+				{"REALIZA" , "N", 12,2}}
+
+	//Instancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cAliasTRB, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"ORDEM"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aFIELD := {{STR0026, "ORDEM"  , "C", 06, 0, "@!"},;
+			   {STR0027, "CODBEM" , "C", 16, 0, "@!"},;
+			   {STR0028, "NOMBEM" , "C", 20, 0, "@!"},;
+			   {STR0012, "PREVIST", "N", 09, 0, "@E 999,999,999.99"},;
+			   {STR0013, "REALIZA", "N", 09, 0, "@E 999,999,999.99"}}
+
+	Processa({|| PROCOSPLANO()})
+
+	DbSelectArea(cAliasTRB)
+	DbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , {STR0026,{{"","C" , 255 , 0 ,"","@!"}} } ) // Indices de pesquisa
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cAliasTRB)
+	oBrowse:SetFields(aFIELD)
+	oBrowse:SetProfileID( '2' )
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	oTempTable:Delete()//Deleta Tabela Temporária
+
+	DbSelectArea("STI")
+	aRotina := aCLONE(OldRot)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PROCOSPLANO
+Processa o Custo do Plano de Manutenção (O.S.)
+@author Inacio Luiz Kolling
+@since 20/01/99
+@version undefined
+@param VPLANO
+@type function
+/*/
+//---------------------------------------------------------------------
+Function PROCOSPLANO(VPLANO)
+
+	DbSelectArea("STL")
+	DbSetOrder(01)
+
+	DbSelectArea("STT")
+	DbSetOrder(01)
+
+	DbSelectArea("STJ")
+	DbSetOrder(03)
+	DbSeek(xFilial("STJ")+STI->TI_PLANO,.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STS")
+	DbSetOrder(03)
+	DbSeek(xFilial("STS")+STI->TI_PLANO,.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	nCUSTOINS := 0.00
+	DbSelectArea("STJ")
+	ProcRegua(nReg)
+	While !Eof() .And. STJ->TJ_FILIAL == xFILIAL("STJ") .And. ;
+	STJ->TJ_PLANO  == STI->TI_PLANO
+
+		IncProc()
+		If STJ->TJ_TIPOOS <> "B"
+			DbSelectArea("STJ")
+			DbSkip()
+			Loop
+		EndIf
+
+		nPre := 0.00
+		nRea := 0.00
+		DbSelectArea("STL")
+		DbSeek(xFilial("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+		While !Eof() .And. STL->TL_FILIAL == xFILIAL("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM  .And. ;
+		STL->TL_PLANO == STJ->TJ_PLANO
+
+			If Alltrim(STL->TL_SEQRELA) == "0"
+
+				nCUSTOINS := NGCUSTIN(STL->TL_SEQRELA,STL->TL_TIPOREG,STL->TL_CODIGO,STL->TL_QUANTID,;
+				STL->TL_UNIDADE,STL->TL_DTINICI,STL->TL_HOINICI,STL->TL_DTFIM,;
+				STL->TL_HOFIM,If(NGCADICBASE('TL_PCTHREX','A','STL',.F.), STL->TL_PCTHREX, STL->TL_HREXTRA),;
+				2,STJ->TJ_SERVICO,STL->TL_CUSTO)
+
+				nPRE := nPRE + nCUSTOINS
+
+			Else
+				nCUSTOINS := NGCUSTIN(STL->TL_SEQRELA,STL->TL_TIPOREG,STL->TL_CODIGO,STL->TL_QUANTID,;
+				STL->TL_UNIDADE,STL->TL_DTINICI,STL->TL_HOINICI,STL->TL_DTFIM,;
+				STL->TL_HOFIM,If(NGCADICBASE('TL_PCTHREX','A','STL',.F.), STL->TL_PCTHREX, STL->TL_HREXTRA),;
+				1,STJ->TJ_SERVICO,STL->TL_CUSTO)
+
+				nREA := nREA + nCUSTOINS
+
+			EndIf
+			DbSelectArea("STL")
+			DbSkip()
+		End
+		DbSelectArea(cAliasTRB)
+		If !DBSeek(STJ->TJ_ORDEM)
+			DbAppend()
+			(cAliasTRB)->ORDEM  := STJ->TJ_ORDEM
+			(cAliasTRB)->CODBEM := STJ->TJ_CODBEM
+			(cAliasTRB)->NOMBEM := NGSEEK('ST9',STJ->TJ_CODBEM,1,'T9_NOME')
+		EndIf
+		(cAliasTRB)->PREVIST   := (cAliasTRB)->PREVIST + nPRE
+		(cAliasTRB)->REALIZA   := (cAliasTRB)->REALIZA + nREA
+
+		DbSelectArea("STJ")
+		DbSkip()
+	End
+
+	// O.S Servi‡o Historico (STS)
+	DbSelectArea("STS")
+	While !Eof() .And. STS->TS_FILIAL == xFILIAL("STS") .And. ;
+	STS->TS_PLANO  == STI->TI_PLANO
+
+		IncProc()
+		If STS->TS_TIPOOS <> "B"
+			DbSelectArea("STS")
+			DbSkip()
+			Loop
+		EndIf
+
+		nPRE := 0.00
+		nREA := 0.00
+		DbSelectArea("STT")
+		DbSeek(xFilial("STT")+STS->TS_ORDEM+STS->TS_PLANO)
+		While !Eof() .And. STT->TT_FILIAL == xFILIAL("STT") .And. STT->TT_ORDEM == STS->TS_ORDEM  .And. ;
+		STT->TT_PLANO == STS->TS_PLANO
+
+			If Alltrim(STT->TT_SEQRELA) == "0"
+
+				nCUSTOINS := NGCUSTIN(STT->TT_SEQRELA,STT->TT_TIPOREG,STT->TT_CODIGO,STT->TT_QUANTID,;
+				STT->TT_UNIDADE,STT->TT_DTINICI,STT->TT_HOINICI,STT->TT_DTFIM,;
+				STT->TT_HOFIM,If(NGCADICBASE('TT_PCTHREX','A','STT',.F.), STT->TT_PCTHREX, STT->TT_HREXTRA),;
+				2,STS->TS_SERVICO,STT->TT_CUSTO)
+
+				nPRE := nPRE + nCUSTOINS
+
+			Else
+
+				nCUSTOINS := NGCUSTIN(STT->TT_SEQRELA,STT->TT_TIPOREG,STT->TT_CODIGO,STT->TT_QUANTID,;
+				STT->TT_UNIDADE,STT->TT_DTINICI,STT->TT_HOINICI,STT->TT_DTFIM,;
+				STT->TT_HOFIM,If(NGCADICBASE('TT_PCTHREX','A','STT',.F.), STT->TT_PCTHREX, STT->TT_HREXTRA),;
+				1,STS->TS_SERVICO,STT->TT_CUSTO)
+
+				nREA := nREA + nCUSTOINS
+
+			EndIf
+			DbSelectArea("STT")
+			DbSKip()
+		End
+
+		DbSelectArea(cAliasTRB)
+		If !DBSeek(STS->TS_ORDEM)
+			DbAppend()
+			(cAliasTRB)->ORDEM  := STS->TS_ORDEM
+			(cAliasTRB)->CODBEM := STS->TS_CODBEM
+			(cAliasTRB)->NOMBEM := NGSEEK('ST9',STS->TS_CODBEM,1,'T9_NOME')
+		EndIf
+		(cAliasTRB)->PREVIST   := (cAliasTRB)->PREVIST + nPRE
+		(cAliasTRB)->REALIZA   := (cAliasTRB)->REALIZA + nREA
+
+		DbSelectArea("STS")
+		DbSkip()
+	End
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de menu Funcional
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version undefined
+@return Array com opcoes da rotina.
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	//------------------------------------------------------------
+	//	Parametros do array a Rotina:                 	     	 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transa‡„o a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 		     	 |
+	//------------------------------------------------------------
+
+	If IsInCallStack("MNC800CON")
+		aRotina := {{STR0001 ,"NGPESQTRB(cAliasTRB,{Ordem},06,)", 0 , 1}}
+	Else
+		aRotina := {{STR0001 ,"AxPesqui" , 0 , 1},; //"Pesquisar"
+					{STR0002 ,"MNC800CON", 0 , 2}}  //"Consulta"
+	Endif
+
+Return(aRotina)

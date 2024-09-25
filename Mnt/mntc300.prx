@@ -1,0 +1,412 @@
+#INCLUDE "MNTC300.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300
+Reatreamento de produto usado por lote e serie
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC300()
+
+	//+------------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		   |
+	//+------------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private aRotina   := MenuDef()
+	Private vVETHORAS := {}
+
+	If !Pergunte("MNT30C")
+		Return
+	Endif
+	Processa({ |lEnd| MNTC300PRO() },STR0001 ) //"Aguarde... processando.."
+
+	//+------------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                           |
+	//+------------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300PRO
+Reatreamento de produto usado por lote e serie (CONSUMO)
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC300PRO()
+
+	Local aArea      := GetArea()
+	Local aBrowse    := {}
+	Local aTitulo    := {}
+	Local aOrdem     := {}
+	Local oDlg
+	Local oBrowse
+	Local oSeek
+	Local oCol
+	Local oOrdem
+	Local oBtn1
+	Local oBtn2
+	Local IC 		 := 0
+	Local nAt 		 := 0
+	Local nSvRecBrw  := 0
+	Local cOrd
+	Local lExport    := .F.
+	Local cSeek      := Space(16)
+	Local oTempTable
+
+	Private cTRB := GetNextAlias()
+
+	cTITULOT := STR0002+"...: "+Alltrim(MV_PAR01)+"  "+STR0003+"..: " //"Rastreamento Produto"###"Lote"
+	cTITULOT := cTITULOT+Alltrim(MV_PAR02)+"  "+STR0004+"..: "+Alltrim(MV_PAR03) //"Serie"
+
+	CondSTL := 'Alltrim(stl->tl_seqrela) <> "0" .And. stl->tl_lotectl = mv_par02'
+	CondSTL := CondSTL +' .And. stl->tl_numseri = mv_par03'
+
+	CondSTT := 'Alltrim(stt->tt_seqrela) <> "0" .And. stt->tt_lotectl = mv_par02'
+	CondSTT := CondSTT +' .And. stt->tt_numseri = mv_par03'
+
+	aDBF := {}
+	Aadd(aDBF,{"CODBEM"  , "C" , Len(st9->t9_codbem), 0})
+	Aadd(aDBF,{"NOMEBEM" , "C" , 40                 , 0})
+	Aadd(aDBF,{"ORDEMSE" , "C" , Len(stl->tl_ordem) , 0})
+	Aadd(aDBF,{"PLANOCO" , "C" , Len(stl->tl_plano) , 0})
+	Aadd(aDBF,{"DATACON" , "D" , 8                  , 0})
+	Aadd(aDBF,{"HORACON" , "C" , 5                  , 0})
+	Aadd(aDBF,{"QUANTCO" , "N" , 9                  , 2})
+	Aadd(aDBF,{"TAREFAC" , "C" , Len(stl->tl_tarefa), 0})
+	Aadd(aDBF,{"SEQRELA","C",3 , 0})
+	Aadd(aDBF,{"ARQUICO","C",3 , 0})
+
+	//Intancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"CODBEM"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	Dbselectarea("STL")
+	Dbsetorder(8)
+	If Dbseek(xFILIAL("STL")+"P"+MV_PAR01)
+		ProcRegua(reccount())
+		While !Eof() .And. stl->tl_filial = xFILIAL("STL") .And.;
+		stl->tl_tiporeg = "P" .And. stl->tl_codigo = MV_PAR01
+			IncProc(STR0005+" "+STR0006) //"Verificando insumos // normais"
+			If &CondSTL
+
+				vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+				STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+				STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+				nQTDHORAS := vVETHORAS[2]
+
+				MNTC300GT(stl->tl_ordem,stl->tl_plano,stl->tl_seqrela,;
+				stl->tl_tarefa,stl->tl_dtinici,stl->tl_hoinici,;
+				nQTDHORAS,"STL")
+			Endif
+			Dbselectarea("STL")
+			Dbskip()
+		End
+	Endif
+
+	Dbselectarea("STT")
+	Dbsetorder(3)
+	If Dbseek(xFILIAL("STT")+"P"+MV_PAR01)
+		ProcRegua(reccount())
+		While !Eof() .And. stt->tt_filial = xFILIAL("STT") .And.;
+		stt->tt_tiporeg = "P" .And. stt->tt_codigo = MV_PAR01
+			IncProc(STR0005+"  "+STR0015) //"Verificando insumos  // historicos"
+			If &CondSTT
+				vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+				STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+				STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+				nQTDHORAS := vVETHORAS[2]
+
+				MNTC300GT(stt->tt_ordem,stt->tt_plano,stt->tt_seqrela,;
+				stt->tt_tarefa,stt->tt_dtinici,stt->tt_hoinici,;
+				nQTDHORAS,"STT")
+			Endif
+			Dbselectarea("STT")
+			Dbskip()
+		End
+	Endif
+
+	Dbselectarea(cTRB)
+	Dbgotop()
+	If Reccount() > 0
+		aAdd(aBrowse,{"CODBEM" })
+		aAdd(aBrowse,{"NOMEBEM"})
+		aAdd(aBrowse,{"ORDEMSE"})
+		aAdd(aBrowse,{"DATACON"})
+		aAdd(aBrowse,{"HORACON"})
+		aAdd(aBrowse,{"QUANTCO"})
+
+		aAdd(aTitulo,{STR0007}) //"Bem"
+		aAdd(aTitulo,{STR0008}) //"Descricao do Bem"
+		aAdd(aTitulo,{STR0009}) //"Ordem"
+		aAdd(aTitulo,{STR0010}) //"Data"
+		aAdd(aTitulo,{STR0011}) //"Hora"
+		aAdd(aTitulo,{STR0012}) //"Quantidade"
+
+		aAdd(aOrdem,STR0007)    //"Bem"
+
+		DEFINE MSDIALOG oDlg FROM 90,70 TO 520,710 TITLE OemToAnsi(cTITULOT) PIXEL
+
+		oBrowse := VCBrowse():New(15,3,320,170,,,,oDlg,,,,{|| (cSeek := Space(16),oSeek:Refresh())},{ || lExport := .T., nSvRecBrw := Recno(), oDlg:End() }, , , , , , , , ,.T.)
+		oBrowse := oBrowse:GetBrowse()
+		oBrowse:lLineDrag := .T.
+
+		For IC := 1 To Len(aBrowse)
+			If aTitulo[IC,1] = STR0012 //"Quantidade"
+				oCol := TCColumn():New( OemToAnsi(aTitulo[IC,1]), &("{ || "+aBrowse[IC,1]+"}"),"@E 999,999.99",,,"RICHT",, .F., .F.,,,, .F., )
+			Else
+				oCol := TCColumn():New( OemToAnsi(aTitulo[IC,1]), &("{ || "+aBrowse[IC,1]+"}"),,,, "LEFT",, .F., .F.,,,, .F., )
+			Endif
+			oBrowse:AddColumn(oCol)
+		Next IC
+
+		@ 187,14 SAY OemToAnsi(STR0020+" "+STR0013) SIZE 42, 7 OF oDlg PIXEL //"Pesqusar // Por:"
+		@ 186,59 COMBOBOX oOrdem VAR cOrd ITEMS aOrdem SIZE 119, 42 OF oDlg PIXEL
+		@ 200,23 SAY OemToAnsi(STR0007) SIZE 32, 7 OF oDlg PIXEL //"Bem"
+		@ 200,58 MSGET oSeek VAR cSeek SIZE 120, 10 OF oDlg PIXEL
+
+		oSeek:bLostFocus := { || If ( dbSeek(AllTrim(oSeek:cText)), oBrowse:Refresh(),)}
+
+		DEFINE SBUTTON oBtn1 FROM 01, 4  TYPE 15 ENABLE OF oDlg ACTION MNTC300VI()
+		DEFINE SBUTTON oBtn2 FROM 01, 38 TYPE  6 ENABLE OF oDlg ACTION MNTC300RE()
+
+		// foi retirado MNTC300PE() pois função não estava compilado e não havia o porque de
+		// existir esse bloco de condição. Retirar após 12.1.033
+
+		ACTIVATE MSDIALOG oDlg
+	Else
+		MsgInfo(STR0014+" "+Alltrim(MV_PAR01)+" "+STR0003+"  "+Alltrim(MV_PAR02); //"Nenhum bem utilizou o produto "###" Lote "
+		+" "+STR0004+" "+Alltrim(MV_PAR03)+" "+STR0017; //" Serie "###" ou nao foi informado o "
+		+STR0018,STR0019) //"lote e a serie no retorno de insumo."###"ATENCAO"
+	EndIf
+
+	RestArea(aArea)
+
+	//Deleta Tabela
+	oTempTable:Delete()
+
+
+	Dbselectarea("ST9")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300GT
+Grava o arquivo temporario
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param cvord, characters, descricao
+@param cvpla, characters, descricao
+@param cvseq, characters, descricao
+@param cvtar, characters, descricao
+@param dvdti, date, descricao
+@param cvhoi, characters, descricao
+@param cvquant, characters, descricao
+@param cvarq, characters, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC300GT(cvord,cvpla,cvseq,cvtar,dvdti,cvhoi,cvquant,cvarq)
+
+	Local cALIAORD := If(cvarq = "STL","STJ","STS")
+
+	Dbselectarea(cALIAORD)
+	Dbsetorder(1)
+	Dbseek(xFILIAL(cALIAORD)+cvord+cvpla)
+	cCODBORD := cALIAORD+If(cvarq = "STL","->TJ_CODBEM","->TS_CODBEM")
+
+	Dbselectarea(cTRB)
+	RecLock((cTRB),.T.)
+	(cTRB)->CODBEM  := &(cCODBORD)
+	(cTRB)->NOMEBEM := NGSEEK("ST9",&(cCODBORD),1,"T9_NOME")
+	(cTRB)->ORDEMSE := cvord
+	(cTRB)->DATACON := dvdti
+	(cTRB)->HORACON := cvhoi
+	(cTRB)->QUANTCO := cvquant
+	(cTRB)->PLANOCO := cvpla
+	(cTRB)->TAREFAC := cvtar
+	(cTRB)->SEQRELA := cvseq
+	(cTRB)->ARQUICO := cvarq
+	MSUNLOCK(cTRB)
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300VI
+Visualizacao do insumo
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC300VI()
+
+	Local cALIAOVI := If((cTRB)->ARQUICO = "STL","STL","STT")
+	Local cCHAVEVI := ""
+
+	cCHAVEVI := (cTRB)->ORDEMSE+(cTRB)->PLANOCO+(cTRB)->TAREFAC+"P"+MV_PAR01+(cTRB)->SEQRELA
+	Dbselectarea(cTRB)
+
+	If Eof() .Or. Bof()
+		Return
+	Endif
+
+	cCadastro := STR0022+" - "+NGSX2NOME(cALIAOVI)+" - "+aROTINA[2,1] //"Cadastro"
+	Dbselectarea(cALIAOVI)
+	Dbsetorder(1)
+	Dbseek(xFILIAL(cALIAOVI)+cCHAVEVI)
+	NGCAD01(cALIAOVI,Recno(),2)
+	Dbselectarea(cTRB)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300RE
+Impressao dos itens rastreados
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC300RE()
+
+	Local cString    := "ST9"
+	Local cDesc1     := STR0023+" "+STR0002+"/"+STR0003+"/"+STR0004 //"Relatorio de  //rastreamento de produto /lote/serie"
+	Local cDesc2     := " "
+	Local cDesc3     := " "
+	Local wnrel      := "MNTC300"
+	Private aReturn  := {STR0024, 1,STR0025, 2, 2, 1, "",1 } //"Zebrado"###"Administracao"
+
+	Private nLastKey := 0
+	Private cPerg    := "MNT30C"
+	Private Titulo   := STR0002+"/"+STR0003+"/"+STR0004 //"Rastreamento Produto  /Lote/Serie"
+	Private Tamanho  := "P"
+
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		DbSelectArea(cTRB)
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+
+	If nLastKey = 27
+		Set Filter To
+		DbSelectArea(cTRB)
+		Return
+	Endif
+
+	RptStatus({|lEnd| MNTC300IR(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC300IR
+Chamada do Relatório
+@author Inacio Luiz Kolling
+@since 20/05/2004
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param titulo, , descricao
+@param tamanho, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC300IR(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	Private li     := 80
+	Private m_pag  := 1
+	Private Cabec1       := STR0007+Space(14)+STR0008  //"Bem              Descricao do bem"
+	Private Cabec2       := Space(7)+STR0009+"    "+STR0010+"     "+STR0011+"  "+STR0016+"  "+STR0012+"  "+STR0026
+	//"Ordem   Data      Hora  Seq.  Quantidade  Origem"
+	Private nomeprog     := "MNTC300"
+	Private nTipo        := IIF(aReturn[4]==1,15,18)
+
+	//+----------------------+
+	//| Monta os Cabecalhos  |
+	//+----------------------+
+
+	//          1         2         3         4         5         6         7
+	//0123456789012345678901234567890123456789012345678901234567890123456789012345678
+	//
+	//Bem              Descricao do bem
+	//xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	//        Ordem   Data      Hora  Seq.  Quantidade  Origem
+	//        xxxxxx  99/99/99  99:99  99   999.999,99  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	cDESSTL := NGSX2NOME("STL")
+	cDESSTT := NGSX2NOME("STT")
+
+	DbSelectArea(cTRB)
+	nRECNOTR := Recno()
+	Dbgotop()
+	SetRegua(LastRec())
+
+	While !Eof()
+		cBEMITRB := (cTRB)->CODBEM
+		Ngsomali(58)
+		@ Li,000 PSay cBEMITRB     Picture "!@"
+		@ Li,017 PSay (cTRB)->NOMEBEM Picture "!@"
+		While !Eof() .And. (cTRB)->CODBEM = cBEMITRB
+			IncRegua()
+			Ngsomali(58)
+			@ Li,007 PSay (cTRB)->ORDEMSE Picture "!@"
+			@ Li,015 PSay (cTRB)->DATACON Picture "99/99/99"
+			@ Li,025 PSay (cTRB)->HORACON Picture "99:99"
+			@ Li,031 PSay (cTRB)->SEQRELA Picture "@!"
+			@ Li,037 PSay (cTRB)->QUANTCO Picture "@E 999,999.99"
+			@ Li,049 PSay If((cTRB)->ARQUICO = "STL",cDESSTL,cDESSTT)
+			DbSelectArea(cTRB)
+			Dbskip()
+		End
+		Ngsomali(58)
+	End
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	RetIndex("ST9")
+	Set Filter To
+	Set device to Screen
+	If aReturn[5] = 1
+		Set Printer To
+		DbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+
+	DbSelectArea(cTRB)
+	Dbgoto(nRECNOTR)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de menu Funcional
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {{STR0020,"Axpesqui" , 0 , 1},; //"Pesquisar"
+					  {STR0021,"NGCAD01"  , 0 , 2}}  //"Visualizar"
+
+Return(aRotina)

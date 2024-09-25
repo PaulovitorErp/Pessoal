@@ -1,0 +1,1486 @@
+#Include "TOPCONN.CH"
+#Include "Protheus.ch"
+#Include "NGIntLogix.ch"
+
+/*
+Static __cDataBase := " " //"INFORMIX" //
+Static __cAlias    := "MNTFROTA" //"logix_tst" // //'Logix1002IFX68'
+Static __nPort     := 7890
+Static __cServer   := "localhost"
+Static __cEmpAnt   := '99' //'T1' //"05"
+Static __cFilAnt   := '01'//"D MG 01 " //"050201"
+
+*/
+
+Static aEMpFilP := {}
+Static aSM0     := {}
+Static aEmpresa := {}
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGIntLogix³ Autor ³ Thiago Olis Machado   ³ Data ³04/10/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Funcao para fazer integracao entre os modulos da Microsiga ³±±
+±±³          ³ e os modulos da Logocenter.                                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGIntLogix(cEvento,aContents)
+
+	Local aArea := GetArea()
+	Private lSchedule	:= IsBlind()
+
+	If lSchedule
+		NGlogixJob(cEvento,aContents)
+	Else
+		StartJob("NGlogixJob",GetEnvServer(),.F.,cEvento,aContents,cEmpAnt,cFilAnt)
+	Endif
+
+	RestArea(aArea)
+
+return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGlogixJob
+Executa operações para ntegracao entre os modulos da Microsiga e os modulos da Logocenter.
+
+@author	Thiago Olis Machado
+@author	Maria Elisandra de Paula
+@since 03/07/2017
+/*/
+//---------------------------------------------------------------------
+Function NGlogixJob(cEvento,aContents,cEmpre,cFili)
+
+	Local nX
+	Local cTableIn  := 'log_integr_Entrada'
+	Local cTableOut := 'log_integr_Saida'
+
+	aEmpresa  := If(ValType(cEvento) == "A",cEvento,{})
+	cEvento   := If(ValType(cEvento) <> "C","E",cEvento)
+	aContents := If(ValType(aContents) <> "A",{},aContents)
+
+	If ValType(cEmpre) == "C" .And. ValType(cFili) == "C" .And. !Empty(cEmpre) .And. !Empty(cFili)
+		RpcSetType(3)
+		RPCSetEnv(cEmpre,cFili,"","","MNT")
+
+		aEmpresa := { cEmpre ,cFili }
+	EndIf
+
+	If cEvento = Nil .Or. Empty( cEvento )
+		If ( type( "oMainWnd" ) == "O" )
+			msgBox(STR0002,STR0003) //"Não foi definido o tipo de evento para a transação" ## "ATENÇÃO"
+		EndIf
+		Return .F.
+	EndIf
+
+	cEvento := upper(cEvento)
+
+	cTables := if( cEvento = 'E', cTableIn, cTableOut )
+
+	If Len(aContents) > 0
+		nTrans := nextTrans(cTables)
+
+		For nX := 1 To Len(aContents)
+			aContents[nX][5] := nTrans
+		Next nX
+	EndIf
+
+	procIntLogix(cTables,aContents,cEvento)
+
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³nextTrans ³ Autor ³ Thiago Olis Machado   ³ Data ³04/10/2007     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Busca o proximo numero sequencial do campo num_trans            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function nextTrans(cTable)
+	
+	Local cResult, cQuery
+	Local cAliasQry := getNextAlias()
+
+	__nConecta := getConnect( @cTable )
+
+	TcSetConn(__nConecta)
+
+	If TcGetDb() == "ORACLE"
+		cQuery := 'SELECT NVL(MAX(num_trans),0) SEQ FROM '+cTable
+	ElseIf TcGetDb() == "DB2"
+		cQuery := 'SELECT COALESCE(MAX(num_trans),0) SEQ FROM '+cTable
+	Else
+		cQuery := 'SELECT ISNULL(MAX(num_trans),0) SEQ FROM '+cTable
+	EndIf
+
+	cQuery := changeQuery(cQuery)
+
+	dbUseArea( .t., "TOPCONN", tcGenQry(,,cQuery),cAliasQry, .f., .t.)
+
+	cResult := (cAliasQry)->SEQ+1
+
+	(cAliasQry)->(dbCloseArea())
+
+	TcUnlink(__nConecta)
+	TcSetConn(AdvConnection())
+
+return cResult
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³procIntLogix³ Autor ³ Thiago Olis Machado   ³ Data ³04/10/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Funcao para fazer integracao entre os modulos da Microsiga   ³±±
+±±³          ³ e os modulos da Logocenter.                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function procIntLogix(cTables,aContents,cEvento)
+	
+	Local cQuery   	:= ''
+	Local i
+	Local cQueryTxt := ""
+	Local cFilLog	:= ""
+	Local aFilLog	:= {}
+
+	If cEvento = 'S'
+		aFilLog 	:=  fLodFilLog(cFilAnt,.F.)
+		If !aFilLog[3]
+			Return .F.
+		EndIf
+		cFilLog		:=	AllTrim(aFilLog[2])
+
+		//nHandle := FCREATE("c:\logix.txt", 1)
+		For i:= 1 To len(aContents)
+
+			//Carrega filial do Logix no De\Para
+			If "_FILIAL" $ aContents[i][2]
+				aEmpProth 	:= fLodFilLog(aContents[i][3],.F.)
+				aContents[i][3] := aEmpProth[2]
+			EndIf
+
+			__nConecta := getConnect( @cTables )
+
+			cQuery := "INSERT INTO "+cTables
+			cQuery += " (servico_web,tip_proced,campo,val_campo,tip_campo,Modulo,"
+			cQuery += " num_trans,Procedimento,sequencia_proced,sit_proced,sit_trans,tip_integr,dat_inclusao,filial)"
+			cQuery += " VALUES ("
+			cQuery += "'"+AllTrim(Str(nextService(cTables)))+"',"
+			cQuery += "'"+aContents[i][1]+"',"
+			cQuery += "'"+aContents[i][2]+"',"
+			cQuery += "'"+aContents[i][3]+"',"
+			cQuery += Alltrim(Str(aContents[i][4]))+","
+			cQuery += "'SIGAMNT',"
+			cQuery += Alltrim(Str(aContents[i][5]))+","
+			cQuery += Alltrim(Str(aContents[i][6]))+","
+			cQuery += Alltrim(Str(aContents[i][7]))+","
+			cQuery += "1,"
+			cQuery += "1,"
+			cQuery += "'SIGAMNT(MS)-LOGIX(LOGOCENTER)',"
+			cQuery += "null,'"
+			cQuery += cFilLog + "')"
+
+			TcSetConn(__nConecta)
+
+			If TcSqlExec(cQuery) <> 0
+				UserException( TCSQLError() )
+			Endif
+
+			TcUnlink(__nConecta)
+			TcSetConn(AdvConnection())
+
+			cQueryTxt += cQuery+CRLF
+
+		Next
+	Else
+		getIntLog(cTables) //Carrega os itens de entrada.
+	EndIf
+
+Return .t.
+
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³nextService ³ Autor ³ Thiago Olis Machado   ³ Data ³04/10/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Busca o proximo numero sequencial do campo servico_web       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function nextService(cTable)
+	
+	Local cResult, cQuery
+	Local cAliasQry := GetNextAlias()
+	Local __nConecta
+
+	__nConecta := getConnect( @cTable )
+
+	TcSetConn(__nConecta)
+
+	If TcGetDb() == "ORACLE"
+		cQuery := 'SELECT NVL(MAX(servico_web),0) SEQ FROM '+cTable
+	ElseIf TcGetDb() == "DB2"
+		cQuery := 'SELECT COALESCE(MAX(servico_web),0) SEQ FROM '+cTable
+	Else
+		cQuery := 'SELECT ISNULL(MAX(servico_web),0) SEQ FROM '+cTable
+	EndIf
+
+	cQuery := changeQuery(cQuery)
+
+	dbUseArea( .t., "TOPCONN", tcGenQry(,,cQuery),cAliasQry, .f., .t.)
+
+	cResult := (cAliasQry)->SEQ+1
+
+	(cAliasQry)->(dbCloseArea())
+
+	TcUnlink(__nConecta)
+	TcSetConn(AdvConnection())
+return cResult
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getIntLog
+Faz a leitura da tabela de entrada.
+
+@author Thiago Olis Machado
+@since  08/04/2008
+@source Generico
+/*/
+//------------------------------------------------------------------
+Static Function getIntLog(cTable)
+
+	Local cContents := ''
+	Local cProced   := ""
+	Local cAliasBKP := ""
+	Local cValCampo := ""
+	Local nTransAtu := 0
+	Local cFilLogix := ""
+	Local aDBF      := {}
+	Local cQueryL   := ""
+	Local oTmpTbl1  := Nil
+	Local cChaveOld := ""
+	Local cTipBanco := ''
+
+	Private cQuery    := ''
+	Private cFilProth := ""
+	Private aValues   := {}
+	Private aEmpProth := {}
+	Private aInsert   := {}
+	Private aUpdate   := {}
+	Private aDelete   := {}
+
+	Public cFilAnt := ""
+	Public cEmpAnt := ""
+
+	cAliasQry := getNextAlias()
+
+	aTabela := {{cTable,"ERP"}}
+
+	aAdd(aDBF,{ "SEQ_PROCED"       , "N", 10 , 0 })
+	aAdd(aDBF,{ "VAL_CAMPO"        , "C" ,255, 0 })
+	aAdd(aDBF,{ "FILIAL   "        , "C" ,2  , 0 })
+	aAdd(aDBF,{ "CAMPO"	           , "C" ,30 , 0 })
+	aAdd(aDBF,{ "NUM_TRANS"        , "N" ,10 , 0 })
+	aAdd(aDBF,{ "TIP_PROCED"       , "C" ,30 , 0 })
+
+	cAliasQry  := GetNextAlias()
+	__nConecta := getConnect( @cTable )
+
+	TcSetConn(__nConecta)
+
+	cTipBanco := TcGetDb()
+
+	//Cria TRB utilizando estrutura acima
+	oTmpTbl1 := FWTemporaryTable():New( cAliasQry, aDBF )
+	oTmpTbl1:AddIndex( "1", {"FILIAL" , "NUM_TRANS", "SEQ_PROCED"} )
+	oTmpTbl1:Create()
+
+	cQueryL := "INSERT INTO " + oTmpTbl1:GetRealName() + "( SEQ_PROCED , VAL_CAMPO, FILIAL, CAMPO, NUM_TRANS,  TIP_PROCED)"
+	If cTipBanco == "ORACLE"
+		cQueryL += " SELECT SEQUENCIA_PROCED,  NVL(VAL_CAMPO,' '), FILIAL, CAMPO, NUM_TRANS, TIP_PROCED "
+	ElseIf cTipBanco == "DB2"
+		cQueryL += " SELECT SEQUENCIA_PROCED,  COALESCE(VAL_CAMPO,' '), FILIAL, CAMPO, NUM_TRANS, TIP_PROCED "
+	Else
+		cQueryL += " SELECT SEQUENCIA_PROCED,  ISNULL(VAL_CAMPO,' '), FILIAL, CAMPO, NUM_TRANS, TIP_PROCED "
+	EndIf
+	cQueryL += "   FROM " + cTable
+	If cTipBanco == "ORACLE"
+		cQueryL += "  WHERE TRIM(TIP_INTEGR) = 'LOGIX-MANUTENCAO_ATIVOS' "
+	Else
+		cQueryL += "  WHERE TIP_INTEGR = 'LOGIX-MANUTENCAO_ATIVOS' "
+	EndIf
+	cQueryL += "    AND SIT_PROCED = '1' "
+	cQueryL += "    AND SIT_TRANS  = '1' "
+	If cTipBanco == "ORACLE"
+		cQueryL += "    AND TRIM(MODULO)     = 'MANIND' "
+	Else
+		cQueryL += "    AND MODULO     = 'MANIND' "
+	EndIf
+	cQueryL += "  ORDER BY FILIAL,NUM_TRANS,sequencia_proced"
+
+	TcSQLExec(cQueryL)
+
+	dbSelectAreA(cAliasQry)
+	dbGoTop()
+
+	While !Eof()
+
+
+		If Alltrim((cAliasQry)->CAMPO) == "tabela"
+			cChaveOld := (cAliasQry)->FILIAL + STR((cAliasQry)->NUM_TRANS,10,0) + STR((cAliasQry)->SEQ_PROCED,10,0)
+			dbSelectArea(cAliasQry)
+			dbSkip()
+			If cfillogix <> (cAliasQry)->VAL_CAMPO
+				If Alltrim((cAliasQry)->CAMPO) == "PKcod_empresa"
+					// Abrir empresa
+					aEmpProth := fLodFilLog((cAliasQry)->VAL_CAMPO,.T.)
+					If !aEmpProth[3]
+						Return .F.
+					EndIf
+					cEmpPrgoh := aEmpProth[1]
+					cFilProth := aEmpProth[2]
+					cfillogix := (cAliasQry)->VAL_CAMPO
+				EndIf
+			EndIf
+
+			dbSelectAreA(cAliasQry)
+			dbSetOrder(1)
+			dbSeek(cChaveOld)
+				
+		EndIf
+
+		If allTrim( (cAliasQry)->(campo) ) == "tabela"
+
+			cProced   := ""
+			cContents := GetTable( (cAliasQry)->(val_campo) )
+			cAliasBKP := Substr(cContents,1,3)
+			nTransAtu := (cAliasQry)->(num_trans)
+
+			If !Empty( allTrim( cContents ) )
+				If Upper(AllTrim((cAliasQry)->(tip_proced))) ==  "INSERT"
+					aAdd( aInsert, { cContents," ", 1, (cAliasQry)->(tip_proced),cFilProth, (cAliasQry)->(num_trans),cEmpPrgoh,cFilProth } ) //(cAliasQry)->(filial)
+					cProced := "INSERT"
+				ElseIf Upper(AllTrim((cAliasQry)->(tip_proced))) ==  "UPDATE"
+					aAdd( aUpdate, { cContents," ", 1, (cAliasQry)->(tip_proced),cFilProth, (cAliasQry)->(num_trans),cEmpPrgoh,cFilProth } )
+					cProced := "UPDATE"
+				ElseIf Upper(AllTrim((cAliasQry)->(tip_proced))) ==  "DELETE"
+					aAdd( aDelete, { cContents," ", 1, (cAliasQry)->(tip_proced),cFilProth, (cAliasQry)->(num_trans) ,cEmpPrgoh,cFilProth } )
+					cProced := "DELETE"
+				EndIf
+			EndIf
+
+		ElseIf nTransAtu == (cAliasQry)->(num_trans)
+
+			cContents := GetField( (cAliasQry)->(campo),cAliasBKP)
+
+			If !empty( allTrim( cContents ) ) .And. Len(TAMSX3(cContents)) > 0
+
+				If Alltrim((cAliasQry)->CAMPO) == 'PKcod_empresa'
+					cValCampo := cFilProth
+				Else
+					cValCampo := ConvertCampo( Upper(AllTrim((cAliasQry)->(campo))) , AllTrim((cAliasQry)->(val_campo)))
+				End
+
+				If TAMSX3(cContents)[3] == "C" //.And. !(SubStr(cValCampo,1,1) == '"') .And. !("'" $ cValCampo)
+					cValCampo := StrTran(cValCampo,"'","")
+					sValCampo := ValToSql(PadR( cValCampo ,TamSX3(AllTrim(cContents))[1]))
+				ElseIf TAMSX3(cContents)[3] == "D" //alltrim( str( (cAliasQry)->(tip_campo) ) ) = "4"
+					sValCampo := ValToSql( dtos(ctod( allTrim( cValCampo ) )))
+				Else
+					sValCampo := allTrim( cValCampo )
+				EndIf
+
+				If cProced == "INSERT"
+					aAdd( aInsert, { cContents, sValCampo , 2, (cAliasQry)->(tip_proced), " ", (cAliasQry)->(num_trans),cEmpPrgoh,cFilProth } )
+					//Travamento para nao ultrapassar a quantidade suportada de um array
+					If Len(aInsert) > 1000
+						Exit
+					EndIf
+				ElseIf cProced == "UPDATE"
+					aAdd( aUpdate, { cContents, sValCampo , 2, (cAliasQry)->(tip_proced), " ", (cAliasQry)->(num_trans),cEmpPrgoh,cFilProth } )
+					//Travamento para nao ultrapassar a quantidade suportada de um array
+					If Len(aUpdate) > 1000
+						Exit
+					EndIf
+				ElseIf cProced == "DELETE"
+					aAdd( aDelete, { cContents, sValCampo , 2, (cAliasQry)->(tip_proced), " ", (cAliasQry)->(num_trans) ,cEmpPrgoh,cFilProth} )
+					//Travamento para nao ultrapassar a quantidade suportada de um array
+					If Len(aDelete) > 1000
+						Exit
+					EndIf
+				EndIf
+
+			EndIf
+		EndIf
+
+		dbSelectArea(cAliasQry)
+		dbSkip()
+	EndDo
+
+	(cAliasQry)->(dbCloseArea())
+
+	oTmpTbl1:Delete()
+
+	getInsert(aInsert,cTable)
+	getUpdate(aUpdate,cTable)
+	getDelete(aDelete,cTable)
+
+	TcUnlink(__nConecta)	
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³GetField     ³ Autor ³ Thiago Olis Machado   ³ Data ³08/04/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Faz a leitura da tabela de/para.                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function GetField( cValCampo,cAlias )
+	Local cReturn := ''
+
+	dbSelectArea("TT6")
+	dbSetOrder(2)
+	If dbSeek( xFilial("TT6")+cAlias+upper( ( AllTrim(cValCampo)+' ' ) ) )
+		cReturn := TT6->TT6_PARA
+	EndIf
+
+return cReturn
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GetTable
+Retorna a tabela do Protheus respectiva ao do Logix
+
+@param cTblLogix Tabela do Logix
+@author Vitor Emanuel Batista
+@since 22/06/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function GetTable(cTblLogix)
+	Local cReturn := ''
+	Local nEmpresa, nEmpFilial
+
+	RpcSetType(3)
+	nEmpresa := aEmpresa[1]
+	nEmpFilial := aEmpresa[2]
+	aEmpresa[1] := NIL
+	aEmpresa[1] := cValToChar(nEmpresa)
+	aEmpresa[2] := NIL
+	aEmpresa[2] := cValToChar(nEmpFilial)
+	RpcSetEnv(aEmpresa[1], aEmpresa[2],,,"MNT")
+
+	dbSelectArea("TT6")
+	dbSetOrder(1)
+	If dbSeek( xFilial("TT6")+upper( ( AllTrim(cTblLogix)+' ' ) ) )
+		cReturn := RetSqlName( allTrim( TT6->TT6_PROTHE) )
+	EndIf
+
+return cReturn
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³getInsert   ³ Autor ³ Thiago Olis Machado   ³ Data ³09/04/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Faz a criacao da query de insercao nas tabelas Protheus.     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function getInsert(aPost,cTable)
+local i			:= 0
+Local nUlt 		:= 0
+Local cNumTrans	:= ""
+Local cFilGra 	:= ""
+Local cNGLOCPA 	:= Padr( SuperGetMv("MV_NGLOCPA",.F.,"01"), TamSx3("NNR_CODIGO")[1] )
+
+for i := 1 to len(aPost)
+	if aPost[i][3] = 1
+		lFirst := .T.
+
+		if i <> 1
+			InsertProtheus(cTable,cFilGra,cNumTrans)
+		endif
+		cFilGra := aPost[i][8]
+		cNumTrans := cValToChar(aPost[i][6])
+		cTabela :=  SubStr( aPost[i][1], 1, 3 )
+		cQuery := ''
+		cQuery += allTrim( aPost[i][4] ) + " INTO " + aPost[i][1] + " ("
+		nUlt := i
+	else
+		if lFirst
+			cQuery += substr( aPost[i][1],1, AT( "_",aPost[i][1] ) ) + "FILIAL"
+			If !("FILIAL" $ aPost[i][1])
+				cQuery += ","+allTrim( aPost[i][1] )
+				aadd( aValues, { AllTrim( aPost[i][1] ), AllTrim( aPost[i][2] ) } )
+			EndIf
+			lFirst := .f.
+		else
+			cQuery += ","+allTrim( aPost[i][1] )
+			If AllTrim(aPost[i][1]) == "B1_LOCPAD" .And. Empty(aPost[i][2])
+				aPost[i][2]	:= cNGLOCPA
+			EndIf
+			aadd( aValues, { AllTrim( aPost[i][1] ), AllTrim( aPost[i][2] ) } )
+		endIf
+
+	endIf
+
+next
+
+If Len(aPost) > 0 .And. nUlt > 0
+ 	InsertProtheus(cTable,aPost[nUlt][8],cNumTrans)
+EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} InsertProtheus
+Insere o registro no Protheus
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function InsertProtheus(cTable,cFil,cNumTrans)
+	Local x
+	Local nRecno
+
+	//Busca o próximo Recno para a alias
+	nRecno := GetRecno(cTabela)
+
+	//Adiciona valores default para campos nao integrados
+	DefaultProtheus(cTabela)
+
+	cQuery += ",R_E_C_N_O_) VALUES("
+	For x := 1 to len( aValues )
+		if x = 1
+
+			cQuery += "'"+xFilial(cTabela,cFil)+"' ,"
+
+			cQuery += aValues[x][2]
+		else
+			cQuery += ","+ Alltrim(aValues[x][2])
+		endIf
+	Next x
+
+	cQuery += "," + AllTrim( str( nRecno ) ) +" )"
+
+	nSQLExe := TcSqlExec(cQuery)
+
+	If nSQLExe <> 0 //Se ocorrer erro altera status para 3 
+		If nSQLExe == -19 //Erro de chave única
+			setTrans('4',cNumTrans,cTable)
+		Else
+			setTrans('3',cNumTrans,cTable)
+		EndIf
+	Else //Se inserido com sucesso altera para 2
+		setTrans('2',cNumTrans,cTable)
+
+	EndIf
+
+	//Zera aValues para proximo registro de insert
+	aValues := {}
+
+	dbCommitAll()
+Return
+
+ //---------------------------------------------------------------------
+/*/{Protheus.doc} UpdateCusto
+Função para atualizar o custo médio do produto na tabela SB2 e consequentemente
+atualizar na STL, assim corrigindo os custos gastos com manutenções.
+O calculo realizado será com base em uma data inicial e final, recebida do
+recalculo do custo médio no final do mes
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+ Static Function UpdateCusto(aValues)
+
+	Local nPosPro := aScan(aValues,{|a| Trim(a[1]) == "B2_COD"})
+	Local cCodPro
+	Local dDtIni, dDtFim
+	Local nOldCusto, nCusto
+
+	If nPosPro > 0
+		cCodPro := StrTran(aValues[nPosPro][2],"'","")
+		dbSelectArea("SB2")
+		dbSetOrder(1)
+		If dbSeek(xFilial("SB2")+cCodPro)
+			dDtIni := SB2->B2_XDTINI
+			dDtFim := SB2->B2_XDTFIN
+			nCusto := SB2->B2_CM1
+
+		 	dbSelectArea("STL")
+		 	dbSetOrder(8)
+		 	dbSeek(xFilial()+"P"+cCodPro)
+		 	While !Eof() .And. STL->TL_FILIAL == xFilial("STL") .And. AllTrim(STL->TL_CODIGO) == AllTrim(cCodPro) .And. STL->TL_TIPOREG == 'P'
+		 		//If TL_SEQRELA
+
+		 		If STL->TL_DTINICI >= dDtIni .And. STL->TL_DTFIM <= dDtFim //Verificar outras possibilidades
+		 			nOldCusto := STL->TL_CUSTO
+		 			RecLock("STL",.F.)
+		 			STL->TL_CUSTO := STL->TL_QUANTID*nCusto
+		 			MsUnLock()
+
+		 			dbSelectArea("STJ")
+		 			dbSetOrder(1)
+		 			If dbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+		 				RecLock("STJ",.F.)
+
+		 				If STL->TL_DESTINO == 'T'
+		 					STJ->TJ_CUSTMAT += (STL->TL_CUSTO - nOldCusto)
+		 				ElseIf STL->TL_DESTINO == 'A'
+							STJ->TJ_CUSTMAA += (STL->TL_CUSTO - nOldCusto)
+						ElseIf STL->TL_DESTINO == 'S'
+							STJ->TJ_CUSTMAS += (STL->TL_CUSTO - nOldCusto)
+		 				EndIf
+
+		 				MsUnLock()
+		 			EndIf
+
+		 		EndIf
+
+		 		dbSelectArea("STL")
+		 		dbSkip()
+		 	EndDo
+		 EndIf
+	EndIf
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DefaultProtheus
+Busca valores default para campos da tabela
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+@Obs Variaveis cQuery e aValues devem ser Private
+/*/
+//---------------------------------------------------------------------
+Static Function DefaultProtheus(cAlias)
+
+	dbSelectAreA("TT6")
+	dbSetOrder(2)
+	dbSeek(xFilial()+cAlias)
+	While !Eof() .And. TT6->TT6_PROTHE == cAlias
+		If Len(TAMSX3(TT6->TT6_PARA)) > 0
+			If TT6->TT6_ORIGEM == '2' //Variavel
+				If TAMSX3(AllTrim(TT6->TT6_PARA))[3] == "C" .And. !('"' $ TT6->TT6_DE .Or. "'" $ TT6->TT6_DE)
+					aAdd(aValues, { AllTrim(TT6->TT6_PARA) , ValToSql(AllTrim(TT6->TT6_DE)) })
+				ElseIf TAMSX3(TT6->TT6_PARA)[3] == "D"
+					aAdd(aValues, { AllTrim(TT6->TT6_PARA) , CTOD(TT6->TT6_DE) })
+				Else
+					aAdd(aValues, { AllTrim(TT6->TT6_PARA) , AllTrim(TT6->TT6_DE)})
+				EndIf
+				cQuery += "," + AllTrim(TT6->TT6_PARA)
+			ElseIf TT6->TT6_ORIGEM == '3' //Função
+				aAdd(aValues, { AllTrim(TT6->TT6_PARA) , ConvChar(&(TT6->TT6_DE))})
+				cQuery += "," + AllTrim(TT6->TT6_PARA)
+			EndIf
+		EndIf
+		dbSelectAreA("TT6")
+		dbSkip()
+	EndDo
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ConvChar
+Converte qualquer valor em char para ser utilizado na Query
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+
+/*/
+//---------------------------------------------------------------------
+Static Function ConvChar(xData)
+
+	If ValType(xData) == "N"
+		xData := cValToChar(xData)
+	ElseIf ValType(xData) == "D"
+		xData := ValToSql(DTOS(xData))
+	ElseIf ValType(xData) == "U"
+		xData := "' '"
+	EndIf
+Return xData
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GetRecno
+Retorna o proximo valor do recno, de acordo com Alias
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+@Obs Variaveis cQuery e aValues devem ser Private
+/*/
+//---------------------------------------------------------------------
+Static Function GetRecno(cAlias)
+	Local cAliasQry := GetNextAlias()
+	Local cQuery
+	Local nRecno
+
+	cQuery := "SELECT MAX(R_E_C_N_O_) RMAX FROM " + RetSqlName( cAlias )
+	dbUseArea(.T., "TOPCONN", TcGenQry(,,cQuery), cAliasQry )
+
+	nRecno := (cAliasQry)->RMAX + 1
+	(cAliasQry)->(dbCloseArea())
+
+Return nRecno
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³getUpdate   ³ Autor ³ Rafael Diogo Richter  ³ Data ³14/04/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Faz a criacao da query de update nas tabelas do Protheus.    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function getUpdate(aPost,cTable)
+Local i
+Local cNumTrans := ""
+Local nUlt := 0
+Local cFilGra := ''
+
+Private aWhere := {}
+
+for i := 1 to len (aPost)
+	if aPost[i][3] = 1
+		lFirst := .T.
+
+		if i <> 1
+			UpdateProtheus(cTable,cFilGra,cNumTrans)
+		endif
+
+		cFilGra := aPost[i][8]
+		cNumTrans := AllTrim(Str(aPost[i][6]))
+		cTabela :=  SubStr( aPost[i][1], 1, 3 )
+
+		cQuery := ''
+		cQuery += allTrim( aPost[i][4] ) + ' ' + aPost[i][1] + " SET "
+		nUlt := i
+	Else
+		If Upper(AllTrim(aPost[i][4])) == "WHERE"
+			aAdd(aWhere, {aPost[i][1],aPost[i][2],aPost[i][3],aPost[i][4],aPost[i][5]})
+		EndIf
+		If Upper(AllTrim(aPost[i][4])) == "SET"
+			If lFirst
+				cQuery += AllTrim(aPost[i][1])+' = '+AllTrim(aPost[i][2])
+				lFirst := .F.
+			Else
+				cQuery += ' ,'+AllTrim(aPost[i][1])+' = '+AllTrim(aPost[i][2])
+			EndIf
+		EndIf
+	EndIf
+next
+
+If Len(aPost) > 0 .And. nUlt > 0
+	UpdateProtheus(cTable,aPost[nUlt][8],cNumTrans)
+EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} UpdateProtheus
+Insere o registro no Protheus
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function UpdateProtheus(cTable,cFil,cNumTrans)
+	Local x
+
+	cQuery += " WHERE "
+	For x := 1 to len( aWhere )
+		If x == 1
+			cQuery += substr( aWhere[x][1],1, AT( "_",aWhere[x][1] ) ) + "FILIAL = '"+xFilial(cTabela,cFil)+"'"
+		Else
+			cQuery += ' AND '+AllTrim(aWhere[x][1])+' = '+AllTrim(aWhere[x][2])
+		EndIf
+	Next
+
+	If TcSqlExec(cQuery) <> 0
+		setTrans('3',cNumTrans,cTable)
+	Else
+		setTrans('2',cNumTrans,cTable)
+
+
+		If "B2_" $ aWhere[1][1] //Tratamento específico para custo de produto
+			UpdateCusto(aWhere)
+		ElseIf "RA_" $ aWhere[1][1]
+			UpdateFunc(aWhere)
+		EndIf
+	EndIf
+
+	//Limpa variavel auxiliar
+	aWhere := {}
+
+	dbCommitAll()
+
+ Return
+
+  //---------------------------------------------------------------------
+/*/{Protheus.doc} UpdateCusto
+Função para atualizar o custo médio do produto na tabela SB2 e consequentemente
+atualizar na STL, assim corrigindo os custos gastos com manutenções.
+O calculo realizado será com base em uma data inicial e final, recebida do
+recalculo do custo médio no final do mes
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+@Obs Variaveis cQuery e aValues devem ser Private
+/*/
+//---------------------------------------------------------------------
+ Static Function UpdateFunc(aValues)
+ 	Local nSalHo  := 0
+ 	Local nPosMat := aScan(aValues,{|a| Trim(a[1]) == "RA_MAT"})
+ 	Local cMatric
+
+ 	//Verifica se existe campo RA_MAT e se parâmetro MV_NGSALHO está habilitado
+ 	If nPosMat > 0 .And. AllTrim(GetNewPar("MV_NGSALHO","")) == "S"
+
+ 		// Matricula do funcionário
+ 		cMatric := StrTran(aValues[nPosMat][2],"'","")
+
+ 		//Verifica se existe funcionario na SRA
+	 	dbSelectArea("SRA")
+	 	dbSetOrder(1)
+	 	If dbSeek(xFilial("SRA")+cMatric)
+
+			//Calculo do Salário hora do funcionario
+	 		nSalHo := (M->RA_SALARIO / M->RA_HRSMES)
+
+	 		//Verifica se funcionário é da manutenção
+	 		dbSelectArea("ST1")
+	 		dbSetOrder(1)
+	 		If nSalHo > 0 .And. dbSeek(xFilial("ST1")+cMatric)
+
+		 		RecLock("ST1",.F.)
+		 		ST1->T1_SALARIO := nSalHo
+		 		MsUnLock()
+
+	 		EndIf
+	 	EndIf
+
+ 	EndIf
+
+ Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³getDelete   ³ Autor ³ Rafael Diogo Richter  ³ Data ³15/04/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Faz a criacao da query de delete nas tabelas do Protheus.    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function getDelete(aPost,cTable)
+Local i
+//Local cFilArq := ""
+
+Local cNumTrans := ""
+Local nUlt := 0
+Local cFilGra := ''
+
+Private aWhere := {}
+
+
+for i := 1 to len (aPost)
+	if aPost[i][3] = 1
+		lFirst := .T.
+
+		if i <> 1
+			DeleteProtheus(cTable,aPost[i][5],cNumTrans)
+		endif
+		cFilGra := aPost[i][8]
+		cNumTrans := AllTrim(Str(aPost[i][6]))
+		cTabela :=  SubStr( aPost[i][1], 1, 3 )
+
+		cQuery := ''
+		cQuery += allTrim( aPost[i][4] ) + ' FROM ' + aPost[i][1]
+		nUlt := i
+	else
+		If Upper(AllTrim(aPost[i][4])) == "WHERE"
+			aAdd(aWhere, {aPost[i][1],aPost[i][2],aPost[i][3],aPost[i][4],aPost[i][5]})
+		EndIf
+	endIf
+next
+
+If Len(aPost) > 0 .And. nUlt > 0
+	DeleteProtheus(cTable,aPost[nUlt][5],cNumTrans)
+EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DeleteProtheus
+Deleta o registro no Protheus
+
+@author Vitor Emanuel Batista
+@since 18/05/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function DeleteProtheus(cTable,cFil,cNumTrans)
+	Local x
+
+	cQuery += " WHERE "
+	for x := 1 to len( aWhere )
+		If x == 1
+			cQuery += substr( aWhere[x][1],1, AT( "_",aWhere[x][1] ) ) + "FILIAL = '"+xFilial(cTabela)+"'"
+		Else
+			cQuery += ' AND '+AllTrim(aWhere[x][1])+' = '+AllTrim(aWhere[x][2])
+		EndIf
+	next
+
+	aWhere := {}
+
+	If TcSqlExec(cQuery) <> 0
+		setTrans('3',cNumTrans,cTable)
+	Else
+		setTrans('2',cNumTrans,cTable)
+	EndIf
+
+	dbCommitAll()
+
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³setTrans    ³ Autor ³ Thiago Olis Machado   ³ Data ³15/04/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³          ³ Faz o update na tabela com a situacao do registro conforme   ³±±
+±±³Descri‡…o ³ definicao:                                                   ³±±
+±±³          ³ 1 = Pendente  2 = Processado  3 = Erro                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+
+Static Function SetTrans(cNumSit,cNumTrans,cTable)
+Local xQuery := ''
+
+TcSetConn(__nConecta)
+
+xQuery := ' UPDATE '+cTable
+xQuery += ' SET SIT_PROCED = '+ValToSql(cNumSit) + ' , SIT_TRANS = '+ValToSql(cNumSit)
+xQuery += ' WHERE NUM_TRANS = '+cNumTrans
+
+TcSqlExec(xQuery)
+
+TcSetConn(AdvConnection())
+
+Return .t.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getConnect
+Efetua conexão com o banco LOGIX.
+
+@author  Anonymos
+@since   15/04/2008
+
+@param   cTable, string, Tabela logix que será consultada.
+/*/
+//-------------------------------------------------------------------
+Static Function getConnect( cTable )
+
+	Local cAlias
+	Local cServer
+	Local nPort
+	Local __nConecta
+	Local __cLastConn
+	Local cDataBase
+
+	Private aDados		:= {}
+
+	//Abre o SX6
+	If Select("SX6") == 0
+		RpcSetType(3)
+		RpcSetEnv(aEmpresa[1], aEmpresa[2] ,,,"MNT")
+	EndIf
+
+	If !Empty(aEmpresa)
+		cFilAnt :=  aEmpresa[2]
+	EndIf
+
+	aDados      := StrTokArr( SuperGetMv( 'MV_NGINTLO', .F., '' ), ';' )
+	cDataBase   := aDados[1]
+	cAlias      := aDados[2]
+	nPort       := Val( aDados[3] )
+	cServer     := aDados[4]
+	__cLastConn := cDatabase+";"+cAlias+";"+cServer
+
+	If !Empty( aDados[5] ) .And. !( aDados[5] $ cTable )
+		
+		cTable  := aDados[5] + '.' + cTable
+	
+	EndIf
+
+	If (("AS" $ cAlias) .And. ("400" $ cAlias))
+		__nConecta := TCLink(cDataBase,cServer,nPort)
+	Else
+		__nConecta := TCLink("@!!@"+AllTrim(cDataBase)+"/"+AllTrim(cAlias),cServer,nPort)  // Nao Comer Licenca do Top
+
+		If __nConecta < 0
+			__nConecta := TCLink(cDataBase+"/"+cAlias,cServer,nPort)
+		EndIf
+	EndIf
+
+	If (__nConecta < 0)
+		UserException("TOPCONN Connection Failed - Error ("+Str(__nConecta,4,0)+")"+__cLastConn)
+	EndIf
+
+Return __nConecta
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ConvertCampo
+Analisa se o conteudo do campo necessita ser convertido para regra de
+negocio do Protheus
+
+@author Vitor Emanuel Batista
+@since 15/06/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ConvertCampo(cCampo,cValCampo)
+
+	If "NUM_CGC_CPF" == cCampo .Or. "COD_CEP" == cCampo
+		cValCampo := StrTran(cValCampo,'-','')
+		cValCampo := StrTran(cValCampo,'/','')
+		cValCampo := StrTran(cValCampo,'.','')
+	ElseIf "IES_TIP_ITEM" == cCampo
+		If cValCampo == "B"
+			cValCampo := "BN"
+		ElseIf cValCampo == "F"
+			cValCampo := "PA"
+		ElseIf cValCampo == "C"
+			cValCampo := "MP" //PODE SER TAMBÉM: GG,ME,MO,MC,PI,PV
+		EndIf
+	ElseIf ',' $ cValCampo .And. !("'" $ cValCampo .Or. '"' $ cValCampo) //"PES_UNIT" == cCampo
+		cValCampo := StrTran(cValCampo,',','.')
+	ElseIf "COD_CIDADE_NASC" == cCampo //Logix possui Estado + Codigo
+		cValCampo := SubStr(cValCampo,1,2)
+	ElseIf "COD_NACION" = cCampo .And. cValCampo == '0'
+		cValCampo := "  "
+	ElseIf "COD_CENTRO_CUSTO" = cCampo .And. cValCampo == '0'
+		cValCampo := "  "
+	EndIf
+
+Return cValCampo
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTFields
+Adiciona complemento de campos para a tabela
+
+@author Vitor Emanuel Batista
+@since 15/06/2012
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTFields(aInt,cAlias)
+
+	If cAlias == "SD3"
+		aAdd( aInt, {"INSERT","D3_CCUSTO",	NGSEEK("STJ",SubStr(SD3->D3_OP,1,6),1,"STJ->TJ_CCUSTO")	,3,1,1,Len(aInt)+1} )
+	ElseIf cAlias == "SD4"
+		aAdd( aInt, {"INSERT","D4_CCUSTO",	NGSEEK("STJ",SubStr(SD4->D4_OP,1,6),1,"STJ->TJ_CCUSTO")	,3,1,1,Len(aInt)+1} )
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fLodFilLog
+Abre a Empresa atraves da Tabela De\Para
+
+@author Taina Alberto Cardoso
+@since 20/08/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fLodFilLog(cFilProth,lLogix)
+
+	Local cFIlLogix := cFilProth
+	Local cEmpLogix := ""
+	Local nPosFil 	:= 0
+	Local lRet 		:= .F.
+	Local aAbreEmp  := {}
+
+	Default lLogix 	:= .F.
+
+	nPosFil := aScan(aEMpFilP,{|x| AllTrim(x[1])+AllTrim(x[2]) == Alltrim(cEmpAnt)+Alltrim(cFilProth)})
+	If nPosFil == 0
+		//Verificar se e pra buscar a empresa Logix ou Protheus
+		If !lLogix
+			aAbreEmp := FWEAIEmpFil(cEmpAnt,cFilProth,"LOGIX",.T.)
+			If Len(aAbreEmp) > 0
+				cFIlLogix := aAbreEmp[1]
+				aAdd(aEMpFilP, {cEmpAnt,cFilProth,cFIlLogix})
+				lRet := .T.
+			EndIf
+
+			If !lRet
+				MsgInfo(STR0015)  //"Não foi encotrando nenhum registro na tabela 'De\Para' de empresas para o Logix"
+			EndIf
+		Else
+			nEmpresa 	:= aEmpresa[1]
+			nEmpFilial 	:= aEmpresa[2]
+			aEmpresa[1] := NIL
+			aEmpresa[1] := cValToChar(nEmpresa)
+			aEmpresa[2] := NIL
+			aEmpresa[2] := cValToChar(nEmpFilial)
+			RpcSetType(3)
+			RpcSetEnv(aEmpresa[1], aEmpresa[2] ,,,"MNT")
+
+			cProduct   := "LOGIX          "
+			aAbreEmp   := FWEAIEmpFil(Alltrim(cFilProth),Space(12),cProduct)
+
+			If Len(aAbreEmp) > 0
+				cEmpLogix := aAbreEmp[1]
+				cFIlLogix := aAbreEmp[2]
+				aAdd(aEMpFilP, {aAbreEmp[1],aAbreEmp[2],cFilProth})
+				lRet := .T.
+				If aEmpresa[1] <> aAbreEmp[1]
+					nEmpresa   := aEmpresa[1]
+					nEmpFilial := aEmpresa[2]
+					aEmpresa[1] := NIL
+					aEmpresa[1] := cValToChar(nEmpresa)
+					aEmpresa[2] := NIL
+					aEmpresa[2] := cValToChar(nEmpFilial)
+					RpcSetType(3)
+					RpcSetEnv(aAbreEmp[1],aAbreEmp[2],,,"MNT")
+				EndIf
+			Else
+				MsgInfo(STR0015)  //"Não foi encotrando nenhum registro na tabela 'De\Para' de empresas para o Logix"
+			EndIf
+		EndIf
+	Else
+		cFIlLogix:= aEMpFilP[nPosFil][3]
+		lRet := .T.
+	EndIf
+
+
+Return {cEmpLogix,cFIlLogix,lRet}
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SqlToTrb
+Cria tabela temporária
+
+@author Tainã Alberto Cardoso
+@since 20/08/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function SqlToTrb( cQuery, aStruTmp, cAliasTmp )
+	Local nI		:= 0
+	Local nJ        := 0
+	Local nF        := 0
+	Local nTotalRec := 0
+	Local aStruQry 	:= {}
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea(.T., "TOPCONN", TCGenQry(,,cQuery), "TMP", .F., .T.)
+	For nJ := 1 to Len(aStruTmp)
+		If !(aStruTmp[nJ,2] $ 'CM')
+			TCSetField("TMP", aStruTmp[nJ,1], aStruTmp[nJ,2],aStruTmp[nJ,3],aStruTmp[nJ,4])
+		EndIf
+	Next nJ
+	nTotalRec:= TMP->(RecCount())
+	aStruQry := TMP->(DbStruct())
+	nF			:= Len(aStruQry)
+	TMP->(DbGoTop())
+	ProcRegua( nTotalRec )
+	While ! TMP->(Eof())
+		IncProc()
+		(cAliasTmp)->(DbAppend())
+		For nI := 1 To nF
+			If (cAliasTmp)->(FieldPos(aStruQry[nI,1])) > 0	 .And. aStruQry[nI,2] <> 'M'
+				(cAliasTmp)->(FieldPut(FieldPos(aStruQry[nI,1]),TMP->(FieldGet(TMP->(FieldPos(aStruQry[nI,1]))))))
+			Endif
+		Next nI
+		TMP->(DbSkip())
+	End
+	TMP->(dbCloseArea())
+	DbSelectArea(cAliasTmp)
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGBaseLog
+Carrega tabela TT6 com a integração padrão do LOGIX.
+
+@author Tainã Alberto Cardoso
+@since 08/02/2017
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function NGBaseLog()
+
+	Local aTT6 := {}
+	Local nTT6 := 0
+
+	//Integração Linhas de Produtos
+	aAdd(aTT6,{"TRY", "LINHA_PROD","PKcod_empresa"   ,"TRY_FILIAL","1"})
+	aAdd(aTT6,{"TRY", "LINHA_PROD","PKcod_lin_prod"	 ,"TRY_LINPRO","1"})
+	aAdd(aTT6,{"TRY", "LINHA_PROD","PKcod_lin_recei" ,"TRY_LINREC","1"})
+	aAdd(aTT6,{"TRY", "LINHA_PROD","PKcod_seg_merc"	 ,"TRY_SEGMER","1"})
+	aAdd(aTT6,{"TRY", "LINHA_PROD","PKcod_cla_uso"	 ,"TRY_CLAUSO","1"})
+	aAdd(aTT6,{"TRY", "LINHA_PROD","den_estr_linprod","TRY_DESCRI","1"})
+
+	//Integração Funcionário Manutenção
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","PKCOD_EMPRESA"    ,"T1_FILIAL","1"})
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","PKNUM_MATRICULA"  ,"T1_CODFUNC","1"})
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","NOM_FUNCIONARIO"  ,"T1_NOME","1"})
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","001","T1_CCUSTO"  ,"2"})
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","001","T1_TURNO"   ,"2"})
+	aAdd(aTT6,{"ST1","FUNCIONARIO_MIN","VAL_CUS_HORA_FUNC","T1_SALARIO","1"})
+
+	//Integração Funcionário do RH
+	aAdd(aTT6,{"SRA","FUNCIONARIO","PKCOD_EMPRESA"   ,"RA_FILIAL","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","PKNUM_MATRICULA" ,"RA_MAT","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","NOM_FUNCIONARIO" ,"RA_NOME","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","COD_CATEGORIA"   ,"RA_TIPOPGT","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","DAT_ADMIS"       ,"RA_ADMISSA","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","DAT_DEMIS"       ,"RA_DEMISSA","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","COD_CIDADE_NASC" ,"RA_NATURAL","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","COD_NACION"      ,"RA_NACIONA","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","IES_EST_CIVIL"   ,"RA_ESTCIVI","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","IES_SEXO"        ,"RA_SEXO","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","DAT_NASCIMENTO"  ,"RA_NASC","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","COD_CENTRO_CUSTO","RA_CC","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","NUM_CPF","RA_CIC","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","NUM_CART_IDENT"  ,"RA_RG","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","SALARIO"         ,"RA_SALARIO","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","QTD_HOR_MES"     ,"RA_HRSMES","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","DEN_CONTATO"     ,"RA_EMAIL","1"})
+	aAdd(aTT6,{"SRA","FUNCIONARIO","NUM_TELEF_RES"   ,"RA_TELEFON","1"})
+
+	//Integração Centro de Custo
+	aAdd(aTT6,{"CTT","CAD_CC","PKCOD_EMPRESA"   ,"CTT_FILIAL","1"})
+	aAdd(aTT6,{"CTT","CAD_CC","PKCOD_CENT_CUST" ,"CTT_CUSTO","1"})
+	aAdd(aTT6,{"CTT","CAD_CC","NOM_CENT_CUST"   ,"CTT_DESC01","1"})
+	aAdd(aTT6,{"CTT","CAD_CC","'01'","CTT_LOCAL","2"})
+	aAdd(aTT6,{"CTT","CAD_CC","'2'","CTT_CLASSE","2"})
+	aAdd(aTT6,{"CTT","CAD_CC","'2'","CTT_BLOQ"  ,"2"})
+
+	//Integração Unidade de Medida
+	aAdd(aTT6,{"SAH","UNID_MED","PKCOD_UNID_MED" ,"AH_UNIMED","1"})
+	aAdd(aTT6,{"SAH","UNID_MED","DEN_UNID_MED_30","AH_UMRES","1"})
+
+	//Integração com Produto
+	aAdd(aTT6,{"SB1","ITEM","PKCOD_EMPRESA"  ,"B1_FILIAL","1"})
+	aAdd(aTT6,{"SB1","ITEM","PKCOD_ITEM"     ,"B1_COD","1"})
+	aAdd(aTT6,{"SB1","ITEM","DEN_ITEM"       ,"B1_DESC","1"})
+	aAdd(aTT6,{"SB1","ITEM","IES_TIP_ITEM"   ,"B1_TIPO","1"})
+	aAdd(aTT6,{"SB1","ITEM","COD_UNID_MED"   ,"B1_UM","1"})
+	aAdd(aTT6,{"SB1","ITEM","PES_UNIT"       ,"B1_PESBRU","1"})
+	aAdd(aTT6,{"SB1","ITEM","COD_LOCAL_ESTOQ","B1_LOCPAD","1"}) //Tamanho 10 no Logix e 2 no protheus
+	aAdd(aTT6,{"SB1","ITEM","GRU_CTR_ESTOQ"  ,"B1_GRUPO","1"})
+	aAdd(aTT6,{"SB1","ITEM","IES_CTR_LOTE"   ,"B1_RASTRO","1"})
+	aAdd(aTT6,{"SB1","ITEM","'M'"            ,"B1_TIPCONV","2"})
+	aAdd(aTT6,{"SB1","ITEM","'1'"            ,"B1_MCUSTD","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'"            ,"B1_TIPODEC","2"})
+	aAdd(aTT6,{"SB1","ITEM","DDATABASE"      ,"B1_UREV","3"})
+	aAdd(aTT6,{"SB1","ITEM","DDATABASE"      ,"B1_DATREF","3"})
+	aAdd(aTT6,{"SB1","ITEM","'S'"            ,"B1_MRP","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'"            ,"B1_IMPORT","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'"            ,"B1_ANUENTE","2"})
+	aAdd(aTT6,{"SB1","ITEM","'M'"            ,"B1_TIPOCQ","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'"            ,"B1_SOLICIT","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'"            ,"B1_DESPIMP","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'"            ,"B1_AGREGCU","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'"            ,"B1_INSS","2"})
+	aAdd(aTT6,{"SB1","ITEM","'1'"            ,"B1_FLAGSUG","2"})
+	aAdd(aTT6,{"SB1","ITEM","'1'"            ,"B1_CLASSVE","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'"            ,"B1_MIDIA","2"})
+	aAdd(aTT6,{"SB1","ITEM","'0'"            ,"B1_ENVOBR","2"})
+	aAdd(aTT6,{"SB1","ITEM","1"              ,"B1_QTDSER","2"})
+	aAdd(aTT6,{"SB1","ITEM","'S'"            ,"B1_ATIVO","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'"            ,"B1_CPOTENC","2"})
+	aAdd(aTT6,{"SB1","ITEM","'1'"            ,"B1_USAFEFO","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'"            ,"B1_MSBLQL","2"})
+
+	aAdd(aTT6,{"SB1","ITEM","'3'","B1_ESCRIPI","2"})
+	aAdd(aTT6,{"SB1","ITEM","'P'","B1_PRODSBP","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'","B1_PIS","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'","B1_CSLL","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'","B1_COFINS","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'","B1_FETHAB","2"})
+	aAdd(aTT6,{"SB1","ITEM","'2'","B1_GARANT","2"})
+	aAdd(aTT6,{"SB1","ITEM","'N'","B1_LOCALIZ","2"})
+	aAdd(aTT6,{"SB1","ITEM","COD_CLA_FISC","B1_POSIPI","1"}) //Campo utilizado pelo Fiscal
+
+	//Integração Custo Médio
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","PKCOD_EMPRESA","B2_FILIAL","1"})
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","PKCOD_ITEM","B2_COD","1"})
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","CUS_UNIT_MEDIO","B2_CM1","1"})
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","DATA_INICIAL","B2_XDTINI","1"})
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","DATA_FINAL","B2_XDTFIN","1"})
+	aAdd(aTT6,{"SB2","ITEM_CUSTO","01","B2_LOCAL","1"})
+
+	//Integração com Fornecedor
+	aAdd(aTT6,{"SA2","FORNECEDOR","PKCOD_FORNECEDOR","A2_COD","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","'01'","A2_LOJA","2"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","RAZ_SOCIAL","A2_NOME","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","RAZ_SOCIAL_REDUZ","A2_NREDUZ","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","END_FORNEC","A2_END","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","COD_CIDADE","A2_MUN","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","COD_UNI_FEDER","A2_EST","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","DEN_BAIRRO","A2_BAIRRO","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","IES_FIS_JURIDICA","A2_TIPO","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","NUM_CGC_CPF","A2_CGC","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","NUM_TELEFONE","A2_TEL","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","NUM_FAX","A2_FAX","1"})
+	aAdd(aTT6,{"SA2","FORNECEDOR","COD_CEP","A2_CEP","1"})
+
+	//Integração Recurso
+	aAdd(aTT6,{"SH1","RECURSO","PKCOD_EMPRESA","H1_FILIAL","1"})
+	aAdd(aTT6,{"SH1","RECURSO","PKCOD_RECUR","H1_CODIGO","1"})
+	aAdd(aTT6,{"SH1","RECURSO","DEN_RECUR","H1_DESCRI","1"})
+
+	//Integração Grupo de Produto
+	aAdd(aTT6,{"SBM","GRUPO_CTR_ESTOQ","PKCOD_EMPRESA","BM_FILIAL","1"})
+	aAdd(aTT6,{"SBM","GRUPO_CTR_ESTOQ","PKGRU_CTR_ESTOQ","BM_GRUPO","1"})
+	aAdd(aTT6,{"SBM","GRUPO_CTR_ESTOQ","DEN_GRU_CTR_ESTOQ","BM_DESC","1"})
+
+	For nTT6 := 1 To Len(aTT6)
+
+		dbSelectArea("TT6")
+		dbSetOrder(1)
+
+		If !dbSeek(xFilial("TT6") + UPPER(PADR(aTT6[nTT6][2],LEN(TT6->TT6_LOGIX))) + ;
+									UPPER(aTT6[nTT6][1]) + UPPER(PADR(aTT6[nTT6][3], LEN(TT6->TT6_DE))) + ;
+									UPPER(PADR(aTT6[nTT6][4], LEN(TT6->TT6_PARA))))
+
+			RecLock("TT6",.T.)
+
+			TT6->TT6_FILIAL := xFilial("TT6")
+			TT6->TT6_PROTHE := UPPER(aTT6[nTT6][1])
+			TT6->TT6_LOGIX  := UPPER(aTT6[nTT6][2])
+			TT6->TT6_DE     := UPPER(aTT6[nTT6][3])
+			TT6->TT6_PARA   := UPPER(aTT6[nTT6][4])
+			TT6->TT6_ORIGEM := UPPER(aTT6[nTT6][5])
+
+			MsUnLock()
+		Else
+
+			Exit
+
+		EndIf
+
+	Next nTT6
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMNTAEN
+Valida AEN quando integrado com LOGIX
+
+@param:
+
+cCodAEN  - Código da AEN.      ||Obrigatório
+
+@author Tainã Alberto Cardoso
+@since 10/02/2017
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function fMNTAEN(cCodAEN)
+
+	Local cLinPro := ""
+	Local cLinRec := ""
+	Local cSegMer := ""
+	Local cClaUso := ""
+	Local cAlerta := ""
+	Local lRet := .T.
+
+	If !Empty(cCodAEN)
+
+		cLinPro := SubStr(cCodAEN, 1, 2)
+		cLinRec := SubStr(cCodAEN, 3, 2)
+		cSegMer := SubStr(cCodAEN, 5, 2)
+		cClaUso := SubStr(cCodAEN, 7, 2)
+
+		If !NGIFdbSeek("TRY",cLinPro,1)
+			cAlerta := STR0017 //"Linha de Produto não existe na tabela de Linha de Produto."
+			lRet := .F.
+		ElseIf !NGIFdbSeek("TRY", cLinRec, 2)
+			cAlerta := STR0018 //"Linha de Receita não existe na tabela de Linha de Produto."
+			lRet := .F.
+		ElseIf !NGIFdbSeek("TRY", cSegMer, 3)
+			cAlerta :=  STR0019 //"Segmento de Mercado não existe na tabela de Linha de Produto."
+			lRet := .F.
+		ElseIf !NGIFdbSeek("TRY", cClaUso, 4)
+			cAlerta := STR0020 //"Classe de Uso não existe na tabela de Linha de Produto."
+			lRet := .F.
+		EndIf
+
+		If !lRet
+			ShowHelpDlg(STR0003, {cAlerta}, 1, {}, 1) //"ATENCAO"
+		EndIf
+
+	EndIf
+
+Return lRet

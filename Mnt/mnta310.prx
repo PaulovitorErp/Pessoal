@@ -1,0 +1,528 @@
+#INCLUDE "mnta310.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA310
+Programa de plano de acompanhamento
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@return: Nil
+@version: P11/P12
+/*/
+//--------------------------------------------------------------------------------
+Function MNTA310()
+
+	Local oBrowse
+	Local cCondicao	:= 'STO->TO_FILIAL == "'+ xFilial("STO")+'"'+'.And. STO->TO_SITUACA <> "C" '
+	Local lOk := .T.
+
+	Private aRotina	:= MenuDef()
+	Private cCadastro	:= STR0001 //"Plano de Acompanhamento"
+	Private cTRB        := GetNextAlias()
+
+	If "A" $ Alltrim(SuperGetMv("MV_NGLANEX",.F.,"-1"))
+		MsgStop(STR0016,STR0015)//"Parâmetro MV_NGLANEX restringe lançamentos do tipo Contador."
+		lOk := .F.
+	EndIf
+
+	If lOk
+		oBrowse := FWMBrowse():New()
+		oBrowse:SetAlias( "STO" ) // Alias da tabela utilizada
+		oBrowse:SetFilterDefault( cCondicao ) //Filtro do Alias
+		oBrowse:SetMenuDef( "MNTA310" )  // Nome do fonte onde esta a função MenuDef
+		oBrowse:SetDescription( cCadastro ) // Descrição do browse
+		oBrowse:Activate()
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Regras de Modelagem da gravacao
+
+@author: Elynton Fellipe Bazzo
+@since:  10/02/2015
+@version: P11/P12
+@return: oModel
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	Local oModel
+	Local oStructSTO := FWFormStruct( 1,"STO" )
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New( "MNTA310",/*bPre*/,{|oModel| PosValida(oModel)},{|oModel| CommitInfo(oModel) },/*bCancel*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields( "MNTA310_STO", Nil, oStructSTO,/*bPre*/,/*bPost*/,/*bLoad*/ )
+
+	oModel:SetDescription( STR0001 ) // Descrição do browse //"Plano de Acompanhamento"
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Regras de Interface com o Usuario
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@version: P11/P12
+@return: oView
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	Local oModel := FWLoadModel( "MNTA310" )
+	Local oView  := FWFormView():New()
+
+	// Objeto do model a se associar a view.
+	oView:SetModel( oModel )
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( "MNTA310_STO",FWFormStruct( 2,"STO" ),/*cLinkID*/ )
+
+	// Criar um "box" horizontal para receber algum elemento da view
+	oView:CreateHorizontalBox( "MASTER",100,/*cIDOwner*/,/*lFixPixel*/,/*cIDFolder*/,/*cIDSheet*/ )
+
+	// Associa um View a um box
+	oView:SetOwnerView( "MNTA310_STO","MASTER" )
+
+	//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} CommitInfo
+Confirmação da tela de cadastro
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@version: P11/P12
+@return: .T.
+/*/
+//---------------------------------------------------------------------
+Static Function CommitInfo( oModel )
+
+	Local nOperation := oModel:GetOperation()
+
+	If nOperation == 5 // "Excluir"
+		DbSelectArea( "STO" )
+		RecLock( "STO",.F. )
+		STO->TO_SITUACA	:= "C"
+		STO->TO_USUARIO	:= If(Len( STO->TO_USUARIO ) > 15,cUsername,Substr( cUsuario,7,15 ))
+		MsUnlock( "STO" )
+		Processa({ |lEnd| fCommitDel(STO->TO_PLANO) },STR0009+STR0010+STR0011 ) //"Aguarde..."###"Excluindo "###"Ordens do Plano "
+	Else
+		// Grava dados do Model
+		FwFormCommit( oModel )
+		ConfirmSX8()
+		Processa( {|lEnd| fCommit( "STO",nOperation )} )
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PosValida
+Pre validação para abertura do cadastro.
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@version: P11/P12
+@return: lRetorno
+/*/
+//---------------------------------------------------------------------
+Static Function PosValida( oModel )
+
+	Local lRetorno	:= .T.
+	Local cError		:= ''
+	Local nOperation	:= oModel:GetOperation()
+
+	If nOperation == 5 //"Excluir"
+		DbSelectArea( "TQA" )
+		DbSetOrder( 05 )
+		If DbSeek( xFilial( "TQA" ) + STO->TO_PLANO + 'S' )
+			cError	:= AllTrim( STR0002 ) //"O.S de Acompanhamento"
+			Help( "",1,"NGINTMOD",,cError,5,1 )
+			lRetorno := .F.
+		EndIf
+	EndIf
+
+Return lRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCommitDel
+Exclusao da ordem de Acompanhamento do plano
+
+@author: Inácio Luiz Kolling
+@since: 02/10/2001
+@version: P11/P12
+@return: .T.
+/*/
+//---------------------------------------------------------------------
+Static Function fCommitDel( cVPLANO )
+
+	DbSelectArea( "TQA" )
+	DbSetOrder( 03 )
+	DbSeek( xFilial( "TQA" ) + cVPLANO )
+	ProcRegua(Reccount())
+	While !Eof() .And. xFilial( "TQA" ) + cVPLANO == TQA->TQA_FILIAL + TQA->TQA_PLANO
+		IncProc()
+		RecLock( "TQA",.F.,.T. )
+		DbDelete()
+		MSUNLOCK( "TQA" )
+		DbSkip()
+	EndDo
+	DbSetOrder( 01 )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCommit
+Critica se a linha digitada esta ok
+
+@author: Paulo Pego
+@since: 02/10/2001
+@version: P11/P12
+@return: .T.
+/*/
+//---------------------------------------------------------------------
+Static Function fCommit( cAlias,nOpcao )
+
+	Local nx ,ny ,nMaxArray ,nCntItem := 1 ,aAnterior := {},nCntDel := 0,i
+	Local nTot, nPos, Scr, nCol, dOLDULT, nTOTREC := 0, lFirst := .t.
+	Local oTmpTbl1
+
+	DbSelectArea( "TQA" )
+	DbSetOrder( 02 )
+
+	DbSelectArea( "ST9" )
+	DbSetOrder( 03 )
+
+	aCampos	:= DbStruct()
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRB, aCampos )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"T9_CODBEM"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	DbSelectArea( "ST9" )
+	DbSeek( xFilial( "ST9" )+STO->TO_CCUSINI,.T. )
+	ProcRegua(Reccount())
+	While !Eof() .And. xFilial( "ST9" ) == T9_FILIAL .And. ST9->T9_CCUSTO >= STO->TO_CCUSINI .And. ST9->T9_CCUSTO <= STO->TO_CCUSFIM
+		IncProc( STR0003 ) //"Selecionando Registros..."
+		If If(Empty(STO->TO_CTRAINI), .T., ST9->T9_CENTRAB >= STO->TO_CTRAINI .And. ST9->T9_CENTRAB <= STO->TO_CTRAFIM) .And.;
+		If(Empty(STO->TO_FAMIINI), .T., ST9->T9_CODFAMI >= STO->TO_FAMIINI .And. ST9->T9_CODFAMI <= STO->TO_FAMIFIM) .And.;
+		If(Empty(STO->TO_BEMINI),  .T., ST9->T9_CODBEM  >= STO->TO_BEMINI  .And. ST9->T9_CODBEM  <= STO->TO_BEMFIM)
+
+			If Empty( ST9->T9_PERACOM )
+				DbSkip()
+				Loop
+			EndIf
+
+			(cTRB)->(DbAppend())
+			For i := 1 To FCount()
+				x   := "ST9->" + FieldName(i)
+				y   := "(cTRB)->" + FieldName(i)
+				Replace &y. with &x.
+			Next i
+		EndIf
+		DbSelectArea( "ST9" )
+		DbSkip()
+	End While
+
+	DbSelectArea( "ST9" )
+	DbSetOrder( 01 )
+
+	// DETALHES PARA MANUTENCAO
+	DbSelectArea(cTRB)
+	DbGoTop()
+	ProcRegua(Reccount())
+	While !Eof()
+		IncProc( STR0004 ) //"Gerando Ordens de Acompanhamento..."
+		dOLDULT := (cTRB)->T9_DTULTAC
+		lFIRST  := .T.
+
+		(cTRB)->(RecLock((cTRB),.F.))
+		DbSelectArea( "ST9" )
+		DbSetOrder(1)
+		DbSeek(xFilial("ST9")+(cTRB)->T9_CODBEM)
+		cCodBem  := ST9->T9_CODBEM
+		dOLDULT  := ST9->T9_DTULTAC
+		cCodBem1 := cCodBem
+		If ST9->T9_TEMCONT == 'S' .And. ST9->T9_SITBEM == 'A'
+			cBEMAUX := Space(Len(ST9->T9_CODBEM))
+			(cTRB)->T9_DTULTAC := dOLDULT
+
+			For i := 1 To ((STO->TO_DATAFIM - STO->TO_DATAINI)+1)
+				vatrasa := .f.
+				If ST9->T9_UNIACOM == "S"
+					nPERIODO := (7 * ST9->T9_PERACOM)
+				ElseIf ST9->T9_UNIACOM == "M"
+					nANO := YEAR((cTRB)->T9_DTULTAC)
+					nMES := MONTH((cTRB)->T9_DTULTAC)
+					nDIA := Day((cTRB)->T9_DTULTAC)
+					nMES := nMES + ST9->T9_PERACOM
+
+					While nMES > 12
+						nMES := nMES - 12
+						nANO := nANO + 01
+					End While
+
+					nDIA := STRZERO(nDIA,2)
+					nMES := STRZERO(nMES,2)
+					nANO := AllTrim(STRZERO(nANO,4))
+					dDAT := CTOD(nDIA+'/'+nMES+'/'+nANO)
+
+					While Empty( dDAT )
+						nDIA := VAL(nDIA)-1
+						nDIA := STRZERO(nDIA,2)
+						dDAT := CTOD(nDIA+'/'+nMES+'/'+nANO)
+					End While
+				ElseIf ST9->T9_UNIACOM == "H"
+					nPERIODO := INT( (ST9->T9_PERACOM / 24) )
+					nPeriodo := If((24 % ST9->T9_PERACOM) > 0, nPeriodo+1,nPeriodo)
+				Else
+					nPERIODO := ST9->T9_PERACOM
+				EndIf
+
+				If ST9->T9_UNIACOM <> "M"
+					dMANUT := If(STO->TO_GERMANV == "N" .And. ((cTRB)->T9_DTULTAC < STO->TO_DATAINI),STO->TO_DATAINI+nPERIODO,(cTRB)->T9_DTULTAC+nPERIODO)
+				Else
+					dMANUT := If(STO->TO_GERMANV == "N" .And. ((cTRB)->T9_DTULTAC < STO->TO_DATAINI),STO->TO_DATAINI + dDAT, dDAT )
+				EndIf
+
+				If (dMANUT < STO->TO_DATAINI .and. STO->TO_GERMANV != "S") .or.;
+				(dMANUT > STO->TO_DATAFIM)
+					Loop
+				EndIf
+
+				dREAL := If(dMANUT < STO->TO_DATAINI, STO->TO_DATAINI, dMANUT)
+
+				While .T. //Verifica se e dia util
+					If fValData(dREAL) .or. (DOW(dREAL) == 1) .or. (DOW(dREAL) == 7)
+						If STO->TO_NAOUTIL == "U"
+							Exit
+						ElseIf STO->TO_NAOUTIL == "A"
+							vatrasa := .T.
+							dREAL--
+						Else
+							dREAL++
+						EndIf
+						Loop
+					EndIf
+					Exit
+				End While
+
+				// VERIFICA A EXISTENCIA DA OS EM OUTRO PLANO
+				lOK := .T.
+				DbSelectArea( "TQA" )
+				If DbSeek(xFilial( "TQA" )+cCodBem+DtoS(dMANUT))
+					If TQA->TQA_SITUAC == "L"
+						lOK := .F.
+					EndIf
+				EndIf
+
+				If lOK
+					cORDEM := GetSx8Num( "TQA","TQA_ORDEM" )
+					ConfirmSX8()
+					TQA->(RecLock("TQA",.T.))
+					TQA->TQA_FILIAL := xFilial("TQA")
+					TQA->TQA_ORDEM  := cORDEM
+					TQA->TQA_PLANO  := STO->TO_PLANO
+					TQA->TQA_CODBEM := cCodBem
+					TQA->TQA_DTORIG := dMANUT
+					TQA->TQA_DTREAL := dREAL
+					TQA->TQA_SITUAC := "P"
+					TQA->TQA_TERMIN := "N"
+					TQA->TQA_CCUSTO := (cTRB)->T9_CCUSTO
+					TQA->TQA_CENTRA := (cTRB)->T9_CENTRAB
+					TQA->TQA_RETORN := "N"
+					MsUnlock()
+					nTOTREC++
+				EndIf
+
+				(cTRB)->(RecLock((cTRB),.F.))
+				If vatrasa
+					(cTRB)->T9_DTULTAC := dMANUT
+				Else
+					(cTRB)->T9_DTULTAC := dREAL
+				EndIf
+			Next
+		EndIf
+		DbSelectArea(cTRB)
+		MsUnlock()
+		DbSkip()
+	End While
+
+	If nTOTREC == 0
+		Help( "",1,"OSNAOEXIST" )
+		DbSelectArea( "STO" )
+		RecLock( "STO",.F.,.T. )
+		DbDelete()
+		MsUnlock( "STO" )
+	EndIf
+
+	/*DbSelectArea(cTRB)
+	Use
+	FErase(cArqtrb310 + GetDbExtension())
+	ArqTrabFPT := cArqtrb310 + ".FPT"
+	FErase(ArqTrabFPT)*/
+	oTmpTbl1:Delete()
+
+	DbSelectArea( "ST9" )
+	DbSetOrder(1)
+
+	DbSelectArea( "TQA" )
+	DbSetOrder( 01 )
+	DbSelectArea( cAlias )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValData
+Critica se a linha digitada esta ok
+
+@author: Paulo Pego
+@since: 02/10/2001
+@version: P11/P12
+@return: lRet
+/*/
+//---------------------------------------------------------------------
+Static Function fValData( dDATA )
+
+	Local lRet := .F.
+
+	If DOW( dDATA ) == 1 .Or. DOW( dDATA ) == 7
+		lRet := .T.
+	EndIf
+
+	SH9->(DbSetOrder( 2 ))
+	SH9->(DbSeek("E" + DtoS( dDATA )))
+
+	If SH9->H9_DTINI >= dDATA .And. SH9->H9_DTFIM <= dDATA
+		lRet := .T.
+	EndIf
+	SH9->(DbSetOrder(1))
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fFinaliza
+Finaliza os ordens do plano de Acompanhamento
+
+@author: Paulo Pego
+@since: 02/10/2001
+@version: P11/P12
+@return: lRet
+/*/
+//---------------------------------------------------------------------
+Static Function fFinaliza( cVPLANO )
+
+	DbSelectArea( "TQA" )
+	DbSetOrder( 03 )
+	DbSeek( xFilial( "TQA" ) + cVPLANO )
+	ProcRegua(Reccount())
+	While !Eof() .And. xFilial( "TQA" ) + cVPLANO == TQA_FILIAL + TQA_PLANO
+		IncProc()
+		RecLock( "TQA",.F. )
+		If TQA->TQA_RETORN != "S"
+			TQA->TQA_SITUAC := "C"
+			TQA->TQA_TERMIN := "S
+		Else
+			TQA->TQA_SITUAC := "L"
+			TQA->TQA_TERMIN := "S"
+		EndIf
+		TQA->(MsUnlock())
+		DbSkip()
+	EndDo
+	DbSetOrder( 01 )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC)
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@version: P11/P12
+@return: aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	ADD OPTION aRotina TITLE STR0005 ACTION 'VIEWDEF.MNTA310'	OPERATION 3 ACCESS 0 //"Incluir"
+	ADD OPTION aRotina TITLE STR0006 ACTION 'VIEWDEF.MNTA310'	OPERATION 2 ACCESS 0 //"Visualizar"
+	ADD OPTION aRotina TITLE STR0007 ACTION 'VIEWDEF.MNTA310'	OPERATION 5 ACCESS 0 //"Excluir"
+	ADD OPTION aRotina TITLE STR0008 ACTION 'MNT310FIM()'		OPERATION 6 ACCESS 0 //"Finalizar"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT310FIM
+Programa de Finalizacao Plano de Acompanhamento
+
+@author: Elynton Fellipe Bazzo
+@since: 10/02/2015
+@version: P11/P12
+@return: aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Function MNT310FIM()
+
+	Local bCampo, cCod
+	Local nOpcao := 0
+	Local oDlg, oEnchoice, oMenu
+
+	Private asMenu
+	Private aSize		:= MsAdvSize( ,.F.,430 )
+	Private nLargura	:= aSize[5]
+	Private nAltura	:= aSize[6]
+
+	asMenu := NGRIGHTCLICK( "MNTA310" )
+	bCampo := {|nCPO| Field(nCPO) }
+
+	If STO->TO_SITUACA == "C"
+		Help( "",1,"PLANJACANC" )
+		Return
+	EndIf
+
+	If STO->TO_SITUACA <> "L" .or. STO->TO_TERMINO == 'S'
+		Help( "",1,"NAOPODEFIN" )
+		Return
+	EndIf
+
+	SoftLock( "STO" )
+	Define MsDialog oDlg Title cCadastro From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel //"Plano de Acompanhamento"
+	oDlg:lMaximized := .T.
+	oEnchoice := Msmget():New( "STO",Recno(),3,,,STR0008 ) //"Finalizar"
+	NGPOPUP( asMenu,@oMenu,oDlg )
+	oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+	oEnchoice:oBox:bRClicked:={ |o,x,y| oMenu:Activate(x,y,oDlg)}
+	oEnchoice:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+	Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{|| nOpcao := 2,oDlg:End()},{|| nOpcao := 1,oDlg:End()})
+
+	DbSelectArea( "STO" )
+
+	If nOpcao == 2
+		cCod := STO->TO_PLANO
+		DbSelectArea( "STO" )
+		RecLock( "STO",.F. )
+		STO->TO_TERMINO := "S"
+		STO->TO_USUARIO := If(Len( STO->TO_USUARIO ) > 15,cUsername,Substr( cUsuario,7,15 ))
+		MsUnlock( "STO" )
+
+		Processa({ |lEnd| fFinaliza( cCod ) },STR0009+STR0012+STR0011 )  //"Aguarde..."###"Finalizando "###"Ordens do Plano "
+	EndIf
+
+	DbSelectArea( "STO" )
+
+Return

@@ -1,0 +1,6019 @@
+#INCLUDE "MNTA231.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWADAPTEREAI.CH" // Integração via Mensagem Única
+
+Static lRel12133 := GetRPORelease() >= '12.1.033'
+Static lIntegRM  := SuperGetMV( 'MV_NGINTER', .F., 'N' ) == 'M'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231
+Movimentacao do Esquema de Pneus
+@author Inacio Luiz Kolling
+@since 27/09/06
+@version undefined
+@param cVOrde, characters
+@param cVPla, characters
+@param cVTip, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231(cVOrde,cVPla,cVTip)
+
+	//+-------------------------------------------------------------------+
+	//|Guarda conteudo e declara variaveis padroes 						  |
+	//+-------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local lNOVAVER := .F.
+	Local oDlg,oPanel
+
+	If FindFunction( 'MNTAmIIn' ) .And. !MNTAmIIn( 95 )
+		Return .F.
+	EndIf
+
+	If !FindFunction("MNT232VERS") .OR. !MNT232VERS()
+		MsgInfo( STR0237  ) // 'Para utilizar a rotina é necessário atualizar o ambiente. Verifique o pacote de atualização referente ao ticket 6255067'
+		Return .F.
+	EndIf
+
+	Private nMaxPe 	   := 0, cTipM := cVTiP,nDifCo := 0,nDifC2 := 0,cTipSer := cVTip
+	Private cUsaIntEs  := AllTrim(GetMV("MV_NGMNTES"))
+	Private cCodST9Est := ' '
+	Private cCodST9Alm := ' '
+	Private cCodST9Loc := ' '
+	Private lTZUser    := NGCADICBASE("TZ_USUARIO","D","STZ",.F.)
+	Private lContEs    := NGCADICBASE('TQZ_ALMOX','A','TQZ',.F.) //Campos de histórico do status que controlam estoques
+	Private lESTNEGA   := If(AllTrim(GETMV("MV_ESTNEG")) == 'S',.T.,.F.)
+	Private lDtvSgCnt  := NGCADICBASE("TPE_SITUAC","A","TPE",.F.) //Indica se permite desativar segundo contador
+
+	// NAO RETIRAR USADA NA CONSULTA NG1
+	Private M->TP9_CCUSTO := Space(len(st9->t9_ccusto))
+
+	DbselectArea("SX3")
+	DbsetOrder(2)
+	If !Dbseek("TQ1_FAMIL7")
+		lNOVAVER := .T.
+	Endif
+	DbsetOrder(1)
+	If !lNOVAVER
+		DbselectArea("TQ1")
+		DbsetOrder(1)
+		lNOVAVER := .F.
+	Endif
+
+	If lNOVAVER
+		MsgInfo(STR0105+chr(13)+STR0106,STR0016)
+		NGRETURNPRM(aNGBEGINPRM)
+		Return .T.
+	Endif
+
+	Private cBEM    := Space(Len(ST9->T9_CODBEM))
+	Private cFORMA  := Space(LEN(TQ0->TQ0_DESENH))
+	Private cBEMNOM := Space(LEN(ST9->T9_NOME)),   cFORNOM := Space(Len(ST6->T6_NOME))
+	Private cCUSTOB := Space(LEN(ST9->T9_CCUSTO)),cCENTRAB := Space(Len(ST9->T9_CENTRAB))
+	Private cCALENB := Space(LEN(ST9->T9_CALENDA))
+	Private nPOSCONT,nPOSCON2,nOP231 := 2,nMONTAG := 2                // numericas
+	Private lTEMCONT,lTEMCON2,lCHKCON1,lCHKCON2                       // logicas
+	Private dDTDATEM := Ctod('  /  /  ')                              // datas
+	Private cBEMME   := cBEM,cMONTAG := STR0001,cHORALE1,cHORALE2     // strings //"Rodados"
+	Private cCODIFAM := Space(Len(st9->t9_codfami)),oMenu, lSH1 := .F.
+	Private lPai      := .F.
+	Private lContPai  := .F.
+	Private cPaiEst   := "" //Quando cBEM for filho, cPaiEst sera pai para atualizacao de contador
+	Private cPaiMod	:= "" //Cod. Modelo do cPaiEst
+	Private cPaiFor	:= "" //cod. Forma do cPaiEst
+
+	Private cHRTIME   := SubStr(Time(),1,5) //Hora do Sistema
+	Private cHRTIME1M := MTOH(HTOM(cHRTIME)+1) //Hora do Sistema + 1 minuto para a troca de localizacao na estrutura
+	Private cTPMODI   := Space(Len(ST9->T9_TIPMOD))
+	Private cPLACA    := Space(Len(ST9->T9_PLACA))
+	Private cDESMOD   := Space(Len(TQR->TQR_DESMOD))
+	Private cNGRODIZ  := AllTrim(GetMv("MV_NGRODIZ"))
+	Private cNGSERPN  := AllTrim(GetMv("MV_NGSERPN"))
+
+	Private lRodizio  := AllTrim(STJ->TJ_SERVICO) == cNGRODIZ
+	Private lDisponi  := AllTrim(STJ->TJ_SERVICO) == cNGSERPN
+	Private cTZUser   := cUserName
+
+	DbselectArea("STJ")
+	DbsetOrder(1)
+	Dbseek(xfilial("STJ")+cVOrde+cVPla)
+
+	Private cNumOS    := STJ->TJ_ORDEM, cNumPL := STJ->TJ_PLANO
+	Private dDataOS   := STJ->TJ_DTMPINI, cHoraOS := STJ->TJ_HORACO1
+	Private dDataOR   := STJ->TJ_DTORIGI
+	Private lSEQSTL   := If(NgVerify("STL"),.T.,.F.)
+
+	Private cEmpOri   := cEmpAnt
+	Private cFilOri   := cFilAnt
+	Private aTable    := { {"ST6"},{"ST9"},{"TQ0"},{"TQ1"},{"TQQ"},{"TQS"},{"TPE"},{"STP"},{"TPP"},{"TQR"},{"STC"} }
+	Private cNGSTAPL  := AllTrim(GetMv("MV_NGSTAPL"))
+	Private cNGBEMTR  := AllTrim(GetMv("MV_NGBEMTR"))
+
+	// Variável que indica se o sistema está utilizando mais Vidas de Pneus
+	Private lMaisVidas := MNTA221Vds()
+
+	//Variaveis de Transferencia de Pneus entre empresas
+	Private lBlkStatus := .F. //Variavel que bloqueia o campo Status
+	Private lTransEmp  := .F. //Indica se ja houve a consistencia dos compartilhamento de tabelas
+	Private lTransErr  := .F.
+	Private aTransBem  := {} //Array das transferencias - Gera TTR
+	Private cMEDIDA, cDESENHO
+	Private lCCUSTO, lCODFAM,lFABRICA, lCALEND, lCENTRAB, lFORNEC, lPRODUTO, lCARACTE, lMANUT, lMEDIDA, lDESENHO
+	Private aNgButton := {}
+	Store .F. to lCCUSTO, lCODFAM,lFABRICA, lCALEND, lCENTRAB, lFORNEC, lPRODUTO, lCARACTE, lMANUT, lMEDIDA, lDESENHO
+
+	If Empty(cHoraOs) .Or. Alltrim(cHoraOs) = ":"
+		cHoraOS := STJ->TJ_HOMPINI
+	Endif
+
+	cPaiEst := cBEM := STJ->TJ_CODBEM
+	Store  '  :  ' To cHORALE1,cHORALE2
+	Store 0        To nPOSCONT,nPOSCON2
+	Store .F.      To lTEMCONT,lTEMCON2,lCHKCON1,lCHKCON2
+	Store .T.      to lWHENCONT, lWHENCON2
+
+	If !MNTA231EST(cBEM)
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	Endif
+
+	DEFINE MSDIALOG oDlg TITLE OemToAnsi(STR0004) From 00,00 To 300,640 OF oMainWnd Pixel COLOR CLR_BLACK,CLR_WHITE //"Esquema de Rodado"
+
+	oPnlPai := TPanel():New(00,00,,oDlg,,,,,,55,15,.F.,.F.)
+	oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oSayBem := TSay():New(8,16,{|| OemtoAnsi(STR0005)},oPnlPai,,,.F.,.F.,.F.,.T.,,,020,008 )//"Bem"
+	@ 0.5,5  MSget cPaiEst  Picture "@!" SIZE 60,10  WHEN .F. Of oPnlPai
+	@ 0.5,13 MSget cBEMNOM  Picture "@!" SIZE 142,10 WHEN .F. Of oPnlPai
+
+	@ 1.5,2  say OemtoAnsi(STR0006) Of oPnlPai//"Esquema"
+	@ 1.5,5  MSget cPaiFor   Picture "@!" SIZE 30,10  When .F. Of oPnlPai
+	@ 1.5,9  MSget cFORNOM  Picture "@!" SIZE 150,10 WHEN .F. Of oPnlPai
+
+	@ 2.5,2  say OemtoAnsi(STR0129) Of oPnlPai//"Modelo"
+	@ 2.5,5  MSget cPaiMod  Picture "@!" SIZE 30,10  When .F. Of oPnlPai
+	@ 2.5,9  MSget cDESMOD  Picture "@!" SIZE 150,10 WHEN .F. Of oPnlPai
+
+	@ 3.9,2  say OemtoAnsi(STR0007) Of oPnlPai//"Data Mov"
+	@ 49.5,45  MSget dDTDATEM Picture "99/99/99"  SIZE 50,10 HASBUTTON PIXEL;
+	VALID NAOVAZIO() .And. MNTA231DL() .And. If(NGFUNCRPO("U_MNTA2316",.F.),NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE1,0}),.T.) .And. fVerBemPai(oPnlPai) Of oPnlPai
+
+	@ 3.5,12 say OemtoAnsi(STR0009) Of oPnlPai//"Hora Leitura"
+	@ 3.5,17 Msget cHORALE1 Picture "99:99" SIZE 10,08 When lTEMCONT .Or. lContPai Of oPnlPai;
+    VALID NGVALHORA(cHORALE1,.T.) .And. MNTA231HL(cHORALE1,1,dDTDATEM) .And. If(NGFUNCRPO("U_MNTA2316",.F.),NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE1,1}),.T.) .And. fVerBemPai(oPnlPai) .And. MNTA231CCB(cPaiEst, dDTDATEM, cHORALE1)
+
+	@ 3.5,21 say OemtoAnsi(STR0008) Of oPnlPai//"Contador 1"
+	@ 3.5,26 MSget nPOSCONT Picture "999999999" Of oPnlPai;
+    VALID MNTA231VCO(cPaiEst,nPOSCONT,1) .And. MNTA231HIS(nPOSCONT,cHORALE1,1,.T.,cPaiEst) When lTEMCONT .And. lWHENCONT .And. ;
+		(!FindFunction("NGBlCont") .Or. NGBlCont( cPaiEst ))
+
+	@ 4.5,12 say OemtoAnsi(STR0009) Of oPnlPai//"Hora Leitura"
+	@ 4.5,17 Msget cHORALE2 Picture "99:99" SIZE 10,08 When lTEMCON2 Of oPnlPai;
+	VALID NGVALHORA(cHORALE2,.T.) .And. MNTA231HL(cHORALE2,2,dDTDATEM) .And. NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE2,2})
+
+	@ 4.5,21 say OemtoAnsi(STR0010) Of oPnlPai//"Contador 2"
+	@ 4.5,26 MSget nPOSCON2 Picture "999999999" Of oPnlPai;
+	VALID MNTA231VCO(cBEM,nPOSCON2,2) .And. MNTA231HIS(nPOSCON2,cHORALE2,2,.T.) When lTEMCON2 .And. lWHENCON2
+
+	@ 5.0,2 To 8.4,13.5 LABEL STR0011 Of oPnlPai//"Apresentar o Esquema Por"
+	@ 80,23 RADIO oRAD VAR nMONTAG ITEMS STR0001,STR0012,STR0013 3D SIZE 78,10 Of oPnlPai//"Rodados"###"Rodados / Localizacoes"###"Rodados / Familias"
+
+	ACTIVATE MSDIALOG oDlg Centered ON INIT EnchoiceBar(oDlg,{||nOP231:=1,If(!MNTA231TOK(),nOP231 := 2,oDlg:End())},{||oDlg:End(),.F.},, aNgButton )
+
+	If nOP231 == 1
+		cHORALE1 := If(cHORALE1 == '  :  ',Substr(Time(),1,5),cHORALE1)
+		cHORALE2 := If(cHORALE2 == '  :  ',Substr(Time(),1,5),cHORALE2)
+		MNTA231GET(cBEM,dDTDATEM,nPOSCONT,nPOSCON2,1,cHORALE1,cHORALE2,nMONTAG,cTPMODI)
+	Endif
+
+	//+-------------------------------------------------------------------+
+	//|Retorna conteudo de variaveis padroes       						  |
+	//+-------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231HL
+Consistencia das horas dos contadores
+@author Inacio Luiz Kolling
+@since 27/09/06
+@version undefined
+@param cHora, characters, Hora Informada
+@param nTPC, numeric, Tipo Contador
+@param dData, date, Data Informada
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231HL(cHora,nTPC,dData)
+
+	If dData == dDataBase
+		If cHora > SubStr(time(),1,5)
+			MsgStop(STR0223) //"Hora não pode ser superior a atual."
+			Return .F.
+		EndIf
+	EndIf
+
+	If dData == dDataBase
+		If !NGCPHORAATU(cHora,"<=",.T.,.T.)
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231DL
+Consistencia da data da movimentacao
+@author Inacio Luiz Kolling
+@since 27/09/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231DL()
+
+	Private dDTULMES  := SuperGetMV("MV_ULMES",.F.,STOD("")) //data do ultimo fechamento do estoque.
+	Private dDtBlqMov := SuperGetMV("MV_DBLQMOV",.F.,STOD("")) //data de bloquei de movimentações no estoque.
+	Private cUsaInt3  := SuperGetMV("MV_NGMNTES",.F.)
+
+	If !NaoVazio(dDTDATEM)
+		Return .F.
+	Endif
+	If dDTDATEM >= dDataOR .And. dDTDATEM <= dDataOS
+		If dDTDATEM < dDataOS
+			If !MsgYesNo(STR0201+" "+NGRETTITULO("TJ_DTMPINI")+CRLF+CRLF+STR0111,STR0016)
+				Return .F.
+			Endif
+		Endif
+	ElseIf dDTDATEM < dDataOR
+		MsgInfo(STR0201+" "+NGRETTITULO("TJ_DTORIGI"),STR0016)
+		Return .F.
+	Endif
+
+	If !NGCPDIAATU(dDTDATEM,"<=",.T.,.T.,.T.)
+		Return .F.
+	EndIf
+
+	If cUsaInt3  == 'S'
+		If dDTDATEM <= dDTULMES //Se a data da movimentação for menor ou igual a data do ultimo fechamento do estoque.
+			MsgInfo( STR0220 + DTOC( dDTULMES ) + "." )
+			Return .F.
+		ElseIf  dDTDATEM <= dDtBlqMov
+			MsgInfo( STR0221 + DTOC( dDtBlqMov ) + "." ) //"A data de origem não pode ser menor ou igual que a data de bloqueio de movimentações. "
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231VCO
+Consistencia dos contadores ( GET )
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cBEM, characters
+@param nCONTG, numeric
+@param nTIPG, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231VCO(cBEM,nCONTG,nTIPG)
+	If Type("lCHKCON1") == "L" .And. Type("lCHKCON2") == "L"
+		lCHKCON1 := If(nTIPG = 1,.F.,lCHKCON1)
+		lCHKCON2 := If(nTIPG = 2,.F.,lCHKCON2)
+	EndIf
+	If !Positivo(nCONTG) .Or. !Naovazio(nCONTG) .Or. !CHKPOSLIM(cBEM,nCONTG,nTIPG)
+		Return .F.
+	Endif
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231TOK
+Consistencia Final dos contadores
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231TOK()
+	If lTEMCONT .And. !lCHKCON1
+		If !MNTA231HIS(nPOSCONT,cHORALE1,1,.F.,cPaiEst)
+			Return .F.
+		Endif
+	Endif
+	If lTEMCON2 .And. !lCHKCON2
+		If !MNTA231HIS(nPOSCON2,cHORALE2,2,.F.)
+			Return .F.
+		Endif
+	Endif
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231HIS
+Consistencia dos contadores ( gets / final )
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param nCONTAD, numeric
+@param cVHORCON, characters
+@param nTIP, numeric
+@param lCHKTIP, logical
+@param cBEMPAI, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231HIS(nCONTAD,cVHORCON,nTIP,lCHKTIP,cBEMPAI)
+
+	Default cBEMPAI := cBEM
+	If !NGVALHORA(cVHORCON,.T.)
+		Return .F.
+	Endif
+	If !NGCHKHISTO(cBEMPAI,dDTDATEM,nCONTAD,cVHORCON,nTIP,,.T.)
+		Return .F.
+	Endif
+	If !NGVALIVARD(cBEMPAI,nCONTAD,dDTDATEM,cVHORCON,nTIP,.T.)
+		Return .F.
+	Endif
+	If lCHKTIP
+		If nTIP = 1
+			lCHKCON1 := .T.
+		Elseif nTIP = 2
+			lCHKCON2 := .T.
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231GET
+Monta da estrutura
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cVBEMF, characters
+@param dDATAEM, date
+@param nCONT, numeric
+@param nCONT2, numeric
+@param nDESIG, numeric
+@param cVHESP1, characters
+@param cVHESP2, characters
+@param nMonta, numeric
+@param cVTMod, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231GET(cVBEMF,dDATAEM,nCONT,nCONT2,nDESIG,cVHESP1,cVHESP2,;
+	nMonta,cVTMod)
+
+	Local nOpca     := 0, i,lAllOk,cCampo, nX, nY, cCaption, cPict, cValid, cF3,nj
+	Local cWhen, nLargSay, nLargGet, uConteudo, oSay, oGet,oBar,lOk,oScroll
+	Local cBlkGet,cBlkWhen,cBlkVld, oSaveGetdad := Nil, aSvRot := Nil
+	Local XI,LT,CT,XW,XX,XP,XY,YX,YK,XK,M,ZZ,nCL,nLC
+	Local vColBut := If(cTipSer <> "C",{45,75,110,160},{0,45,80,130})
+	Local oBmp0,oBmp1,oBmp2,oBmp3,oBmp4
+	Local cBANDA, cMedida, cCodEnder
+	Local oScrollBox, oDlge, oPnlDlge, oPnlTop, oPnlAll, oPnlBot
+	Local nopce    := 0
+	Local nLinBmp, nColBmp, nLinSay, nColSay, nBmpPorLin, nBmpPorAtu, cLocAtu
+	Local lFoundEP := .F.
+	Private lLanRRet := NGHISTRETR(cVBEMF,dDATAEM,cVHESP1,1,xFilial("STP"))
+	Private nPOSCST9, nPOSCTPE
+	Private cGERAPREV := AllTrim(GETMv("MV_NGGERPR"))
+	Private lVolta  :=.F. ,bSet15,bSet24,cPNEUT,lSeqRot := .T.
+	Private cStatus := Space(Len(TQY->TQY_STATUS)),nSulco := 0.00,cNomSt := Space(30)
+	Private nSulcT  := nSulco, cStatuT := cStatus,cMOTIVT := Space(Len(stz->tz_causa))
+	Private oFont := TFont():New(,,,,.T.,,,,.F.,.F.)
+	Private oPNEUROD
+
+	Private aTempTbl
+	Private oTmpTbl1
+	Private oTmpTbl2
+	Private cTRBY
+	Private cTRBZ
+
+	cSemMov := Alltrim(SubStr(Str(Year(dDTDATEM),4),3,2)+StrZero(NGSEMANANO(dDTDATEM),2))
+	cLineOk := "AllwaysTrue()"
+	cAllOk  := "AllwaysTrue()"
+	nCOunt  := 0
+	nOpcx   := 3
+	oGets   := {}
+	aC      := {}
+	nDESIGM := nMonta
+
+	Dbselectarea("ST9")
+	Dbsetorder(1)
+	If !Dbseek(xFilial('ST9')+cVBEMF)
+		msginfo(STR0014+Alltrim(cVBEMF)+STR0015,STR0016) //"Bem "###" Nao Cadastrado "###"ATENCAO"
+		Return .F.
+	Endif
+
+	cBEM    := cVBEMF
+	cFORMA  := ST9->T9_CODFAMI
+	cBEMNOM := ST9->T9_NOME
+
+	Dbselectarea("TQ0")
+	Dbsetorder(1)
+
+	If lRel12133
+		lFoundEP := MNTSeekPad( 'TQ0', 1, cFORMA, cVTMod )
+	Else
+		lFoundEP := Dbseek( xFilial('TQ0')+cFORMA+cVTMod)
+	EndIf
+
+	If !lFoundEP
+		msginfo(STR0017+cFORMA+"  "+STR0129+"  "+cVTMod+"  "+STR0049,STR0016) //"Esquema padrao "###" Nao Cadastrada"
+		Return .F.
+	Endif
+
+	Dbselectarea("TQ1")
+	Dbsetorder(1)
+	If !Dbseek( xFilial('TQ1')+TQ0->TQ0_DESENH+TQ0->TQ0_TIPMOD)
+		msginfo(STR0019+cFORMA+"  "+STR0129+" "+cVTMod,STR0016) //"Nao Existe Itens Para Esquema de Rodado  "###"ATENCAO"
+		Return .F.
+	Endif
+
+	cFORNOM  := Alltrim(NGSEEK("ST6",cFORMA,1,"ST6->T6_NOME"))
+	cMODNOM  := Alltrim(NGSEEK("TQR",cVTMod,1,"TQR->TQR_DESMOD"))
+
+	//CRIA TABELAS TEMPORARIAS
+	aTempTbl	:= MNTA231TRB()
+	oTmpTbl1	:= aTempTbl[ 1 , 1 ]
+	oTmpTbl2	:= aTempTbl[ 2 , 1 ]
+	cTRBY 		:= aTempTbl[ 1 , 2 ]
+	cTRBZ 		:= aTempTbl[ 2 , 2 ]
+
+	dDTDATA   := dDATAEM
+	nPOSCST9  := nCONT
+	nPOSCTPE  := nCONT2
+	cPNEUROD  := Space(LEN(ST9->T9_CODBEM))
+	cSTRINGT9 := Space(LEN(ST9->T9_CODBEM))
+	cPNEUOLD  := Space(LEN(ST9->T9_CODBEM))
+	cBEMSTC   := SPACE(LEN(ST9->T9_CODBEM))
+	cNOMCAU   := Space(Len(st8->t8_nome))
+	cMOTIVE   := Space(Len(ST8->T8_CODOCOR))
+	cCODIFAM  := Space(Len(st9->t9_codfami))
+	cFAMISTC  := SPACE(LEN(ST9->T9_CODFAMI))
+
+	lSH1      := .F.
+	lCARESTP  := .F.
+	aARRAESTP := {}
+	aARRAPTQ1 := {}
+	aARRAYSTC := {}
+	aBEMLOC   := {}
+	aARRAYTRB := {}
+	aNOMEVAR  := {}
+	aDESIGNE  := {}
+	aCOLLINH  := {}
+
+	// VERIFICA AS LOCALIZACOES DO DESENHO DO RODADO
+
+	DbSelectArea("TQ1")
+	While !Eof() .And. TQ1->TQ1_FILIAL == xFILIAL("TQ1");
+				 .And. TQ1->TQ1_DESENH == TQ0->TQ0_DESENH;
+				 .And. TQ1->TQ1_TIPMOD == TQ0->TQ0_TIPMOD
+
+		aAdd(aARRAPTQ1,{TQ1->TQ1_QTDPNE,TQ1->TQ1_LOCPN1,TQ1->TQ1_LOCPN2,;
+						TQ1->TQ1_LOCPN3,TQ1->TQ1_LOCPN4,TQ1->TQ1_LOCPN5,;
+						TQ1->TQ1_LOCPN6,TQ1->TQ1_LOCPN7,TQ1->TQ1_LOCPN8,;
+						TQ1->TQ1_LOCPN9,TQ1->TQ1_LOCPN0,TQ1->TQ1_EIXO,;
+						TQ1->TQ1_FAMIL1,TQ1->TQ1_FAMIL2,TQ1->TQ1_FAMIL3,;
+						TQ1->TQ1_FAMIL4,TQ1->TQ1_FAMIL5,TQ1->TQ1_FAMIL6,;
+						TQ1->TQ1_FAMIL7,TQ1->TQ1_FAMIL8,TQ1->TQ1_FAMIL9,;
+						TQ1->TQ1_FAMIL0,TQ1->TQ1_TIPEIX,Val(TQ1->TQ1_SEQREL)})
+
+		aAdd(aARRAYSTC,{TQ1->TQ1_QTDPNE,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,;
+						cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,;
+						TQ1->TQ1_EIXO,cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,;
+						cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,;
+						TQ1->TQ1_TIPEIX,Val(TQ1->TQ1_SEQREL)})
+
+		Dbselectarea("TQ1")
+		DbSkip()
+	End
+
+
+	nAUXEIXO := Len(aARRAPTQ1)
+
+	// VERIFICA OS COMPONETES DA ESTRUTURA
+
+	aBEM := NGCOMPEST(cBEM,'B',.F.,.F.)
+	aBEMLOC := {}
+
+	// LOCALIZACAO NA ESTRUTURA
+	For xi := 1 to Len(aBEM)
+		Dbselectarea("ST9")
+		Dbsetorder(1)
+		If Dbseek(XFILIAL("ST9")+aBEM[xi])
+			Dbselectarea("STC")
+			Dbsetorder(3)
+			If Dbseek(XFILIAL("STC")+aBEM[xi])
+				While !Eof() .And. stc->tc_filial = Xfilial('STC') .And.;
+				stc->tc_compone = aBEM[xi]
+					If !Empty(STC->TC_LOCALIZ) .And. STC->TC_TIPOEST = 'B' .And. STC->TC_CODBEM == cVBEMF
+						Aadd(aBEMLOC,{STC->TC_LOCALIZ,aBEM[xi],Space(Len(stz->tz_causa)),st9->t9_codfami,stc->tc_codbem})
+						Exit
+					Endif
+					Dbskip()
+				End
+			Endif
+		Endif
+	Next
+
+	aARRAYTRB := {}
+
+	// MONTA A ESTRUTURA DO ESQUEMA DE RODADO COM OS RODADOS
+	For LT := 1 to Len(aARRAPTQ1)
+		For CT := 2 to 11
+			cLOC    := ALLTRIM(aARRAPTQ1[LT][CT])
+			cBEMSTC := cSTRINGT9
+			cBEMPAI := cSTRINGT9
+			cMedida := Space(6)
+			nSulco  := 0.00
+			cBanda  := Space(1)
+			cDot    := Space(4)
+			cStatus := Space(2)
+			cLocAtu := Space(2)
+			cCUSTOB := Space(Len(ST9->T9_CCUSTO))
+			cCENTRAB:= Space(Len(ST9->T9_CENTRAB))
+			cCODESTO:= Space(Len(ST9->T9_CODESTO))
+
+			If !Empty(cLOC)
+				nPOS := ASCAN(aBEMLOC,{|x| x[1]+x[4] == aARRAPTQ1[LT][CT]+aARRAPTQ1[LT][CT+11]})
+				If nPOS > 0
+					cBEMSTC := aBEMLOC[nPOS][2]
+					cBEMPAI := aBEMLOC[nPOS][5]
+					aARRAYSTC[LT][CT]    := cBEMSTC
+					aARRAYSTC[LT][CT+11] := aBEMLOC[nPOS][4]
+
+					Dbselectarea("TQS")
+					Dbsetorder(1)
+					Dbseek(XFILIAL("TQS")+cBEMSTC)
+					cMedida := TQS->TQS_MEDIDA
+					nSulco  := TQS->TQS_SULCAT
+					cBanda  := TQS->TQS_BANDAA
+					cDot    := TQS->TQS_DOT
+					cLocAtu := IIF(lContEs,NGSEEK("TQZ",cBEMSTC+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT,1,"TQZ->TQZ_ALMOX"),' ')
+
+					Dbselectarea("ST9")
+					Dbsetorder(1)
+					nRecEST9 := Recno()
+					dbSeek(xFilial("ST9")+cBEMSTC)
+					cStatus := ST9->T9_STATUS
+					cCUSTOB := ST9->T9_CCUSTO
+					cCENTRAB:= ST9->T9_CENTRAB
+					cCODESTO:= ST9->T9_CODESTO
+					Dbgoto(nRecEST9)
+				Endif
+
+				If CT >= 2 .And. CT <= 11
+					cLOCTRB := cLOC+SPACE(LEN(STC->TC_LOCALIZ)-LEN(cLOC))
+					aAdd(aARRAYTRB,{	cLOCTRB  , ;//[1]
+					SPACE(8) , ;//[2]
+					cBEMSTC  , ;//[3]
+					aARRAPTQ1[LT][CT+11] , ;//[4]
+					cBEMPAI  , ;//[5]
+					aARRAPTQ1[LT,23], ;//[6]
+					cMedida  , ;//[7]
+					nSulco   , ;//[8]
+					cBanda   , ;//[9]
+					cDot     , ;//[10]
+					cStatus  , ;//[11]
+					aARRAPTQ1[LT,24], ;//[12]
+					Space(6) , ;//[13]
+					cCODESTO , ;//[14]
+					cLocAtu , ;//[15]
+					''       , ;//[16]
+					cCUSTOB  , ;//[17]
+					cCENTRAB , ;//[18]
+					Space(Len(STL->TL_LOCAL)),;   //[19] Almoxarifado
+					Space(Len(STL->TL_NUMLOTE)),; //[20] Sub_lote
+					Space(Len(STL->TL_LOTECTL)),; //[21] Lote
+					Space(Len(STL->TL_NUMSERI)),; //[22] Numero da serie
+					Space(Len(STL->TL_LOCALIZ)),; //[23] Localizacao fisica
+					Ctod("  /  /  "),;            //[24] Data validade
+					cCODESTO,;					  //[25] Codigo estoque
+					cCodEnder})                   //[26] Localização/Enderçamento
+				Endif
+			Endif
+		Next CT
+	Next LT
+
+	//Variavel utilizada por pontos de entradas
+	//sendo possivel aumentar a array para adicionar campos de usuario
+	nTamTRB := Len(aARRAYTRB[1])
+
+	aARRAYINI := aClone(aARRAYTRB)
+	aARRAYCOL := {175,105,95,70,36,1}
+
+	nCOL      := If(nAUXEIXO < 7,aARRAYCOL[nAUXEIXO],0)
+	nCOLX     := nCOL - 1
+	cTIPODEG  := STR0001 //"RODADOS"
+	nMaxPe    := 0
+
+	For xw := 1 to nAUXEIXO
+		cEIX   := Alltrim(Str(xw,3))
+		vPNUEI := {}
+		vDESIG := {}
+		nMaxPe := Max(nMaxPe,aARRAYSTC[xw,1])
+		For zz := 1 To aARRAYSTC[xw][1]
+			cPNEI := If(zz = 10,Str(zz,2),Str(zz,1))
+			cVARP := Space(10)
+			cVARP := Alltrim('P'+cPNEI+'E'+cEIX)
+			Public &(cVARP) := aARRAYSTC[XW][zz+1]
+
+			nPOST := ASCAN(aARRAYTRB,{|x| x[1] == aARRAPTQ1[xw][zz+1]})
+			If nPOST > 0
+				aARRAYTRB[nPOST][2] := cVARP
+			Endif
+
+			Aadd(vPNUEI,cVARP)
+			Aadd(vDESIG,aARRAYTRB[nPOST][1])
+		Next zz
+		Aadd(aNOMEVAR,vPNUEI)
+		Aadd(aDESIGNE,vDESIG)
+	Next xw
+
+	cREADVAR := SPACE(8)
+
+	vVQE := If(nDESIGM = 1,{45,40,35,30,25,20,15,10,5,0},;
+	{80,70,60,50,50,40,40,15,20,0})
+	// 1
+	l11 := If(nDESIGM = 1,95-vVQE[nMaxPe],137-vVQE[nMaxPe])
+
+	// 2
+	l21 := If(nDESIGM = 1,82-vVQE[nMaxPe] ,114-vVQE[nMaxPe])
+	l22 := If(nDESIGM = 1,107-vVQE[nMaxPe],162-vVQE[nMaxPe])
+
+	// 3
+	l31 := If(nDESIGM = 1,80-vVQE[nMaxPe] ,119-vVQE[nMaxPe])
+	l32 := If(nDESIGM = 1,95-vVQE[nMaxPe] ,142-vVQE[nMaxPe])
+	l33 := If(nDESIGM = 1,110-vVQE[nMaxPe],165-vVQE[nMaxPe])
+
+	// 4
+	l41 := If(nDESIGM = 1,67-vVQE[nMaxPe] ,91-vVQE[nMaxPe])
+	l42 := If(nDESIGM = 1,82-vVQE[nMaxPe] ,114-vVQE[nMaxPe])
+	l43 := If(nDESIGM = 1,107-vVQE[nMaxPe],162-vVQE[nMaxPe])
+	l44 := If(nDESIGM = 1,122-vVQE[nMaxPe],185-vVQE[nMaxPe])
+
+	// 5
+	l51 := If(nDESIGM = 1,65-vVQE[nMaxPe] ,96-vVQE[nMaxPe])
+	l52 := If(nDESIGM = 1,80-vVQE[nMaxPe] ,119-vVQE[nMaxPe])
+	l53 := If(nDESIGM = 1,95-vVQE[nMaxPe] ,142-vVQE[nMaxPe])
+	l54 := If(nDESIGM = 1,110-vVQE[nMaxPe],165-vVQE[nMaxPe])
+	l55 := If(nDESIGM = 1,125-vVQE[nMaxPe],188-vVQE[nMaxPe])
+
+	// 6
+	l61 := If(nDESIGM = 1,52-vVQE[nMaxPe] ,68-vVQE[nMaxPe])
+	l62 := If(nDESIGM = 1,67-vVQE[nMaxPe] ,91-vVQE[nMaxPe])
+	l63 := If(nDESIGM = 1,82-vVQE[nMaxPe] ,114-vVQE[nMaxPe])
+	l64 := If(nDESIGM = 1,107-vVQE[nMaxPe],162-vVQE[nMaxPe])
+	l65 := If(nDESIGM = 1,122-vVQE[nMaxPe],185-vVQE[nMaxPe])
+	l66 := If(nDESIGM = 1,137-vVQE[nMaxPe],208-vVQE[nMaxPe])
+
+	// 7
+	l71 := If(nDESIGM = 1,50-vVQE[nMaxPe] ,73-vVQE[nMaxPe])
+	l72 := If(nDESIGM = 1,65-vVQE[nMaxPe] ,96-vVQE[nMaxPe])
+	l73 := If(nDESIGM = 1,80-vVQE[nMaxPe] ,119-vVQE[nMaxPe])
+	l74 := If(nDESIGM = 1,95-vVQE[nMaxPe] ,142-vVQE[nMaxPe])
+	l75 := If(nDESIGM = 1,110-vVQE[nMaxPe],165-vVQE[nMaxPe])
+	l76 := If(nDESIGM = 1,125-vVQE[nMaxPe],188-vVQE[nMaxPe])
+	l77 := If(nDESIGM = 1,140-vVQE[nMaxPe],211-vVQE[nMaxPe])
+
+	// 8
+	l81 := If(nDESIGM = 1,37-vVQE[nMaxPe] ,45-vVQE[nMaxPe])
+	l82 := If(nDESIGM = 1,52-vVQE[nMaxPe] ,68-vVQE[nMaxPe])
+	l83 := If(nDESIGM = 1,67-vVQE[nMaxPe] ,91-vVQE[nMaxPe])
+	l84 := If(nDESIGM = 1,82-vVQE[nMaxPe] ,114-vVQE[nMaxPe])
+	l85 := If(nDESIGM = 1,107-vVQE[nMaxPe],162-vVQE[nMaxPe])
+	l86 := If(nDESIGM = 1,122-vVQE[nMaxPe],185-vVQE[nMaxPe])
+	l87 := If(nDESIGM = 1,137-vVQE[nMaxPe],208-vVQE[nMaxPe])
+	l88 := If(nDESIGM = 1,152-vVQE[nMaxPe],231-vVQE[nMaxPe])
+
+	// 9
+	l91 := If(nDESIGM = 1,35-vVQE[nMaxPe] ,50-vVQE[nMaxPe])
+	l92 := If(nDESIGM = 1,50-vVQE[nMaxPe] ,73-vVQE[nMaxPe])
+	l93 := If(nDESIGM = 1,65-vVQE[nMaxPe] ,96-vVQE[nMaxPe])
+	l94 := If(nDESIGM = 1,80-vVQE[nMaxPe] ,119-vVQE[nMaxPe])
+	l95 := If(nDESIGM = 1,95-vVQE[nMaxPe] ,142-vVQE[nMaxPe])
+	l96 := If(nDESIGM = 1,110-vVQE[nMaxPe],165-vVQE[nMaxPe])
+	l97 := If(nDESIGM = 1,125-vVQE[nMaxPe],188-vVQE[nMaxPe])
+	l98 := If(nDESIGM = 1,140-vVQE[nMaxPe],211-vVQE[nMaxPe])
+	l99 := If(nDESIGM = 1,155-vVQE[nMaxPe],234-vVQE[nMaxPe])
+
+	// 10
+	l01 := If(nDESIGM = 1,22-vVQE[nMaxPe] ,22-vVQE[nMaxPe])
+	l02 := If(nDESIGM = 1,37-vVQE[nMaxPe] ,45-vVQE[nMaxPe])
+	l03 := If(nDESIGM = 1,52-vVQE[nMaxPe] ,68-vVQE[nMaxPe])
+	l04 := If(nDESIGM = 1,67-vVQE[nMaxPe] ,91-vVQE[nMaxPe])
+	l05 := If(nDESIGM = 1,82-vVQE[nMaxPe] ,114-vVQE[nMaxPe])
+	l06 := If(nDESIGM = 1,107-vVQE[nMaxPe],162-vVQE[nMaxPe])
+	l07 := If(nDESIGM = 1,122-vVQE[nMaxPe],185-vVQE[nMaxPe])
+	l08 := If(nDESIGM = 1,137-vVQE[nMaxPe],208-vVQE[nMaxPe])
+	l09 := If(nDESIGM = 1,152-vVQE[nMaxPe],231-vVQE[nMaxPe])
+	l00 := If(nDESIGM = 1,167-vVQE[nMaxPe],254-vVQE[nMaxPe])
+
+	For xx := 1 to nAUXEIXO
+
+		lSTEPEI := If(Alltrim(aARRAYSTC[xx][6]) == STR0127,.T.,.F.)
+		nCOL    := If(lSTEPEI,nCOL - 1,nCOL)
+
+		If aARRAYSTC[xx][1] = 1
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l11 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l11})
+		ElseIf aARRAYSTC[xx][1] = 2
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l21 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2] ,{l22 ,nCOL},aDESIGNE[xx,2],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l21,l22})
+
+		ElseIf aARRAYSTC[xx][1] = 3
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l31 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2] ,{l32 ,nCOL},aDESIGNE[xx,2],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3] ,{l33 ,nCOL},aDESIGNE[xx,3],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l31,l32,l33})
+
+		ElseIf aARRAYSTC[xx][1] = 4
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l41 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2] ,{l42 ,nCOL},aDESIGNE[xx,2],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3] ,{l43 ,nCOL},aDESIGNE[xx,3],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4] ,{l44 ,nCOL},aDESIGNE[xx,4],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l41,l42,l43,l44})
+
+		ElseIf aARRAYSTC[xx][1] = 5
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l51 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2] ,{l52 ,nCOL},aDESIGNE[xx,2],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3] ,{l53 ,nCOL},aDESIGNE[xx,3],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4] ,{l54 ,nCOL},aDESIGNE[xx,4],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5] ,{l55 ,nCOL},aDESIGNE[xx,5],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l51,l52,l53,l54,l55})
+
+		ElseIf aARRAYSTC[xx][1] = 6
+			Aadd(aC,{aNOMEVAR[xx][1] ,{l61 ,nCOL},aDESIGNE[xx,1],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2] ,{l62 ,nCOL},aDESIGNE[xx,2],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3] ,{l63 ,nCOL},aDESIGNE[xx,3],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4] ,{l64 ,nCOL},aDESIGNE[xx,4],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5] ,{l65 ,nCOL},aDESIGNE[xx,5],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][6] ,{l66 ,nCOL},aDESIGNE[xx,6],"@!"  ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l61,l62,l63,l64,l65,l66})
+
+		ElseIf aARRAYSTC[xx][1] = 7
+			Aadd(aC,{aNOMEVAR[xx][1]  ,{l71 ,nCOL},aDESIGNE[xx,1],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2]  ,{l72 ,nCOL},aDESIGNE[xx,2],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3]  ,{l73 ,nCOL},aDESIGNE[xx,3],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4]  ,{l74 ,nCOL},aDESIGNE[xx,4],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5]  ,{l75 ,nCOL},aDESIGNE[xx,5],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][6]  ,{l76 ,nCOL},aDESIGNE[xx,6],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][7]  ,{l77 ,nCOL},aDESIGNE[xx,7],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l71,l72,l73,l73,l74,l76,l77})
+
+		ElseIf aARRAYSTC[xx][1] = 8
+			Aadd(aC,{aNOMEVAR[xx][1]  ,{l81 ,nCOL},aDESIGNE[xx,1],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2]  ,{l82 ,nCOL},aDESIGNE[xx,2],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3]  ,{l83 ,nCOL},aDESIGNE[xx,3],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4]  ,{l84 ,nCOL},aDESIGNE[xx,4],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5]  ,{l85 ,nCOL},aDESIGNE[xx,5],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][6]  ,{l86 ,nCOL},aDESIGNE[xx,6],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][7]  ,{l87 ,nCOL},aDESIGNE[xx,7],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][8]  ,{l88 ,nCOL},aDESIGNE[xx,8],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l81,l82,l83,l84,l85,l86,l87,l88})
+
+		ElseIf aARRAYSTC[xx][1] = 9
+			Aadd(aC,{aNOMEVAR[xx][1]  ,{l91 ,nCOL},aDESIGNE[xx,1],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2]  ,{l92 ,nCOL},aDESIGNE[xx,2],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3]  ,{l93 ,nCOL},aDESIGNE[xx,3],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4]  ,{l94 ,nCOL},aDESIGNE[xx,4],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5]  ,{l95 ,nCOL},aDESIGNE[xx,5],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][6]  ,{l96 ,nCOL},aDESIGNE[xx,6],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][7]  ,{l97 ,nCOL},aDESIGNE[xx,7],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][8]  ,{l98 ,nCOL},aDESIGNE[xx,8],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][9]  ,{l99 ,nCOL},aDESIGNE[xx,9],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l91,l92,l93,l94,l95,l96,l97,l98,l99})
+
+		ElseIf aARRAYSTC[xx][1] = 10
+			Aadd(aC,{aNOMEVAR[xx][1]  ,{l01 ,nCOL},aDESIGNE[xx,1],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][2]  ,{l02 ,nCOL},aDESIGNE[xx,2],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][3]  ,{l03 ,nCOL},aDESIGNE[xx,3],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][4]  ,{l04 ,nCOL},aDESIGNE[xx,4],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][5]  ,{l05 ,nCOL},aDESIGNE[xx,5],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][6]  ,{l06 ,nCOL},aDESIGNE[xx,6],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][7]  ,{l07 ,nCOL},aDESIGNE[xx,7],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][8]  ,{l08 ,nCOL},aDESIGNE[xx,8],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][9]  ,{l09 ,nCOL},aDESIGNE[xx,9],"@!" ,"MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aC,{aNOMEVAR[xx][10] ,{l00 ,nCOL},aDESIGNE[xx,10],"@!","MNTA231BE(cBEM)","NGB",,58})
+			Aadd(aCOLLINH,{nCOL,l01,l02,l03,l04,l05,l06,l07,l08,l09,l00})
+		Endif
+		nCOL := nCOL + 65
+	Next xx
+
+	cTIPODE2 := STR0001 //"RODADOS"
+	If nDESIGM = 2
+		cTIPODE2 := STR0021 //"LOCALIZACAO"
+	ElseIf nDESIGM = 3
+		cTIPODE2 := STR0022 //"FAMILIA"
+	Endif
+
+	cTiTel := STR0024+"..: "+ALLTRIM(cBEM)+" - "+Alltrim(cBEMNOM)+Space(10)+STR0129+"..: "+Alltrim(cVTMod)+" - "+cMODNOM
+
+	DEFINE MSDIALOG oDlge TITLE OemToAnsi(cTiTel) FROM 0,0 To 460,779 COLOR CLR_BLACK,CLR_WHITE PIXEL
+	oDlge:lEscClose := .F.
+
+	// Painél principal do Dialog
+	oPnlDlge := TPanel():New(01, 01, , oDlge, , , , CLR_BLACK, CLR_WHITE, 100, 100)
+	oPnlDlge:Align := CONTROL_ALIGN_ALLCLIENT
+
+	// Painél TOP
+	oPnlTop := TPanel():New(01, 01, , oPnlDlge, , , , CLR_BLACK, CLR_WHITE, 100, 20)
+	oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	@ 004,005 BUTTON STR0025 SIZE 35,12 ACTION MNTA231FBE(cREADVAR) OF oPnlTop PIXEL //"&Visualizar"
+
+	If cTipSer = "C" // Canibalismo
+		@ 005,210 SAY STR0155 OF oPnlTop PIXEL //"Processo de Canibalismo"
+	Else
+		@ 004,vColBut[1] BUTTON STR0026 SIZE 25,12 ACTION MNTA231RO() WHEN lRodizio OF oPnlTop PIXEL //"&Rodizio"
+		@ 006,210 SAY STR0029 OF oPnlTop PIXEL //"Area Transf."
+		@ 005,260 MSGET oPNEUROD VAR cPNEUROD Picture '@!' SIZE 70,9 WHEN .F. FONT oFont OF oPnlTop PIXEL
+	Endif
+
+	@ 004,vColBut[2] BUTTON STR0027 SIZE 30,12 ACTION MNTA231ES() WHEN !lRodizio OF oPnlTop PIXEL //"&Disponivel"
+	@ 004,vColBut[3] BUTTON STR0028 SIZE 45,12 ACTION MNTA231EP() OF oPnlTop PIXEL //"&Esquema Padrao"
+	@ 004,vColBut[4] BUTTON STR0156 SIZE 35,12 ACTION MNTA231FIN(oDlge,cVBEMF,dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2) OF oPnlTop PIXEL //"&Finalizar"
+
+	// Painél BOT
+	oPnlBot := TPanel():New(01, 01, , oPnlDlge, , , , CLR_BLACK, CLR_WHITE, 100, 20)
+	oPnlBot:Align := CONTROL_ALIGN_BOTTOM
+
+	nLinBmp := 004
+	nColBmp := 050
+	nLinSay := 004
+	nColSay := 065
+	@ nLinBmp,nColBmp BITMAP oBmp0 RESNAME "BR_PRETO" SIZE 16,16 NOBORDER OF oPnlBot PIXEL
+	@ nLinSay,nColSay Say STR0159 OF oPnlBot PIXEL //"Novo"
+
+	nColBmp += 060
+	nColSay += 060
+	@ nLinBmp,nColBmp BITMAP oBmp1 RESNAME "BR_VERDE" SIZE 16,16 NOBORDER OF oPnlBot PIXEL
+	@ nLinSay,nColSay Say STR0160 OF oPnlBot PIXEL //"1 Vida"
+
+	nColBmp += 060
+	nColSay += 060
+	@ nLinBmp,nColBmp BITMAP oBmp2 RESNAME "BR_AZUL" SIZE 16,16 NOBORDER OF oPnlBot PIXEL
+	@ nLinSay,nColSay Say STR0161 OF oPnlBot PIXEL //"2 Vidas"
+
+	nColBmp += 060
+	nColSay += 060
+	@ nLinBmp,nColBmp BITMAP oBmp3 RESNAME "BR_LARANJA" SIZE 16,16 NOBORDER OF oPnlBot PIXEL
+	@ nLinSay,nColSay Say STR0162 OF oPnlBot PIXEL //"3 Vidas"
+
+	nColBmp += 060
+	nColSay += 060
+	@ nLinBmp,nColBmp BITMAP oBmp4 RESNAME "BR_VERMELHO" SIZE 16,16 NOBORDER OF oPnlBot PIXEL
+	@ nLinSay,nColSay Say STR0206+If(lMaisVidas," +","") OF oPnlBot PIXEL //"4 Vidas"
+
+	// Painél ALL
+	oPnlAll := TPanel():New(01, 01, , oPnlDlge, , , , CLR_BLACK, CLR_WHITE, 100, 100)
+	oPnlAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oScrollBox := TScrollBox():new(oPnlAll, 0, 0, 10, 10, .T., .T., .T.)
+	oScrollBox:Align := CONTROL_ALIGN_ALLCLIENT
+
+	For nCL := 1 To Len(aCOLLINH)
+		If aARRAYSTC[nCL][1] > 1
+			nINCOL := If(aARRAYSTC[nCL][1] = 2,26,27)
+			For nLC := 2 To Len(aCOLLINH[nCL])-1
+				@ aCOLLINH[nCL,nLC]+9,aCOLLINH[nCL,1]+25 To aCOLLINH[nCL,nLC+1]+.5,aCOLLINH[nCL,1]+nINCOL Of oScrollbox pixel
+			Next nLC
+		Endif
+	Next nCL
+
+	If nDESIGM <> 1
+		For nCL := 1 To Len(aCOLLINH)
+			nINCOL := aCOLLINH[nCL][1]
+			For XP := 2 To Len(aCOLLINH[nCL])
+				@ aCOLLINH[nCL,XP]+10,nINCOL To aCOLLINH[nCL,XP]+21,nINCOL+25 Of oScrollbox pixel
+			Next XP
+		Next nCL
+	Endif
+
+	For XP := 1 to Len(aC)
+		cCampo   := aC[XP,1]
+		nX       := aC[XP,2,1]  // LINHA
+		nY       := aC[XP,2,2]  // COLUNA
+		cCaption := Iif(Empty(aC[XP,3])," ",aC[XP,3])
+		cPict    := Iif(Empty(aC[XP,4]),Nil,aC[XP,4])
+		cValid   := Iif(Empty(aC[XP,5]),".T.",aC[XP,5])
+		cF3      := Iif(Empty(aC[XP,6]),NIL,aC[XP,6])
+		cWhen    := Iif(aC[XP,7]==NIL,".T.",Iif(aC[XP,7],".T.",".F."))
+		cWhen    := Iif(!(Str(nOpcx,1,0)$"346"),".F.",cWhen)
+		nSIZE    := Iif(Empty(aC[XP,8]),Nil,aC[XP,8])
+		cBlkGet  := "{ | u | If( PCount() == 0, "+cCampo+","+cCampo+":= u ) }"
+		cBlKVld  := "{|| "+cValid+"}"
+		cBlKWhen := "{|| MNTA231WHE()}"
+		nCLRTEXT := MNT231VIDA(aARRAYTRB[XP][9])
+		oGet     := TGet():New( nX, nY,&cBlKGet,oScrollBox,nSIZE,,cPict,&(cBlkVld),nCLRTEXT,,oFont,.T.,,.T.,,.T.,&(cBlkWhen),.F.,.F.,,.F.,.F.,cF3,(cCampo),,,,.T.)
+		oGet:setCSS("QLineEdit{color:#"+NGRGBHEX(ConvRGB(nCLRTEXT))+";}")
+		Aadd(oGets,oGet)
+	Next XP
+
+	For nCL := 1 To Len(aARRAYSTC)
+		cCaption := If(aARRAYSTC[nCL,12] = STR0102,STR0157,;
+		Alltrim(aARRAYSTC[nCL,12])+CHR(167)+" "+STR0103)
+		cBlKSay1 := "{|| OemToAnsi('"+cCaption+"')}"
+		oSay     := TSay():New(aCOLLINH[nCL,2]-8,aCOLLINH[nCL,1]+2,&cBlkSay1,oScrollBox,,, .F., .F., .F., .T.,CLR_HBLUE,,,, .F., .F., .F., .F., .F. )
+		nLargSay := GetTextWidth(0,cCaption) / 1.8
+		cCaption := oSay:cCaption
+
+		If nDESIGM <> 1
+			nItq1 := If(nDESIGM = 2,1,12)
+			For XP := 1 To aARRAYSTC[nCL,1]
+				nINCOL    := aCOLLINH[nCL][1]
+				cCaption  := aARRAPTQ1[nCL,XP+nItq1]
+				cBlKSay2  := "{|| OemToAnsi('"+cCaption+"')}"
+				oSay2     := TSay():New(aCOLLINH[nCL,XP+1]+12.5,nINCOL+2,&cBlkSay2,oScrollBox,,, .F., .F., .F., .T.,CLR_HRED,,,, .F., .F., .F., .F., .F. )
+				nLargSay2 := GetTextWidth(0,cCaption) / 1.8
+				cCaption  := oSay2:cCaption
+			Next XP
+		Endif
+	Next nCL
+
+	If Len( asMenu ) == 0
+		asMenu := NGRIGHTCLICK( "MNTA231" )
+	EndIf
+	NGPOPUP(aSMenu,@oMenu)
+	oDlge:bRClicked      := { |o,x,y| oMenu:Activate(x,y,oDlge)}
+	oScrollBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oScrollBox)}
+
+	ACTIVATE MSDIALOG oDlge Centered ON INIT MNTA231BAR(oDlge,{||If(!MNT231FIT(),nopce:= 0,(nopce:=1,oDlge:End()))},{||nopce := 0,oDlge:End()})
+
+	If nopce == 1
+
+		//+-------------------------------------------------------------------+
+		//| MNT231VCON(), Grava novos valores para      					  |
+		//| dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2, 							  |
+		//| caso estes já sejam inválidos.									  |
+		//+-------------------------------------------------------------------+
+		MNT231VCON(@dDATAEM,@nCONT,@cVHESP1,@nCONT2,@cVHESP2)
+
+		MsgRun( "Processando informações..." , "Aguarde" , { || MNTA231RET(cVBEMF,dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2) })
+		NGDETRAVAROT("MNTA231FIM")
+		NGDETRAVAROT("MNTA231RET")
+	EndIf
+
+	oTmpTbl1:Delete() // Deleta Tab. Temporária 1
+	oTmpTbl2:Delete() // Deleta Tab. Temporária 2
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231FIT
+Travamento de acesso e validacao final
+@author Inacio Luiz Kolling
+@since 10/10/2010
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT231FIT()
+
+	Local lRtetT,lTravF,lTravR
+	Store .F. To lRtetT,lTravF,lTravR
+
+	If NGTRAVAROT("MNTA231FIM")
+		lTravF := .T.
+		If NGTRAVAROT("MNTA231RET")
+			lTravR := .T.
+			lRetT := MNTA231FIM()
+		EndIf
+	EndIf
+	If !lRetT .And. (lTravF .Or. lTravR)
+		If lTravF
+			NGDETRAVAROT("MNTA231FIM")
+		EndIf
+		If lTravR
+			NGDETRAVAROT("MNTA231RET")
+		EndIf
+	EndIf
+
+Return lRetT
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231BAR
+Altera o menu de opções
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param oDlge, object
+@param bOk, block
+@param bCancel, block
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231BAR(oDlge,bOk,bCancel)
+
+	DEFINE BUTTONBAR oBar SIZE 25,25 3D TOP OF oDlge
+
+	DEFINE BUTTON RESOURCE "S4WB005N" OF oBar 		ACTION NaoDisp()		TOOLTIP STR0163 PROMPT ""//"Recortar"
+	DEFINE BUTTON RESOURCE "S4WB006N" OF oBar 		ACTION NaoDisp() 		TOOLTIP STR0164 PROMPT ""//"Copiar"
+	DEFINE BUTTON RESOURCE "S4WB007N" OF oBar		ACTION NaoDisp() 		TOOLTIP STR0165 PROMPT ""//"Colar"
+	DEFINE BUTTON RESOURCE "S4WB010N" OF oBar 		ACTION MNTA231IMT(cBEM,aARRAPTQ1,aARRAYTRB,cTPMODI) 		TOOLTIP STR0166 PROMPT ""//"Impressao"
+	DEFINE BUTTON RESOURCE "S4WB009N" OF oBar       ACTION MNTA231LEG()     TOOLTIP STR0205 PROMPT ""//"Cod.xDesc."
+	DEFINE BUTTON RESOURCE "S4WB016N" OF oBar GROUP ACTION HelProg()		TOOLTIP STR0168 PROMPT ""//"Ajuda"
+	DEFINE BUTTON oBtOk RESOURCE "OK" OF oBar GROUP ACTION (lLoop:=lVolta,lOk:=Eval(bOk)) TOOLTIP "Ok" PROMPT ""
+	SetKEY(15,oBtOk:bAction)
+	DEFINE BUTTON oBtCan RESOURCE "CANCEL" OF oBar ACTION (lLoop:=.F.,Eval(bCancel),MNTA231BOF(bSet15,bSet24,.T.)) TOOLTIP STR0169 PROMPT ""//"Cancelar"
+
+	SetKEY(24,oBtCan:bAction)
+	oDlge:bSet15 := oBtOk:bAction
+	oDlge:bSet24 := oBtCan:bAction
+	oBar:bRClicked := {|| AllwaysTrue()}
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231IMT
+Selecao de impressao da legenda
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cBEM, characters
+@param aARRAPTQ1, array
+@param aARRAYTRB, array
+@param cTMod, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231IMT(cBEM,aARRAPTQ1,aARRAYTRB,cTMod)
+
+	nTGIOPL := 1
+	tg_bOk  := tb_bCancel := Nil
+	tg_oDlg := oSend( MSDialog(), "New", 9, 0, 20, 70, STR0036,,,.F.,,,,,oMainWnd,.F.,,,.F.) //"Quanto a Legenda ?"
+
+	oPnlPai := TPanel():New(00,00,,tg_oDlg,,,,,,55,15,.F.,.F.)
+	oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oSEND(TRadMenu(),"New", 12, 110,{STR0037,STR0038},bSETGET(nTGIOPL),oPnlPai,,,,,,,,70,12,,,.T., .T.) //"Nao Imprimir"###"Imprimir"
+
+	tg_bOk     := {||oSend(tg_oDlg,"End")}
+	tg_bCancel := {||nTGIOPL:=0,oSend(tg_oDlg,"End")}
+	tg_bInit   := {|| EnchoiceBar(tg_oDlg,tg_bOk,tg_bCancel) }
+
+	oSend(tg_oDlg,"Activate",,,,.T.,,, tg_bInit )
+
+	IF nTGIOPL # 0
+		MNTA231IMP(cBEM,aARRAPTQ1,aARRAYTRB,nTGIOPL,cTMod)
+		tg_lRet := .T.
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231LEG
+Legenda
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231LEG()
+
+	Local aBEMLEG := {}
+	Local aDESIGM := {}
+	Local aDESIGF := {},ww
+	Local nCOLIE  := 11
+	Local nCOLFE  := 48
+
+
+	For ww := 1 To Len(aARRAYTRB)
+		If !Empty(aARRAYTRB[ww][3])
+			NGIFDICIONA("ST9",xFilial('ST9')+aARRAYTRB[ww][3],1)
+			Aadd(aBEMLEG,{aARRAYTRB[ww][3],Substr(st9->t9_nome,1,30)})
+		EndIf
+	Next ww
+
+	aBEMLEG := aSORT(aBEMLEG,,,{|x,y| x[1] < y[1]})
+
+	cTITLEG := STR0039 //" RODADOS"
+	nCOLLIS := 110//54
+	lSOMA   := .F.
+	nCOLBO  := If(nDESIGM = 1,175,320)
+	nLININ  := 27
+	nLINBO  := 10.5
+	lAVANCA := .T.
+	lVOLTA  := .F.
+
+	MNTA231ZOO(aBEMLEG,aDESIGM,aDESIGF,nCOLIE,nCOLFE,nLININ)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231ZOO
+Monta o zoom
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param aBEMLEG, array
+@param aDESIGM, array
+@param aDESIGF, array
+@param nCOLIE, numeric
+@param nCOLFE, numeric
+@param nLININ, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231ZOO(aBEMLEG,aDESIGM,aDESIGF,nCOLIE,nCOLFE,nLININ)
+
+	Local oLISTBOX
+	Local oBrw, oBrw1, n := 1, ny := 1
+	Local oDlgy
+
+	If Len(aBEMLEG) == 0
+		MsgStop(STR0204,STR0016) //"Não existem pneus na estrutura."##"Atenção"
+		Return .F.
+	EndIf
+
+	DEFINE DIALOG oDlgy FROM nLININ,nCOLIE TO 42,nCOLFE+12 TITLE cTITLEG
+	@.25,0.5 listbox oBrw fields aBEMLEG[n][1],aBEMLEG[n][2];
+	headers STR0042, STR0043; //"Codigo"###"Descricao"
+	fieldsizes 53,92;
+	of odlgy size 187,nCOLLIS
+
+	oBrw:bGotop    := { || n := 1 }
+	oBrw:bGoBottom := { || n := eval( oBrw:bLogicLen ) }
+	oBrw:bSkip     := { | nwant, nold | nold := n , n += nwant,;
+	n := max( 1, min( n, eval( oBrw:bLogicLen ))),;
+	n - nOld }
+	oBrw:bLogicLen := { || len(aBEMLEG) }
+	oBrw:cAlias    := "Array"
+	ACTIVATE DIALOG oDlgy CENTERED
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231BOF
+Set o botões
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param bSet15, block
+@param bSet24, block
+@param lOk, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231BOF(bSet15,bSet24,lOk)
+
+	DEFAULT lOk := .T.
+	IF lOk
+		SetKey(15,bSet15)
+		SetKey(24,bSet24)
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231EST
+Consistencia do Bem e Estrutura
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cVBEM, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231EST(cVBEM)
+
+	Local cMENSA := Space(1)
+	Local lFoundEP := .F.
+	Store  '  :  ' To cHORALE1,cHORALE2
+	Store .F.      To lTEMCONT,lTEMCON2,lCHKCON1,lCHKCON2
+	Store 0        To nPOSCONT,nPOSCON2
+
+	dbselectarea("TPE")
+	dbsetorder(1)
+	If dbseek(XFILIAL("TPE")+cVBEM)
+		lTEMCON2  := IIf(lDtvSgCnt, TPE->TPE_SITUAC == "1", .T.)
+		cHORALE2 := '  :  '
+		nPOSCON2 := 0
+	Endif
+
+	Dbselectarea("ST9")
+	Dbsetorder(1)
+	IF !Dbseek(XFILIAL("ST9")+cVBEM)
+		cMENSA := STR0045 //"Este Bem nao esta cadastrado..."
+	Else
+		If ST9->T9_SITBEM = 'I'
+			MsgInfo(STR0014+Alltrim(cVBEM)+STR0046,STR0016) //"Bem "###" esta inativo.."###"ATENCAO"
+			Return .F.
+		Endif
+		If ST9->T9_SITBEM = 'T'
+			MsgInfo(STR0014+Alltrim(cVBEM)+STR0158,STR0016) //"Bem "###" foi transferido."###"ATENCAO"
+			Return .F.
+		Endif
+
+		cCUSTOB  := ST9->T9_CCUSTO
+		cCENTRAB := ST9->T9_CENTRAB
+		cCALENB  := ST9->T9_CALENDA
+		cPLACA   := ST9->T9_PLACA
+		cHORALE1 := '  :  '
+		cBEMNOM  := ST9->T9_NOME
+		cPaiFor	 := cFORMA := ST9->T9_CODFAMI
+		lTEMCONT := fVerTpCont()
+		nPOSCONT := 0
+		lRefresh := .T.
+		cFORNOM  := NGSEEK("ST6",cFORMA,1,"ST6->T6_NOME")
+		cPaiMod  := cTPMODI := ST9->T9_TIPMOD
+		cDESMOD  := NGSEEK("TQR",cTPMODI,1,"TQR->TQR_DESMOD")
+
+		Dbselectarea("TQ0")
+		Dbsetorder(1)
+
+		If lRel12133
+			lFoundEP := MNTSeekPad( 'TQ0', 1, cFORMA, cTPMODI )
+		Else
+			lFoundEP := Dbseek(xFilial('TQ0')+cFORMA+cTPMODI)
+		EndIf
+
+		If !lFoundEP
+			cMENSA := STR0048+Alltrim(cFORMA)+"  "+STR0129+"  "+Alltrim(cTPMODI)+"  "+STR0049 //"Esquema padrao "###" Nao Cadastrada"
+		Else
+			Dbselectarea("TQ1")
+			Dbsetorder(1)
+			If !Dbseek( xFilial('TQ1')+TQ0->TQ0_DESENH+TQ0->TQ0_TIPMOD)
+				cMENSA := STR0050+Alltrim(cFORMA)+"  "+STR0129+" "+Alltrim(TQ0->TQ0_TIPMOD) //"Nao Existe Itens Para Esquema de Rodado "
+			Endif
+		Endif
+	Endif
+
+	If !Empty(cMENSA)
+		Msginfo(cMENSA,STR0016) //"ATENCAO"
+		Return .F.
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231RO
+Consistencia do Rodizio de rodados
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231RO()
+
+	Local cBANDA := '0'
+	Local nPOSI    := ASCAN(aARRAYINI,{|x| x[3] == &cREADVAR})
+	Local aTable := {{"TQS"},{"TQY"},{"STN"},{"CTT"},{"SI3"},{"SHB"}}
+
+	If !lRodizio
+		MsGstop(STR0137,STR0016) //"Rodízio não habilitado para OS com serviço do tipo movimentação de pneus."
+		Return .F.
+	Endif
+
+	If Empty(&cREADVAR)
+		MsGstop(STR0051,STR0016) //"Nao foi informado o rodado para o rodizio ( Area de Transferencia ).."
+		Return .F.
+	Endif
+
+	If lSeqRot
+		If !Empty(cPNEUROD)
+			MsGstop(STR0052,STR0016) //"Ja existe rodado na Area de Transferencia."
+			Return .F.
+		Endif
+	Endif
+
+	cPNEUT  := &(cREADVAR)
+	nPOSA   := ASCAN(aARRAYTRB,{|x| x[3] == cPNEUT})
+	cMTRANS := STR0053+alltrim(aARRAYTRB[nPOSA][3])+chr(13); //"Rodado "
+	+STR0054+aARRAYTRB[nPOSA][1] //"Localizacao Atual   "
+
+	nPOSB := ASCAN(aBEMLOC,{|x| x[2] == cPNEUT})
+	If nPOSB > 0 .And. Empty(aBEMLOC[nPOSB][3])
+
+		If !lSeqRot
+			Return .T.
+		Endif
+
+
+		nopre := MNTA231MTV(cMTRANS,1,,,.F.)
+		If nopre = 1
+			Return .T.
+		Endif
+
+		nPOSV := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+		If ExistBlock("MNTA2313")
+			If !ExecBlock("MNTA2313",.F.,.F.)
+				Return .T.
+			EndIf
+		EndIf
+		aBEMLOC[nPOSB][3] := cMOTIVE
+
+
+		If nPOSV > 0
+			aARRAYTRB[nPOSV][8]  := nSulco
+			aARRAYTRB[nPOSV][11] := cStatus
+			aARRAYTRB[nPOSV][13] := cMOTIVE
+			aARRAYTRB[nPOSV][17] := cCUSTOB
+			aARRAYTRB[nPOSV][18] := cCENTRAB
+			nSulcT  := nSulco
+			cStatuT := cStatus
+			cMOTIVT := cMOTIVE
+		Endif
+	Endif
+
+	cPNEUROD    := &(cREADVAR)
+	&(cREADVAR) := cSTRINGT9
+	dbSelectArea("TQS")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQS")+cPNEUROD+Space(Len(TQS->TQS_CODBEM)-Len(cPNEUROD)) )
+		cBANDA := TQS->TQS_BANDAA
+	EndIf
+	oPNEUROD:NCLRTEXT := MNT231VIDA(cBANDA)
+	oPNEUROD:setCSS("QLineEdit{color:#"+NGRGBHEX(ConvRGB(MNT231VIDA(cBANDA)))+";}")
+
+	nPOSV := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+	If nPOSV > 0
+		aARRAYTRB[nPOSV][3]  := cSTRINGT9
+		aARRAYTRB[nPOSV][16] := cTZUser
+		If Empty(aARRAYINI[nPOSV][16])
+			aARRAYINI[nPOSV][16] := cTZUser
+		EndIf
+	Endif
+
+	lRefresh := .T.
+	cREADVAR := SPACE(8)
+
+	//Atualiza todas as cores da Vida do Pneu
+	MNT231ACOR()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231ES
+Consistencia Para Estoque
+
+@author Inacio Luiz Kolling
+@since 25/05/05
+
+@version undefined
+
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231ES()
+
+	Local lMNT2326 := .T.
+
+	If Empty(&cREADVAR)
+		MsGstop(STR0055,STR0016) //"Nao foi informado o rodado para a disponibilizacao..."
+		Return .F.
+	Endif
+
+	If ExistBlock("MNTA2326")
+		lMNT2326 := ExecBlock("MNTA2326", .F., .F.)
+	EndIf
+
+	If lMNT2326 .And. !NGLANCON( &( CREADVAR ), dDTDATEM, cHORALE1, cBEM, .F. ) .And. ;
+		!MsgYesNo( STR0234 + chr(13) + STR0235 ) //"Já existe lançamento de contador com data posterior a informada." # "Deseja continuar ?"
+		Return .F.
+	EndIf
+
+	If !Empty(ReadVar())
+		cREADVAR := ReadVar()
+	EndIf
+
+	cMTRANS  := Space(1)
+	cMTRANS2 := Space(1)
+	nPOSX    := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+
+	If nPOSX > 0
+		nPOSB := ASCAN(aBEMLOC,{|x| x[2] == aARRAYTRB[nPOSX][3]})
+		If nPOSB > 0
+
+			If !lSeqRot
+				Return .T.
+			Endif
+
+			nOpcb := MNTA231MTV(cMTRANS,2,,,.T.)
+			If nOpcb = 1
+				Return .F.
+			Endif
+
+			If ExistBlock("MNTA2313")
+				nPOSV := nPOSX
+				If !ExecBlock("MNTA2313",.F.,.F.)
+					MNT231ACOR()
+					Return .F.
+				EndIf
+			EndIf
+
+			aBEMLOC[nPOSB][3] := cMOTIVE
+
+			aARRAYINI[nPOSX][8]  := nSulco
+			aARRAYINI[nPOSX][11] := cStatus
+			aARRAYINI[nPOSX][13] := cMOTIVE
+			aARRAYINI[nPOSX][17] := cCUSTOB
+			aARRAYINI[nPOSX][18] := cCENTRAB
+		Endif
+
+		cVAR := aARRAYTRB[nPOSX][2]
+		&(cVAR) := cSTRINGT9
+		aARRAYTRB[nPOSX][3]  := cSTRINGT9
+		aARRAYTRB[nPOSX][8]  := 0
+		aARRAYTRB[nPOSX][11] := Space(Len(TQY->TQY_STATUS))
+		aARRAYTRB[nPOSX][13] := Space(Len(STZ->TZ_CAUSA))
+		aARRAYTRB[nPOSX][16] := cTZUser
+		If Empty(aARRAYINI[nPOSX][16])
+			aARRAYINI[nPOSX][16] := cTZUser
+		EndIf
+	Endif
+	cREADVAR := SPACE(8)
+
+	//Atualiza todas as cores da Vida do Pneu
+	MNT231ACOR()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231EP
+Visualiza o Esquema Padrao do Bem Pai
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231EP()
+
+	MNTA220DES(TQ0->TQ0_DESENH,TQ0->TQ0_TIPMOD)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231MTV
+Informa o Motivo do tranferência e/ou estoque
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cVMENSA, characters
+@param nTIPT, numeric
+@param cVMENSA2, characters
+@param cPneu, characters
+@param lStatus, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231MTV(cVMENSA,nTIPT,cVMENSA2,cPneu,lStatus)
+
+	Local cCABEC1 := Space(1)
+	Local nLINF   := If (Empty(cVMENSA),27,30)
+	Local cCompM := &(cREADVAR)
+	Local nLenMot := 0
+	Local nT := 0
+	Local nY := 0
+	Local oDlgx, oMenu
+	Private lFrota :=  GetNewPar('MV_NGMNTFR','N') == 'S' // Variavel utilizada na construção da tela de inclusão de Status através do F3.
+
+	Private nOpcmo  := 1
+
+	If nTIPT = 1
+		cCABEC1 := STR0056 //"Movimento para Area de Transferˆncia"
+	ElseIf nTIPT = 2
+		cCABEC1 := STR0057+Alltrim(&cREADVAR) //"Disponibilizacao do Rodado "
+	Else
+		cCABEC1 := STR0058 //"Transferência de Rodado"
+	Endif
+
+	cPneu   := If(cPneu = NIL,cCompM,cPneu)
+	cNOMCAU := Space(Len(st8->t8_nome))
+	cMOTIVE := Space(Len(ST8->T8_CODOCOR))
+	lMOSTRE := .T.
+	cStatus := Space(Len(TQY->TQY_STATUS))
+	nSulco  := 0.00
+	cNomSt  := Space(30)
+	M->T9_CATBEM := '3'
+
+	If lRodizio
+		cStatus := IIF(Empty(cNGSTAPL),"  ",cNGSTAPL)
+		cNomSt  := NGSEEK("TQY",cStatus,1,"TQY->TQY_DESTAT")
+		If !Empty(AllTrim(GetMv("MV_NGMOROD")))
+			If Len(AllTrim(GetMv("MV_NGMOROD"))) < Len(ST8->T8_CODOCOR)
+				nLenMot := Len(ST8->T8_CODOCOR) - Len(AllTrim(GetMv("MV_NGMOROD")))
+				cMotive := AllTrim(GetMv("MV_NGMOROD")) + Space(nLenMot)
+			Else
+				cMotive := AllTrim(GetMv("MV_NGMOROD"))
+			EndIf
+			NGPMOT231(cMotive)
+		EndIf
+	EndIf
+
+	cCUSTOB  := NGSEEK('ST9',cPneu,1,'ST9->T9_CCUSTO')
+	cNomCust := NGSEEK('SI3',cCUSTOB,1,'SI3->I3_DESC')
+	cCENTRAB := NGSEEK('ST9',cPneu,1,'ST9->T9_CENTRAB')
+	cNomSHB  := NGSEEK('SHB',cCENTRAB,1,'SHB->HB_NOME')
+	lMoviBem := NGSEEK('ST9',cPneu,1,'ST9->T9_MOVIBEM') = 'S'
+
+	If !Empty(cVMENSA) .And. lStatus
+		nT := 40
+	EndIf
+
+	DEFINE MSDIALOG oDlgx TITLE OemToAnsi(cCABEC1) From 0,0 To 200+nT,465 COLOR CLR_BLACK,CLR_WHITE Pixel
+	If Empty(cVMENSA)
+
+		oPanel := TPanel():New(0, 0, Nil, oDlgx, Nil, .T., .F., Nil, Nil, 0, 0, .T., .F. )
+		oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@0.6,1   Say OemtoAnsi(STR0059) COLOR CLR_HBLUE OF oPanel //"Motivo"
+		@0.5,6.5 MsGet cMOTIVE Picture "@!" VALID NGPMOT231(cMOTIVE) F3 "STN" SIZE 35,10 HASBUTTON OF oPanel
+		@0.5,13  MsGet cNOMCAU Picture "@!" SIZE 120,10 WHEN .F. OF oPanel
+
+		@1.5,1   Say OemtoAnsi(STR0190) COLOR CLR_HBLUE OF oPanel //"Centro de Custo"
+		@1.5,6.5 MsGet cCUSTOB Picture "@!" VALID CTB105CC() .And.;
+		MNTA231CC(cCUSTOB) F3 "CTT" SIZE 35,10 HASBUTTON WHEN lMoviBem OF oPanel
+
+		@1.5,13  MsGet cNomCust  Picture "@!" SIZE 120,10 WHEN .F.OF oPanel
+
+		@2.5,1   Say OemtoAnsi("C. Trabalho") OF oPanel //"C. Trabalho"
+		@2.5,6.5 MsGet cCENTRAB Picture "@!" VALID MNTA231CT(cCENTRAB,cCUSTOB) F3 "NG1" SIZE 35,10 HASBUTTON WHEN lMoviBem OF oPanel
+
+		// CHKCENTRAB(cCENTRAB,cCUSTOB) .And. (cNomSHB := NGSEEK('SHB',cCENTRAB,1,'SHB->HB_NOME')) F3 "NG1" ;
+
+		@2.5,13  MsGet cNomSHB  Picture "@!" SIZE 120,10 WHEN .F. OF oPanel
+
+		@3.5,1   Say OemtoAnsi(STR0124) COLOR CLR_HBLUE OF oPanel //"Status"
+		@3.5,6.5 MsGet cStatus Picture "@!" VALID MNTA231ST(cStatus,cCompM,nTIPT,lStatus) F3 "TQYFIL" SIZE 35,10 WHEN !lBlkStatus HASBUTTON OF oPanel
+		@3.5,13  MsGet cNomSt  Picture "@!" SIZE 120,10 WHEN .F. OF oPanel
+
+		// Ponto de Entrada que carrega o valor do Sulco do primeiro pneu.
+		If ExistBlock( 'MNTA2318' )
+			nSulco := ExecBlock( 'MNTA2318', .F., .F., { cPneu, 1, nSulco } )
+		EndIf
+
+	
+		@4.5,1   Say OemtoAnsi(STR0125) COLOR CLR_HBLUE OF oPanel //"Sulco"
+		@4.5,6.5 MsGet nSulco Picture "@E 999.99" VALID MNTA231SU(cCompM,nSulco,cHORALE1,.T.) SIZE 35,10 HASBUTTON OF oPanel
+
+	Else
+
+		@2.5,1   Say OemtoAnsi(cVMENSA)
+		@3.4,1 Say OemtoAnsi(cVMENSA2)
+
+		@4.3,1 Say OemtoAnsi(STR0059) COLOR CLR_HBLUE //"Motivo"
+		@4.0,6.5 MsGet cMOTIVE Picture "@!" VALID NGPMOT231(cMOTIVE) F3 "STN" SIZE 35,10 HASBUTTON
+		@4.0,13  MsGet cNOMCAU Picture "@!" SIZE 120,10  when .F.
+
+		//Nao necessario informar Status quando for para Area de Transferencia (nTIPT == 1), ja que o pneu nao saira da estrutura
+		If lStatus
+			@5.2,1 Say OemtoAnsi(STR0190) COLOR CLR_HBLUE //"Centro de Custo"
+
+			//@4,6.5 MsGet cCUSTOB Picture "@!" VALID CTB105CC() .And. (cNomCust := NGSEEK('SI3',cCUSTOB,1,'SI3->I3_DESC')) F3 "CTT" ;
+
+			@5.0,6.5 MsGet cCUSTOB Picture "@!" VALID CTB105CC() .And. MNTA231CC(cCUSTOB) F3 "CTT" SIZE 35,10 HASBUTTON WHEN lMoviBem
+
+			@5.0,13  MsGet cNomCust  Picture "@!" SIZE 120,10 WHEN .F.
+
+			@6.2,1   Say OemtoAnsi("C. Trabalho")
+			@6.0,6.5 MsGet cCENTRAB Picture "@!" VALID MNTA231CT(cCENTRAB,cCUSTOB) F3 "NG1" SIZE 35,10 HASBUTTON WHEN lMoviBem
+			//  CHKCENTRAB(cCENTRAB,cCUSTOB) .And. (cNomSHB := NGSEEK('SHB',cCENTRAB,1,'SHB->HB_NOME')) F3 "NG1" ;
+			@6.0,13  MSget cNomSHB  Picture "@!" SIZE 120,10 WHEN .F.
+
+			@7.2,1 Say OemtoAnsi(STR0124) COLOR CLR_HBLUE //Status
+			@7.0,6.5 MsGet cStatus Picture "@!" VALID MNTA231ST(cStatus,cPneu,nTIPT,lStatus) F3 "TQYFIL" SIZE 35,10 WHEN !lBlkStatus HASBUTTON
+			@7.0,13  MsGet cNomSt  Picture "@!" SIZE 120,10 WHEN .F.
+
+			nY := 3
+		EndIf
+
+		@5.3+nY , 1 Say OemtoAnsi(STR0125) COLOR CLR_HBLUE //Sulco
+		@5.0+nY , 6.5 MsGet nSulco Picture "@E 999.99" VALID MNTA231SU(cCompM,nSulco,cHORALE1,.T.) SIZE 35,10 HASBUTTON
+	Endif
+	NGPOPUP(aSMenu,@oMenu)
+	oDlgx:bRClicked      := { |o,x,y| oMenu:Activate(x,y,oDlgx)}
+	ACTIVATE MSDIALOG oDlgx Centered ON INIT EnchoiceBar(oDlgx,{||nopcmo:=2,If(MNTA231ST(cStatus,If(cPneu = NIL,cCompM,cPneu),nTIPT,lStatus,nopcmo),;
+	oDlgx:End(),nopcmo:=1)},{||nopcmo:=1,oDlgx:End()})
+
+Return nopcmo
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231BE
+Consistencia Do rodado na Estrutura
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cBEM, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231BE(cBEM)
+
+	Local xC,Z     := 0,lTesBan := .F.
+	Local cVARDE   := Readvar()
+	Local cVPNEU   := &(cVARDE)
+	Local nPOSF    := ASCAN(aARRAYTRB,{|x| x[2] == READVAR()})
+	Local nPOSI    := ASCAN(aARRAYINI,{|x| x[3] == cVPNEU})
+	Local nPOSR    := ASCAN(aARRAYTRB,{|x| x[3] == cVPNEU})
+	Local cPNEUOLD := If(nPOSF > 0 ,aARRAYTRB[nPOSF][3],Space(Len(st9->t9_codbem)))
+	Local lTrocLo  := .F.
+	Local aTable   := {{"ST9"},{"TQS"},{"STC"},{"STN"},{"CTT"},{"SI3"},{"SHB"}}
+	Local cPNEUxC
+	Local aOldEstoq := {}
+	Local lIntEst   := GetNewPar('MV_NGMNTES','N') == 'S' // Verifica parametro de integração com estóque.
+	Local lPneEst   := GetNewPar('MV_NGPNEST','N') == 'S' // Verifica parametro de controle de estoque do pneu.
+	Local nPneuSul 	:= 0 //Variavel para verificação de sulco do pneu quando utilizado TWI
+
+	//Verifica a existência do campo TQS_TWI
+	Local lExistTwi := NGCADICBASE("TQS_TWI", "A", "TQS", .F.)
+
+	//Variavel utilizada para receber informações retornadas da função MNTA231TWI
+	Local aValTwi := {}
+
+	If lRodizio .AND. Empty(cVPNEU) .AND. !Empty(cPNEUOLD)
+		MsgStop(STR0199,STR0016) //""Para serviço do tipo 'Rodízio' não será possível retirar pneus da estrutura."###"ATENCAO"
+		Return .F.
+	Endif
+
+	lBlkStatus:= .F.
+
+	lSeqRot  := .T.
+	cCODIFAM := If(nPOSF > 0 ,aARRAYTRB[nPOSF][4],Space(Len(st9->t9_codfami)))
+	cREADVAR := READVAR()
+
+	//Verifica se o pneu ja esta na estrutura
+	nPOSV := ASCAN(aARRAYTRB,{|x| x[2] == READVAR()})
+	If nPOSV > 0 .AND. aARRAYTRB[nPOSV][3] == cVPNEU
+		Return .T.
+	Endif
+
+	If cTipSer = 'C' .And. cPNEUOLD != &(cREADVAR)
+		MsgInfo(STR0139+chr(13)+STR0140,STR0063)  //"Para o processo de CANIBALISMO, somente sera"
+		&(cREADVAR) := cPNEUOLD                   //"permitido a retirada do pneu (Disponivel)."
+		lRefresh := .T.
+		Return .T.
+	Endif
+
+	//Adicionada validação de pneus para antes da validação do Bem pois
+	//estava validando estrutura sem Pneus antes de enviar o mesmo para outro local de estoque
+	If Empty(cVPNEU)
+		If !(Empty(&(cREADVAR)) .And. Empty(cPNEUOLD))
+			&(cREADVAR) := cPNEUOLD
+			MNTA231ES()
+		EndIf
+		MNT231ACOR()
+		Return .T.
+	Endif
+
+	Dbselectarea("ST9")
+	Dbsetorder(1)
+	IF !Dbseek(xFILIAL("ST9")+cVPNEU)
+		MSGSTOP(STR0045,STR0016) //"Este Bem nao esta cadastrado..."
+		Return .F.
+	ElseIf ST9->T9_SITBEM = 'I'
+		MsgInfo(STR0014+Alltrim(cVPNEU)+STR0046,STR0016) //"Bem "###" esta inativo.."###"ATENCAO"
+		&(cREADVAR) := cPNEUOLD
+		lRefresh := .T.
+		Return .T.
+	ElseIf ST9->T9_SITBEM = 'T'
+		MsgInfo(STR0014+Alltrim(cVPNEU)+STR0158,STR0016) //"Bem "###" foi transferido."###"ATENCAO"
+		&(cREADVAR) := cPNEUOLD
+		lRefresh := .T.
+		Return .T.
+	ElseIf cBEM = cVPNEU
+		MsgInfo(STR0014+Alltrim(cVPNEU)+STR0108,STR0016) //"Bem "###"e pai do Esquema do Rodado.","###"ATENCAO"
+		&(cREADVAR) := cPNEUOLD
+		lRefresh := .T.
+		Return .T.
+	Else
+		If cPNEUOLD != &(cREADVAR)
+			If !NGFIL231() .And. nPOSI == 0
+				MsgInfo(STR0138,STR0016) //"Bem não permitido devido ao seu status.","###"ATENCAO"
+				&(cREADVAR) := cPNEUOLD
+				lRefresh := .T.
+				Return .T.
+			Endif
+		Endif
+	Endif
+
+	// Validação do pneu apos já validar se o mesmo existe
+	If !Empty(cVPNEU) .AND. (cVPNEU != cPNEUOLD)
+		If lExistTwi
+			//Busca Sulco do pneu inserido na estrutura
+			nPneuSul := POSICIONE("TQV", 1, xFilial("TQV")+Alltrim(cVPNEU),'TQV_SULCO')
+			//Caso pneu utilize TWI e o sulco seja menor que o TWI cadastro no Pneu, não poderá ser incluso na estrutura.
+			aValTwi := MNTA231TWI(cVPNEU, .T., nPneuSul)
+
+			If !aValTwi[1] .And. !Empty(aValTwi[2])
+				MsgInfo(aValTwi[2], STR0016)
+				Return aValTwi[1]
+			EndIf
+		EndIf
+		If !MNTA231PRO(cVPNEU)
+			Return .F.
+		Endif
+	Endif
+
+	Dbselectarea("TQS")
+	Dbsetorder(1)
+	IF !Dbseek(xFILIAL("TQS")+cVPNEU)
+		MSGSTOP(STR0117,STR0016) //"O componente informado nao e pneu"
+		Return .F.
+	Endif
+
+	If cTipM = "R"
+		lRodiz := .F.
+		For Z := 1 to len(aARRAYTRB)
+			If aARRAYTRB[Z][3] = cVPNEU
+				lRodiz := .T.
+				Exit
+			Endif
+		Next Z
+		If !lRodiz
+			If !Empty(cPNEUROD)
+				If cVPNEU = cPNEUROD
+					lRodiz := .T.
+				Endif
+			Endif
+		Endif
+
+		If !lRodiz
+			MSGSTOP(STR0118+Chr(13)+STR0119,STR0016) //"Para movimentacao de servico tipo rodizio,
+			//"somente estara disponivel os pneus da estrutura"
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			Return .T.
+		Endif
+
+		If GETMV("MV_NGSTEP") = "N"
+			If nPOSR > 0
+				If aARRAYSTC[aARRAYTRB[nPOSR,12],12] = STR0127
+					MsgInfo(STR0153+Chr(13); //"Segundo configuracao nao sera permitido"
+					+ STR0154+STR0127,STR0016) //"movimentar pneus do eixo "
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					lSeqRot  := .F.
+					Return .T.
+				Endif
+			Endif
+		Endif
+	Endif
+
+	If cCODIFAM <> st9->t9_codfami
+		MsgInfo(STR0060+st9->t9_codfami+STR0061+chr(13)+chr(13); //"O rodado da familia "###" nao podera ser"
+		+STR0062,STR0063) //"considerado por divergir do esquema padrao."###"NAO CONFORMIDADE"
+		&(cREADVAR) := cPNEUOLD
+		lRefresh := .T.
+		Return .T.
+	Endif
+
+	cREADVAR := READVAR()
+	nPOSV := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+
+	If nPOSV > 0 .AND. aARRAYTRB[nPOSV][3] == cVPNEU
+		Return .T.
+	Endif
+
+	If ExistBlock("MNTA2317")
+		If !ExecBlock("MNTA2317",.F.,.F.)
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			MNT231ACOR()
+			Return .T.
+		EndIf
+	EndIf
+
+	// CONSISTENCIA DA MEDIDA
+
+	nNumE := aARRAYTRB[nPOSF,12]
+
+	For Z := 1 to len(aARRAYTRB)
+		If aARRAYTRB[Z,12] = nNumE
+			If Z <> nPOSF
+				If !Empty(aARRAYTRB[Z][3])
+					If aARRAYTRB[Z,7] <> TQS->TQS_MEDIDA
+						If !MSGYESNO(STR0120+Chr(13)+STR0067)
+							&(cREADVAR) := cPNEUOLD
+							lRefresh := .T.
+							//cREADVAR := cPNEUOLD
+							Return .T.
+						Else
+							Exit
+						Endif
+					Endif
+				Endif
+			Endif
+		Endif
+	Next
+
+	// CONSISTENCIA DO TIPO DE EIXO
+
+	If Val(aARRAYTRB[nPOSF,6]) > 2
+		If !lTEMCONT
+			cBemPEs := NGBEMPAI(cVPNEU)
+			If !Empty(cBemPEs)
+				Dbselectarea("ST9")
+				nRecST9 := Recno()
+				Dbsetorder(1)
+				If Dbseek(XFILIAL("ST9")+cBemPES)
+					lTesBan := If(ST9->T9_TEMCONT = "S",.T.,.F.)
+				Endif
+				Dbgoto(nRecST9)
+			Endif
+		Else
+			lTesBan := .T.
+		Endif
+		If lTesBan
+			If TQS->TQS_BANDAA <> '1'
+				If !MSGYESNO(STR0121+Chr(13)+STR0067)
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					//cREADVAR := cPNEUOLD
+					Return .T.
+				Endif
+			Endif
+		Endif
+	Endif
+
+	// CONSISTENCIA DO SULCO
+	nParSul := GETMV("MV_NGDIFSU")
+	nDifSMa := TQS->TQS_SULCAT + nParSul
+	nDifSMe := TQS->TQS_SULCAT - nParSul
+
+	For Z := 1 to len(aARRAYTRB)
+		If aARRAYTRB[Z,12] = nNumE
+			If Z <> nPOSF
+				If !Empty(aARRAYTRB[Z][3])
+					If aARRAYTRB[Z,8] >= nDifSMe .And. aARRAYTRB[Z,8] <= nDifSMa
+					Else
+						If !MSGYESNO(STR0122+Chr(13)+STR0067)
+							&(cREADVAR) := cPNEUOLD
+							lRefresh := .T.
+							//cREADVAR := cPNEUOLD
+							Return .F.
+						Else
+							Exit
+						Endif
+					Endif
+				Endif
+			Endif
+		Endif
+	Next
+
+	// CONSISTENCIA DO DOT
+	cTQSDot := StrZero(Val(SuBstr(TQS->TQS_DOT,3,2))+5,2)+SuBstr(TQS->TQS_DOT,1,2)
+	If cSemMov > cTQSDot
+		If !MSGYESNO(STR0123+Chr(13)+STR0067)
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			//cREADVAR := cPNEUOLD
+			Return .F.
+		Endif
+	Endif
+
+	If cPNEUROD == cVPNEU .AND. !Empty(cPNEUROD) .and. Empty(cPNEUOLD)
+
+		If !MSGYESNO(STR0053+alltrim(cVPNEU)+STR0064+chr(13)+chr(13); //"Rodado "###"  atualmente esta na area de transferencia."
+		+STR0065+aARRAYTRB[nPOSV][1]+STR0066+chr(13)+chr(13)+chr(13); //"Esta sendo transferido para a localizacao  "###"."
+		+STR0067) //"Confirma ?"
+
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			Return .T.
+		Endif
+
+		If ExistBlock("MNTA2313")
+			If !ExecBlock("MNTA2313",.F.,.F.)
+				&(cREADVAR) := cPNEUOLD
+				lRefresh := .T.
+				MNT231ACOR()
+				Return .T.
+			EndIf
+		EndIf
+
+		cPNEUROD := cSTRINGT9
+		lRefresh := .T.
+		aARRAYTRB[nPOSV][3]  := cVPNEU
+		aARRAYTRB[nPOSV][8]  := nSulcT
+		aARRAYTRB[nPOSV][11] := cStatuT
+		aARRAYTRB[nPOSV][13] := cMOTIVT
+		aARRAYTRB[nPOSV][16] := cTZUser
+		If Empty(aARRAYINI[nPOSV][16])
+			aARRAYINI[nPOSV][16] := cTZUser
+		EndIf
+		MNT231ACOR()
+		Return .T.
+	Endif
+
+	If Empty(aARRAYTRB[nPOSV][3])
+		nPOS2 := ASCAN(aARRAYTRB,{|x| x[3] == cVPNEU})
+		If nPOS2 > 0
+			cMTRANS := STR0053+alltrim(aARRAYTRB[nPOS2][3])+chr(13); //"Rodado "
+			+STR0068+aARRAYTRB[nPOS2][1]+chr(13); //"Localizacao Atual "
+			+STR0069+aARRAYTRB[nPOSV][1]+chr(13)+chr(13)+chr(13) //"Localizacao Nova  "
+
+			lTrocLo  := .F.
+			nPOSB := ASCAN(aBEMLOC,{|x| x[2] == cVPNEU})
+			If nPOSB > 0 .And. Empty(aBEMLOC[nPOSB][3])
+
+				If !lSeqRot
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					Return .T.
+				Endif
+
+				nopre := MNTA231MTV(cMTRANS,3,,,.F.)
+				If nopre = 1
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					Return .T.
+				Endif
+				If ExistBlock("MNTA2313")
+					If !ExecBlock("MNTA2313",.F.,.F.)
+						&(cREADVAR) := cPNEUOLD
+						lRefresh := .T.
+						MNT231ACOR()
+						Return .T.
+					EndIf
+				EndIf
+
+				aBEMLOC[nPOSB][3] := cMOTIVE
+			Else
+				If !MSGYESNO(cMTRANS+STR0067) //"Confirma ?"
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					Return .T.
+				Endif
+				If ExistBlock("MNTA2313")
+					If !ExecBlock("MNTA2313",.F.,.F.)
+						&(cREADVAR) := cSTRINGT9
+						lRefresh := .T.
+						cREADVAR := cSTRINGT9
+						MNT231ACOR()
+						Return .T.
+					EndIf
+				EndIf
+				lTrocLo  := .T.
+			Endif
+
+
+			cVAR1    := aARRAYTRB[nPOSV][2]
+			cVAR2    := aARRAYTRB[nPOS2][2]
+			&(cVAR2) := aARRAYTRB[nPOSV][3]
+			aARRAYTRB[nPOSV][3]   := aARRAYTRB[nPOS2][3]
+
+			aARRAYTRB[nPOSV][8]   := If(!lTrocLo,nSulco,aARRAYTRB[nPOS2][8])
+			aARRAYTRB[nPOSV][11]  := If(!lTrocLo,cStatus,aARRAYTRB[nPOS2][11])
+			aARRAYTRB[nPOSV][13]  := If(!lTrocLo,cMOTIVE,aARRAYTRB[nPOS2][13])
+			aARRAYTRB[nPOSV][15]  := aARRAYTRB[nPOS2][15]
+			aARRAYTRB[nPOSV][16]  := cTZUser
+			aARRAYTRB[nPOSV][17]  := cCUSTOB
+			aARRAYTRB[nPOSV][18]  := cCENTRAB
+
+			aARRAYTRB[nPOSV][19]  := aARRAYTRB[nPOS2][19] // Almoxarifado
+			aARRAYTRB[nPOSV][20]  := aARRAYTRB[nPOS2][20] // Sub_lote
+			aARRAYTRB[nPOSV][21]  := aARRAYTRB[nPOS2][21] // Lote
+			aARRAYTRB[nPOSV][22]  := aARRAYTRB[nPOS2][22] // Numero da serie
+			aARRAYTRB[nPOSV][23]  := aARRAYTRB[nPOS2][23] // Localizacao fisica
+			aARRAYTRB[nPOSV][24]  := aARRAYTRB[nPOS2][24] // Data validade
+
+			If Empty(aARRAYINI[nPOSV][16])
+				aARRAYINI[nPOSV][16] := cTZUser
+			EndIf
+
+			aARRAYTRB[nPOS2][3]  := cSTRINGT9
+			aARRAYTRB[nPOS2][8]  := 0
+			aARRAYTRB[nPOS2][11] := Space(Len(TQY->TQY_STATUS))
+			aARRAYTRB[nPOS2][13] := Space(Len(STZ->TZ_CAUSA))
+			aARRAYTRB[nPOS2][15] := Space(Len(SB1->B1_LOCPAD))
+			aARRAYTRB[nPOS2][16] := cTZUser
+			aARRAYTRB[nPOS2][17] := Space(Len(ST9->T9_CCUSTO))
+
+			aARRAYTRB[nPOS2][19] := Space(Len(STL->TL_LOCAL))   // Almoxarifado
+			aARRAYTRB[nPOS2][20] := Space(Len(STL->TL_NUMLOTE)) // Sub_lote
+			aARRAYTRB[nPOS2][21] := Space(Len(STL->TL_LOTECTL)) // Lote
+			aARRAYTRB[nPOS2][22] := Space(Len(STL->TL_NUMSERI)) // Numero da serie
+			aARRAYTRB[nPOS2][23] := Space(Len(STL->TL_LOCALIZ)) // Localizacao fisica
+			aARRAYTRB[nPOS2][24] := Ctod("  /  /  ")            // Data validade
+
+			If Empty(aARRAYINI[nPOS2][16])
+				aARRAYINI[nPOS2][16] := cTZUser
+			EndIf
+
+			&(cVAR2) := cSTRINGT9
+			lRefresh := .T.
+			cREADVAR := SPACE(8)
+			MNT231ACOR()
+			Return .T.
+		Endif
+	Endif
+
+	cMENSAB := Space(1)
+
+	For Z := 1 to len(aARRAYTRB)
+		If aARRAYTRB[Z][3] = cVPNEU
+			cMENSAB := STR0070 //"Ja foi informado este rodado para o esquema de rodado..."
+			Exit
+		Endif
+	Next
+
+	If Empty(cMENSAB)
+		Dbselectarea("STC")
+		Dbsetorder(3)
+		If Dbseek(Xfilial("STC")+cVPNEU)
+			If ASCAN(aBEMLOC,{|x| x[2] == cVPNEU}) == 0
+				nPOSEA := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+				NGIFDBSEEK("TQS",cVPNEU,1)
+				cMENSAB := STR0209+Chr(13)+Chr(13)+;
+				STR0210+" "+STR0211+Chr(13)+;
+				STR0207+" "+STC->TC_CODBEM+Chr(13)+;
+				STR0208+" "+cVPNEU+Chr(13)+;
+				STR0213+" "+TQS->TQS_EIXO+Chr(13)+;
+				Alltrim(STR0072)+": "+TQS->TQS_POSIC+Chr(13)+Chr(13)+;
+				STR0210+" "+STR0212+Chr(13)+;
+				STR0207+" "+cBEM+Chr(13)+;
+				STR0208+" "+cVPNEU+Chr(13)+;
+				STR0213+" "+Str(aARRAYTRB[nPOSEA,12],2)+Chr(13)+;
+				Alltrim(STR0072)+": "+aARRAYTRB[nPOSEA,1]
+			Endif
+		Endif
+	Endif
+
+	If !Empty(cMENSAB)
+		MsgInfo(cMENSAB,STR0016) //"ATENCAO"
+		&(cREADVAR) := cPNEUOLD
+		lRefresh := .T.
+		Return .F.
+	Endif
+	lChkLote := .F.
+	If ASCAN(aARRAYINI,{|x| x[3] == cVPNEU}) = 0
+		If AllTrim(GetMV("MV_NGPNEST")) == 'S'
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			If dbseek(XFILIAL("ST9")+cVPNEU)
+				If Empty(ST9->T9_CODESTO)
+					If !MSGYESNO(STR0132+Chr(13)+STR0133+Chr(13);
+					+' ( T9_CODESTO - ' + AllTrim( FWX3Titulo( 'T9_CODESTO' ) ) + ' ) ';
+					+STR0134+' '+Alltrim(NGSX2NOME('ST9'))+ChR(13);
+					+STR0135+Chr(13)+Chr(13)+STR0067)
+						&(cREADVAR) := cPNEUOLD
+						lRefresh := .T.
+						//cREADVAR := cSTRINGT9
+						Return .F.
+					Endif
+				Endif
+				If AllTrim(GetMV("MV_NGMNTES")) == 'S' .And. !Empty(st9->t9_codesto) .And. ;
+				AllTrim(GetMV("MV_RASTRO")) == 'S' .And. AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. ;
+				NGSEEK('SB1',ST9->T9_CODESTO,1,"B1_RASTRO") = "S"
+					lChkLote := .T.
+				EndIf
+			EndIf
+		Endif
+	Endif
+
+	cCodEstST9 := ' '
+	// Caso integracao com o estoque, empresa utilizar identificao de bem no estoque
+	// e produto tiver mais de um almoxarifado, chama tela para informar a qual almoxarifado atual para se debitar.
+	If cUsaIntEs == 'S' .And. (AllTrim(GetMV("MV_NGPNEST")) == 'S')
+		aOldEstoq := NG231OLDES(ST9->T9_STATUS,ST9->T9_CODESTO)
+		aARRAYTRB[nPOSV][15] := aOldEstoq[2]//cCodST9Alm
+		aARRAYTRB[nPOSV][26] := aOldEstoq[3]
+		cCodEstST9 := aOldEstoq[1]//ST9->T9_CODESTO
+	EndIf
+	If !lESTNEGA .AND. cPNEUOLD != cVPNEU
+		If NGIFDBSEEK("SB1",ST9->T9_CODESTO,1)
+			nQtdeProd := 0
+			If ASCAN(aARRAYINI,{|x| x[2] == cVPNEU}) == 0 .OR. Empty(cPNEUOLD)
+				nQtdeProd++
+			Endif
+
+			For Z := 1 to Len(aARRAYTRB)
+				If aARRAYTRB[Z][14] == ST9->T9_CODESTO
+					If aARRAYTRB[Z][3] == cPNEUOLD
+						nQtdeProd--
+					Else
+						nQtdeProd++
+					Endif
+				Endif
+			Next
+			
+			If Empty(aARRAYTRB[nPOSV][15])
+				cLocAlm := SB1->B1_LOCPAD
+			Else
+				cLocAlm := aARRAYTRB[nPOSV][15]
+			EndIf
+			
+			For Z := 1 to Len(aARRAYINI)
+				If aARRAYINI[Z][14] == ST9->T9_CODESTO .And. aARRAYINI[Z][15] == cLocAlm
+					nQtdeProd--
+				Endif
+			Next
+			lIncluiOld := Inclui
+			Inclui     := .T.
+
+			If nQtdeProd > 0 .And. lIntEst .And. lPneEst .and. !Empty(ST9->T9_CODESTO)
+				If !NGSALSB2(ST9->T9_CODESTO,cLocAlm,nQtdeProd,,,dDTDATEM)
+					Inclui  := lIncluiOld
+					Return .F.
+				Endif
+				Inclui     := lIncluiOld
+			Endif
+		Endif
+	Endif
+
+	//Verifica se o Bem foi retirado da estrutura sem clicar em 'Disponivel'
+	nPOSB := ASCAN(aBEMLOC,{|x| x[2] == cPNEUOLD})
+	If nPOSB > 0 .And. Empty(aBEMLOC[nPOSB][3])
+		cMTRANS := STR0053+Alltrim(cPNEUOLD)+chr(13); //"Rodado "
+		+STR0072+aBEMLOC[nPOSB][1]+chr(13) //; //"Localizacao  "
+		cMTRANS2 := STR0073+cVPNEU //"Esta sendo trocado pelo rodado "
+
+		If cPNEUROD == cVPNEU
+			If !MSGYESNO(STR0053+AllTrim(cVPNEU)+STR0064+chr(13)+chr(13); //"Rodado "###"  atualmente esta na area de transferencia."
+			+STR0065+aARRAYTRB[nPOSV][1]+STR0066+chr(13)+chr(13)+chr(13); //"Esta sendo transferido para a localizacao  "###"."
+			+STR0067) //"Confirma ?"
+
+				&(cREADVAR) := cPNEUOLD
+				lRefresh := .T.
+				Return .T.
+			Endif
+			cPNEUROD := cSTRINGT9
+		EndIf
+
+		nPOSX    := ASCAN(aARRAYTRB,{|x| x[2] == cREADVAR})
+
+		If nPOSX > 0
+			nPOSB := ASCAN(aBEMLOC,{|x| x[2] == aARRAYTRB[nPOSX][3]})
+			If nPOSB > 0
+
+				nopre := MNTA231MTV(cMTRANS,3,cMTRANS2,cPNEUOLD,.T.)
+				If nopre = 1
+					&(cREADVAR) := cPNEUOLD
+					lRefresh := .T.
+					Return .F.
+				EndIf
+
+				aBEMLOC[nPOSB][3] := cMOTIVE
+
+				aARRAYINI[nPOSX][8]  := nSulco
+				aARRAYINI[nPOSX][11] := cStatus
+				aARRAYINI[nPOSX][13] := cMOTIVE
+				aARRAYINI[nPOSX][17] := cCUSTOB
+				aARRAYINI[nPOSX][18] := cCENTRAB
+			EndIf
+		EndIf
+	EndIf
+
+	If ExistBlock("MNTA2313")
+		If !ExecBlock("MNTA2313",.F.,.F.)
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			MNT231ACOR()
+			Return .F.
+		EndIf
+	EndIf
+
+	If lChkLote
+		If !MNTA231LL(cVPNEU,nPOSV)
+			&(cREADVAR) := cPNEUOLD
+			lRefresh := .T.
+			Return .T.
+		Endif
+	Endif
+
+	aARRAYTRB[nPOSV][3]  := cVPNEU
+	aARRAYTRB[nPOSV][7]  := TQS->TQS_MEDIDA
+	aARRAYTRB[nPOSV][8]  := TQS->TQS_SULCAT
+	aARRAYTRB[nPOSV][9]  := TQS->TQS_BANDAA
+	aARRAYTRB[nPOSV][10] := TQS->TQS_DOT
+	aARRAYTRB[nPOSV][11] := ST9->T9_STATUS
+	aARRAYTRB[nPOSV][16] := cTZUser
+	If Empty(aARRAYINI[nPOSV][16])
+		aARRAYINI[nPOSV][16] := cTZUser
+	EndIf
+	aARRAYTRB[nPOSV][14] := cCodEstST9
+
+	cREADVAR := SPACE(8)
+	nPOS2    := 0
+
+	MNT231ACOR()
+Return .T.
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231FIM
+Consistencia Final para dados serem gravados
+@type function
+
+@author Inacio Luiz Kolling
+@since 25/05/2005
+
+@sample MNTA231FIM()
+
+@param	[lFinalOS], Lógico, Define se a OS foi finalizada.
+@return .T.
+/*/
+//---------------------------------------------------------------------------
+Function MNTA231FIM( lFinalOS )
+
+	Local yy         := 0
+	Local yx         := 0
+	Local yz         := 0
+	Local cFORMABE   := TQ0->TQ0_DESENH + Space( Len( STC->TC_CODBEM ) - Len( TQ0->TQ0_DESENH ) )
+	Local lFoundEP   := .F.
+	Local cModSTC    := ''
+
+	Default lFinalOS := .F.
+
+	If cPrograma == 'MNTA232'
+		Return MNTA232FIM( lFinalOS )
+		oTmpTbl1:Delete() //Deleta Tabela Temporária 1
+		oTmpTbl2:Delete() //Deleta Tabela Temporária 2
+	EndIf
+
+	//--------------------------------------------------------------------------
+	// Valida contador informado na tela inicial de contador, caso este já
+	// não seja mais válido, então apresenta uma nova tela para reporte do cont.
+	//--------------------------------------------------------------------------
+	If !lFinalOS .And. !MNT231VCFIM()
+		Return .F.
+	EndIf
+
+	If !Empty(cPNEUROD)
+		MsgInfo(STR0128,STR0063)
+		Return .F.
+	Endif
+
+	If cTipSer <> 'C'  // Diferente de CANIBALISMO
+
+		If !lCARESTP
+			Dbselectarea("STC")
+			Dbsetorder(1)
+
+			If lRel12133
+				lFoundEP := MNTSeekPad( 'STC', 5, cFORMABE, cTPMODI )
+				cModSTC  := STC->TC_TIPMOD
+			Else
+				lFoundEP := Dbseek(Xfilial("STC")+cFORMABE)
+				cModSTC  := cTPMODI
+			EndIf
+
+			If lFoundEP
+				While !eof() .and. stc->tc_filial = xfilial('STC');
+				.and. stc->tc_codbem = cFORMABE
+					If stc->tc_tipoest == 'F' .And. stc->tc_tipmod = cModSTC
+						Aadd(aARRAESTP,{stc->tc_localiz,stc->tc_obrigat})
+					Endif
+					dbskip()
+				End
+				lCARESTP := .T.
+			Endif
+
+			Dbselectarea("STC")
+			Dbsetorder(1)
+
+		Endif
+
+		For yy := 1 to len(aARRAYTRB)
+			nPOS4 := ASCAN(aARRAESTP,{|x| x[1] == aARRAYTRB[yy][1]})
+			If nPOS4 > 0
+				If Empty(aARRAYTRB[yy][3]) .And. aARRAESTP[nPOS4][2] = 'S'
+					MsgInfo(STR0074,STR0063) //"Nao foi informado rodado para a localizacao  "###"NAO CONFORMIDADE"
+					Return .F.
+				Endif
+			Endif
+		Next yy
+
+		cHRTROCL := If(Alltrim(cHORALE1) = ":",cHRTIME1M,MTOH(HTOM(SubStr(cHORALE1,1,5))+1))  //Hora da entrada para o comp que trocou de localizacao
+		If cHRTROCL = "24:00"
+			cHRTROCL := "00:00"
+		EndIf
+		dDTROCLO := If(Alltrim(cHRTROCL) = "00:00",dDTDATA+1,dDTDATA)              //Data da entrada para o comp que trocou de localizacao
+		cHORAESA := If(Alltrim(cHORALE1) = ":",cHRTIME,Substr(cHORALE1,1,5))                   //Hora para o componente que saiu ou entrou na estrutura
+
+		//Le a estrutura final
+		For yx := 1 To Len(aARRAYTRB)
+
+			If !Empty(aARRAYTRB[yx][3])
+				nPOSX := ASCAN(aARRAYINI,{|x| x[3] == aARRAYTRB[yx][3]})
+				If nPOSX > 0 //Componente ja existente na estrutura
+
+					If aARRAYINI[nPOSX ][1] <> aARRAYTRB[yx][1] ///Troco de Localizacao
+
+						//Consiste a movimentacao do componente valida para a saida da localizacao inicial
+						If !NGCONSTZ(aARRAYTRB[yx][3],dDTDATA,cHORAESA, ,aARRAYINI[nPOSX ][1])
+							Return .F.
+						EndIf
+
+						//Consiste a movimentacao do componente valida para a entrada da localizacao final
+						If !NGCONSTZ(aARRAYTRB[yx][3],dDTROCLO,cHRTROCL,"E",aARRAYTRB[yx][1])
+							Return .F.
+						EndIf
+					EndIf
+				Else //Componente novo adicionado na estrutura
+
+					//Consiste a movimentacao do componente valida para a entrada na estrutura
+					If !NGCONSTZ(aARRAYTRB[yx][3],dDTDATA,cHORAESA,"E",aARRAYTRB[yx][1])
+						Return .F.
+					EndIf
+
+				Endif
+			EndIf
+
+		Next yx
+
+		//Le a estrutura inicial
+		For yz := 1 To Len(aARRAYINI)
+
+			If !Empty(aARRAYINI[yz][3])
+				nPOSX := ASCAN(aARRAYTRB,{|x| x[3] == aARRAYINI[yz][3]})
+				If nPOSX = 0 //Componente que saiu da estrutura inicial
+
+					//Consiste a movimentacao do componente valida para a saida
+					If !NGCONSTZ(aARRAYINI[yz][3],dDTDATA,cHORAESA, ,aARRAYINI[yz][1])
+						Return .F.
+					EndIf
+
+				EndIf
+			EndIf
+		Next yz
+
+		//Le a estrutura final e separa o novo componente e verifica e esta em outro estrutura
+		For yz := 1 To Len(aARRAYTRB)
+			If !Empty(aARRAYTRB[yz][3])
+				nPosN := ASCAN(aARRAYINI,{|x| x[3] == aARRAYTRB[yz][3]})
+				If nPosN = 0
+					If NGIFDBSEEK("STC",aARRAYTRB[yz][3],3)
+						NGIFDBSEEK("TQS",aARRAYTRB[yz][3],1)
+						MsgInfo(STR0209+Chr(13)+Chr(13)+;
+						STR0210+" "+STR0211+Chr(13)+;
+						STR0207+" "+STC->TC_CODBEM+Chr(13)+;
+						STR0208+" "+aARRAYTRB[yz][3]+Chr(13)+;
+						STR0213+" "+TQS->TQS_EIXO+Chr(13)+;
+						Alltrim(STR0072)+": "+TQS->TQS_POSIC+Chr(13)+Chr(13)+;
+						STR0210+" "+STR0212+Chr(13)+;
+						STR0207+" "+cBEM+Chr(13)+;
+						STR0208+" "+aARRAYTRB[yz][3]+Chr(13)+;
+						STR0213+" "+Str(aARRAYTRB[yz,12],2)+Chr(13)+;
+						Alltrim(STR0072)+": "+aARRAYTRB[yz,1],STR0063)
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		Next yz
+	Endif
+
+	// Aviso de movimentação retroativa
+	If NGHISTRETR( cPaiEst, dDTDATA, cHORAESA, 1, xFilial("STP") ) .And. ;
+		!MsgYesNo( STR0234 + chr(13) + STR0236 + chr(13) + chr(13) + STR0235 ) //"Já existe lançamento de contador com data posterior a informada."
+			//"Como este apontamento influenciará nos demais itens da estrutura o processo poderá ser demorado dependendo da quantidade de registros."
+			// "Deseja continuar ?"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231WHE
+Inicializa a variável de leitura ( get )
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param lVARM, logical, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231WHE(lVARM)
+
+	cPNEUOLD := &(READVAR())
+	IF !Empty(READVAR()) .and. Empty(cREADVAR)
+		cREADVAR := READVAR()
+	Endif
+	nPOSF := ASCAN(aARRAYTRB,{|x| x[2] == READVAR()})
+	cCODIFAM := If(nPOSF > 0 ,aARRAYTRB[nPOSF][4],Space(Len(st9->t9_codfami)))
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231FBE
+Visualiza‡Æo do bem ( cadastro )
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cREADVAR, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231FBE(cREADVAR)
+
+	Local cVIBEM := ""
+	Local aOLDROT := {}
+	local lRotina := .F.
+	Local nPOSI  := 0
+	Local aTable := {{"ST9"},{"ST6"},{"ST7"},{"TPY"},{"DA3"},{"STB"},{"SB1"},{"TQR"},{"CTT"},{"SH7"},{"SHB"},{"TPR"}}
+
+	cVIBEM := &(cREADVAR)
+
+	If Empty(cVIBEM)
+		MsgStop(STR0075,STR0016) //"Nao foi informado o bem para visualizar"###"ATENCAO"
+		Return .F.
+	Endif
+
+	nPOSI  := ASCAN(aARRAYINI,{|x| x[3] == cVIBEM})
+
+	If TYPE("aROTINA") == "A"
+		aOLDROT  := aCLONE(aROTINA)
+		lRotina := .T.
+	Endif
+
+	aRotina := {{STR0076,"AxPesqui", 0, 1},; //"Pesquisar"
+				{STR0077,"NGCAD01" , 0, 2}} //"Visualizar"
+	cCadastro := OemtoAnsi(STR0078) //"Bens"
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	dbSeek(xFILIAL("ST9")+cVIBEM)
+	NG080FOLD('ST9',Recno(),2)
+
+
+	If lRotina
+		aROTINA := aCLONE(aOLDROT)
+	Endif
+	cREADVAR := SPACE(8)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGPMOT231
+Consistência do motivo do rodizio
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cVMOTIVO, characters
+@param cNome, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGPMOT231(cVMOTIVO,cNome)
+
+	Default cNome := cNOMCAU
+
+	lMOSTRE := .T.
+	cNOMCAU := Space(Len(ST8->T8_NOME))
+	lRefresh := .T.
+	If !ExistCpo('ST8',cVMOTIVO)
+		Return .F.
+	Endif
+	Dbselectarea("ST8")
+	Dbsetorder(1)
+	Dbseek(XFILIAL("ST8")+cVMOTIVO)
+	If ST8->T8_TIPO <> 'C'
+		MsgInfo(STR0079,STR0016) //"Motivo devera ser do tipo CAUSA"###"ATENCAO"
+		Return .F.
+	Endif
+	cNOMCAU  := ST8->T8_NOME
+	cNome    := cNOMCAU
+	lRefresh := .T.
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231IMP
+Impressão do esquema de rodado
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@param cVBEMPAI, characters
+@param aAREXIOS, array
+@param aARTRB, array
+@param nLEGEN, numeric
+@param cVModT, characters
+@param lTMSp, logical
+@param cTiPag, characters
+@param lPreview, logical
+@param nVPag, numeric
+@param nTipD, numeric
+@type function
+/*/
+Function MNTA231IMP(cVBEMPAI,aAREXIOS,aARTRB,nLEGEN,cVModT,;
+	nTipD)
+	Local nTipDe := If(nTipD  = Nil,2,nTipD)
+	Local i      := 1
+	Local x      := 0
+	Local cMENSA := Space(1),xi,lt,ct
+	Local aTable := {{"ST9"},{"STC"},{"TQ0"},{"TQ1"},{"TQR"}}
+	Local cBEMPAI
+	Local lFoundEP := .F.
+
+	Private nLINHAM := 2500, nCOLUAM := 3100
+
+	Dbselectarea("ST9")
+	Dbsetorder(1)
+	If !Dbseek(xFilial('ST9')+cVBEMPAI)
+		cMENSA := STR0080 //"Bem Nao Cadastrada"
+	Endif
+
+	Dbselectarea("STC")
+	Dbsetorder(1)
+	If !Dbseek( xFilial('STC')+cVBEMPAI)
+		If Empty(cMENSA)
+			cMENSA := STR0081 //"Estrutura do Bem Nao Cadastrada"
+		Endif
+	Endif
+
+	Dbselectarea("TQ0")
+	Dbsetorder(1)
+
+	If lRel12133
+		lFoundEP := MNTSeekPad( 'TQ0', 1, ST9->T9_CODFAMI, cVModT )
+	Else
+		lFoundEP := Dbseek( xFilial('TQ0')+ST9->T9_CODFAMI+cVModT)
+	EndIf
+
+	If !lFoundEP
+		If Empty(cMENSA)
+			cMENSA := STR0082 //"Esquema Padrao Nao Cadastrado"
+		Endif
+	Endif
+
+	Dbselectarea("TQ1")
+	Dbsetorder(1)
+	If !Dbseek( xFilial('TQ1')+TQ0->TQ0_DESENH+TQ0->TQ0_TIPMOD)
+		If Empty(cMENSA)
+			cMENSA := STR0050+cVFORMA //"Nao Existe Itens Para Esquema de Rodado "
+		Endif
+	Endif
+
+	If !Empty(cMENSA)
+		MsgInfo(cMENSA,STR0016) //"ATENCAO"
+		Return .F.
+	Endif
+
+	If aAREXIOS <> NIL
+		aAREIXO := Aclone(aAREXIOS)
+		aARESTB := Aclone(aARTRB)
+	Else
+		// MONTA IMPRESSAO EXTRA SOMENTE COM O CODIGO DO BEM COM PARAMETRO
+		aARESTP   := {}
+		aAREIXO   := {}
+		aARYSTC   := {}
+		cBEMMP    := Space(Len(ST9->T9_CODBEM))
+		cBEMSTC   := Space(Len(ST9->T9_CODBEM))
+		cSTRINGT9 := Space(Len(ST9->T9_CODBEM))
+		cFAMISTC  := SPACE(LEN(ST9->T9_CODFAMI))
+		NDESIGM   := nTipDe
+
+		// VERIFICA AS LOCALIZACOES DO DESENHO DO RODADO
+
+		While !EOF() .And. TQ1->TQ1_FILIAL == xFILIAL("TQ0");
+					 .And. TQ1->TQ1_DESENH == TQ0->TQ0_DESENH;
+					 .And. TQ1->TQ1_TIPMOD == TQ0->TQ0_TIPMOD
+
+				Aadd(aAREIXO,{TQ1->TQ1_QTDPNE,TQ1->TQ1_LOCPN1,TQ1->TQ1_LOCPN2,;
+							  TQ1->TQ1_LOCPN3,TQ1->TQ1_LOCPN4,TQ1->TQ1_LOCPN5,;
+							  TQ1->TQ1_LOCPN6,TQ1->TQ1_LOCPN7,TQ1->TQ1_LOCPN8,;
+							  TQ1->TQ1_LOCPN9,TQ1->TQ1_LOCPN0,TQ1->TQ1_EIXO,;
+							  TQ1->TQ1_FAMIL1,TQ1->TQ1_FAMIL2,TQ1->TQ1_FAMIL3,;
+							  TQ1->TQ1_FAMIL4,TQ1->TQ1_FAMIL5,TQ1->TQ1_FAMIL6,;
+							  TQ1->TQ1_FAMIL7,TQ1->TQ1_FAMIL8,TQ1->TQ1_FAMIL9,;
+							  TQ1->TQ1_FAMIL0})
+
+				Aadd(aARYSTC,{TQ1->TQ1_QTDPNE,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,;
+							  cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,cBEMSTC,;
+							  TQ1->TQ1_EIXO,cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,;
+							  cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,cFAMISTC,;
+							  cFAMISTC})
+				Dbselectarea("TQ1")
+				DbSkip()
+		End
+
+		// VERIFICA OS COMPONETES DA ESTRUTURA
+
+		aBEMEST := NGCOMPEST(cVBEMPAI,'B',.F.,.F.)
+		If Len(aBEMEST) == 0
+			msginfo(STR0020,STR0016) //"Este Bem nao tem estrutura.."###"ATENCAO"
+			Return .F.
+		Endif
+
+		// LOCALIZACAO NA ESTRUTURA
+		aBEMESTLOC := {}
+		For xi := 1 to Len(aBEMEST)
+			Dbselectarea("ST9")
+			Dbsetorder(1)
+			If Dbseek(XFILIAL("ST9")+aBEMEST[xi])
+				Dbselectarea("STC")
+				Dbsetorder(3)
+				If Dbseek(XFILIAL("STC")+aBEMEST[xi])
+					While !Eof() .And. stc->tc_filial = Xfilial('STC') .And.;
+					stc->tc_compone = aBEMEST[xi]
+						If !Empty(STC->TC_LOCALIZ) .And. STC->TC_TIPOEST = 'B' .And. STC->TC_CODBEM == cVBEMPAI
+							Aadd(aBEMESTLOC,{STC->TC_LOCALIZ,aBEMEST[xi],Space(Len(stz->tz_causa)),st9->t9_codfami,stc->tc_codbem})
+							Exit
+						Endif
+						Dbskip()
+					End
+				Endif
+			Endif
+		Next
+
+		aARESTB := {}
+
+		// MONTA A ESTRUTURA DO ESQUEMA DE RODADO COM OS RODADOS
+		For LT := 1 to Len(aAREIXO)
+			For CT := 2 to 11
+				cLOC    := ALLTRIM(aAREIXO[LT][CT])
+				cBEMSTC := cSTRINGT9
+
+				If !Empty(cLOC)
+					nPOS := ASCAN(aBEMESTLOC,{|x| x[1]+x[4] == aAREIXO[LT][CT]+aAREIXO[LT][CT+11]})
+					If nPOS > 0
+						cBEMSTC := aBEMESTLOC[nPOS][2]
+						cBEMPAI := aBEMESTLOC[nPOS][5]
+						aARYSTC[LT][CT]    := cBEMSTC
+						aARYSTC[LT][CT+11] := aBEMESTLOC[nPOS][4]
+					Endif
+
+					If CT >= 2 .And. CT <= 11
+						cLOCTRB := cLOC+SPACE(LEN(STC->TC_LOCALIZ)-LEN(cLOC))
+						Aadd(aARESTB,{cLOCTRB,SPACE(8),cBEMSTC,aAREIXO[LT][CT+11]})
+					Endif
+				Endif
+			Next CT
+		Next LT
+
+	Endif
+
+	MNTR231(cVBEMPAI, nLEGEN, cVModT,aAREIXO)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231COM
+Composicao do compomente da estrutura
+@author Inacio Luiz Kolling
+@since 25/05/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231COM()
+
+	Local cVARLE := cReadVar //ReadVar()
+	Local nPOSI
+	Local cFilTroc := cFilOri
+	Local cEmpTroc := cEmpOri
+
+	If cVARLE = NIL .Or. Empty(cVARLE)
+		MsGstop(STR0087,STR0016) //"Nao foi selecionado o rodado..."
+		Return .T.
+	Endif
+	If Empty(&(cVARLE))
+		MsGstop(STR0088,STR0016) //"Rodado nao localizado na estrutura..."
+		Return .T.
+	Endif
+	nPOSLE := ASCAN(aARRAYTRB,{|x| x[2] == cVARLE})
+	If nPOSLE > 0
+		nPOSI := ASCAN(aARRAYINI,{|x| x[3] == aARRAYTRB[nPOSLE][3]})
+
+		DEFINE MSDIALOG oDlgl TITLE STR0089 From 30,20 To 34.5,80 OF oMainWnd //"Composicao do rodado do esquema"
+		@.2 ,.5 SAY STR0090+Alltrim(aARRAYTRB[nPOSLE][3])+'  -  '+ NGSEEK("ST9",aARRAYTRB[nPOSLE][3],1,"ST9->T9_NOME",cFilTroc,cEmpTroc) //"Rodado.........: "
+		@.9 ,.5 SAY STR0091+Alltrim(aARRAYTRB[nPOSLE][4])+'  -  '+ NGSEEK("ST6",aARRAYTRB[nPOSLE][4],1,"ST6->T6_NOME",cFilTroc,cEmpTroc) //"Familia...........: "
+		@1.6,.5 SAY STR0092+Alltrim(aARRAYTRB[nPOSLE][1])+'  -  '+ NGSEEK("TPS",aARRAYTRB[nPOSLE][1],1,"TPS->TPS_NOME",cFilTroc,cEmpTroc) //"Localiz..........: "
+		ACTIVATE MSDIALOG oDlgl Centered
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231PEN
+Consiste as pendencias
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231PEN()
+
+	Local Zp := 0,V2 := Zp,lTesBa := .F.
+	Local cCodMed
+	Local nParSul 	:= GETMV("MV_NGDIFSU")
+	Private lPrimL 	:= .T.
+	Private cComPE,cBemPC,cCodPen,cLocC
+
+	// CONSISTENCIA DA MEDIDA
+	For Zp := 1 To Len(aARRAYSTC)
+		cCodMed := Space(Len(TQS->TQS_MEDIDA))
+		For V2 := 1 To Len(aARRAYTRB)
+			If aARRAYTRB[V2,12] = Zp
+				If !Empty(aARRAYTRB[V2][3])
+					If Empty(cCodMed)
+						cCodMed := aARRAYTRB[V2][7]
+						cComPE  := aARRAYTRB[V2][3]
+						cLocC   := aARRAYTRB[V2][1]
+					Else
+						If aARRAYTRB[V2,7] <> cCodMed
+							If lPrimL
+								MNTA231GPEN(cComPE,'01',cLocC)
+							Endif
+							MNTA231GPEN(aARRAYTRB[V2][3],'01',aARRAYTRB[V2][1])
+						Endif
+					EndIf
+				Endif
+			Endif
+		Next V2
+	Next Zp
+
+	// CONSISTENCIA DO TIPO DE EIXO
+	For V2 := 1 To Len(aARRAYTRB)
+		If Val(aARRAYTRB[V2,6]) > 2 .And. !Empty(aARRAYTRB[V2][3])
+			If !lTEMCONT
+				cBemPEs := NGBEMPAI(aARRAYTRB[V2][3])
+				If !Empty(cBemPEs)
+					Dbselectarea("ST9")
+					nRecST9 := Recno()
+					Dbsetorder(1)
+					If Dbseek(XFILIAL("ST9")+cBemPES)
+						lTesBa := If(ST9->T9_TEMCONT = "S",.T.,.F.)
+					Endif
+					Dbgoto(nRecST9)
+				Endif
+			Else
+				lTesBa := .T.
+			Endif
+			If lTesBa
+				If aARRAYTRB[V2,9] <> '0'
+					MNTA231GPEN(aARRAYTRB[V2][3],'02',aARRAYTRB[V2][1])
+				Endif
+			Endif
+		Endif
+	Next V2
+
+	// CONSISTENCIA DO SULCO
+	lPrimL  := .T.
+	For Zp := 1 To Len(aARRAYSTC)
+		cLocC := Space(6)
+		For V2 := 1 To Len(aARRAYTRB)
+			If aARRAYTRB[V2,12] = Zp
+				If !Empty(aARRAYTRB[V2][3])
+					nDifSMa := aARRAYTRB[V2][8] + nParSul
+					nDifSMe := aARRAYTRB[V2][8] - nParSul
+					If aARRAYTRB[V2,8] >= nDifSMe .And. aARRAYTRB[V2,8] <= nDifSMa
+					Else
+						If Empty(cLocC)
+							cComPE  := aARRAYTRB[V2][3]
+							cLocC   := aARRAYTRB[V2][1]
+						Else
+							If lPrimL
+								MNTA231GPEN(cComPE,'03',cLocC)
+							Endif
+							MNTA231GPEN(aARRAYTRB[V2][3],'03',aARRAYTRB[V2][1])
+						Endif
+					Endif
+				Endif
+			Endif
+		Next V2
+	Next Zp
+
+	// CONSISTENCIA DO DOT
+	For V2 := 1 To Len(aARRAYTRB)
+		If !Empty(aARRAYTRB[V2][3])
+			cTQSDot := StrZero(Val(SuBstr(aARRAYTRB[V2][10],3,2))+5,2)+SuBstr(aARRAYTRB[V2][10],1,2)
+			If cSemMov > cTQSDot
+				MNTA231GPEN(aARRAYTRB[V2][3],'04',aARRAYTRB[V2][1])
+			Endif
+		Endif
+	Next V2
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231GPEN
+Grava as pendencias
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+@param cVComPE, characters
+@param cVCodPen, characters
+@param cVLocC, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231GPEN(cVComPE,cVCodPen,cVLocC)
+
+	Dbselectarea("TR1")
+	Dbsetorder(1)
+	If !Dbseek(XFILIAL("TR1")+cVComPE+Dtos(dDTDATEM)+cHORALE1+cVCodPen)
+		RecLock("TR1",.T.)
+		TR1->TR1_FILIAL := Xfilial("TR1")
+		TR1->TR1_CODBEM := cVComPE
+		TR1->TR1_BEMPAI := cBEM
+		TR1->TR1_DTPEND := dDTDATEM
+		TR1->TR1_HRPEND := cHORALE1
+		TR1->TR1_CODPEN := cVCodPen
+		TR1->TR1_LOCAL  := cVLocC
+		TR1->(MsUnLock())
+		lPrimL := .F.
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231NC
+Grava as informacoes dos componte de estrutura
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+@param cVComp, characters, descricao
+@param cVMed, characters, descricao
+@param nVSul, numeric, descricao
+@param cVBan, characters, descricao
+@param cVSt, characters, descricao
+@param cVEi, characters, descricao
+@param cLOC, characters, descricao
+@param cTPE, characters, descricao
+@param lSAI, logical, descricao
+@param cProdNovo, characters, descricao
+@param cAlmNovo, characters, descricao
+@param cProdEO, characters, Codigo do produto do estoque antigo
+@param CodEnd, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231NC(cVComp,cVMed,nVSul,cVBan,cVSt,cVEi,cLOC,cTPE,lSAI,;
+	cProdNovo,cAlmNovo,cProdEO,CodEnd)
+
+	Local aInfoSTL  := {}
+	Local cMod      := ' '
+	Local cBandaa   := ' '
+	Local cAlsSTL   := ''
+	Local cOldHr    := ''
+	Local dOldDt    := CToD( '' )
+	Local nRecTQZ   := 0
+	Local lContEs   := NGCADICBASE('TQZ_ALMOX','A','TQZ',.F.) //Campos de histórico do status que controlam estoques
+	Local lRet      := .T.
+
+	cHORALE1 := If(cHORALE1 == '  :  ',Substr(Time(),1,5),cHORALE1)
+
+	IF cUsaIntEs == 'S' .and. !Empty(cProdNovo) .And. !lSai
+		
+		dbSelectArea( 'STZ' )
+		dbSetOrder( 6 ) // TZ_FILIAL + TZ_BEMPAI + TZ_CODBEM + TZ_DATASAI + TZ_HORASAI
+		If ( lRet := dbSeek( xFilial( 'STZ' ) + STJ->TJ_CODBEM + cVComp + DToS( dDTDATEM ) + cHORALE1 ) )
+
+			cAlsSTL := GetNextAlias()
+
+			BeginSQL Alias cAlsSTL
+
+				SELECT 
+					STL.R_E_C_N_O_
+				FROM
+					%table:STL% STL
+				WHERE
+					STL.TL_FILIAL  = %xFilial:STL%                 AND
+					STL.TL_ORDEM   = %exp:STJ->TJ_ORDEM%           AND
+					STL.TL_PLANO   = %exp:STJ->TJ_PLANO%           AND
+					STL.TL_DTINICI = %exp:DToS( STZ->TZ_DATAMOV )% AND
+					STL.TL_HOINICI = %exp:STZ->TZ_HORAENT%         AND
+					STL.TL_NUMSEQ <> ' '                           AND 
+					STL.%NotDel%
+
+			EndSQL
+
+			If (cAlsSTL)->( !EoF() )
+
+				dbSelectArea( 'STL' )
+				dbGoTo( (cAlsSTL)->R_E_C_N_O_ )
+
+				/*-------------------------------------------------------+
+				| Deleta insumo que terá o produto devolvido ao estoque. |
+				+-------------------------------------------------------*/
+				RecLock( 'STL', .F. )
+				dbDelete()
+				MsUnLock()
+			
+				(cAlsSTL)->( dbCloseArea() )
+
+			EndIf
+
+			If !Empty( SuperGetMV( 'MV_MNTDEV', .F., '' ) ) .And. NgVldRpo( { { 'MNTUTIL.prx', cToD( '10/02/2022' ), '12:00' } } )
+
+				aInfoSTL := { STJ->TJ_ORDEM, STJ->TJ_PLANO, 'P', cProdNovo, 1, cAlmNovo, '', '',;
+					CodEnd, '', CToD( '' ), , , , , dDTDATEM, , }
+
+				/*----------------------------------------------------------------+
+				| Realiza a devolução do produto atrelado ao pneu para o estoque. |
+				+----------------------------------------------------------------*/
+				lRet := MntExecSD3( .F., cProdNovo, cAlmNovo, aInfoSTL, .T. )[2]
+
+			Else
+
+				// O parâmetro MV_MNTDEV deverá ser informado para que ocorra a movimentação de estoque.
+				Help( '', 1, 'MV_MNTDEV', , STR0238, 3, 1 )
+				lRet := .F.
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	If lRet
+
+		Dbselectarea("ST9")
+		Dbsetorder(1)
+		If Dbseek(xFilial("ST9")+cVComp)
+			RecLock("ST9",.F.)
+			ST9->T9_STATUS := cVSt
+			If cVSt == GetMv("MV_NGSTARS") //Enviado pneu para sucata
+				ST9->T9_SITBEM	:= "I"
+				ST9->T9_SITMAN	:= "I"
+				ST9->T9_DTBAIXA	:= dDTDATEM
+			EndIf
+
+			cMod := ST9->T9_TIPMOD
+			ST9->T9_CODESTO := cProdNovo
+			ST9->T9_LOCPAD  := cAlmNovo
+			If cUsaIntEs == 'S' .and. !Empty(cProdNovo) .And. (AllTrim(GetMV("MV_NGPNEST")) == 'S')
+				cOldCodEst      := ST9->T9_CODESTO
+				cCodST9Est      := cProdNovo
+				lOldT9Stat      := ST9->T9_STATUS
+			EndIf
+
+			If lSai
+				ST9->T9_CODESTO := Space(TAMSX3("T9_CODESTO")[1])
+				ST9->T9_LOCPAD  := Space(TAMSX3("T9_LOCPAD")[1])
+			EndIf
+
+			ST9->(MsUnLock())
+		Endif
+
+		dbSelectArea("TQS")
+		dbSetOrder(1)
+		dbSeek(XFILIAL("TQS")+cVComp)
+		cOldHr := TQS->TQS_HRMEAT
+		dOldDt := TQS->TQS_DTMEAT
+		If nVSul <> TQS->TQS_SULCAT .Or. !lSAI .Or. cLOC <> TQS->TQS_POSIC
+			dbSelectArea("TQV")
+			dbSetOrder(1)
+			If !dbSeek(xFilial("TQV")+cVComp+DTOS(dDTDATEM)+cHORALE1+cVBan)
+				RecLock("TQV",.T.)
+				TQV->TQV_FILIAL := xFilial("TQV")
+				TQV->TQV_CODBEM := cVComp
+				TQV->TQV_DTMEDI := dDTDATEM
+				TQV->TQV_HRMEDI := cHORALE1
+				TQV->TQV_BANDA  := cVBan
+				If cBandaa == "1"
+					TQV->TQV_DESENH := cMod
+				Else
+					TQV->TQV_DESENH := TQS->TQS_DESENH
+				EndIf
+				TQV->TQV_SULCO  := nVSul
+				TQV->(MsUnLock())
+			EndIf
+
+			dbSelectArea("TQS")
+			dbSetOrder(1)
+			If dbSeek(XFILIAL("TQS")+cVComp)
+				RecLock("TQS",.F.)
+				If dDTDATEM >= TQS->TQS_DTMEAT
+					If nVSul < TQS->TQS_SULCAT
+						TQS->TQS_SULCAT := nVSul
+					Endif
+					TQS->TQS_DTMEAT := dDTDATEM
+					TQS->TQS_HRMEAT := cHORALE1
+				Endif
+				TQS->TQS_EIXO   := If(!lSAI,Space(Len(TQS->TQS_EIXO)),cVEi)
+				TQS->TQS_POSIC  := If(!lSAI,Space(Len(TQS->TQS_POSIC)),cLOC)
+				TQS->TQS_PLACA  := If(!lSAI,Space(Len(TQS->TQS_PLACA)),cPLACA)
+				TQS->TQS_TIPEIX := If(!lSAI,Space(Len(TQS->TQS_TIPEIX)),cTPE)
+				cBandaa := TQS->TQS_BANDAA
+
+				TQS->(MsUnLock())
+			Endif
+		EndIf
+
+		dbSelectArea("TQZ")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQZ")+cVComp)
+		While TQZ->(!Eof()) .and. TQZ->TQZ_CODBEM == cVComp
+			nRecTQZ := Recno()
+			TQZ->(dbSkip())
+		End
+		dbGoTo(nRecTQZ)
+		If TQZ->TQZ_STATUS <> cVSt
+			RecLock("TQZ",.T.)
+			TQZ->TQZ_FILIAL := xFilial("TQZ")
+			TQZ->TQZ_CODBEM := cVComp
+			TQZ->TQZ_DTSTAT := dDTDATEM
+			TQZ->TQZ_HRSTAT := cHORALE1
+			TQZ->TQZ_STATUS := cVSt
+			If lContEs .And. !lSai
+				TQZ->TQZ_PRODUT := cProdNovo
+				TQZ->TQZ_ALMOX  := cAlmNovo
+			EndIf
+			TQZ->(MsUnLock())
+		ElseIf lContEs
+			If TQZ->TQZ_PRODUT <> PADR(cProdNovo,Len(TQZ->TQZ_PRODUT)) .or. TQZ->TQZ_ALMOX <> PADR(cAlmNovo,Len(TQZ->TQZ_ALMOX))
+				RecLock("TQZ",.T.)
+				TQZ->TQZ_FILIAL := xFilial("TQZ")
+				TQZ->TQZ_CODBEM := cVComp
+				TQZ->TQZ_DTSTAT := dDTDATEM
+				TQZ->TQZ_HRSTAT := cHORALE1
+				TQZ->TQZ_STATUS := cVSt
+				TQZ->TQZ_PRODUT := cProdNovo
+				TQZ->TQZ_ALMOX  := cAlmNovo
+				TQZ->(MsUnLock())
+			EndIf
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231ST
+Consistencia do status
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+@param cStatus, characters
+@param cCompone, characters
+@param nTipo, numeric
+@param lStatus, logical
+@param nCTelaMov, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231ST(cStatus,cCompone,nTipo,lStatus,nCTelaMov)
+
+	//nCTelaMov: Usado para saber se esta sendo chamado ao confirmar a tela de movimentação
+	Local lRet
+	Local aOldArea := GetArea()
+
+	If !lStatus
+		Return .T.
+	EndIf
+
+	cNomSt := Space(30)
+	If !ExistCpo("TQY",cStatus)
+		Return .F.
+	Endif
+	cNomSt  := NGSEEK("TQY",cStatus,1,"TQY->TQY_DESTAT")
+	cNomApl := NGSEEK("TQY",cNGSTAPL,1,"TQY->TQY_DESTAT")
+
+	nRET := ASCAN(aARRAYINI,{|x| x[3] == cCompone})
+	aARRAYINI[nRET][11] := cStatus
+
+	If !Empty(cCompone) .And. cStatus == SuperGetMV("MV_NGSTARS",.F.,"") // MV_NGSTARS: indica status de sucata
+		If FindFunction("NG232CHKBE") .And. !NG232CHKBE(cCompone) // verifica se componente pneu possui ordem de serviço aberta
+			Return .F.
+		EndIf
+	EndIf
+
+	//Valida se informou o codigo do destino no estoque ao confirmar a tela de envio do pneu para o estoque
+	If cUsaIntEs == 'S' .And. Empty(cCodST9Est) .And. !Empty(nCTelaMov) .And. nCTelaMov == 2 .And. AllTrim(GetMV("MV_NGPNEST")) == 'S';
+	.And. ( cStatus $ GetMv("MV_NGSTAEU") .Or. cStatus  == GetMv("MV_NGSTAER") .Or. cStatus == GetMv("MV_NGSTEST") .Or. ;
+	cStatus  == GetMv("MV_NGSTAEN") .Or. cStatus == GetMV("MV_NGSTARS") )
+		MsgStop("Informe um código de estoque para destino do Pneu.")
+		
+		lRet := MNT231DEST(cCompone,cStatus)
+
+		aARRAYINI[nRET,14] := cCodST9Est
+		aARRAYINI[nRET,15] := cCodST9Alm
+		aARRAYINI[nRET,26] := cCodST9Loc
+
+		RestArea(aOldArea)
+		
+		Return lRet //Não deixa o usuario sair da tela de envio para estoque se ele nao informar o codigo do destino no estoque caso esteja integrado
+
+	Else
+
+		aARRAYINI[nRET,14] := cCodST9Est
+		aARRAYINI[nRET,15] := cCodST9Alm
+		aARRAYINI[nRET,26] := cCodST9Loc
+
+	EndIf
+
+	If cStatus == cNGSTAPL
+		cNomSt := If(cStatus == cNGSTAPL,cNomApl,cNomSt)
+		MsgStop(STR0173+Capital(AllTrim(cNomSt)),STR0016) //"O Status deverá ser diferente de "
+		Return .F.
+	EndIf
+
+	IF cUsaIntEs == 'S' .And. nOpcmo == 1 .And. AllTrim(GetMV("MV_NGPNEST")) == 'S'
+		If cStatus $ GetMv("MV_NGSTAEU") .OR. cStatus  == GetMv("MV_NGSTAER") .OR.;
+		cStatus == GetMv("MV_NGSTARS") .OR. cStatus  == GetMv("MV_NGSTAEN") .Or. cStatus  == GetMv("MV_NGSTEST")
+
+			MNT231DEST(cCompone,cStatus)
+
+			aARRAYINI[nRET,14] := cCodST9Est
+			aARRAYINI[nRET,15] := cCodST9Alm
+			aARRAYINI[nRET,26] := cCodST9Loc
+
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231SU
+Consistencia do sulco
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+@param cVCompM, characters
+@param nSulco, numeric
+@param cHORALE1, characters
+@param  lApli, .T. Se for aplicação de Pneu.
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231SU(cVCompM,nSulco,cHORALE1,lApli)
+
+	Local aAreaSu 	:= GetArea()
+	Local nSulAr, nSulNp, nSulNz, nSulNx
+	Local cMenSu 	:= Space(1), lTem := .F.
+	Local aTable 	:= {{"TQS"}}
+	Local nSulTs 	:= 0
+	Local cQryAlias
+
+	//Variavel utilizada para receber informações retornadas da função MNTA231TWI
+	Local aValTwi := {}
+
+	//Usado para validar TWI quando for uma aplicação de Pneu
+	Default lApli := .F.
+
+	Store 0.00 To nSulNp,nSulNz,nSulNx,nSulAr
+
+	If !NAOVAZIO(cVCompM)
+		Return .F.
+	Endif
+
+	If !Positivo(nSulco) .Or. !NaoVazio(nSulco)
+		Return .F.
+	EndIf
+
+	dbSelectArea("TQS")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQS")+cVCompM)
+		nSulTs := TQS->TQS_SULCAT
+	EndIf
+
+	cQryAlias := GetNextAlias()
+	cQuery := "SELECT TQV_DTMEDI,TQV_HRMEDI,TQV_SULCO FROM " + RetSqlName("TQV") + " TQV"
+	cQuery += " WHERE TQV_FILIAL = '" + xFilial("TQV") + "'"
+	cQuery += " AND TQV_CODBEM = '" + NGRETTXT(cVCompM) +"'"
+	cQuery += " AND D_E_L_E_T_ = ' '"
+	cQuery += " ORDER BY TQV_DTMEDI,TQV_HRMEDI"
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), cQryAlias, .F., .T.)
+
+	dbSelectArea(cQryAlias)
+	dbgotop()
+
+	While !Eof()
+		If (cQryAlias)->TQV_DTMEDI > Dtos(dDTDATEM)
+			nSulNz := (cQryAlias)->TQV_SULCO
+			lTem   := .T.
+			Exit
+		Endif
+
+		If (cQryAlias)->TQV_DTMEDI <= Dtos(dDTDATEM)
+			If (cQryAlias)->TQV_DTMEDI < Dtos(dDTDATEM)
+				nSulAr := (cQryAlias)->TQV_SULCO
+			Else
+				If (cQryAlias)->TQV_HRMEDI <= cHORALE1
+					nSulAr := (cQryAlias)->TQV_SULCO
+					If (cQryAlias)->TQV_HRMEDI = cHORALE1
+						lTem := .T.
+						Exit
+					Endif
+				Else
+					If cHORALE1 <= cHORALE1
+						nSulNp := (cQryAlias)->TQV_SULCO
+						lTem   := .T.
+						Exit
+					Endif
+				Endif
+			Endif
+		Endif
+
+		nSulNx := (cQryAlias)->TQV_SULCO
+
+		dbSelectArea(cQryAlias)
+		dbskip()
+	End
+
+	dbSelectArea(cQryAlias)
+	dbCloseArea()
+
+	If !lTem
+		If nSulco > nSulTs
+			cMenSu := STR0125+" "+STR0126
+		Endif
+	Else
+		If !Empty(nSulNx)
+			If !Empty(nSulNp)
+				If nSulco > nSulNp //.And. nSulco <= nSulNx
+					cMenSu := STR0125+" "+STR0126
+				Endif
+			Else
+				If nSulco > nSulNx //.And. nSulco >= nSulAr
+					cMenSu := STR0125+" "+STR0126
+				Endif
+			Endif
+		Else
+			If !Empty(nSulNz)
+				If nSulCo > nSulNz
+					cMenSu := STR0131
+				Endif
+			Else
+				If nSulCo > nSulAr
+					cMenSu := STR0125+" "+STR0126
+				Endif
+			EndIf
+		Endif
+	Endif
+
+	If !Empty(cMenSu)
+		MsgInfo(cMenSu,STR0016)
+	Endif
+
+	If Type("aARRAYINI") == "A"
+		nRET := ASCAN(aARRAYINI,{|x| x[3] == cVCompM})
+		If nRet > 0
+			aARRAYINI[nRET][8] := nSulco
+		EndIf
+	EndIf
+
+	aValTwi := MNTA231TWI(cVCompM, lApli, nSulco)
+
+	If !aValTwi[1] .And. !Empty(aValTwi[2])
+		cMenSu := aValTwi[2]
+		MsgInfo(cMenSu,STR0016)
+	EndIf
+
+	RestArea(aAreaSu)
+
+Return If(Empty(cMenSu),.T.,.F.)
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231TWI
+Verifica se o sulco do pneu é valido para o limite TWI.
+
+@author	 Eduardo Mussi
+@since	 17/11/17
+@version P11
+@uso 	 MNTA231/MNTA232
+@param	 cCodPn    - Código do Pneu		 			 - Obrigatório
+		 lApli     - Se é uma aplicação na estrutura - Obrigatório
+		 nPneSulco - Sulco do Pneu				     - Obrigatório
+
+@example Utilizado para validar TWI.
+@return  aVeTwi[1] = .T.
+		        Sem problema
+         aVeTwi[2] = Conteudo vazio
+				Problema
+		 aVeTwi[1] = .F.
+         aVeTwi[2] = Mensagem do problema
+/*/
+//------------------------------------------------------------------------------
+Function MNTA231TWI(cCodPn, lApli, nPneSulco)
+
+	//Verifica a existência dos campos TQS_TWI e TQU_TWI.
+	Local lExistTwi  := NGCADICBASE("TQS_TWI", "A", "TQS", .F.)
+
+	//Busca Limite definido no pneu.
+	Local nTQSTWI    := IIf(lExistTwi, NGSEEK("TQS", cCodPn, 1, 'TQS_TWI'), 0)
+
+	//Vetor para retorno de informações
+	Local aVeTwi := {.T.}
+
+	//Usado para validar TWI quando for uma aplicação de Pneu(lExistTwi)
+	Default lApli    := .F.
+
+	//Sulco do Pneu informado na estrutura.
+	Default nPneSulco := 0
+
+	//Verifica se existência do campo, se é uma aplicação de pneu e se país é o Brasil
+	If lExistTwi .And. lApli .And. cPaisLoc == "BRA"
+		If nTQSTWI > 0
+			If nPneSulco < nTQSTWI
+				//Retorna mensagem informando a não conformidade.
+				//"O sulco do pneu" ### "é inferior à margem de segurança (TWI)" ### "informada no seu cadastro, portanto a operação não pode ser realizada."
+				aVeTwi := {.F.,STR0224 + ' "' + AllTrim(cCodPn) + '" ' + STR0225 + " " + STR0226}
+			EndIf
+		EndIf
+	EndIf
+
+Return aVeTwi
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231ANE
+Atualiza o eixo do componente na cadastro de pneus
+@author Inacio Luiz Kolling
+@since 02/10/06
+@version undefined
+
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231ANE()
+	
+	Local nF   := 0
+	Local lRet := .T.
+
+	DbSelectArea("TQS")
+	DbSetOrder(1)
+
+	//Saindo da estrutura
+	For nF := 1 To Len(aARRAYINI)
+		
+		If !Empty(aARRAYINI[nF,3])
+			
+			If ASCAN(aARRAYTRB,{|x| x[3] == aARRAYINI[nF][3]}) = 0
+
+				If lRel12133
+					MNTSeekPad( 'TQ1', 1, cFORMA, cTPMODI, aARRAYINI[nF][1] )
+					cNoEix := TQ1->TQ1_EIXO
+				Else
+					cNoEix := NGSEEK('TQ1',cFORMA+cTPMODI+aARRAYINI[nF][1],1,'TQ1_EIXO')
+				EndIf
+
+				cNoEix := If(cNoEix = STR0102,'R',aARRAYINI[nF][1])
+
+				lRet := MNTA231NC( aARRAYINI[nF][3], aARRAYINI[nF][7], aARRAYINI[nF][8] , aARRAYINI[nF][9] , aARRAYINI[nF][11], '   ',;
+					cNoEix, aARRAYINI[nF][6], .F., aARRAYINI[nF][14] , aARRAYINI[nF][15], aARRAYINI[nF][25], aARRAYINI[nF][26] )
+
+				If !lRet
+					Exit
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	Next nF
+
+	If lRet
+
+		//Entrando na Estrutura
+		For nF := 1 To Len(aARRAYTRB)
+			
+			If !Empty(aARRAYTRB[nF,3])
+
+				If lRel12133
+					MNTSeekPad( 'TQ1', 1, cFORMA, cTPMODI, Str(aARRAYINI[nF][12],3) )
+					cNoEix := TQ1->TQ1_EIXO
+				Else
+					cNoEix := NGSEEK('TQ1',cFORMA+cTPMODI+Str(aARRAYINI[nF][12],3),1,'TQ1_EIXO')
+				EndIf
+
+				cNoEix := If(Upper(cNoEix) == Upper(STR0102),'R',Str(aARRAYINI[nF][12],1))
+				
+				MNTA231NC( aARRAYTRB[nF][3], aARRAYTRB[nF][7], aARRAYTRB[nF][8], aARRAYTRB[nF][9], cNGSTAPL, cNoEix, aARRAYTRB[nF][1],;
+					aARRAYTRB[nF][6], .T., aARRAYTRB[nF][14], aARRAYTRB[nF][15], aARRAYTRB[nF][25], aARRAYTRB[nF][26] )
+
+			EndIf
+
+		Next nF
+
+		For nF := 1 To Len(aARRAYTRB)
+			
+			If !Empty(aARRAYTRB[nF,3])
+				
+				If ASCAN(aARRAYINI,{|x| x[3] == aARRAYTRB[nF][3]}) = 0
+
+					lRet := MNTA231STL( aARRAYTRB[nF][3], nF, aARRAYTRB[nF][15], aARRAYTRB[nF][14] )
+
+					If !lRet
+						Exit
+					EndIf
+				
+				EndIf
+
+			EndIf
+
+		Next nF
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231STL
+Gera lancamento de insumo ( STL )
+@author Inacio Luiz Kolling
+@since 10/01/2007
+@version undefined
+@param cVCompN, characters
+@param nItem, numeric
+@param cAlmo, characters
+@param cEstoq, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231STL(cVCompN,nItem,cAlmo,cEstoq)
+
+	Local aAreaCN := GetArea()
+	Local cSEQRN  := Space(3)
+	Local lRet    := .T.
+	Local nSEQUN  := 0
+
+	Default cAlmo := ""
+
+	lSEQSTL       := If(NgVerify("STL"),.T.,.F.)
+	cUsaInt3      := AllTrim(GetMv("MV_NGMNTES"))
+	M->TL_ORDEM   := cNumOS
+	M->TL_PLANO   := cNumPL
+	M->TJ_ORDEM   := cNumOS
+	M->TJ_PLANO   := cNumPL
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	If dbseek(XFILIAL("ST9")+cVCompN)
+		If !Empty(cEstoq) .And. (AllTrim(GetMV("MV_NGPNEST")) == 'S')
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			If dbseek(XFILIAL("SB1")+cEstoq)
+				If lSEQSTL
+					cSEQRN := ULTSEQ(Recno())
+				Else
+					nSEQUN := ULTSEQ(Recno())
+				EndIf
+
+				DbSelectArea("STJ")
+				DbSetOrder(1)
+				If msSeek( FwxFilial( "STJ" ) + cNumOs ) //Gravando TJ_TIPORET para no retorno de OS entender que há insumo
+					RecLock( "STJ", .F. )
+
+					STJ->TJ_TIPORET := "S"
+						
+					STJ->( MsUnlock() )
+				EndIf  
+
+				dbSelectArea("STL")
+				dbSetOrder(1)
+				Reclock("STL",.T.)
+				STL->TL_FILIAL  := Xfilial('STL')
+				STL->TL_ORDEM   := cNumOS
+				STL->TL_PLANO   := cNumPL
+				STL->TL_SEQRELA := cSEQRN
+				STL->TL_TAREFA  := "0"
+				STL->TL_TIPOREG := "P"
+				STL->TL_CODIGO  := cEstoq
+				STL->TL_USACALE := "N"
+				STL->TL_QUANTID := 1
+				STL->TL_UNIDADE := SB1->B1_UM
+				STL->TL_CUSTO   := SB1->B1_CUSTD
+				STL->TL_DESTINO := "T"
+				STL->TL_DTINICI := dDTDATEM
+				STL->TL_HOINICI := cHORALE1
+				STL->TL_DTFIM   := dDTDATEM
+				STL->TL_HOFIM   := cHORALE1
+				STL->TL_REPFIM  := "N"
+				STL->TL_LOCAL   := If(Empty(cAlmo),SB1->B1_LOCPAD,cAlmo)
+				STL->TL_GARANTI := "N"
+				STL->TL_TIPOHOR := GETMV("MV_NGUNIDT")
+				STL->TL_SEQUENC := nSEQUN
+				STL->TL_USACALE := "N"
+
+				aMatFim := If(cPROGRAMA = "MNTA231","aARRAYTRB","aPNEUSFIM")
+
+				If !Empty(&(aMatFim)[nItem,19])
+					STL->TL_LOCAL := &(aMatFim)[nItem,19]
+				Endif
+				If !Empty(&(aMatFim)[nItem,20])
+					STL->TL_NUMLOTE := &(aMatFim)[nItem,20]
+				Endif
+				If !Empty(&(aMatFim)[nItem,21])
+					STL->TL_LOTECTL := &(aMatFim)[nItem,21]
+				Endif
+				If !Empty(&(aMatFim)[nItem,22])
+					STL->TL_NUMSERI := &(aMatFim)[nItem,22]
+				Endif
+
+				If !Empty(&(aMatFim)[nItem,23])
+					STL->TL_LOCALIZ := &(aMatFim)[nItem,23]
+				Endif
+
+				If !Empty(&(aMatFim)[nItem,24])
+					STL->TL_DTVALID := &(aMatFim)[nItem,24]
+				Endif
+
+				If Len( &( aMatFim )[nItem] ) > 25
+					If!Empty(&(aMatFim)[nItem,26])
+						STL->TL_LOCALIZ := &(aMatFim)[nItem,26]
+					EndIf
+				EndIf
+				STL->(MsUnlock())
+
+				If cUsaInt3  = 'S'
+					
+					cB1APROP := SB1->B1_APROPRI
+
+					If !Empty( SuperGetMV( 'MV_MNTREQ', .F., '' ) ) .And. NgVldRpo( { { 'MNTUTIL.prx', cToD( '10/02/2022' ), '12:00' } } )
+
+						If lIntegRM
+							
+							/*----------------------------------+
+							| Atualiza saldo do produto pelo RM |
+							+----------------------------------*/
+							NGMUStoLvl( STL->TL_CODIGO, STL->TL_LOCAL, .T. )
+						
+						EndIf
+
+						/*--------------------------------------------------------+
+						| Realiza a baixa de estoque do produto atrelado ao pneu. |
+						+--------------------------------------------------------*/
+						lRet := MntExecSD3( .T., STL->TL_CODIGO, STL->TL_LOCAL, , .T. )[2]
+						
+					Else
+
+						// O parâmetro MV_MNTREQ deverá ser informado para que ocorra a movimentação de estoque.
+						Help( '', 1, 'MV_MNTREQ', , STR0239, 3, 1 )
+						lRet := .F.
+
+					EndIf
+
+					If lRet
+					
+						//Ponto de entrada para alterar a data da emissão em SD3.
+						If ExistBlock( 'MNTA231A' )
+							
+							RecLock( 'SD3', .F. )
+							ExecBlock( 'MNTA231A', .F., .F. )
+							MsUnLock()
+
+						EndIf
+
+						RecLock( 'STL', .F. )
+						STL->TL_NUMSEQ := SD3->D3_NUMSEQ
+						STL->TL_CUSTO  := SD3->D3_CUSTO1
+						MsUnLock()
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	RestArea(aAreaCN)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231FIN
+Finaliza a O.S.
+@author Thiago Olis Machado
+@since 29/01/2007
+@version undefined
+@param oDlge, object
+@param cVBEMF, characters
+@param dDATAEM, date
+@param nCONT, numeric
+@param cVHESP1, characters
+@param nCONT2, numeric
+@param cVHESP2, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231FIN( oDlge, cVBEMF, dDATAEM, nCONT, cVHESP1, nCONT2, cVHESP2 )
+
+	Local lFecha   := .T.
+	Local lRet     := .T.
+	Local aArea    := GetArea()
+	Local nRetFin  := 0
+
+	Private lTemInus    := .F.
+
+	dbSelectArea("STJ")
+	dbSetOrder(1)
+	dbSeek(xFilial("STJ")+cNumOS+cNumPL)
+
+	If !MNTA231FIM()
+		Return .F.
+	EndIf
+
+
+	If FindFunction("NGVLDSTL") .And. !NGVLDSTL(STJ->TJ_ORDEM) // verifica se não existe insumo com data e hora inicial igual a data e hora final
+		RestArea(aArea)
+		Return .F.
+	EndIf
+	//+-------------------------------------------------------------------+
+	// MNT231VCON(), Grava novos valores para dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2, caso estes já sejam inválidos.
+	//+-------------------------------------------------------------------+
+	If IsInCallStack("MNTA231")
+		MNT231VCON(@dDATAEM,@nCONT,@cVHESP1,@nCONT2,@cVHESP2)
+	EndIf
+
+	DbSelectArea("ST9")
+	DbSetOrder(1)
+	DbSeek(xFilial("ST9")+STJ->TJ_CODBEM)
+
+	DbSelectArea("STL")
+	DbSetOrder(01)
+	If DbSeek(xFILIAL("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+
+		While !Eof() .and. xFilial("STL") == STL->TL_FILIAL .and.;
+		STL->TL_ORDEM == STJ->TJ_ORDEM .and. STL->TL_PLANO == STJ->TJ_PLANO
+
+			If AllTrim(STL->TL_SEQRELA) != "0" .And. STL->TL_TIPOREG == "M"
+				lTemInus := .T.
+				Exit
+			EndIf
+			DbSkip()
+		End
+	EndIf
+
+	If !lTemInus
+		If ExistBlock("MNTA2312")
+			lFecha := ExecBlock("MNTA2312",.F.,.F.)
+		Else
+			lFecha := MNTA231MO()
+		Endif
+
+		If lFecha
+			lTemInus := .T.
+		EndIf
+	EndIf
+
+	dbSelectArea("STJ")
+	If lTEMINUS
+		If NGFUNCRPO("NGRESPETAEX",.F.)
+			If !NGRESPETAEX(STJ->TJ_ORDEM,.T.)
+				RestArea(aArea)
+				Return .F.
+			Endif
+		Endif
+	Endif
+
+	nDif := STJ->TJ_POSCONT - ST9->T9_POSCONT
+	If lTEMINUS
+
+		If FindFunction( 'MNT400VPAR' )
+
+			//----------------------------------------------------------
+			// Monta tela com data e hora de parada para finalização
+			//----------------------------------------------------------
+			Private bNgGrava := { || MNT400VPAR() }
+			Private aChkDel  := {}
+			Private aChoice := { 'TJ_ORDEM', 'TJ_DTPRINI', 'TJ_DTPRFIM', 'TJ_HOPRINI', 'TJ_HOPRFIM', 'TJ_OBSERVA' }
+
+			dbSelectArea('STJ')
+			Inclui   := .F.
+			nRetFin  :=  NGCAD01( 'STJ', STJ->( Recno() ), 4 )
+			Inclui   := .T.
+			bNgGrava := {}
+
+		Else
+
+			nRetFin := 1
+
+			If MsgYesNo(STR0151,STR0152) //"Deseja inserir alguma observação?" //"ATENÇÃO"
+				MNTA231OBS()
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	If lFecha
+
+		lRet := MNTA231FIM( lFecha )
+		
+		If lRet
+
+			If cPrograma == 'MNTA232'
+				MsgRun( STR0174, STR0175, { || lRet := MNTA232RET( @cTRBY, @cTRBZ ) } )	 //"Processando informações..." ## "Aguarde"
+			Else
+				MsgRun( STR0174, STR0175, { || lRet := MNTA231RET( cVBEMF, dDATAEM, nCONT, cVHESP1, nCONT2, cVHESP2 ) } )	 //"Processando informações..." ## "Aguarde"
+			EndIf
+
+			If lRet
+
+				If lTEMINUS .And. nRetFin == 1
+
+					NGFINAL( STJ->TJ_ORDEM, STJ->TJ_PLANO, STJ->TJ_DTPRINI, STJ->TJ_HOPRINI, STJ->TJ_DTPRFIM, STJ->TJ_HOPRFIM,;
+						nCONT, nCONT2, STJ->TJ_CODBEM, cHORALE1, cHORALE1, nDIF )
+
+				EndIf
+
+				oDlge:End()
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231MO
+Monta a tela para digitacao do insumo Mao de Obra
+@author Thiago Olis Machado
+@since 29/01/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231MO()
+
+	Local lRet := .F.
+	Local oDlg1, oMenu
+	Local nOpca := 0
+	Local aArea := GetArea()
+	Local nX, x
+	Local nDtini, nHrini
+	Local cCampo   := ""
+	Local cX3NVL   := ""
+	Local cTitle   := ""
+	Local cPict    := ""
+	Local cValid   := ""
+	Local cUso     := ""
+	Local cType    := ""
+	Local cF3      := ""
+	Local cContext := ""
+	Local cCBOX    := ""
+	Local cRelacao := ""
+	Local nTam     := 0
+	Local nDec     := 0
+
+	Private cNomeFunc,oNomeFunc
+	Private M->TL_TIPOREG := "M"
+	Private M->TL_CODIGO  := Space(Len(STL->TL_CODIGO))
+	Private M->TL_QUANTID := 0
+	Private M->TL_UNIDADE := "H"
+	Private M->TL_DTINICI := CtoD("  /  /  ")
+	Private M->TL_HOINICI := " "
+	Private M->TL_USACALE := "N"
+	Private M->TL_DTFIM   := CtoD("  /  /  ")
+	Private M->TL_HOFIM   := " "
+	Private aChoice1 	  := {} , aHead1 := {} , aCols := {}
+
+	Define MsDialog oDlg1 Title STR0146 From 6.5,0 To 18,115 Of oMainWnd //"Insumo"
+
+		aChoice1 := {"TL_TIPOREG","TL_CODIGO","TL_NOMCODI","TL_USACALE","TL_QUANTID","TL_UNIDADE","TL_DTINICI","TL_HOINICI","TL_DTFIM","TL_HOFIM"}
+
+		nTam := Len(aChoice1)
+		For nX := 1 To nTam
+
+			cCampo := aChoice1[nx]
+			cX3NVL := Posicione("SX3",2,cCampo,"X3_NIVEL")
+			If cNivel >= cX3NVL  //sem X3USO
+
+				cTitle   := X3TITULO(cCampo)
+				cPict    := X3Picture(cCampo)
+				nTam     := TAMSX3(cCampo)[1]
+				nDec     := TAMSX3(cCampo)[2]
+				cValid   := Posicione("SX3",2,cCampo,"X3_VALID")
+				cUso     := X3USO(cCampo)
+				cType    := Posicione("SX3",2,cCampo,"X3_TIPO")
+				cF3      := Posicione("SX3",2,cCampo,"X3_F3")
+				cContext := Posicione("SX3",2,cCampo,"X3_CONTEXT")
+				cCBOX    := X3CBOX(cCampo)
+				cRelacao := Posicione("SX3",2,cCampo,"X3_RELACAO")
+				aAdd(aHead1,{cTitle, cCampo, cPict, nTam, nDec, cValid, cUso, cType, cF3, cContext, cCBOX, cRelacao})
+
+			EndIf
+
+		Next
+
+		nTpReg := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_TIPOREG"})
+		nDtini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTINICI"})
+		nHrini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_HOINICI"})
+		nCalen := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_USACALE"})
+		nDtFim := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTFIM"  })
+
+		// Altera inicialiador padrao do campo de Tipo de Insumo, sempre como Mao de Obra e Calendario com a Opcao (nao).
+		aHead1[nTpReg][12] := "'M'"
+		aHead1[nCalen][12] := "'N'"
+
+		If Len(aCols) == 0
+			aCols := BlankGetD(aHead1)
+			// Inicializa variaveis da linha em branco
+			If nDtini > 0 .And. nHrini > 0 .And. nTpReg > 0
+				aCols[1][nTpReg] := "M"
+				aCols[1][nCalen] := "N"
+			EndIf
+		EndIf
+
+		cLinOK  := "MNT231LIOK"
+		cTudoOk := "MNT231TDOK"
+
+		oGet1 := MsNewGetDados():New(0,0,200,200,GD_INSERT+GD_UPDATE+GD_DELETE,cLinOK,'MNT231TDOK',,aChoice1,,9999,,,,oDlg1,aHead1,aCols)
+		oGet1:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+		oGet1:oBrowse:Refresh()
+
+		oDlg1:lMaximized := .T.
+	Activate MsDialog oDlg1 On Init EnchoiceBar(oDlg1,{|| nOpca := 1 ,If( MNT231TDOK(),oDlg1:End(),nOpca := 0)},{||oDlg1:End()}) Centered
+
+	nCod   := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_CODIGO" })
+	nQuant := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_QUANTID"})
+
+	If nOpca = 1
+		For x := 1 To Len(oGet1:aCols)
+			If !aCols[x][Len(aCols[x])]
+				NGRETINS(STJ->TJ_ORDEM,STJ->TJ_PLANO,'C',,,,'0','M',oGet1:aCols[x][nCod],oGet1:aCols[x][nQuant],'H',,STR0150,oGet1:aCols[x][nDtini],oGet1:aCols[x][nHrini],'F',,,,) //'Consumo Padrao'
+				lRet := .T.
+				DbSelectArea("STL")
+				DbSetOrder(1)
+				DbSeek(Xfilial("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+				While !EOF() .And. STL->TL_FILIAL == Xfilial("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM .And. STL->TL_PLANO == STJ->TJ_PLANO
+					If STL->TL_CODIGO == oGet1:aCols[x][nCod]
+						Reclock("STL",.F.)
+						STL->TL_USACALE := "N"
+						STL->TL_GARANTI := "N"
+						MsUnLock("STL")
+					EndIf
+					DbSkip()
+				End
+			EndIf
+		Next
+	EndIf
+
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231LIOK
+Valida a linha da getdados da finalizacao de rodados.
+@author Taina A. Cardoso
+@since 05/01/11
+@version undefined
+
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT231LIOK()
+
+	Local x
+
+	nCod   := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_CODIGO" })
+	nQuant := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_QUANTID"})
+	nDtini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTINICI"})
+	nHrini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_HOINICI"})
+	nDtFim := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTFIM"  })
+	nHfim  := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_HOFIM"  })
+
+	For x := 1 To Len(aCols)
+		If !aCols[x][Len(aCols[x])]
+			If x <> n
+				If aCols[n][nCod] == aCols[x][nCod] .And. aCols[n][nDtini] == aCols[x][nDtini] .And. aCols[n][nHrini] <= aCols[x][nHfim]
+					MsgStop(STR0215) //"Este insumo já foi informado."
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	Next
+	If !aCols[n][Len(aCols[n])]
+		If Empty(aCols[n][nCod])
+			Help(" ",1,STR0016,,STR0229+STR0042,4,5) //"ATENCAO" ## Campo obrigatório não informado: Codigo
+			Return .F.
+		ElseIf Empty(aCols[n][nQuant])
+			Help(" ",1,STR0016,,STR0229+STR0148,4,5) //"ATENCAO" ## Campo obrigatório não informado: QUantidade
+			Return .F.
+		ElseIf Empty(aCols[n][nDtini])
+			Help(" ",1,STR0016,,STR0229+STR0230,4,5) //"ATENCAO" ## Campo obrigatório não informado: Data Inicio
+			Return .F.
+		ElseIf Empty(aCols[n][nHrini])
+			Help(" ",1,STR0016,,STR0229+STR0231,4,5) //"ATENCAO" ## Campo obrigatório não informado: Hora Inicio
+			Return .F.
+		ElseIf Empty(aCols[n][nDtFim])
+			Help(" ",1,STR0016,,STR0229+STR0232,4,5) //"ATENCAO" ## Campo obrigatório não informado: Data Fim
+			Return .F.
+		ElseIf Empty(aCols[n][nHfim])
+			Help(" ",1,STR0016,,STR0229+STR0233,4,5) //"ATENCAO" ## Campo obrigatório não informado: Hora Fim
+			Return .F.
+		EndIf
+
+		//Valida sobreposição de mão de obra
+		aRETVALINT := NGVALDATIN(aCols[n][nCod],STJ->TJ_ORDEM,STJ->TJ_PLANO,aCols[n][nDtini],aCols[n][nHrini],aCols[n][nDtFim],aCols[n][nHfim],"M", ,"STL")
+		If !aRETVALINT[1]
+			Return .F.
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231TDOK
+//Descrição auto-gerada.
+@author Microsiga
+@since 01/06/11
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT231TDOK()
+
+	Local x,y
+
+	nCod   := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_CODIGO" })
+	nQuant := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_QUANTID"})
+	nDtini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTINICI"})
+	nHrini := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_HOINICI"})
+	nDtFim := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_DTFIM"  })
+	nHfim  := aSCAN(aHead1, {|x| AllTrim(Upper(X[2])) == "TL_HOFIM"  })
+
+	aCols := aClone(oGet1:aCols)
+
+	For x := 1 To Len(aCols)
+		If !aCols[x][Len(aCols[x])]
+			For y := 1 To Len(aCols)
+				If !aCols[y][Len(aCols[y])]
+					If x <> y
+						If aCols[y][nCod] == aCols[x][nCod]
+							MsgStop("Este insumo já foi informado.Item "+cvaltochar(y)+".") //"Este insumo já foi informado."
+							Return .F.
+						EndIf
+					EndIf
+				EndIf
+			Next
+		EndIf
+	Next
+
+	For x := 1 To Len(aCols)
+		If !aCols[x][Len(aCols[x])]
+			If Empty(aCols[x][nCod])
+				Help(" ",1,STR0016,,STR0229+STR0042,4,5) //"ATENCAO" ## Campo obrigatório não informado: Codigo
+				Return .F.
+			ElseIf Empty(aCols[x][nQuant])
+				Help(" ",1,STR0016,,STR0229+STR0148,4,5) //"ATENCAO" ## Campo obrigatório não informado: QUantidade
+				Return .F.
+			ElseIf Empty(aCols[x][nDtini])
+				Help(" ",1,STR0016,,STR0229+STR0230,4,5) //"ATENCAO" ## Campo obrigatório não informado: Data Inicio
+				Return .F.
+			ElseIf Empty(aCols[x][nHrini])
+				Help(" ",1,STR0016,,STR0229+STR0231,4,5) //"ATENCAO" ## Campo obrigatório não informado: Hora Inicio
+				Return .F.
+			ElseIf Empty(aCols[x][nDtFim])
+				Help(" ",1,STR0016,,STR0229+STR0232,4,5) //"ATENCAO" ## Campo obrigatório não informado: Data Fim
+				Return .F.
+			ElseIf Empty(aCols[x][nHfim])
+				Help(" ",1,STR0016,,STR0229+STR0233,4,5) //"ATENCAO" ## Campo obrigatório não informado: Hora Fim
+				Return .F.
+			EndIf
+
+			//Valida sobreposição de mão de obra
+			aRETVALINT := NGVALDATIN(aCols[x][nCod],STJ->TJ_ORDEM,STJ->TJ_PLANO,;
+						aCols[x][nDtini],aCols[x][nHrini],aCols[x][nDtFim],aCols[x][nHfim],"M", ,"STL")
+			If !aRETVALINT[1]
+				Return .F.
+			EndIf
+
+		EndIf
+	Next
+
+
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTA231MA  ³ Autor ³ Thiago Olis Machado   ³ Data ³29/01/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consiste a Mao de Obra e busca o nome.                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA231                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+/*
+Static Function MNTA231MA(cMatricula)
+
+IF !ExistCpo("ST1",cMatricula)
+Return .F.
+EndIf
+
+DbSelectArea("ST1")
+DbSetOrder(1)
+DbSeek(xFilial("ST1")+cMatricula)
+cNomeFunc := ST1->T1_NOME
+oNomeFunc:Refresh()
+
+Return .T.
+*/
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231OBS
+Mostra a tela para digitacao de observacao
+@author Thiago Olis Machado
+@since 29/01/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231OBS()
+
+	Local aArea := GetArea()
+	Local oDlg3,oMemo, cObserv := ''
+	Local nOpcao := 0
+
+	Define MsDialog oDlg3 From 300,120 To 550,1030 Title STR0170 Pixel Of oMainWnd //"Observações"
+
+	@ 20,08 Say STR0171 Of oDlg3 Pixel //"Observação"
+	@ 50,48 GET oMemo Var cObserv MEMO SIZE 270,40 MEMO of oDlg3 PIXEL
+	@ 022,070 Button "&OK" Size 30,10
+
+	Activate MsDialog oDlg3 On Init EnchoiceBar(oDlg3,{|| (nOpcao:=1,oDlg3:End()) },{|| oDlg3:End() }) Centered
+
+	If nOpcao = 1
+		RecLock("STJ",.F.)
+		If NGCADICBASE("TJ_MMSYP","A","STJ",.F.)
+			MsMM(,80,,cObserv,1,,,"STJ","TJ_MMSYP")
+		Else
+			STJ->TJ_OBSERVA := cObserv
+		EndIf
+		MsUnLock("STJ")
+	EndIf
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231RET
+Faz a gravacao nas tabelas relacionadas
+@author Inacio Luiz Kolling
+@since 29/01/2007
+@version undefined
+@param cVBEMF, characters
+@param dDATAEM, date
+@param nPOSCST9, numeric
+@param cVHESP1, characters descricao
+@param nPOSCTPE, numeric
+@param cVHESP2, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231RET(cVBEMF,dDATAEM,nPOSCST9,cVHESP1,nPOSCTPE,cVHESP2)
+
+	Local XY,YX,YK,XK,NY,NX,M
+	Local lMNTA2314   := ExistBlock("MNTA2314")
+	Local lMNTA2315	  := ExistBlock("MNTA2315")
+	Local lPIMSINT	  := SuperGetMV("MV_PIMSINT",.F.,.F.)
+	Local lMain		  := .F.
+	Local nPOSSTZ 	  := 0
+	Local cStaCan     := AllTrim(SuperGetMv("MV_NGSTACA",.F.,""))
+	Local aComponents := {}
+	Local aMntInfo    := GetApoInfo( 'MNTUTIL_ESTRUTURA.PRW' )
+	Local cMntEstAtu  := DtoS( aMntInfo[4] ) + aMntInfo[5]
+	Local lRetroat    := NGHISTRETR( cPaiEst, dDATAEM, cVHESP1, 1, xFilial("STP") )
+
+	Private nTroLoc := 7   //Tamanho do aARTROLOC
+
+	If lTEMCONT .And. nPOSCST9 > 0
+		nPOSSTZ := nPOSCST9
+	EndIf
+
+	// VERIFICA SE HOUVE ALTERACAO NA ESTRUTURA
+	lALTEST := .F.
+
+	For xy := 1 to Len(aARRAYINI)
+		nPOSX := ASCAN(aARRAYTRB,{|x| x[3] == aARRAYINI[xy][3]})
+		If nPOSX = 0
+			lALTEST := .T.
+			Exit
+		Else
+			If aARRAYINI[xy][1] <> aARRAYTRB[nPOSX][1]
+				lALTEST := .T.
+				Exit
+			Endif
+		Endif
+	Next xy
+
+	If !lALTEST
+		DbSelectArea("STJ")
+		Return
+	Endif
+
+	//Retorna o bem pai de toda a estrutura
+	cBEMPEST := NGBEMPAI(cVBEMF)
+	cBEMPEST := If(Empty(cBEMPEST),cVBEMF,cBEMPEST)
+
+	//Alimenta o arquivo temporario com os componentes que fazem parte da
+	//estrutura do bem pai antes do Rodizio
+	DbSelectArea("ST9")
+	nREGST998 := Recno()
+	cCUSTOB   := NGSEEK('ST9',cVBEMF,1,'ST9->T9_CCUSTO')
+	cCENTRAB  := NGSEEK('ST9',cVBEMF,1,'ST9->T9_CENTRAB')
+	M98ARQTRB(cTRBY,cBEMPEST,.T.)
+
+	DbSelectArea("ST9")
+	DbGoto(nREGST998)
+
+	aBENSSAIDA := {} // pneus que saem da estrutura - inclusive aqueles que trocam de localização
+	aBENSENTRA := {} // pneus que entram na estrutura - inclusive aqueles que trocam de localização
+	aARDELSTC := {} // pneus que saem da estrutura e serão deletados da STC
+	aARTROLOC := {} // pneus que apenas trocam de localização
+
+	If Len(aARRAYINI) > 0
+		For xy := 1 To len(aARRAYINI)
+			If !Empty(aARRAYINI[xy,3])
+				nPOS3 := ASCAN(aARRAYTRB,{|x| x[3] == aARRAYINI[xy][3]})
+				If nPOS3 = 0 //Deletado da Estrutura
+					aAdd(aARDELSTC,aARRAYINI[xy])
+
+				Else //Troca de Localizacao
+					If aARRAYINI[xy][1] <> aARRAYTRB[nPOS3][1]
+						nPOS4 := ASCAN(aBEMLOC,{|x| x[2] == aARRAYINI[xy][3]})
+						//Se houver modificacoes no tamanho nesta array, devera ser alterada a variavel nTroLoc
+						Aadd(aARTROLOC,{aARRAYINI[xy,3],aARRAYTRB[nPOS3][1],;
+						aARRAYINI[xy][1],aBEMLOC[nPOS4][3],aARRAYINI[xy,5],;
+						aARRAYINI[xy][16],aARRAYTRB[nPOS3][16]})
+
+						If lMNTA2314
+							ExecBlock( 'MNTA2314' , .F., .F., { xy } )
+						Endif
+					Endif
+				Endif
+			Endif
+		Next xy
+	Endif
+
+	//Identifica a utilização de MSDialog
+	lMain := Type( "oMainWnd" ) == "O"
+
+	BEGIN TRANSACTION
+	
+		// deleta os rodados do STC e baixa do STZ que sairam da estrutura
+		For yx := 1 To Len(aARDELSTC)
+			cBEMPCOM := If(Empty(aARDELSTC[yx,5]),cBEM,aARDELSTC[yx,5])
+			Dbselectarea("STC")
+			Dbsetorder(1)
+			If Dbseek(Xfilial("STC")+cBEMPCOM+aARDELSTC[yx][3])
+				Dbselectarea("STZ")
+				Dbsetorder(1)
+				If Dbseek(XFILIAL("STZ")+aARDELSTC[yx][3]+'E')
+					While !Eof() .And. STZ->TZ_FILIAL == xFILIAL('STZ') .AND.;
+					STZ->TZ_CODBEM == aARDELSTC[yx][3] .And. STZ->TZ_TIPOMOV = 'E'
+						If Empty(STZ->TZ_DATASAI)
+							nPOS4 := ASCAN(aBEMLOC,{|x| x[2] == aARDELSTC[yx][3]})
+							RecLock("STZ",.F.)
+							STZ->TZ_TIPOMOV := 'S'
+							STZ->TZ_DATASAI := dDTDATA
+							STZ->TZ_HORASAI := If(Alltrim(cHORALE1) = ":",cHRTIME,cHORALE1)
+							STZ->TZ_CONTSAI := nPOSSTZ
+							STZ->TZ_CONTSA2 := nPOSCTPE
+							STZ->TZ_CAUSA   := aBEMLOC[nPOS4,3]
+							STZ->TZ_ORDEM   := cNumOS
+							STZ->TZ_PLANO   := cNumPL
+							If lTZUser
+								STZ->TZ_USUARIO := aARDELSTC[yx][16]
+							EndIf
+
+							STZ->(MsUnLock())
+
+							Aadd(aBENSSAIDA,{STZ->TZ_CODBEM,STZ->(Recno()), .F. })
+
+							Dbselectarea("ST9")
+							Dbsetorder(1)
+							If Dbseek(xFILIAL("ST9")+aARDELSTC[yx][3])
+								RecLock("ST9",.F.)
+								ST9->T9_ESTRUTU := "N"
+								ST9->(MsUnLock())
+								If lMNTA2315
+									ExecBlock( 'MNTA2315' , .F., .F., { 'D', yx })
+								Endif
+							Endif
+
+							Exit
+						Endif
+						Dbskip()
+					End
+				Endif
+				Reclock("STC",.F.)
+				Dbdelete()
+				STC->(MsUnlock())
+			Endif
+
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			If dbSeek(xFILIAL("ST9")+aARDELSTC[yx][3])
+				If ST9->T9_MOVIBEM = "S" .And. (ST9->T9_CCUSTO <> aARDELSTC[yx][17] .Or. ST9->T9_CENTRAB <> aARDELSTC[yx][18])
+					RecLock("ST9",.F.)
+					ST9->T9_CCUSTO  := aARDELSTC[yx][17]
+					ST9->T9_CENTRAB := aARDELSTC[yx][18]
+					ST9->(MsUnLock())
+
+					//Atualiza o centro de custo no ativo fixo
+					NGATUATF(ST9->T9_CODIMOB,ST9->T9_CCUSTO)
+
+					DbselectArea("TPN")
+					DbsetOrder(1)
+					RecLock("TPN",.T.)
+					TPN->TPN_FILIAL := xFILIAL("TPN")
+					TPN->TPN_CODBEM := aARDELSTC[yx][3]
+					TPN->TPN_DTINIC := dDTDATEM
+					TPN->TPN_HRINIC := If(Alltrim(cHORALE1) = ":",cHRTIME,cHORALE1)
+					TPN->TPN_CCUSTO := aARDELSTC[yx][17]
+					TPN->TPN_CTRAB  := aARDELSTC[yx][18]
+					TPN->TPN_UTILIZ := "U"
+					TPN->TPN_POSCON := nPOSCONT
+					TPN->TPN_POSCO2 := nPOSCON2
+					TPN->(MsUnLock())
+
+					//Funcao de integracao com o PIMS atraves do EAI
+					If lPIMSINT .And. FindFunction("NGIntPIMS")
+						NGIntPIMS("TPN",TPN->(RecNo()),3)
+					EndIf
+
+					//----------------------------------------------------
+					// Integração via mensagem única do cadastro de Bem
+					//----------------------------------------------------
+					If FindFunction("MN080INTMB") .And. MN080INTMB(ST9->T9_CODFAMI)
+
+						DbSelectArea( "ST9" )
+
+						// Define array private que será usado dentro da integração
+						aParamMensUn    := Array( 4 )
+						aParamMensUn[1] := Recno() // Indica numero do registro
+						aParamMensUn[2] := 4       // Indica tipo de operação que esta invocando a mensagem unica
+						aParamMensUn[3] := .F.     // Indica que se deve recuperar dados da memória
+						aParamMensUn[4] := 1       // Indica se deve inativar o bem (1 ativo,2 - inativo)
+
+						lMuEquip := .F.
+						bBlock := { || FWIntegDef( "MNTA080",EAI_MESSAGE_BUSINESS,TRANS_SEND,Nil ) }
+
+						If lMain
+							MsgRun( "Aguarde integração com backoffice...","Equipment",bBlock )
+						Else
+							Eval( bBlock )
+						EndIf
+
+					EndIf
+
+				Endif
+			Endif
+		Next yx
+
+		// baixa do STZ os compomente que trocam de localiza‡ao
+		For yk := 1 To Len(aARTROLOC)
+			Dbselectarea("STZ")
+			Dbsetorder(1)
+			If Dbseek(XFILIAL("STZ")+aARTROLOC[yk][1]+'E')
+				While !Eof() .And. STZ->TZ_FILIAL == xFILIAL('STZ') .AND.;
+				STZ->TZ_CODBEM == aARTROLOC[yk][1] .And. STZ->TZ_TIPOMOV = 'E'
+					If Empty(STZ->TZ_DATASAI) .And. STZ->TZ_LOCALIZ = aARTROLOC[yk][3]
+						RecLock("STZ",.F.)
+						STZ->TZ_TIPOMOV := 'S'
+						STZ->TZ_DATASAI := dDTDATA
+						STZ->TZ_CONTSAI := nPOSSTZ
+						STZ->TZ_HORASAI := If(Alltrim(cHORALE1) = ":",cHRTIME,cHORALE1)
+						STZ->TZ_CONTSA2 := nPOSCON2
+						STZ->TZ_CAUSA   := aARTROLOC[yk][4]
+						STZ->TZ_ORDEM   := cNumOS
+						STZ->TZ_PLANO   := cNumPL
+						If lTZUser
+							STZ->TZ_USUARIO := aARTROLOC[yk][6]
+						EndIf
+						STZ->(MsUnLock())
+
+						dbSelectArea("ST9")
+						dbSetOrder(1)
+						If dbSeek(xFILIAL("ST9")+aARTROLOC[yk][1])
+							If lMNTA2315
+								ExecBlock( 'MNTA2315' , .F., .F., { 'S', yk })
+							Endif
+						EndIf
+
+						Aadd(aBENSSAIDA,{STZ->TZ_CODBEM,STZ->(Recno()), .F. })
+
+						Exit
+					Endif
+					Dbskip()
+				End
+			Endif
+
+			Dbselectarea("STC")
+			Dbsetorder(1)
+			If Dbseek(XFILIAL("STC")+aARTROLOC[yk][5]+aARTROLOC[yk][1])
+				RecLock("STC",.F.)
+				Dbdelete()
+				STC->(MsUnLock())
+			Endif
+		Next yk
+
+		// Atualiza a estrutura STC com os componentes novos
+		For m := 1 to len(aARRAYTRB)
+			If !Empty(aARRAYTRB[m][3])
+				cBEMPCOM := If(Empty(aARRAYTRB[m,5]),cBEM,aARRAYTRB[m,5])
+				Dbselectarea("STC")
+				Dbsetorder(1)
+				If !Dbseek(XFILIAL("STC")+cBEMPCOM+aARRAYTRB[m][3])
+					Reclock("STC",.T.)
+					STC->TC_FILIAL  := XFILIAL("STC")
+					STC->TC_CODBEM  := cBEMPCOM
+					STC->TC_COMPONE := aARRAYTRB[m][3]
+					STC->TC_LOCALIZ := aARRAYTRB[m][1]
+					STC->TC_TIPOEST := 'B'
+					STC->TC_DATAINI := dDTDATA
+					STC->TC_TIPMOD  := cTpModi
+					STC->(MsUnlock())
+					Dbselectarea("ST9")
+					Dbsetorder(1)
+					If Dbseek(xFILIAL("ST9")+aARRAYTRB[m][3])
+						//Atualiza campo T9_ESTRUTU, indicando o pneu como aplicado
+						RecLock("ST9",.F.)
+						ST9->T9_ESTRUTU := "S"
+						MsUnLock("ST9")
+						If ST9->T9_MOVIBEM = "S" .And. (ST9->T9_CCUSTO <> cCUSTOB .Or. ST9->T9_CENTRAB <> cCENTRAB)
+							RecLock("ST9",.F.)
+							ST9->T9_CCUSTO  := cCUSTOB
+							ST9->T9_CENTRAB := cCENTRAB
+							ST9->T9_CALENDA := cCALENB
+							ST9->T9_STATUS  := AllTrim(cNGSTAPL)
+							ST9->(MsUnLock())
+
+							//Atualiza o centro de custo no ativo fixo
+							NGATUATF(ST9->T9_CODIMOB,ST9->T9_CCUSTO)
+
+							DbselectArea("TPN")
+							DbsetOrder(1)
+							RecLock("TPN",.T.)
+							TPN->TPN_FILIAL := xFILIAL("TPN")
+							TPN->TPN_CODBEM := aARRAYTRB[m][3]
+							TPN->TPN_DTINIC := dDTDATEM
+							TPN->TPN_HRINIC := If(Alltrim(cHORALE1) = ":",cHRTIME,cHORALE1)
+							TPN->TPN_CCUSTO := cCUSTOB
+							TPN->TPN_CTRAB  := cCENTRAB
+							TPN->TPN_UTILIZ := "U"
+							TPN->TPN_POSCON := nPOSCONT
+							TPN->TPN_POSCO2 := nPOSCON2
+							TPN->(MsUnLock())
+
+							//Funcao de integracao com o PIMS atraves do EAI
+							If lPIMSINT .And. FindFunction("NGIntPIMS")
+								NGIntPIMS("TPN",TPN->(RecNo()),3)
+							EndIf
+
+							//----------------------------------------------------
+							// Integração via mensagem única do cadastro de Bem
+							//----------------------------------------------------
+							If FindFunction("MN080INTMB") .And. MN080INTMB(ST9->T9_CODFAMI)
+
+								DbSelectArea( "ST9" )
+
+								// Define array private que será usado dentro da integração
+								aParamMensUn    := Array( 4 )
+								aParamMensUn[1] := Recno() // Indica numero do registro
+								aParamMensUn[2] := 4       // Indica tipo de operação que esta invocando a mensagem unica
+								aParamMensUn[3] := .F.     // Indica que se deve recuperar dados da memória
+								aParamMensUn[4] := 1       // Indica se deve inativar o bem (1 ativo,2 - inativo)
+
+								lMuEquip := .F.
+								bBlock := { || FWIntegDef( "MNTA080",EAI_MESSAGE_BUSINESS,TRANS_SEND,Nil ) }
+
+								If lMain
+									MsgRun( "Aguarde integração com backoffice...","Equipment",bBlock )
+								Else
+									Eval( bBlock )
+								EndIf
+
+							EndIf
+
+						Endif
+					Endif
+
+					cTEMCONT := st9->t9_temcont
+					Dbselectarea("ST9")
+					nREGST9 := Recno()
+					Dbselectarea("ST9")
+					Dbsetorder(1)
+					Dbseek(xFILIAL("ST9")+cBEM)
+					cTEMCPAI := st9->t9_temcont
+					Dbgoto(nREGST9)
+
+					Dbselectarea("STZ")
+					If !Dbseek(XFILIAL("STZ")+aARRAYTRB[M,3]+'E')
+						RecLock("STZ",.T.)
+						STZ->TZ_FILIAL  := xFILIAL('STZ')
+						STZ->TZ_CODBEM  := aARRAYTRB[m][3]
+						STZ->TZ_BEMPAI  := cBEMPCOM
+						STZ->TZ_TIPOMOV := 'E'
+
+						nPOSX := ASCAN(aARRAYINI,{|x| x[3] == aARRAYTRB[m][3]})
+						If nPOSX > 0 //Componente que trocou de localizacao
+							If aARRAYTRB[m][1] <> aARRAYINI[nPOSX][1]
+								STZ->TZ_HORAENT := If(Alltrim(cHORALE1) = ":",cHRTIME1M,MTOH(HTOM(SubStr(cHORALE1,1,5))+1))
+								If STZ->TZ_HORAENT = "24:00"
+									STZ->TZ_HORAENT := "00:00"
+								EndIf
+								If STZ->TZ_HORAENT = "00:00"
+									STZ->TZ_DATAMOV := dDTDATA + 1
+
+									DbSelectArea("STC")
+									Reclock("STC",.F.)
+									STC->TC_DATAINI := STZ->TZ_DATAMOV
+									STC->(MsUnlock())
+								Else
+									STZ->TZ_DATAMOV := dDTDATA
+								EndIf
+							EndIf
+						Else
+							STZ->TZ_HORAENT := If(Alltrim(cHORALE1) = ":",cHRTIME,cHORALE1)
+							STZ->TZ_DATAMOV := dDTDATA
+						EndIf
+
+						STZ->TZ_POSCONT := nPOSSTZ
+						STZ->TZ_LOCALIZ := aARRAYTRB[m][1]
+						STZ->TZ_TEMCONT := cTEMCONT
+						STZ->TZ_TEMCPAI := cTEMCPAI
+						//Verificar se o bem tem 1º contador
+						If cTEMCONT <> "N"
+							STZ->TZ_HORACO1 := cHORALE1
+						EndIf
+						//Verificar se o bem tem 2º contador
+						If NGIFDBSEEK('TPE',aARRAYTRB[m][3],1)
+							STZ->TZ_HORACO2 := cHORALE2
+						EndIf
+						STZ->TZ_ORDEM   := cNumOS
+						STZ->TZ_PLANO   := cNumPL
+						If lTZUser
+							STZ->TZ_USUARIO := aARRAYTRB[m][16]
+						EndIf
+
+						DbSelectArea("STZ")
+						STZ->(MsUnLock())
+					EndIf
+
+					dbSelectArea("ST9")
+					dbSetOrder(1)
+					If dbSeek(xFILIAL("ST9")+cBEMPCOM)
+						If lMNTA2315
+							ExecBlock( 'MNTA2315' , .F., .F., { 'T', m })
+						Endif
+					EndIf
+
+					Aadd(aBENSENTRA,{STZ->TZ_CODBEM,STZ->(Recno()), .F. })
+
+				Else
+					If STC->TC_LOCALIZ <> aARRAYTRB[m][1]
+						Reclock("STC",.F.)
+						STC->TC_LOCALIZ := aARRAYTRB[m][1]
+						STC->(MsUnlock())
+					Endif
+				Endif
+			Endif
+		Next m
+
+		// Atualiza STZ com os rodados com nova localizacao
+		For xk := 1 To Len(aARTROLOC)
+			cBEMPCOM := If(Empty(aARTROLOC[xk][5]),cBEM,aARTROLOC[xk][5])
+			Dbselectarea("ST9")
+			Dbsetorder(1)
+			nREGST9 := Recno()
+			Dbseek(xFILIAL("ST9")+aARTROLOC[xk][1])
+			cTEMCONT := st9->t9_temcont
+			Dbseek(xFILIAL("ST9")+cBEMPCOM)
+			cTEMCPAI := st9->t9_temcont
+			Dbgoto(nREGST9)
+
+			Dbselectarea("STZ")
+			Dbsetorder(1)
+			If !Dbseek(XFILIAL("STZ")+aARTROLOC[xk][1]+'E')
+				RecLock("STZ",.T.)
+				STZ->TZ_FILIAL  := xFILIAL('STZ')
+				STZ->TZ_CODBEM  := aARTROLOC[xk][1]
+				STZ->TZ_BEMPAI  := cBEMPCOM
+				STZ->TZ_TIPOMOV := 'E'
+				STZ->TZ_POSCONT := nPOSSTZ
+				STZ->TZ_LOCALIZ := aARTROLOC[xk][2]
+				STZ->TZ_HORAENT := If(Alltrim(cHORALE1) = ":",cHRTIME1M,MTOH(HTOM(SubStr(cHORALE1,1,5))+1))
+				If STZ->TZ_HORAENT = "24:00"
+					STZ->TZ_HORAENT := "00:00"
+				EndIf
+				If STZ->TZ_HORAENT = "00:00"
+					STZ->TZ_DATAMOV := dDTDATA + 1
+
+					Dbselectarea("STC")
+					Dbsetorder(1)
+					If Dbseek(xFILIAL("STC")+cBEMPCOM+aARTROLOC[xk][1])
+						RecLock("STC",.F.)
+						STC->TC_DATAINI := STZ->TZ_DATAMOV
+						STC->(MsUnLock())
+					EndIf
+
+				Else
+					STZ->TZ_DATAMOV := dDTDATA
+				EndIf
+				STZ->TZ_TEMCONT := cTEMCONT
+				STZ->TZ_TEMCPAI := cTEMCPAI
+				//Verificar se o bem tem 1º contador
+				If cTEMCONT <> "N"
+					STZ->TZ_HORACO1 := cHORALE1
+				EndIf
+				//Verificar se o bem tem 2º contador
+				If NGIFDBSEEK('TPE',aARTROLOC[xk][1],1)
+					STZ->TZ_HORACO2 := cHORALE2
+				EndIf
+				STZ->TZ_ORDEM   := cNumOS
+				STZ->TZ_PLANO   := cNumPL
+				If lTZUser
+					STZ->TZ_USUARIO := aARTROLOC[xk][7]
+				EndIf
+				Dbselectarea("STZ")
+				STZ->(MsUnLock())
+
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+				If dbSeek(xFilial("ST9")+aARTROLOC[xk][1])
+					If lMNTA2315
+						ExecBlock( 'MNTA2315' , .F., .F., { 'E', xk })
+					EndIf
+				EndIf
+
+				Aadd(aBENSENTRA,{STZ->TZ_CODBEM,STZ->(Recno()), .F. })
+
+			Endif
+		Next xk
+
+		//Retorna a estrutura padrao do bem pai e informacao dos componentes que recebem contador
+		DbSelectArea("ST9")
+		DbSetOrder(01)
+		Dbseek(xfilial("ST9")+cBEMPEST)
+		cCODFAM231 := ST9->T9_CODFAMI+Space(Len(ST9->T9_CODBEM)-Len(ST9->T9_CODFAMI))
+		cTIPMOD231 := ST9->T9_TIPMOD
+		aESTFAM231 := NGCOMPEST(cCODFAM231,"F",.T.,.F.,.T.,Nil,Nil,cTIPMOD231)
+
+		// Le array com os itens de saida
+		For ny := 1 To Len(aBENSSAIDA)
+
+			DbSelectArea("STZ")
+			DbGoto(aBENSSAIDA[ny][2])
+
+			Dbselectarea("ST9")
+			DbSetOrder(01)
+			If Dbseek(xFILIAL("ST9")+aBENSSAIDA[ny][1])
+
+				//Verifica se o componente e um step
+				lREPAS231 := .T.
+
+				//-------------------------------------------
+				cPaiSup := ""
+				lEnd := .F.
+
+				DbSelectArea("ST9")
+				DbSetOrder(01)
+				Dbseek(xfilial("ST9")+cVBEMF)
+				cCodPai := ST9->T9_CODBEM
+				cFamP231 := ST9->T9_CODFAMI+Space(Len(ST9->T9_CODBEM)-Len(ST9->T9_CODFAMI))
+				cLocP231 := ""
+
+				Dbseek(xFILIAL("ST9")+aBENSSAIDA[ny][1])
+				cCodCom := ST9->T9_CODBEM
+				cFamC231 := ST9->T9_CODFAMI+Space(Len(ST9->T9_CODBEM)-Len(ST9->T9_CODFAMI))
+				cLocC231 := STZ->TZ_LOCALIZ
+
+				//Se bem bem pai deste componente também é filho de outro componente na estrutura,
+				//busca sua localização
+				dbSelectArea("STC")
+				nRecNo := STC->(RecNo())
+				dbSetOrder(03)
+				If dbSeek(xFilial("STC")+cCodPai)
+					cLocP231 := STC->TC_LOCALIZ
+					cPaiSup := STC->TC_CODBEM
+				EndIf
+				dbGoTo(nRecNo)
+
+				nPOSF231 := 0
+				If Len(aESTFAM231) > 0
+					nPOSF231 := aSCAN(aESTFAM231,{|x| cFamC231+cLocC231 = x[1]+x[2].And.;
+					cFamP231+cLocP231 = x[6]+x[7]})
+				EndIf
+
+				If nPOSF231 > 0
+					If aESTFAM231[nPOSF231,3] = "N"
+						lREPAS231 := .F.
+					EndIf
+				ElseIf !Empty(cPaiSup)
+					While !lEnd
+						//se nao encontrou, busca estruturas padrao dos pais imediatos, ate o topo da estrutura
+						cTpMod2 := NGSEEK('ST9',cCodPai,1,'T9_TIPMOD')
+						cFamPa2 := NGSEEK('ST9',cCodPai,1,'T9_CODFAMI')+Space(Len(st9->t9_codbem)-Len(st9->t9_codfami))
+						aESTFAM2 := NGCOMPEST(cFamPa2,"F",.T.,.F.,.T.,Nil,Nil,cTpMod2)
+
+						//sobe um nivel na estrutura
+						cCodCom := cCodPai
+						cCodPai := cPaiSup
+
+						//executa busca na nova estrutura padrao
+						nPOSF231 := aSCAN(aESTFAM2,{|x| cFamC231+cLocC231 = x[1]+x[2] .And.;
+						cFamP231+cLocP231 = x[6]+x[7]})
+						If nPOSF231 > 0
+							lREPASS := (aESTFAM2[nPOSF231,3] != "N")
+							lEnd := .T.
+						Else
+							//Se bem bem pai deste componente também é filho de outro componente na estrutura:
+							dbSelectArea("STC")
+							nRecNo := STC->(RecNo())
+							dbSetOrder(03)
+							If dbSeek(xFilial("STC")+cCodPai)
+								cLocP231 := STC->TC_LOCALIZ
+								cPaiSup := STC->TC_CODBEM
+							Else
+								lEnd := .T.
+							EndIf
+							dbSelectArea("STC")
+							dbGoTo(nRecNo)
+						EndIf
+					EndDo
+				EndIf
+				//-------------------------------------------
+
+				aBENSSAIDA[nY,3] := lREPAS231
+
+				If lREPAS231
+					// Procura no arq. (cTRBY) quem ‚ o pai do componente na estrutura e acessa o ST9 para obter
+					// o contador e alterar o contador no STZ
+					DbSelectArea(cTRBY)
+					DbSetOrder(02)
+					If DbSeek(aBENSSAIDA[ny][1])
+						If (cTRBY)->TC_CONTRO <> "N"
+
+							//Procura o bem pai do componente
+							cVBEMPAI98 := NGTBEMPTE(aBENSSAIDA[ny][1],(cTRBY))
+
+							If !Empty(cVBEMPAI98)
+								DbSelectArea("ST9")
+								DbSetOrder(01)
+								If DbSeek(xFilial("ST9")+cVBEMPAI98)
+
+									DbSelectArea("STZ")
+									DbGoto(aBENSSAIDA[ny][2])
+									nCONT2TRBY := STZ->TZ_CONTSA2
+
+								If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,cVBEMPAI98)
+										nCONT2TRBY := TPE->TPE_POSCON
+									If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,aBENSSAIDA[ny][1])
+											nCONT2TRBY := STZ->TZ_CONTSA2
+										EndIf
+									EndIf
+
+									DbSelectArea("STZ")
+									RecLock("STZ",.F.)
+									STZ->TZ_CONTSAI := nPOSSTZ
+									STZ->TZ_CONTSA2 := nCONT2TRBY
+									STZ->TZ_ORDEM   := cNumOS
+									STZ->TZ_PLANO   := cNumPL
+									STZ->(MsUnLock())
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				Else
+					nCONT2TRBY := 0
+				If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,aBENSSAIDA[ny][1])
+						nCONT2TRBY := TPE->TPE_POSCON
+					EndIf
+
+					DbSelectArea("STZ")
+					DbGoto(aBENSSAIDA[ny][2])
+					RecLock("STZ",.F.)
+					STZ->TZ_CONTSAI := nPOSSTZ
+					STZ->TZ_CONTSA2 := nCONT2TRBY
+					STZ->TZ_ORDEM   := cNumOS
+					STZ->TZ_PLANO   := cNumPL
+					STZ->(MsUnLock())
+				EndIf
+			EndIf
+		Next ny
+
+		//Alimenta o arquivo temporario com os componentes que fazem parte da
+		//estrutura do bem pai apos o Rodizio
+		dbSelectArea("STC")
+		dbSetOrder(01)
+		M98ARQTRB(cTRBZ,cBEMPEST,.T.)
+
+		// Le array com os itens de entrada
+		For nx := 1 To Len(aBENSENTRA)
+
+			DbSelectArea("STZ")
+			DbGoto(aBENSENTRA[nx][2])
+
+			Dbselectarea("ST9")
+			DbSetOrder(01)
+			If Dbseek(xFILIAL("ST9")+aBENSENTRA[nx][1])
+
+				//Verifica se o componente e um step
+				lREPAS231 := .T.
+
+				//-------------------------------------------
+				cPaiSup := ""
+				lEnd := .F.
+
+				DbSelectArea("ST9")
+				DbSetOrder(01)
+				Dbseek(xfilial("ST9")+cVBEMF)
+				cCodPai := ST9->T9_CODBEM
+				cFamP231 := ST9->T9_CODFAMI+Space(Len(ST9->T9_CODBEM)-Len(ST9->T9_CODFAMI))
+				cLocP231 := ""
+
+				Dbseek(xFILIAL("ST9")+aBENSENTRA[nx][1])
+				cCodCom := ST9->T9_CODBEM
+				cFamC231 := ST9->T9_CODFAMI+Space(Len(ST9->T9_CODBEM)-Len(ST9->T9_CODFAMI))
+				cLocC231 := STZ->TZ_LOCALIZ
+
+				//Se bem bem pai deste componente também é filho de outro componente na estrutura,
+				//busca sua localização
+				dbSelectArea("STC")
+				nRecNo := STC->(RecNo())
+				dbSetOrder(03)
+				If dbSeek(xFilial("STC")+cCodPai)
+					cLocP231 := STC->TC_LOCALIZ
+					cPaiSup := STC->TC_CODBEM
+				EndIf
+				dbGoTo(nRecNo)
+
+				nPOSF231 := 0
+				If Len(aESTFAM231) > 0
+					nPOSF231 := aSCAN(aESTFAM231,{|x| cFamC231+cLocC231 = x[1]+x[2].And.;
+					cFamP231+cLocP231 = x[6]+x[7]})
+				EndIf
+
+				If nPOSF231 > 0
+					If aESTFAM231[nPOSF231,3] = "N"
+						lREPAS231 := .F.
+					EndIf
+				ElseIf !Empty(cPaiSup)
+					While !lEnd
+						//se nao encontrou, busca estruturas padrao dos pais imediatos, ate o topo da estrutura
+						cTpMod2 := NGSEEK('ST9',cCodPai,1,'T9_TIPMOD')
+						cFamPa2 := NGSEEK('ST9',cCodPai,1,'T9_CODFAMI')+Space(Len(st9->t9_codbem)-Len(st9->t9_codfami))
+						aESTFAM2 := NGCOMPEST(cFamPa2,"F",.T.,.F.,.T.,Nil,Nil,cTpMod2)
+
+						//sobe um nivel na estrutura
+						cCodCom := cCodPai
+						cCodPai := cPaiSup
+
+						//executa busca na nova estrutura padrao
+						nPOSF231 := aSCAN(aESTFAM2,{|x| cFamC231+cLocC231 = x[1]+x[2] .And.;
+						cFamP231+cLocP231 = x[6]+x[7]})
+						If nPOSF231 > 0
+							lREPASS := (aESTFAM2[nPOSF231,3] != "N")
+							lEnd := .T.
+						Else
+							//Se bem bem pai deste componente também é filho de outro componente na estrutura:
+							dbSelectArea("STC")
+							nRecNo := STC->(RecNo())
+							dbSetOrder(03)
+							If dbSeek(xFilial("STC")+cCodPai)
+								cLocP231 := STC->TC_LOCALIZ
+								cPaiSup := STC->TC_CODBEM
+							Else
+								lEnd := .T.
+							EndIf
+							dbSelectArea("STC")
+							dbGoTo(nRecNo)
+						EndIf
+					EndDo
+				EndIf
+				//-------------------------------------------
+
+				aBENSENTRA[nX,3] := lREPAS231
+
+				If lREPAS231
+					// Procura no arq. (cTRBZ) que ‚ o pai do componente na estrutura e acessa o ST9 e para obter
+					// o contador e alterar o contador no STZ
+					DbSelectArea(cTRBZ)
+					DbSetOrder(02)
+					If DbSeek(aBENSENTRA[nx][1])
+						If (cTRBZ)->TC_CONTRO <> "N"
+
+							nREGTRBZ := Recno()
+
+							//Procura o bem pai do componente na estrutura
+							cVBEMPAI98 := NGTBEMPTE(aBENSENTRA[nx][1],(cTRBZ))
+
+							DbSelectArea(cTRBZ)
+							DbGoto(nREGTRBZ)
+
+							DbSelectArea("ST9")
+							DbSetOrder(01)
+							If DbSeek(xFilial("ST9")+cVBEMPAI98)
+
+								DbSelectArea("STZ")
+								DbGoto(aBENSENTRA[nx][2])
+								nCONT1TRBZ := nPOSCST9
+								nCONT2TRBZ := nPOSCTPE
+								lCONT2 := .F.
+							If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,cVBEMPAI98)
+									lCONT2     := .T.
+									nCONT2TRBZ := nPOSCTPE
+								If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,aBENSENTRA[nx][1])
+										lCONT2     := .F.
+										nCONT2TRBZ := nPOSCTPE
+									EndIf
+								EndIf
+
+								DbSelectArea("STZ")
+								RecLock("STZ",.F.)
+								STZ->TZ_POSCONT := nPOSSTZ
+								STZ->TZ_POSCON2 := nPOSCTPE
+								STZ->TZ_ORDEM   := cNumOS
+								STZ->TZ_PLANO   := cNumPL
+								STZ->(MsUnLock())
+
+								If nCONT1TRBZ > 0
+									DbSelectArea("ST9")
+									DbSetOrder(01)
+									If DbSeek(xFilial("ST9")+STZ->TZ_CODBEM)
+
+										//Inclui registro de entrada na estrutura para componente controlado por Pai da estrutura
+										//ou Imediato e Contador Proprio
+										If ST9->T9_TEMCONT == 'S'
+											NGTRETCON(STZ->TZ_CODBEM,STZ->TZ_DATAMOV,nCONT1TRBZ,STZ->TZ_HORAENT,1,,.T.)
+										ElseIf ST9->T9_TEMCONT == 'P' .Or. ST9->T9_TEMCONT == 'I'
+											aAdd( aComponents, { STZ->TZ_CODBEM, STZ->TZ_DATAMOV, STZ->TZ_HORAENT, 1, nCONT1TRBZ, ST9->T9_CONTACU, ST9->T9_VIRADAS } )
+										EndIf
+
+									EndIf
+								EndIf
+
+								If nCONT2TRBZ > 0
+								If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,STZ->TZ_CODBEM)
+
+										//Inclui registro de entrada na estrutura para componente controlado por Pai da estrutura
+										//ou Imediato e Contador Proprio
+										If (cTRBZ)->TC_CONTRO == 'S'
+											NGTRETCON(STZ->TZ_CODBEM,STZ->TZ_DATAMOV,nCONT2TRBZ,STZ->TZ_HORAENT,2,,.T.)
+										ElseIf (cTRBZ)->TC_CONTRO == 'P' .Or. (cTRBZ)->TC_CONTRO == 'I'
+											aAdd( aComponents, { STZ->TZ_CODBEM, STZ->TZ_DATAMOV, STZ->TZ_HORAENT, 2, nCONT2TRBZ, TPE->TPE_CONTAC, TPE->TPE_VIRADA } )
+										EndIf
+
+									EndIf
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				Else
+					nCONT2TRBZ := 0
+				If MNT2312CNT(xFilial("TPE"),lDtvSgCnt,aBENSENTRA[nx][1])
+						nCONT2TRBZ := nPOSCTPE
+					EndIf
+
+					DbSelectArea("STZ")
+					DbGoto(aBENSENTRA[nx][2])
+					RecLock("STZ",.F.)
+					STZ->TZ_POSCONT := nPOSSTZ
+					STZ->TZ_POSCON2 := nPOSCTPE
+					STZ->TZ_ORDEM   := cNumOS
+					STZ->TZ_PLANO   := cNumPL
+					STZ->(MsUnLock())
+				EndIf
+			EndIf
+
+		Next nx
+
+		// Gera as pendencias TR1
+		MNTA231PEN()
+		
+		lRet := MNTA231ANE()
+
+		If !lRet
+
+			DisarmTransaction()
+
+		EndIf
+
+	END TRANSACTION
+
+	If lRet
+
+		//Inclusão em lote do histórico de contadores conforme entrada na estrutura
+		If !Empty( aComponents )
+			NGINREGEST(,,,,,,, aComponents, .F. )
+		EndIf
+
+		//-------------------------------------------
+		// Tratamento para movimentação retroativa
+		//-------------------------------------------
+		If lRetroat
+
+			MNT232PAST( aBENSSAIDA, aBENSENTRA, dDATAEM, cVHESP1, nPOSCST9, cVHESP2, nPOSCTPE )
+
+		EndIf
+
+		If lTEMCONT .And. nPOSCST9 > 0
+			NGTRETCON(cPaiEst,dDATAEM,nPOSCST9,cVHESP1,1,,.T.)
+		Endif
+
+		If lTEMCON2 .And. nPOSCTPE > 0
+			NGTRETCON(cVBEMF,dDATAEM,nPOSCTPE,cVHESP2,2,,.F.)
+		Endif
+
+		//GERA O.S AUTOMATICA POR CONTADOR
+		DbSelectArea("ST9")
+		DbSetOrder(16)
+		If DbSeek(cBEM)
+			cFilBem := ST9->T9_FILIAL
+		Else
+			cFilBem := " "
+		EndIf
+		If (cGERAPREV = "S" .Or. cGERAPREV = "C") .And. (!Empty(nPOSCST9) .Or. !Empty(nPOSCTPE))
+			If cGERAPREV = "C"
+				If MsgYesNo(STR0110+chr(13)+chr(13); //"Deseja que seja verificado a existência de o.s automática por contador?"
+				+STR0111,STR0016)         //"Confirma (Sim/Não)" # "ATENÇÃO"
+					NGGEROSAUT(cBEM,If(!Empty(nPOSCST9),nPOSCST9,nPOSCTPE),cFilBem)
+				EndIf
+			Else
+				NGGEROSAUT(cBEM,If(!Empty(nPOSCST9),nPOSCST9,nPOSCTPE),cFilBem)
+			Endif
+		EndIf
+
+		If ExistBlock("MNTA2311")
+			ExecBlock("MNTA2311",.F.,.F.)
+		Endif
+
+		// Testa se o servio e CABIBALISMO
+		If cTipSer = 'C'
+
+			// Somente o bem pai recebera status de CANIBALISMO
+			DbSelectArea("ST9")
+			DbSetOrder(01)
+
+			If DbSeek(xFilial("ST9")+cVBEMF)
+				RecLock("ST9",.F.)
+				ST9->T9_STATUS := cStaCan
+				ST9->(MsUnLock())
+			Endif
+
+		Endif
+	
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGFIL231
+Faz o filtro da consulta "NGB"
+@author Marcos Wagner Junior
+@since 06/06/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGFIL231()
+	Local lRET := .F.
+
+	If ST9->T9_STATUS $ GETMV('MV_NGSTAEU') .OR. ST9->T9_STATUS = GETMV('MV_NGSTAER') .OR.;
+	   ST9->T9_STATUS = GETMV('MV_NGSTAEN') .OR. ST9->T9_STATUS = GETMV('MV_NGSTEST')
+		lRET := .T.
+	Endif
+
+Return lRET
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGFILT231
+Faz o filtro da consulta "NGB"
+@author Marcos Wagner Junior
+@since 06/06/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NGFILT231()
+	Local lRET := .F.
+
+	If Type("aARRAYTRB") = "A" .And. Len(aARRAYTRB) > 0
+		If ST9->T9_CODFAMI!=cCODIFAM .Or. ASCAN(aARRAYTRB,{|x| x[3] == ST9->T9_CODBEM}) > 0
+			Return .F.
+		EndIf
+	EndIf
+
+	If (ST9->T9_STATUS $ SuperGetMV('MV_NGSTAEU',.F.) .OR. ST9->T9_STATUS = SuperGetMV('MV_NGSTAER',.F.) .OR.;
+	ST9->T9_STATUS = SuperGetMV('MV_NGSTAEN',.F.) .OR. ST9->T9_STATUS = SuperGetMV('MV_NGSTEST',.F.)) .And.;
+	!(ST9->T9_STATUS $ SuperGetMV('MV_NGSTAGR',.F.)+'/'+SuperGetMV('MV_NGSTAGC',.F.)+'/'+SuperGetMV('MV_NGSTAAT',.F.))
+		lRET := .T.
+	Endif
+
+Return lRET
+
+//------------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT231DEST
+Função de validação do campo TR4_DESTIN
+@type function
+
+@author Marcos Wagner Junior
+@since 31/07/2008
+
+@sample MNT231DEST()
+
+@param  cVComp   , Caracter, Código do Bem.
+@param  cVSt     , Caracter, Código do Produto.
+@param  lBloqProd, Lógico  , Define se bloqueia o produto
+@param  cValPad  , Caracter,
+@return Lógico   , Define se o processo foi concluido com êxito.
+/*/
+//------------------------------------------------------------------------------------
+Function MNT231DEST(cVComp,cVSt,lBloqProd,cValPad)
+
+	Local bKeyF4 := SetKey(VK_F4)
+	Local aOldArea := GetArea()
+	Local oDlgP,oFontB,oFontN
+	Local nOpca   := 0
+	Local nAltBar := 0
+	Local cConsultaSB1 := "SB1", cBotaoNada := ' '
+	Local lRet := .T.
+	/* Variaveis do Ponto de Entrada MNTA231V */
+	Local cProdAnt := ""
+	Local cAlmoAnt := ""
+	Local cProdSta := ""
+	//Variaveis de descricao
+	Local cTitulo  := STR0141//"Informe o novo código de produto"
+	Local cDesc01  := STR0142//"Informe o novo código de produto para o pneu "
+	Local lNNR		:= Alltrim(NGSEEKDIC("SX3", "B1_LOCPAD", 2, "SX3->X3_F3")) == "NNR"
+	//Variavel para controle de Localização/Endereçamento
+	Local cLocaliz := Space(TAMSX3('TL_LOCALIZ')[1])
+	Local oPnlScr
+	Private lChkLoc := .F.
+	Private cCodAlmo := Space(TAMSX3('B1_LOCPAD')[1])
+	Private cCodProd := Space(TamSX3("B1_COD")[1])
+	Private cNomCodP := Space(30)
+
+	// Variáveis usadas para o PE MNTA2319.
+	Private aMNTA2319
+	Private cRod := cVComp
+	//-------------------------------------
+	Default lBloqProd := .F.
+	Default cValPad   := Space( Len( SB1->B1_COD ) )
+
+	If lBloqProd
+		cCodProd := cValPad
+		cNomCodP := NGSEEK("SB1",cValPad,1,"B1_DESC")
+		cCodAlmo := NGSEEK("SB1",cValPad,1,"B1_LOCPAD")
+		cTitulo  := STR0217//"Informe o código de Almoxarifado"
+		cDesc01  := STR0218//"Informe o codigo de Almoxarifado para o pneu "
+	EndIf
+
+	//Verifica se usa endereçamento de produto
+	If (AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. NGSEEK('SB1',cCodProd,1,"B1_LOCALIZ") == "S")
+		lChkLoc := .T.
+	EndIf
+
+	//Consulta no dicionário se existe a consulta padrão NGSB1
+	dbSelectArea("SXB")
+	dbSetOrder(01)
+	If dbSeek("NGSB1")
+		cConsultaSB1 := "NGSB1"
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(01)
+	If dbSeek(xFilial("ST9")+cVComp)
+		If cUsaIntEs == 'S' .And. (AllTrim(GetMV("MV_NGPNEST")) == 'S') //!Empty(ST9->T9_CODESTO) .AND.
+
+			If PtGetTheme() = "MDI"
+				nAltBar := 20
+			EndIf
+
+			// Recebe o Produto e o Almoxarifado anterior e o Status como Estoque Filial
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SB1")+ST9->T9_CODESTO)
+				cProdAnt := ST9->T9_CODESTO
+				cAlmoAnt := SB1->B1_LOCPAD
+				cProdSta := cVSt
+			Else
+				SB1->( dbGoTop() )
+			EndIf
+
+			SetKey(VK_F4, {||MntViewSB2('P',cCodProd)})
+			If !ExistBlock( "MNTA2319" )
+				Define Font oFontB Name "Arial" Size 07,17 Bold
+				Define Font oFontN Name "Arial" Size 07,17
+				Define msDialog oDlgP Title cTitulo From 000,000 To 170+nAltBar,500 Pixel
+
+				oDlgP:lEscClose := .F.
+
+				oPnlScr := TPanel():New(00,00,,oDlgP,,,,,,55,15,.F.,.F.)
+				oPnlScr:Align := CONTROL_ALIGN_ALLCLIENT
+
+				@ 07,008 Say OemToAnsi(cDesc01) Font oFontN Size 400,10 Of oPnlScr Pixel
+				@ 07,141 Say OemToAnsi(AllTrim(cVComp)+", ") Font oFontB Size 400,10 Of oPnlScr Pixel
+				@ 18,008 Say OemToAnsi(STR0143) Font oFontN Size 400,10 Of oPnlScr Pixel //"cujo status foi alterado para "
+				@ 18,091 Say OemToAnsi(AllTrim(cVSt)+".") Font oFontB Size 400,10 Of oPnlScr Pixel
+
+				@ 34,008 Say OemToAnsi(STR0144) Size 47,07 Of oPnlScr Pixel //"Produto"
+				@ 33,045 MsGet cCodProd Size  60,08 OF oPnlScr Pixel Picture "@!" F3 cConsultaSB1 ;
+					Valid MNT600PROD(cCodProd,cVComp) .And. fVldBloq( cCodProd, cCodAlmo ) HASBUTTON When !lBloqProd
+				@ 33,108 MsGet cNomCodP Size 120,08 OF oPnlScr Pixel Picture '@!' When .F.
+				@ 47,008 Say OemToAnsi(STR0145) Size 47,07 Of oPnlScr Pixel //"Almoxarifado"
+
+				If lNNR
+					@ 46,045 MsGet cCodAlmo Size  12,08 OF oPnlScr Pixel F3 "NNR" Picture "@!" ;
+						Valid NaoVazio() .And. ExistCpo("NNR",cCodAlmo) .And. fVldBloq( cCodProd, cCodAlmo ) HASBUTTON
+				Else
+					@ 46,045 MsGet cCodAlmo Size  12,08 OF oPnlScr Pixel Picture "@!" Valid NaoVazio() .And. fVldBloq( cCodProd, cCodAlmo )
+				EndIf
+
+				@ 47,108 Say OemToAnsi("Localização: ") Font oFontN Size 47,07 Of oPnlScr Pixel
+				@ 46,150 MsGet cLocaliz Size 55,08 OF oPnlScr Pixel Picture '@!' F3 'SBE' Valid ExistCPO( 'SBE', cCodAlmo + cLocaliz ) WHEN lChkLoc HASBUTTON
+
+				@ -1000,-1000 MsGet cBotaoNada Size 10,08 OF oPnlScr Pixel Picture '@!' When .T.
+
+				Activate MsDialog oDlgP On Init EnchoiceBar(oDlgP,{|| nOpca:=1, If(If(lBloqProd,NGSALSB2(cCodProd,cCodAlmo,1,,,dDTDATEM),.T.) .AND. MNTA231VLD(cProdAnt,cCodProd,cAlmoAnt,cCodAlmo,cProdSta),oDlgP:End(),nOpca:=0)},;
+				{|| oDlgP:End() }) Center
+
+				If nOpca == 1
+					cCodST9Est := cCodProd
+					cCodST9Alm := cCodAlmo
+					cCodST9Loc := cLocaliz
+					lRet       := .T.
+				Else
+					cCodST9Est := ' '
+					cCodST9Alm := ' '
+					cCodST9Loc := ' '
+					lRet       := .F.
+				EndIf
+
+			Else
+				aMNTA2319  := ExecBlock( 'MNTA2319', .F., .F., { cRod } )
+				cCodST9Est := aMNTA2319[1]
+				cCodST9Alm := aMNTA2319[2]
+				lRet       := .T.
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	SetKey( VK_F4, bKeyF4 )
+	RestArea(aOldArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231VIDA
+Funcao que retorna a cor da vida do Pneu
+@author Vitor Emanuel Batista
+@since 20/10/08
+@version undefined
+@param cVida, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNT231VIDA(cVida)
+
+	Local nCor := CLR_BLACK
+
+	If cVida == '2'
+		nCor := CLR_GREEN
+	ElseIf cVida == '3'
+		nCor := CLR_BLUE
+	ElseIf cVida == '4'
+		nCor := RGB(255,144,0) //205,101,0
+	ElseIf cVida >= '5'
+		nCor := CLR_HRED
+	EndIf
+
+Return nCor
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231ACOR
+Atualiza cores dos Pneus
+@author Vitor Emanuel Batista
+@since 20/10/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNT231ACOR()
+
+	Local xC
+	Local cBANDA,cPNEUxC
+	Local aINI := {} //Pneus Iniciais - Empresa da Bem
+	Local aTRB := {} //Pneus Adicionados - Empresa Local
+	Local aTable := {{"TQS"}}
+
+	If Type('aARRAYTRB') == 'A'
+		For xC := 1 to Len(aARRAYTRB)
+			cBANDA  := '0'
+			cPNEUxC := AllTrim(oGets[xC]:cText)
+			If !Empty(cPNEUxC)
+				dbSelectArea("TQS")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TQS")+cPNEUxC+Space(Len(TQS->TQS_CODBEM)-Len(cPNEUxC)) )
+					cBANDA := TQS->TQS_BANDAA
+				EndIf
+			EndIf
+			oGets[xC]:NCLRTEXT := MNT231VIDA(cBANDA)
+			oGets[xC]:setCSS("QLineEdit{color:#"+NGRGBHEX(ConvRGB(MNT231VIDA(cBANDA)))+";}")
+		Next
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} CONSTRANS
+Consiste dados da tela de transferencia do Pneu
+@author Vitor Emanuel Batista
+@since 20/03/2009
+@version undefined
+@param aCampos, array
+@return Boleano
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function CONSTRANS(aCampos)
+
+	Local x
+
+	For x:= 1 to Len(aCampos)
+		If Empty(&(aCampos[x][1]))
+			Help(1," ","OBRIGAT",,aCampos[x][2]+Space(35),3,0)
+			Return .F.
+		EndIf
+	Next x
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ATRANSREL
+Imprime relatorio para preenchimento manual dos dados
+@author Vitor Emanuel Batista
+@since 20/03/2009
+@version undefined
+@param cBem, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function ATRANSREL(cBem)
+
+	Local oFont07,oFont09B,oFont10,oFont10s,oFont11
+	Local oPrint
+	Local lin := 0
+	Local cFileLogo
+
+	oFont07  := TFont():New("Arial",07,07,,.F.,,,,.F.,.F.)
+	oFont09B := TFont():New("Arial",09,09,,.T.,,,,.F.,.F.)
+	oFont10  := TFont():New("Arial",10,10,,.F.,,,,.F.,.F.)
+	oFont10s := TFont():New("Arial",10,10,,.F.,,,,.F.,.T.)
+	oFont11  := TFont():New("Arial",11,11,,.T.,,,,.F.,.F.)
+
+	oPrint	:= TMSPrinter():New(OemToAnsi(STR0181)) //"Transferência de Pneu"
+	oPrint:Setup()
+
+	nPag := 0
+	oPrint:StartPage()
+	nPag ++
+	lin := 100
+	cFileLogo := "lgrl"+cEmpOri+cFilOri+".bmp"
+	If !File(cFileLogo)
+		cFileLogo := "lgrl"+cEmpOri+".bmp"
+	EndIf
+	If File(cFileLogo)
+		oSend(oPrint, "SayBitmap",100,100, cFileLogo ,320,120 )
+	Endif
+	oPrint:Say(lin+40,1050,OemToAnsi(STR0181),oFont11)
+	oPrint:Say(lin+10,2120,STR0182 + cValToChar(nPag),oFont07) //"PÁG.:   "
+	oPrint:Say(lin+45,2120,STR0183 + cValToChar(Date()),oFont07) //"DATA.: "
+	oPrint:Say(lin+80,2120,STR0184 + Time(),oFont07) //"HORA.: "
+
+	lin := 220
+	oPrint:Line(lin,100,lin,2300)
+
+	lin += 120
+	oPrint:Say(lin,130,STR0185,oFont09B)//"Empresa Origem.:"
+	oPrint:Say(lin,385,cEmpDe + " - " + NGSEEK("SM0",cEmpDe,1,'M0_NOMECOM'),oFont10)
+	lin += 100
+	oPrint:Say(lin,130,STR0186,oFont09B) //"Empresa Destino.:"
+	oPrint:Say(lin,385,cEmpAte + " - " + NGSEEK("SM0",cEmpAte,1,'M0_NOMECOM'),oFont10)
+
+	lin += 120
+	oPrint:Say(lin,130,STR0187,oFont09B) //"Bem.:"
+	oPrint:Say(lin,245,cBem,oFont10)
+
+	lin += 100
+	oPrint:Say(lin,130,STR0188,oFont09B) //"Tipo Modelo.:"
+	oPrint:Say(lin,320,M->T9_TIPMOD + " - " + NGSEEK("TQR",M->T9_TIPMOD,1,'TQR_DESMOD'),oFont10)
+
+	lin += 100
+	oPrint:Say(lin,130,STR0189,oFont09B) ///"Família.:"
+	oPrint:Say(lin,260,M->T9_CODFAMI + " - " + NGSEEK("ST6",M->T9_CODFAMI,1,'T6_NOME'),oFont10)
+
+	lin += 100
+	oPrint:Say(lin,130,STR0190+".:",oFont09B) //"Centro de Custo.:"
+	oPrint:Say(lin,380,M->T9_CCUSTO + " - " + NGSEEK("CTT",M->T9_CCUSTO,1,'CTT_DESC01'),oFont10)
+
+	lin += 100
+	oPrint:Say(lin,130,STR0191,oFont09B) //"Turno.:"
+	oPrint:Say(lin,260,M->T9_CALENDA + " - " + NGSEEK("SH7",M->T9_CALENDA,1,'H7_DESCRI'),oFont10)
+
+	lin += 100
+	If !Empty(cMEDIDA)
+		oPrint:Say(lin,130,STR0192,oFont09B) //"Medida Pneu.:"
+		oPrint:Say(lin,360,M->TQS_MEDIDA + " - " + NGSEEK("TQT",M->TQS_MEDIDA,1,'TQT_DESMED'),oFont10)
+		lin += 100
+	EndIf
+
+	If !lDESENHO .And. !Empty(cDESENHO)
+		oPrint:Say(lin,130,STR0193,oFont09B) //"Desenho Pneu.:"
+		oPrint:Say(lin,360,M->TQS_DESENH,oFont10)
+		lin += 100
+	EndIf
+
+	If lMANUT .And. !lCALEND
+		oPrint:Say(lin,130,STR0194,oFont09B) //"Calend. Manut.:"
+		oPrint:Say(lin,370,M->TF_CALENDA + " - " + NGSEEK("SH7",M->TF_CALENDA,1,'H7_DESCRI'),oFont10)
+		lin += 100
+	EndIf
+
+	lin += 50
+	oPrint:Say(lin,130,STR0195,oFont09B)//"Obs.:"
+
+	lin += 50
+	oPrint:Line(lin,300,lin,2250)
+	oPrint:Line(lin+70,300,lin+70,2250)
+	oPrint:Line(lin+140,300,lin+140,2250)
+	oPrint:Line(lin+210,300,lin+210,2250)
+
+	oPrint:EndPage()
+	oPrint:Preview()
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231PRO
+Verifica se o produto nao esta bloqueado (B1_MSBLQL == 1)
+@author Marcos Wagner Junior
+@since 13/07/2009
+@version undefined
+@param cCodPneu, characters, Código do Produto (SB1)  -Obrigatorio
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231PRO(cCodPneu)
+
+	Local lRet := .T.
+	Local aOldArea := GetArea()
+
+	dbSelectArea("ST9")
+	dbSetOrder(16)
+	If dbSeek(cCodPneu+'A') .AND. !Empty(ST9->T9_CODESTO)
+		dbSelectArea("SB1")
+		dbSetOrder(01)
+		If dbSeek(xFilial("SB1")+ST9->T9_CODESTO) .AND. SB1->B1_MSBLQL == '1'
+			lRet := .F.
+			Aviso("REGBLOQ",OemToAnsi(STR0200)+ST9->T9_CODESTO,{"Ok"}, 2) //"Itens Bloqueados: "
+		Endif
+	Endif
+
+	RestArea(aOldArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231TRB
+Cria tabelas temporarias utilizadas na rotina
+@author Vitor Emanuel Batista
+@since 17/08/2009
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231TRB()
+
+	Local aDBFY,aDBFZ
+
+	Local oTmpTbl1
+	Local oTmpTbl2
+	Local cTRBY := GetNextAlias() //Alias Tab. 1
+	Local cTRBZ := GetNextAlias() //Alias Tab. 2
+
+	// ARQUIVO TEMPORARIO COM A SITUACAO ATUAL DO PAI DA ESTRUTURA
+	aDBFY    := STC->(DbStruct())
+		aAdd(aDBFY,{"TC_CONTRO", "C", 01, 0}) //TIPO DE CONTROLE DO COMPONENTE(S,P,I,N)
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRBY, aDBFY )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"TC_CODBEM","TC_COMPONE"} )
+	oTmpTbl1:AddIndex( "Ind02" , {"TC_COMPONE","TC_CODBEM"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	// ARQUIVO TEMPORARIO COM A SITUACAO ATUAL DO PAI APOS A GRAVAÇAO DO STC
+	aDBFZ  := STC->(DbStruct())
+		aAdd(aDBFZ,{"TC_CONTRO", "C", 01, 0}) //TIPO DE CONTROLE DO COMPONENTE(S,P,I,N)
+
+	oTmpTbl2:= FWTemporaryTable():New( cTRBZ, aDBFZ )
+	//Cria indices
+	//Adiciona os Indices
+	oTmpTbl2:AddIndex( "Ind01" , {"TC_CODBEM","TC_COMPONE"} )
+	oTmpTbl2:AddIndex( "Ind02" , {"TC_COMPONE","TC_CODBEM"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+Return { { oTmpTbl1 , cTRBY } , { oTmpTbl2 , cTRBZ } }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231CC
+Consistencia do centro de custo
+@author Inacio Luiz Kolling
+@since 12/11/2009
+@version undefined
+@param cCUSTOB, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231CC(cCUSTOB)
+
+	Local cCodCusT := Alltrim(cCUSTOB)+Space(Len(CTT->CTT_CUSTO)-Len(Alltrim(cCUSTOB)))
+	cNomCust := Space(Len(CTT->CTT_DESC01))
+	DbSelectArea("CTT")
+	DbsetOrder(1)
+
+	If !ExistCpo("CTT",cCodCusT,1)
+		Return .F.
+	Endif
+
+	cNomCust := Posicione( 'CTT', 1, xFilial('CTT') + cCUSTOB, 'CTT_DESC01' )
+	M->TP9_CCUSTO := Space(len(st9->t9_ccusto))
+	M->TP9_CCUSTO := cCodCusT
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231CT
+Consistencia do centro de trabalho
+@author Inacio Luiz Kolling
+@since 12/11/2009
+@version undefined
+@param cCENTRAB, characters
+@param cCUSTOB, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231CT(cCENTRAB,cCUSTOB)
+
+	cNomSHB := Space(Len(SHB->HB_NOME))
+	If !Empty(cCENTRAB)
+		If !ExistCpo("SHB",cCENTRAB)
+			Return .F.
+		Endif
+		cNomSHB := NGSEEK('SHB',cCENTRAB,1,'SHB->HB_NOME')
+		If !CHKCENTRAB(cCENTRAB,cCUSTOB)
+			Return .F.
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231LL
+Cadastramento do rastro e enderecamento fisico
+@author Inacio Luiz Kolling
+@since 12/11/2009
+@version undefined
+@param cPneu, characters
+@param nPOSL, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA231LL(cPneu,nPOSL)
+
+	Local nopcmo := 1
+	cCodEsto := NGSEEK("ST9",cPneu,1,"ST9->T9_CODESTO")
+	cLocalEs := Pad(NGSEEK('SB1',cCodEsto,1,'SB1->B1_LOCPAD'),Len(SB1->B1_LOCPAD))
+	cSubLote := Space(Len(STL->TL_NUMLOTE)) // Sub_lote
+	cLoTecTl := Space(Len(STL->TL_LOTECTL)) // Lote
+	cNumSeri := Space(Len(STL->TL_NUMSERI)) // Numero da serie
+	cLocaliz := Space(Len(STL->TL_LOCALIZ)) // Localizacao fisica
+	dDtvalid := Ctod("  /  /  ")
+
+	aMatFim := If(cPROGRAMA = "MNTA231","aARRAYTRB","aPNEUSFIM")
+	&(aMatFim)[nPOSL][19] := cLocalEs
+	&(aMatFim)[nPOSL][20] := cSubLote
+	&(aMatFim)[nPOSL][21] := cLoTecTl
+	&(aMatFim)[nPOSL][22] := cNumSeri
+	&(aMatFim)[nPOSL][23] := cLocaliz
+	&(aMatFim)[nPOSL][24] := dDtvalid
+	M->TL_TIPOREG := "P"
+
+	DEFINE MSDIALOG oDlgx TITLE OemToAnsi(STR0202+"..: "+Alltrim(cPneu);
+	+" "+STR0203+"..: "+ST9->T9_CODESTO) From 0,0 To 195,465 COLOR CLR_BLACK,CLR_WHITE Pixel
+
+	@1.5,1    Say OemtoAnsi(NGRETTITULO("TL_LOCAL")) //"Almoxarifado
+	@1.5,6.5  MsGet cLocalEs Picture "@!" VALID ExistCpo("SB2",ST9->T9_CODESTO+cLocalEs) SIZE 35,10;
+	When NGWHENLOCA()
+
+	@2.5,1    Say OemtoAnsi(NGRETTITULO("TL_LOTECTL")) //"Numero do lote
+	@2.5,6.5  MsGet cLoteCTL Picture "@!" VALID;
+	If(!Empty(cLoTecTl),NGRASTOLOTE(ST9->T9_CODESTO,cLocalEs,cLoteCTL,cSubLote,"dDtvalid"),.T.) SIZE 45,10;
+	When NGVALPRASTRE()
+
+	@3.5,1    Say OemtoAnsi(NGRETTITULO("TL_NUMLOTE")) //"Numero do Sub_lote
+	@3.5,6.5  MsGet cSubLote Picture "@!" VALID If(!Empty(cSubLote),NGRASSUBLOTE(ST9->T9_CODESTO,cLocalEs,cSubLote,"cLoteCTL","dDtvalid"),.T.) SIZE 45,10;
+	When NGVALPRASTRE()
+
+	@4.5,1   Say OemtoAnsi(NGRETTITULO("TL_DTVALID"))  //"Data validade
+	@4.5,6.5 MsGet dDtvalid Picture "99/99/99" SIZE 45,10 HASBUTTON
+
+	@5.5,1    Say OemtoAnsi(NGRETTITULO("TL_LOCALIZ")) //"Localizacao fisica
+	@5.5,6.5  MsGet cLocaliz Picture "@!" VALID If(!Empty(cLocaliz),ExistCpo("SBE",cLocalEs+cLocaliz),.T.) F3 "SBE" SIZE 60,10;
+	When NGVCONLOC() HASBUTTON
+
+	@6.5,1   Say OemtoAnsi(NGRETTITULO("TL_NUMSERI"))  //"Serie
+	@6.5,6.5 MsGet cNumSeri Picture "@!" SIZE 70,10
+
+	ACTIVATE MSDIALOG oDlgx Centered ON INIT EnchoiceBar(oDlgx,;
+	{||nopcmo:=2,If(NGCHKFRASTO(cCodEsto,dDTDATEM,cSubLote,cLotecTl,cLocalEs,cNumSeri,cLocaliz,1),;
+	oDlgx:End(),nopcmo:=1)},{||nopcmo:=1,oDlgx:End()}) //MNTA231LD()})
+
+	If nopcmo = 2
+		&(aMatFim)[nPOSL][19] := cLocalEs
+		&(aMatFim)[nPOSL][20] := cSubLote
+		&(aMatFim)[nPOSL][21] := cLoTecTl
+		&(aMatFim)[nPOSL][22] := cNumSeri
+		&(aMatFim)[nPOSL][23] := cLocaliz
+		&(aMatFim)[nPOSL][24] := dDtvalid
+	Endif
+
+Return If(nopcmo = 2,.T.,.F.)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231VLD
+Chama a validacao do ponto de entrada MNTA231V.
+@author Wagner S. de Lacerda
+@since 26/05/2010
+@version undefined
+@obs todos parametros abaixo são obrigatórios.
+@param cProdAnt, characters, Indica o produto ao qual o bem pertencia
+@param cProdAtu, characters, Indica o novo produto ao qual o bem pertence
+@param cAlmoAnt, characters, Indica o almoxarifado ao qual o bem pertencia
+@param cAlmoAtu, characters, Indica o novo almoxarifado ao qual o bem
+@param cStatus, characters, ndica o status atual do bem.
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231VLD(cProdAnt,cProdAtu,cAlmoAnt,cAlmoAtu,cStatus)
+
+	Local lRet := .T.
+
+	If ExistBlock("MNTA231V")
+		lRet := ExecBlock( 'MNTA231V', .F., .F., {cProdAnt, cProdAtu, cAlmoAnt, cAlmoAtu, cStatus} )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231QE
+Chama a validacao do ponto de entrada MNTA231V
+@author Jackson Machado
+@since 03/05/2011
+@version undefined
+@param aEixo, array, Array com os eixos do bem. /Obrigatório
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT231QE(aEixo)
+
+	Local nx
+	Local nMaior := 0
+
+	For nx := 1 To Len(aEixo)
+		If nMaior < aEixo[nx][1]
+			nMaior  := aEixo[nx][1]
+		Endif
+		nTotEixo += aEixo[nx][1]
+	Next nx
+
+Return nMaior
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231VCFIM
+Validação de contador/data/hora na confirmação da tela de movimentação.
+Necessário, pois no tempo em que o usuário faz movimentaçãoes na
+estrutura do bem, outro usuário pode informar um contador maior com
+data menor, entao valida na confirmação e caso o contador inicialmente
+informado já seja inválido exibe uma tela para informar o contador
+atualizado.
+@author André Felipe Joriatti
+@since 02/10/2012
+@version MP11
+@return .T. ou .F. Conforme resultado da validação
+/*/
+//---------------------------------------------------------------------
+Static Function MNT231VCFIM()
+
+	Local lRet := .T.
+	Local aVldCont1 := {}
+	Local aVldCont2 := {}
+
+	//+-------------------------------------------------------------------+
+	// Testa se o(s) contador(es) estão vazios, se sim, chama tela para informar
+	//+-------------------------------------------------------------------+
+	If ( lTEMCONT .And. Empty( nPOSCONT ) ) .Or. ( lTEMCON2 .And. Empty( nPOSCON2 ) )
+
+		cHORALE1 := cHORALE2 := '  :  '//Limpa as horas dos contadores que foram anteriormente informados
+		//+-------------------------------------------------------------------+
+		// Tela para informar contador
+		//+-------------------------------------------------------------------+
+		lRet := MNT231INFCON()
+
+	ElseIf ( lTEMCONT .And. !(MNTA231VCO(cPaiEst,nPOSCONT,1) .And. MNTA231HIS(nPOSCONT,cHORALE1,1,.T.,cPaiEst)) )  .Or.;
+	( lTEMCON2 .And. !(MNTA231VCO(cBem,nPOSCON2,2) .And. MNTA231HIS(nPOSCON2,cHORALE2,2,.T.,cBem)) )
+
+		//+-------------------------------------------------------------------+
+		// Força a exibir a tela de aviso para o Contador2, caso este também seja inválido e
+		// porém o Contador1 também seja inválido.
+		//+-------------------------------------------------------------------+
+		If lTEMCON2
+			aVldCont1 := NGCHKHISTO(cPaiEst,dDTDATEM,nPOSCONT,cHORALE1,1,,.F.)
+			If !aVldCont1[1]
+				MNTA231HIS(nPOSCON2,cHORALE2,2,.T.,cBem)
+			EndIf
+		EndIf
+
+		//+-------------------------------------------------------------------+
+		// Limpa hora/contador do contador que estiver inválido (1 ou 2)
+		//+-------------------------------------------------------------------+
+		If lTEMCONT
+			aVldCont1 := NGCHKHISTO(cPaiEst,dDTDATEM,nPOSCONT,cHORALE1,1,,.F.)
+			If !aVldCont1[1]
+				cHORALE1 := '  :  '
+				nPOSCONT := 0
+			EndIf
+		EndIf
+
+		If lTEMCON2
+			aVldCont2 := NGCHKHISTO(cBem,dDTDATEM,nPOSCON2,cHORALE2,2,,.F.)
+			If !aVldCont2[1]
+				cHORALE2 := '  :  '
+				nPOSCON2 := 0
+			EndIf
+		Else
+			cHORALE2 := '  :  ' //Se nao tem Contador2 limpa o campo da hora (que fica preenchido com a hora que abriu a estrutura por padrao)
+		EndIf
+
+		//+-------------------------------------------------------------------+
+		// Tela para informar contador
+		//+-------------------------------------------------------------------+
+		lRet := MNT231INFCON()
+
+	EndIf
+
+Return lRet
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231INFCON
+Tela para informar o contador após a confirmação da movimentação de
+rodados, caso o contador/data/hora informados na primeira tela já
+sejam inválidos.
+@author André Felipe Joriatti
+@since 02/10/2012
+@version MP11
+@return .T. Caso o contador tenha sido confirmado, .F. caso a tela tenha sido cancelada
+/*/
+//---------------------------------------------------------------------
+Static Function MNT231INFCON()
+
+	Local lRet := .F.
+	Local oDlg
+	Local lCancel := .F.
+
+	DEFINE MSDIALOG oDlg TITLE OemToAnsi(STR0216) From 15,15 To 29,80 OF oMainWnd COLOR CLR_BLACK,CLR_WHITE //"Informe contador atualizado"
+
+	oDlg:lEscClose := .F.
+
+	oPnlPai := TPanel():New(00,00,,oDlg,,,,,,55,15,.F.,.F.)
+	oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oSayBem := TSay():New(8,16,{|| OemtoAnsi(STR0005)},oPnlPai,,,.F.,.F.,.F.,.T.,,,020,008 )//"Bem"
+	@ 0.5,5  MSget cPaiEst  Picture "@!" SIZE 60,10  WHEN .F. Of oPnlPai
+	@ 0.5,13 MSget cBEMNOM  Picture "@!" SIZE 120,10 WHEN .F. Of oPnlPai
+
+	@ 1.5,2  say OemtoAnsi(STR0006) Of oPnlPai//"Esquema"
+	@ 1.5,5  MSget cPaiFor   Picture "@!" SIZE 30,10  When .F. Of oPnlPai
+	@ 1.5,9  MSget cFORNOM  Picture "@!" SIZE 150,10 WHEN .F. Of oPnlPai
+
+	@ 2.5,2  say OemtoAnsi(STR0129) Of oPnlPai//"Modelo"
+	@ 2.5,5  MSget cPaiMod  Picture "@!" SIZE 30,10  When .F. Of oPnlPai
+	@ 2.5,9  MSget cDESMOD  Picture "@!" SIZE 150,10 WHEN .F. Of oPnlPai
+
+	@ 3.9,2  say OemtoAnsi(STR0007) Of oPnlPai//"Data Mov"
+	@ 49.5,45  MSget dDTDATEM Picture "99/99/99"  SIZE 50,10 HASBUTTON PIXEL;
+	VALID NAOVAZIO() .And. MNTA231DL() .And. If(NGFUNCRPO("U_MNTA2316",.F.),NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE1,0}),.T.) .And. fVerBemPai(oPnlPai) Of oPnlPai
+
+	@ 3.5,12 say OemtoAnsi(STR0009) Of oPnlPai//"Hora Leitura"
+	@ 3.5,17 Msget cHORALE1 Picture "99:99" SIZE 10,08 When lTEMCONT .Or. lContPai Of oPnlPai;
+	VALID NGVALHORA(cHORALE1,.T.) .And. MNTA231HL(cHORALE1,1,dDTDATEM) .And. If(NGFUNCRPO("U_MNTA2316",.F.),NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE1,1}),.T.) .And. fVerBemPai(oPnlPai)
+
+	@ 3.5,21 say OemtoAnsi(STR0008) Of oPnlPai//"Contador 1"
+	@ 3.5,26 MSget nPOSCONT Picture "999999999" Of oPnlPai;
+	VALID MNTA231VCO(cPaiEst,nPOSCONT,1) .And. MNTA231HIS(nPOSCONT,cHORALE1,1,.T.,cPaiEst) When lTEMCONT .And. lWHENCONT
+
+	@ 4.5,12 say OemtoAnsi(STR0009) Of oPnlPai//"Hora Leitura"
+	@ 4.5,17 Msget cHORALE2 Picture "99:99" SIZE 10,08 When lTEMCON2 Of oPnlPai;
+	VALID NGVALHORA(cHORALE2,.T.) .And. MNTA231HL(cHORALE2,2,dDTDATEM) .And. NGPONTOENTR("MNTA2316",.T.,{dDTDATEM,cHORALE2,2})
+
+	@ 4.5,21 say OemtoAnsi(STR0010) Of oPnlPai//"Contador 2"
+	@ 4.5,26 MSget nPOSCON2 Picture "999999999" Of oPnlPai;
+	VALID MNTA231VCO(cBEM,nPOSCON2,2) .And. MNTA231HIS(nPOSCON2,cHORALE2,2,.T.) When lTEMCON2 .And. lWHENCON2
+
+	ACTIVATE MSDIALOG oDlg Centered ON INIT EnchoiceBar(oDlg,{||nOP231:=1,If(!MNTA231TOK(),nOP231 := 2,oDlg:End())},{||lCancel := .T.,oDlg:End(),.F.},,{})
+
+	If nOP231 == 1 .And. !lCancel
+		cHORALE1 := If(cHORALE1 == '  :  ',Substr(Time(),1,5),cHORALE1)
+		cHORALE2 := If(cHORALE2 == '  :  ',Substr(Time(),1,5),cHORALE2)
+		lRet := .T.
+	Else
+		//+-------------------------------------------------------------------+
+		// Caso o usuário cancele a tela, então limpa a(s) hora(s) e o(s) cont(s)
+		//+-------------------------------------------------------------------+
+		cHORALE1 := cHORALE1 := '  :  '
+		nPOSCONT := nPOSCON2 := 0
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231VCON
+Grava novos valores para dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2 (passados por referencia) caso o usuário
+tenha passado pela tela de reporte de contador do final da rotina, caso o usuário
+nao tenha passado, então grava os mesmos valores informados no início da rotina.
+@author André Felipe Joriatti
+@since 02/10/2012
+@version MP11
+@param dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MNT231VCON(dDATAEM,nCONT,cVHESP1,nCONT2,cVHESP2)
+
+	If lTEMCONT .Or. lTEMCON2
+		dDATAEM := dDTDATEM
+	EndIf
+
+	If lTEMCONT
+		nCONT   := nPOSCONT
+		cVHESP1 := cHORALE1
+	EndIf
+
+	If lTEMCON2
+		nCONT2  := nPOSCON2
+		cVHESP2 := cHORALE2
+	EndIf
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231WTIP
+Funcao que carrega a hora de inicio do insumo aplicado.
+@author Elynton Fellipe Bazzo
+@since 03/01/2013
+/*/
+//---------------------------------------------------------------------
+Function MNT231WTIP()
+Return !IsInCallStack("MNTA231MO")
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT231LOCA
+Função que retorna almoxarifado atual do produto estoque de um pneu.
+@author Cezar Augusto Padilha
+@since 13/03/2013
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNT231LOCA(cCodBem)
+	Local cLocal := ''
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	dbSeek(xFilial("ST9")+cCodBem)
+	dbSelectArea("TQS")
+	dbSetOrder(1)
+	dbSeek(xFilial("TQS")+cCodBem)
+	dbSelectArea("TQZ")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQZ")+cCodBem+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS) .and. lContEs
+		cLocal := TQZ->TQZ_ALMOX
+	EndIf
+Return cLocal
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG231OLDES
+Função que carrega estoque atual do pneu.
+@author Cezar Augusto Padilha
+@since 27/03/2013
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function NG231OLDES(cStAtu,cCodEsto,cCodAlmo)
+
+	Local cStDeb := (SuperGetMV("MV_NGSTAEU",.F.)+"/"+SuperGetMV("MV_NGSTAER",.F.)+"/"+SuperGetMV("MV_NGSTARS",.F.)+"/"+;
+	SuperGetMV("MV_NGSTAEN",.F.)+"/"+SuperGetMV("MV_NGSTEST",.F.))
+	Local aRet := {'','',''}
+
+	Default cCodAlmo := Space(TAMSX3('B1_LOCPAD')[1])
+
+	If cStAtu $ cStDeb
+		If !Empty(cCodEsto)
+
+			dbSelectArea("TQS")
+			dbSetOrder(1)
+			dbSeek(xFilial("TQS")+ST9->T9_CODBEM)
+
+			dbSelectArea("TQZ")
+			dbSetOrder(1)
+			dbSeek(xFilial("TQZ")+ST9->T9_CODBEM+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS)
+
+			If (AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. NGSEEK('SB1',cCodEsto,1,"B1_LOCALIZ") == "S")
+				aRet := MNT600LOCA(cCodEsto,cCodAlmo)
+			Else
+				If !Empty(TQZ->TQZ_ALMOX)
+					aRet := {cCodEsto,TQZ->TQZ_ALMOX,""}
+				Else
+					aRet := MNT600LOCA(cCodEsto,cCodAlmo)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+Return aRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerTpCont
+Verifica o tipo do contador do bem em questão
+@author Lucas Guszak
+@since 16/12/13
+@version MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Static Function fVerTpCont()
+
+	Local lRet := .T.
+
+	If ST9->T9_TEMCONT == "S"
+		lRet := .T.
+	ElseIf ST9->T9_TEMCONT == "P" .Or. ST9->T9_TEMCONT == "I"
+		lContPai := .T.
+		lRet := .F.
+	Else
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerBemPai
+Verifica o bem pai da estrutura de acordo com a data e hora informados
+OBS.: SOMENTE CONTADOR 1, FICA PEDENTE TRATAMENTO CONTADOR 2
+@author Lucas Guszak
+@since 17/12/13
+@version MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Static Function fVerBemPai(oPanel)
+
+	Local aAreaST9 := ("ST9")->(GetArea())
+
+	//-------------------------
+	// cBemPai - Bem em questao
+	// cPaiEst - Pai do cBemPai
+	//-------------------------
+
+	//Somente verifica apos de data e hora preenchidos
+	If !Empty(dDTDATEM) .And. cHORALE1 != "  :  "
+
+		DbSelectArea("ST9")
+		DbSetOrder(1)
+		If DbSeek(xFilial("ST9")+cBEM)
+
+			//Verifica se o tipo do contador do bem
+			If ST9->T9_TEMCONT == "P" .Or. ST9->T9_TEMCONT == "I"
+
+				//Preenche com o pai da estrutura
+				cPaiEst := NGBEMPAI(ST9->T9_CODBEM,dDTDATEM,cHORALE1)
+
+				DbSelectArea("ST9")
+				DbSetOrder(1)
+				If	DbSeek(xFilial("ST9")+If(Empty(cPaiEst),cBEM,cPaiEst))
+
+					lPai		:= If(Empty(cPaiEst),.F.,.T.)
+					lTEMCONT	:= If(  ST9->T9_TEMCONT == "S" , .T. , .F. )
+
+					cPaiEst := ST9->T9_CODBEM
+					cBEMNOM := Trim(ST9->T9_NOME)
+					cPaiFor := Trim(ST9->T9_CODFAMI)
+					cFORNOM := Trim(NGSEEK("ST6",ST9->T9_CODFAMI,1,"ST6->T6_NOME"))
+					cPaiMod := Trim(ST9->T9_TIPMOD)
+					cDESMOD := Trim(NGSEEK("TQR",ST9->T9_TIPMOD,1,"TQR->TQR_DESMOD"))
+
+					oSayBem:SetText( OemtoAnsi(If(lPai,STR0219,STR0005)) ) //Bem Pai ## Bem
+
+					//Atualiza Objeto
+					oSayBem:CtrlRefresh()
+
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If !lTEMCONT
+		nPOSCONT := 0
+	EndIf
+
+	RestArea(aAreaST9)
+
+Return .T.
+
+//-------------------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT2312CNT
+Valida se:
+1) Existe o segundo contador
+2) Se existe, verifica se é permitido desativar o mesmo, e retorna se está ou não ativado.
+
+@author Maicon André Pinheiro
+@since 30/03/2017
+@return bool lRet
+@param lDtvSgCnt  - Verifica se é possível desativar segundo contador
+	   cTQN_Frota - Frota que está validada.
+@version P12
+/*/
+//-------------------------------------------------------------------------------------------
+Static Function MNT2312CNT(cFilVld,lDtvSgCnt,cTQN_Frota)
+
+	Local lRet := .F. //Não existe segundo contador ou está desativado.
+
+	dbSelectArea("TPE")
+	dbSetOrder(1)
+	If dbSeek(cFilVld + cTQN_Frota)
+		lRet := IIf(lDtvSgCnt, TPE->TPE_SITUAC == "1", .T.)
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA231CCB
+Carrega o valor do contador do bem se o campo estiver bloqueado
+
+@param cCobBem: Código do bem
+@param dData: Data
+@param cHora: Hora
+@author Wexlei Silveira
+@since 07/06/2016
+@version MP11
+@return True
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA231CCB(cCobBem, dData, cHora)
+
+	If FindFunction("NGBlCont") .And. !NGBlCont( cCobBem )
+		nPOSCONT := NGTpCont(cCobBem, dData, cHora)
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldBloq
+Valida produto em inventário
+
+@param cCodProd, string, código do produto
+@param cCodAlmo, string, código do almoxarifado
+@author Maria Elisandra de Paula
+@since26/04/21
+@return boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fVldBloq( cCodProd, cCodAlmo )
+
+	Local lRet := .T.
+	Local aArea := SB1->( GetArea() )
+
+	If !Empty( cCodProd ) .And. !Empty( cCodAlmo )
+
+		dbSelectArea('SB1')
+		dbSetOrder(1)
+		If dbSeek( xFilial( 'SB1' ) + cCodProd )
+
+			If BlqInvent( cCodProd, cCodAlmo, dDTDATEM )
+
+				Help( '' , 1, 'BLQINVENT',, cCodProd + ' / ' + cCodAlmo, 1, 11 )
+				lRet := .F.
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet

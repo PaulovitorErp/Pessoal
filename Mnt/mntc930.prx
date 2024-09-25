@@ -1,0 +1,402 @@
+#INCLUDE "mntc930.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC930
+Consulta gerencial do Custo das O.S. (Intervalo ano)
+@author Inacio Luiz Kolling 
+@since  19/03/98
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC930() 
+
+	//+------------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		   |
+	//+------------------------------------------------------------------------+
+	
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+	Local oTmpTbl1
+	
+	Private cCadastro := OemToAnsi(STR0001) //"Custo das O.S. por Servico no Ano de "
+	Private totalc,nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1,nFol
+	Private nTempo,nSem
+
+	Store 0.00 To totalc,nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1,nFol
+	Store 0    To nTempo,nSem
+	
+	Private vVETHORAS := {}
+	
+	
+	Private cTRB  := GetNextAlias() 
+	Private cTRBV := GetNextAlias() 
+
+	aRotina := {{STR0002 ,"AxPesqui" , 0 , 1},; //"Pesquisar"
+				{STR0003 ,"NGCAD01"  , 0 , 2}} 	//"Visualizar"
+
+	cCadastro := OemToAnsi(cCadastro)
+	//+--------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros                         |
+	//| mv_par01     // De ano                                       |
+	//| mv_par02     // Ate ano seguinte                             |
+	//| mv_par03     // De  Serviço                                  |
+	//| mv_par04     // Ate Serviço                                  |
+	//| mv_par05     // De Centro Custo                              |
+	//| mv_par06     // Ate Centro Custo                             |
+	//+--------------------------------------------------------------+
+	
+	If !Pergunte("MNT93G",.T.)
+		Return
+	EndIf
+
+	nMV_PAR01 := MV_PAR01
+	nMV_PAR02 := MV_PAR02  
+	nMV_PAR03 := MV_PAR03
+	nMV_PAR04 := MV_PAR04
+	nMV_PAR05 := MV_PAR05
+	nMV_PAR06 := MV_PAR06
+
+	aDBF := {{"SERVICO" , "C", 06,0} ,;
+   			 {"NOMESER" , "C", 40,0} ,;
+			 {"ANOUM"   , "N", 12,2} ,;
+			 {"ANODOIS" , "N", 12,2}}
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices 
+	oTmpTbl1:AddIndex( "Ind01" , {"SERVICO"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	Processa({|| C930PRCO()})   // STJ & STS - HISTORICO
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+
+	Define Dialog oDlg1 From 6,0 To 34,100 Title cCadastro+str(nMV_PAR01,4)+STR0008+ str(mv_par02,4)
+	@ 04,020 Button STR0009 Of oDlg1 Size 40,09 Pixel Action (C930GRAFI()) //"&Grafico"
+	@ 04,060 Button STR0010 Of oDlg1 Size 40,09 Pixel Action (C930PRINT()) //"&Imprimir"
+
+	@ 1,0.3   Listbox Fields SERVICO                           ,;
+	NOMESER                           ,;
+	Transform(ANOUM,"@E 999,999.99")  ,;
+	Transform(ANODOIS,"@E 999,999.99") ;
+	FieldSizes 50,200,100,100              ;
+	Size 388,195                           ;
+	HEADERS STR0011                       ,; //"Servico "
+	STR0012                       ,;         //"Nome do Servico"
+	STR0013+" "+str(nMV_PAR01,4)  ,;         //"Ano "
+	STR0013+" "+str(nmv_par02,4)             //"Ano "
+	Activate Dialog oDlg1
+
+	oTmpTbl1:Delete()
+
+	DbSelectArea("STJ")
+	DbSetOrder(01)
+
+	//+-----------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                          |
+	//+-----------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C930PRCO
+Processa as O.S. atual e O.S. historico 
+@author Inacio Luiz Kolling
+@since   /06/97
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C930PRCO()
+
+	cCONDSTJ := 'STJ->TJ_TIPOOS = "B"'
+	cCONDSTJ += ' .And. STJ->TJ_SITUACA == "L"'
+	cCONDSTJ += ' .And. (STJ->TJ_SERVICO >= nMV_PAR03 .And. STJ->TJ_SERVICO <= nMV_PAR04)'
+	cCONDSTJ += ' .And. (STJ->TJ_CCUSTO >= nMV_PAR05 .And. STJ->TJ_CCUSTO <= nMV_PAR06)'
+
+	cCONDSTS := 'STS->TS_TIPOOS = "B"'
+	cCONDSTS += ' .And. STS->TS_SITUACA == "L"'
+	cCONDSTS += ' .And. (STS->TS_SERVICO >= nMV_PAR03 .And. STS->TS_SERVICO <= nMV_PAR04)'
+	cCONDSTS += ' .And. (STS->TS_CCUSTO >= nMV_PAR05 .And. STS->TS_CCUSTO <= nMV_PAR06)'
+
+	DMV_PAR01 := CTOD('01/01/'+STR(nMV_PAR01))
+	DMV_PAR02 := CTOD('31/12/'+STR(nMV_PAR02))
+
+	DbSelectArea("STL")
+	DbSetOrder(06)
+	DbSeek(xFilial("STL")+DTOS(DMV_PAR01),.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STT")
+	DbSetOrder(05)
+	DbSeek(xFilial("STT")+DTOS(DMV_PAR01),.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	DbSelectArea("STL")
+	ProcRegua(nReg)
+	While !Eof() .And. STL->TL_FILIAL == xfilial("STL") .And. STL->TL_DTINICI <= DMV_PAR02
+
+		IncProc()
+		If Alltrim(STL->TL_SEQRELA) <> "0" .And. STL->TL_CUSTO > 0
+
+			DbSelectArea("STJ")
+			DbSetOrder(01)
+			If DbSeek(xfilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+				If &(cCONDSTJ)
+					C930GRAVA(STJ->TJ_SERVICO,STL->TL_DTINICI,STL->TL_CUSTO)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STL")
+		DbSkip()
+	End
+
+	DbSelectArea("STT")
+	While !Eof() .And. xFilial("STT") == STT->TT_FILIAL .And. STT->TT_DTINICI <= DMV_PAR02
+
+		IncProc()
+		If Alltrim(STT->TT_SEQRELA) <> "0" .And. STT->TT_CUSTO > 0
+			DbSelectArea("STS")
+			DbSetOrder(01)
+			If DbSeek(xfilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+				If &(cCONDSTS)
+					C930GRAVA(STS->TS_SERVICO,STT->TT_DTINICI,STT->TT_CUSTO)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STT")
+		DbSkip()
+	End
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C930GRAVA
+Grava no arquivo auxiliar
+@author  Inacio Luiz Kolling 
+@since 06/12/2016
+@version undefined
+@param VSERVICO, , descricao
+@param VDTINICI, , descricao
+@param nCusto, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C930GRAVA(VSERVICO,VDTINICI,nCusto)
+	DbSelectArea(cTRB)
+	If !DbSeek(VSERVICO)
+		(cTRB)->(DbAppend())
+		(cTRB)->SERVICO := VSERVICO
+		(cTRB)->NOMESER := NGSEEK('ST4',VSERVICO,1,'T4_NOME')
+		If Year(VDTINICI) = nMV_PAR01
+			(cTRB)->ANOUM := nCusto
+		Else
+			(cTRB)->ANODOIS := nCusto
+		EndIf
+	Else
+		If Year(VDTINICI) = nMV_PAR01
+			(cTRB)->ANOUM   := (cTRB)->ANOUM + nCusto
+		Else
+			(cTRB)->ANODOIS := (cTRB)->ANODOIS + nCusto
+		EndIf
+	EndIf
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C930GRAFI
+Grafico Custo das O.S. por Servico
+@author Inacio Luiz Kolling
+@since 06/12/2016
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C930GRAFI()
+
+	Local oTmpTbl2
+	
+	DbselectArea(cTRB)
+	Dbgotop()
+	If Reccount() = 0
+		nDel := Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico..."###"ATENCAO"
+		Return .T.
+	EndIf
+
+	cTilucen := cCadastro+str(nMV_PAR01,4)+ STR0008+str(mv_par02,4) //" e "
+
+	//ARQUIVO DE DADOS
+	aDBF3 := {{"CODIGO" , "C", 10,0} ,;
+			  {"NOMECOD", "C", 30,0} ,;
+			  {"VALOR1" , "N", 12,2} ,;
+			  {"VALOR2" , "N", 12,2}}
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Index
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbselectArea(cTRB)
+	DbGotop()
+	While !Eof()
+
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->SERVICO
+		(cTRBV)->NOMECOD := Substr((cTRB)->NOMESER,1,15)
+		(cTRBV)->VALOR1  := (cTRB)->ANOUM
+		(cTRBV)->VALOR2  := (cTRB)->ANODOIS
+
+		DbselectArea(cTRB)
+		Dbskip()
+
+	End
+
+	// 1- linha titulo do grafico (janela)
+	// 2- linha titulo da direita do grafico
+	// 3- linha titulo superior do grafico
+	// 4- linha titulo da direita do grafico
+	// 5- linha titulo da inferior do grafico
+	// 6- linha series do grafico
+	// 7- leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8- alias doa arquivo temporario com os dados /ou
+	// 9- matriz com os dados
+
+	vCRIGTXT := NGGRAFICO(" "+cTilucen," ",cTilucen,STR0015,STR0016,;
+	{str(nMV_PAR01,4),str(nMV_PAR02,4)},"A",(cTRBV))
+
+	oTmpTbl2:Delete()
+
+	DbselectArea(cTRB)
+	DbGotop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C930PRINT
+Impressao do Custo das O.S. por Servico 
+@author Inacio Luiz Kolling 
+@since 06/12/2016
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C930PRINT()
+
+	Local cString    := (cTRB)
+	Local cDesc1     := cCadastro+str(nMV_PAR01,4)+STR0008+str(mv_par02,4)
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTC930"
+
+	Private aReturn  := { STR0019, 1,STR0020, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "M"
+	Private cPerg    := "MNT93G"
+	Private nomeprog := "MNTC930"
+
+	DbSelectArea(cTRB)
+	If Reccount() = 0
+		nDel := Help(" ",1,"NGTDADIMP") //"Nao existem dados para imprimir..."###"ATENCAO"
+		Return .T.
+	EndIf
+
+	//+--------------------------------------------------------------+
+	//| Envia controle para a funcao SETPRINT                        |
+	//+--------------------------------------------------------------+
+	
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| C930Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C930Imp
+Chamada do Relatório  
+@author Inacio Luiz Kolling
+@since 26/06/97
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param titulo, , descricao
+@param tamanho, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function C930Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	
+	//+--------------------------------------------------------------+
+	//| Contadores de linha e pagina                                 |
+	//+--------------------------------------------------------------+
+	Private li := 80
+	Private Cabec1 := STR0022+str(nMV_PAR01,4)+ STR0023+str(mv_par02,4) //"  Servico   Nome do Servico                                 Ano "###"        Ano "
+	Private Cabec2 := ' '
+	m_pag := 1
+
+	//+--------------------------------------------------------------+
+	//| Verifica se deve comprimir ou nao                            |
+	//+--------------------------------------------------------------+
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	/*
+	************************************************************************************************************************************
+	*<empresa>                                                                                                        Folha..: xxxxx   *
+	*SIGA /<nome .04                                 <     titulo do relatorio    >                                   DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                Emissao: dd/mm/aa*
+	************************************************************************************************************************************
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	************************************************************************************************************************************
+	Servico   Nome do Servico                                Ano 9999         Ano 9999
+	************************************************************************************************************************************
+	XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  999.999.999,99  999.999.999,99
+	XXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  999.999.999,99  999.999.999,99
+
+	*/
+
+	//+--------------------------------------------------------------+
+	//| Define o indice de leitura do arquivo de Bens                |
+	//+--------------------------------------------------------------+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+	While !(cTRB)->(Eof())
+
+		IncRegua()
+
+		NGSOMALI(58)
+		@li,002 Psay (cTRB)->SERVICO
+		@li,012 Psay (cTRB)->NOMESER
+		@li,054 Psay (cTRB)->ANOUM    Picture '@E 999,999,999.99'
+		@li,070 Psay (cTRB)->ANODOIS  Picture '@E 999,999,999.99'
+
+		(cTRB)->(DbSkip())
+
+	End
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+	DbGotop()
+Return Nil

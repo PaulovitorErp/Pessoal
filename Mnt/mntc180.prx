@@ -1,0 +1,299 @@
+#INCLUDE "mntc180.ch"
+#INCLUDE "PROTHEUS.CH"
+
+Static lRel12133 := GetRpoRelease() >= '12.1.033'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC180
+Onde se usa manutencao padrao
+@author Inacio Luiz Kolling
+@since 21/09/98
+@version undefined
+@param lPerg, logical, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC180(lPerg)
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local rotc180 := aRotina
+	Local aAlias := {}
+	Local cSavRegua
+	Local oTempTable // Tabela Temporaria
+	Local aPesq := {}
+
+	//+--------------------------------------------------------------+
+	//| Define o cabecalho da tela de baixas                         |
+	//+--------------------------------------------------------------+
+
+	aRotina := {{ STR0001 ,"MNTC180PE" ,0, 1},;    //"Pesquisar"
+				{ STR0002 ,"MNTC180VI" ,0, 2},;    //"Visualizar"
+				{ STR0003 ,"MNCTAR180" ,0, 3 ,0}}  //"Tarefas"
+
+	cCadastro := OemToAnsi(STR0004) //"Consulta Manutencao"
+
+	// A partir do release 12.1.33, o parâmetro MV_NGMNTFR será descontinuado
+	// Haverá modulo específico para a gestão de Frotas no padrão do produto
+	Private lFrota := IIf( FindFunction('MNTFrotas'), MNTFrotas(), GetNewPar('MV_NGMNTFR','N') == 'S' )
+	Private lTipMod := lRel12133 .Or. lFrota
+	Private cSavtela
+	Private conshisto := .t.
+	Private consprogr := 'MNTC600'
+
+	Private lmostra    := .T.
+	Private cMESTRE    := "STF"
+
+	Private cTRBF := GetNextAlias() //Alias da Tabela
+
+	cCadastro := OemToAnsi(STR0005) //"Manutencao"
+
+	vPerg := If(lPerg = Nil,.t.,.f.)
+
+	If vPerg
+		Return
+	Else
+		MV_PAR01 := M->TPF_CODFAM
+		MV_PAR02 := M->TPF_SERVIC
+		MV_PAR03 := M->TPF_SEQREL
+		If lTipMod
+			MV_PAR04 := M->TPF_TIPMOD
+		EndIf
+	EndIf
+
+	aDBF := {;
+				{"TF_CODBEM" , "C", 16,0},;
+				{"TF_NOMBEM" , "C", 30,0},;
+				{"TF_SERVICO", "C", 06,0},;
+				{"TF_NOMSER ", "C", 30,0},;
+				{"TF_SEQRELA", "C", 03,0},;
+				{"TF_CODAREA", "C", 06,0},;
+				{"TF_TIPO"   , "C", 03,0},;
+				{"REG"       , "N", 05,0};
+			}
+
+	//Intancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRBF, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"TF_CODBEM","TF_SERVICO","TF_SEQRELA"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aFIELD := {{STR0006 ,"TF_CODBEM"  ,"C",16,0,"@!"},; //"Bem"
+			   {STR0007 ,"TF_NOMBEM"  ,"C",30,0,"@!"},; //"Nome do Bem"
+			   {STR0008 ,"TF_SERVICO" ,"C",6,0,"@!"},;  //"Servico"
+			   {STR0009 ,"TF_NOMSER " ,"C",30,0,"@!"},; //"Nome do Servico"
+			   {STR0010 ,"TF_SEQRELA" ,"C",3,0,"@!"},;  //"Sequencia"
+			   {STR0011 ,"TF_CODAREA" ,"C",6,0,"@!"},;  //"Area"
+			   {STR0012 ,"TF_TIPO"    ,"C",3,0,"@!"} }  //"Tipo"
+
+	DbSelectArea("ST9")
+	DbSetorder(4)
+	cFIL := xfilial('ST9')
+
+	If DbSeek(xfilial('ST9')+MV_PAR01)
+		Processa({|| C180STFPRO()})
+	EndIf
+
+	DbSelectArea(cTRBF)
+	DbGotop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , { STR0006 + " + " + STR0008 + " + " + STR0010, {{"","C" , 255 , 0 ,"","@!"} }} ) // Indices de pesquisa
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRBF)
+	oBrowse:SetFields(aFIELD)
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	Set Key VK_F12  To // Desativa tecla F12
+
+	oTempTable:Delete() // Delete tabela temporaria
+
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+	//+--------------------------------------------------------------+
+	//| Recupera a Ordem Original do arquivo principal               |
+	//+--------------------------------------------------------------+
+	DbSelectArea("ST6")
+	DbSetOrder(1)
+	aRotina := aClone(rotc180)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C180STFPRO
+Processa o STF
+@author Inacio Luiz Kolling
+@since -
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C180STFPRO()
+	
+	Local lSkipST9
+	Local aAreaTPF  := TPF->( GetArea() )
+	Local lTipTodos := lRel12133 .And. MV_PAR04 == Padr('*', Len(TPF->TPF_TIPMOD))
+	
+	ProcRegua(0)
+	
+	DbSelectArea("TPF")
+	DbSetorder(4) // TPF_FILIAL+TPF_CODFAM+TPF_TIPMOD+TPF_SERVIC+TPF_SEQREL
+
+	DbSelectArea("ST9")
+	DbSeek(xfilial("ST9")+MV_PAR01)
+	
+	While ST9->( !Eof() ) .And. ST9->T9_FILIAL == cFIL .And. ST9->T9_CODFAMI == MV_PAR01
+
+		IncProc()
+		
+		lSkipST9 := .F.
+		
+		If lTipMod
+			If lTipTodos
+				If !Empty(ST9->T9_TIPMOD)
+					lSkipST9 := TPF->( DbSeek( xFilial("TPF") + ST9->T9_CODFAMI + ST9->T9_TIPMOD + MV_PAR02 + MV_PAR03 ) )
+				EndIf
+			Else
+				lSkipST9 := ST9->T9_TIPMOD != MV_PAR04
+			EndIf
+			
+			If lSkipST9
+				dbSelectArea("ST9")
+				dbSkip()
+				Loop
+			EndIf
+		EndIf
+
+		DbSelectArea("STF")
+		DbSetorder(1)
+		If DbSeek(xfilial("STF")+ST9->T9_CODBEM+MV_PAR02)
+
+			While !Eof() .And. STF->TF_FILIAL == xFilial("STF");
+			.And. ST9->T9_CODBEM == STF->TF_CODBEM .And. STF->TF_SERVICO == MV_PAR02
+
+				If STF->TF_PADRAO = "S" .And. STF->TF_SEQREPA == MV_PAR03
+
+					nregstf := Recno()
+					DbSelectArea(cTRBF)
+					(cTRBF)->(DbAppend())
+					(cTRBF)->TF_CODBEM  := stf->tf_codbem
+					(cTRBF)->TF_NOMBEM  := Substr(st9->t9_nome,1,30)
+					(cTRBF)->TF_SERVICO := stf->tf_servico
+					(cTRBF)->TF_SEQRELA := stf->tf_seqrela
+					(cTRBF)->TF_CODAREA := stf->tf_codarea
+					(cTRBF)->TF_TIPO    := stf->tf_tipo
+					(cTRBF)->REG        := nregstf
+
+					DbSelectArea("ST4")
+					DbSetorder(1)
+					If DbSeek(xfilial("ST4")+STF->TF_SERVICO)
+						(cTRBF)->TF_NOMSER := Substr(st4->t4_nome,1,30)
+					EndIf
+
+				EndIf
+				DbSelectArea("STF")
+				DbSkip()
+			End
+		EndIf
+		DbSelectArea("ST9")
+		Dbskip()
+	End
+	
+	RestArea(aAreaTPF)
+	
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC180PE
+Monta a caixa de pesquisa Bem + Servico + Sequencia
+@author Elisangela Costa
+@since 11/08/05
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC180PE()
+	cRCODBEM := Space(LEN(STF->TF_CODBEM))
+	cRCSERVI := Space(LEN(STF->TF_SERVICO))
+	cSEQC180 := Space(LEN(STF->TF_SEQRELA))
+
+	Define MsDialog oDlg0C80 From 300,120 To 435,370 Title OemToAnsi(STR0001) Pixel
+
+	@ 0.5,1 say OemtoAnsi(STR0006)
+	@ 0.5,5 Msget cRCODBEM  Picture '@!' SIZE 75,10 F3 "ST9"
+
+	@ 1.5,1 say OemtoAnsi(STR0008)
+	@ 1.5,5 Msget cRCSERVI  Picture '@!' SIZE 50,10 F3 "ST4"
+
+	@ 2.5,1 say OemtoAnsi(STR0010)
+	@ 2.5,5 Msget cSEQC180  Picture '@!' SIZE 30,10
+
+	@ 4.7,20 BUTTON "&OK" SIZE 30,10 ACTION MNTC180POS()
+
+	Activate MsDialog oDlg0C80 Centered
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC180POS
+Posiciona no registro
+@author Elisangela Costa
+@since 11/08/2005
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC180POS()
+	DbSelectArea(cTRBF)
+	DbSeek(cRCODBEM+cRCSERVI+cSEQC180)
+	oDlg0C80:End()
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC180VI
+Visualiza manutencao
+@author Elisangela Costa
+@since 11/08/2005
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC180VI()
+
+	cCadas    := cCadastro
+
+	dbSelectArea("STF")
+	dbSetOrder(01)
+	STF->(DbSeek(xFilial("STF")+(cTRBF)->TF_CODBEM+(cTRBF)->TF_SERVICO+(cTRBF)->TF_SEQRELA))
+
+	NG120FOLD("STF",Recno(),2)
+
+	dbSelectArea(cTRBF)
+	cCadastro := cCadas
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNCTAR180
+Permite consulta informacoes referentes as tarefas da manut.
+@author Elisangela Costa
+@since 11/08/2005
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNCTAR180()
+
+	dbSelectArea("STF")
+	dbSetOrder(01)
+	STF->(DbSeek(xFilial("STF")+(cTRBF)->TF_CODBEM+(cTRBF)->TF_SERVICO+(cTRBF)->TF_SEQRELA))
+
+	MNTCTARE()
+
+	dbSelectArea(cTRBF)
+Return .t.

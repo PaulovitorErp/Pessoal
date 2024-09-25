@@ -1,0 +1,1069 @@
+#INCLUDE "MNTA125.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA125
+Cadastro de Ocorrências da Manutenção, possibilitando o relacionemtno
+com as familias de bens.
+
+@author Guilherme Freudenburg
+@since 15/05/2018
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA125()
+
+	Local oBrowse  // Variavel para montagem do browser.
+	Local aArea125 // Cria bacukp da área posicionada.
+
+	If MNTAmiIn( '19', '35', '95' )
+		
+		aArea125 := GetArea()
+
+		Private cCadastro := OemtoAnsi(STR0009+" - "+UPPER(STR0011))//"Ocorrências" - "PROB.X CAU.X SOL"
+
+		If FindFunction('U_MNTA1251') .And. !FindFunction('U_MNTA125')
+			MsgInfo(STR0028,STR0027) //'O ponto de entrada "MNTA1251" deve ser alterado conforme o novo modelo. Por favor pesquisar a ISSUE DNG-4 no TDN.'##'PONTO DE ENTRADA'
+		EndIf
+
+		oBrowse := FWMBrowse():New()
+		oBrowse:SetAlias("ST8") // Alias da tabela utilizada.
+		oBrowse:SetMenuDef("MNTA125") // Nome do fonte onde esta a função MenuDef.
+		oBrowse:SetDescription(STR0009) // Descrição do browse ## 'Ocorrências'.
+		oBrowse:Activate() // Ativação do objeto.
+
+		RestArea(aArea125) // Retorna Backup da área salva.
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Opções de menu
+
+@author Guilherme Freudenburg
+@since 15/05/2018
+@return aRotina - Estrutura
+	[n,1] Nome a aparecer no cabecalho
+	[n,2] Nome da Rotina associada
+	[n,3] Reservado
+	[n,4] Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+		6 - Alteração sem inclusão de registros
+		7 - Cópia
+		8 - Imprimir
+	[n,5] Nivel de acesso
+	[n,6] Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Private	aRotina := {}
+
+	ADD OPTION aRotina Title STR0005 Action 'VIEWDEF.MNTA125' OPERATION 2 ACCESS 0 // 'Visualizar'
+	ADD OPTION aRotina Title STR0006 Action 'VIEWDEF.MNTA125' OPERATION 3 ACCESS 0 // 'Incluir'
+	ADD OPTION aRotina Title STR0007 Action 'VIEWDEF.MNTA125' OPERATION 4 ACCESS 0 // 'Alterar'
+	ADD OPTION aRotina Title STR0008 Action 'VIEWDEF.MNTA125' OPERATION 5 ACCESS 3 // 'Excluir'
+	ADD OPTION aRotina Title STR0011 Action 'AR125RELAC'      OPERATION 4 ACCESS 0 // 'Prob.x Cau.x Sol.'
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Criação do modelo de dados MVC
+
+@author Guilherme Freudenburg
+@since 15/05/2018
+@return oModel
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	Local oModel
+	Local oStructST8 := FWFormStruct(1, 'ST8', /*bAvalCampo*/,/*lViewUsado*/)
+	Local oStructTUS := FWFormStruct(1, 'TUS', /*bAvalCampo*/,/*lViewUsado*/)
+	Local aRelac     := {} // Receberá campos para relacionamento entre a tabela pai e filho.
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New('MNTA125',/*bPre*/,/*bPos*/,{|oModel| CommitInfo(oModel) }, /*bCancel*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields('MNTA125_ST8', /*cOwner*/, oStructST8, /*bPreValidacao*/, /*bPosValidacao*/, /*bCarga*/ )
+    oModel:AddGrid('MNTA125_TUS','MNTA125_ST8',oStructTUS,/*bLinePre*/, /*bLinePost*/,/*bPre - Grid Inteiro*/,/*bPos - Grid Inteiro*/,/*bLoad - Carga do modelo manualmente*/)  
+
+	// Determina que o preenchimento da Grid não é obrigatório.
+	oModel:GetModel('MNTA125_TUS'):SetOptional(.T.)
+
+	//Faz a relação entre a tabela PAI(ST8) e FILHO(TUS).
+	aAdd(aRelac,{'TUS_FILIAL', "xFilial('TUS')" })    
+    aAdd(aRelac,{'TUS_CODOCO','T8_CODOCOR'})
+    aAdd(aRelac,{'TUS_TIPO'  ,'T8_TIPO'   })
+    oModel:SetRelation('MNTA125_TUS', aRelac, TUS->(IndexKey(1))) // IndexKey -> quero a ordenação e depois filtrado
+
+	// Determina a chave primária da tabela ST8.
+	oModel:SetPrimaryKey({'T8_FILIAL','T8_CODOCOR','T8_TIPO'})
+
+	// Determina que será permitido incluir apenas uma linha com o mesmo código na GRID.
+	oModel:GetModel('MNTA125_TUS'):SetUniqueLine({"TUS_CODOCO"})    
+	 
+	// Adiciona a descricao do Modelo de Dados
+	oModel:SetDescription(STR0009) //'Ocorrências'
+	oModel:GetModel('MNTA125_ST8'):SetDescription(STR0009) //'Ocorrências'
+	oModel:GetModel('MNTA125_TUS'):SetDescription(STR0009) //'Dados da Ocorrência'
+
+	// Remove os campos da tela.
+	oStructTUS:RemoveField('TUS_CODOCO')
+	oStructTUS:RemoveField('TUS_TIPO')
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Criação da visão MVC  
+
+@author Guilherme Freudenburg
+@since 15/05/2018
+@return oView
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	// Cria um objeto de Modelo de Dados baseado no ModelDef do fonte informado
+	Local oModel     := FWLoadModel('MNTA125')
+	// Cria a estrutura a ser usada na View
+	Local oStructST8 := FWFormStruct(2, 'ST8')
+
+	// Cria o objeto de View
+	Local oView := FWFormView():New()
+
+	Local oTmpTbl1 
+
+	// Define qual o Modelo de dados será utilizado
+	oView:SetModel(oModel)
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField('VIEW_ST8', oStructST8, 'MNTA125_ST8')
+
+	//--------------------------------------------------------------
+	//Cria markbrowse para manipular TUS separadamente
+	//--------------------------------------------------------------
+	oView:AddOtherObject( "VIEW_MARK", { |oPanel| fCreateObj( oPanel, @oTmpTbl1 ) } ,;
+		{|oPanel| fKillObj( oPanel, @oTmpTbl1 ) }/*bDeActivate*/, /*bRefresh*/)
+
+	//Adiciona um titulo para o formulário
+	oView:EnableTitleView('VIEW_ST8',STR0009) // "Dados da Ocorrência"
+
+	// Criar um "box" horizontal para receber os elementos da view
+	oView:CreateHorizontalBox( 'SUPERIOR', 30 )
+	oView:CreateHorizontalBox( 'INFERIOR', 70 )
+
+	// Relaciona o ID da View com o "box" para exibicao
+	oView:SetOwnerView( 'VIEW_ST8' , 'SUPERIOR' )
+	oView:SetOwnerView( 'VIEW_MARK', 'INFERIOR' )
+
+	//Força o fechamento da janela na confirmação
+	oView:SetCloseOnOk({||.T.})
+
+	//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn(oView)
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} CommitInfo
+Gravação após confirmação da tela de cadastro
+
+@author Guilherme Freudenburg
+@since 14/05/2018
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function CommitInfo(oModel)
+
+	Local cCodCor := ""
+	Local cTipo := ""
+
+	If oModel:GetOperation() == MODEL_OPERATION_DELETE //Excluir
+
+		cCodCor := oModel:GetValue('MNTA125_ST8','T8_CODOCOR')
+		cTipo := oModel:GetValue('MNTA125_ST8','T8_TIPO')
+
+		//----------------------------------------------
+		//Exclui relacionamento Causa X Solução
+		//----------------------------------------------
+		DbSelectArea("TQ5")
+		DbSetOrder(1)
+		If DbSeek( xFilial("TQ5") + cCodCor + cTipo )
+			While !EoF() .And. TQ5->TQ5_FILIAL == xFILIAL("TQ5") ;
+				.And. TQ5->TQ5_CODOCO == cCodCor .And. TQ5->TQ5_TIPO == cTipo
+
+				RecLock("TQ5",.F.)
+				TQ5->( DbDelete() )
+				TQ5->( MsUnlock() )
+				
+				TQ5->( DbSkip() )
+			EndDo
+		EndIf
+	EndIf
+
+	FwFormCommit( oModel )// Grava dados do Model(ST8 e TUS)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} AR125RELAC
+Permite fazer o relacionamento de problemas x possiveis causas e de causas x possiveis solucoes
+
+@return Nil
+
+@sample
+AR125RELAC("ST8",0,3)
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function AR125RELAC(cAlias,nReg,nOpcx)
+
+	Local i
+	Local nSavRecST8 := ST8->(RecNo())
+	//Variavies locais de informacoes
+	Local cTipoDes, cNomeOc
+	//Variaveis de objeto
+	Local oDlgOco,oMenu, oPnlPai
+	Local oPnlTop, oPnlGet
+	Local lRet := .T.
+	//Variavies de GetDados
+	Local cKeyGet, cWhileGet
+	Local aNoFields := {}
+	Private aCols, aHeader
+	Private oGetOco
+	//Variavies privates de informacoes
+	Private cTipoR, cCodOco
+	Private cRetF3     := ''
+	Private cMntGenFun := 'MNT125F3()'
+	Private cMntGenRet := 'MNTT125F3()'
+
+	If ST8->T8_TIPO <> "C" .And. ST8->T8_TIPO <> "P"
+		ShowHelpDlg(STR0013,{STR0022},2,{STR0012},2)//"NÃO CONFORMIDADE"###"Ocorrência inválida."###"A ocorrência não é do tipo problema ou causa."
+		lRet := .F.
+	EndIf
+
+	If lRet
+		If ST8->T8_TIPO = "P"
+			cTipoDes := STR0014//"Problema"
+		ElseIf ST8->T8_TIPO = "C"
+			cTipoDes := STR0015//"Causa"
+		Else
+			cTipoDes := STR0016//"Solução"
+		EndIf
+
+		cCodOco := ST8->T8_CODOCOR
+		cNomeOc := ST8->T8_NOME
+		cTipoR  := ST8->T8_TIPO
+
+		//-----------------------------------------------
+		// Verifica se existe algum dado no arquivo
+		//-----------------------------------------------
+		dbSelectArea(cAlias)
+		dbSetOrder(01)
+		For i := 1 To FCount()
+			x   := "M->" + FieldName(i)
+			&x. := FieldGet(i)
+		Next i
+
+		cALIAS := "TQ5"
+
+		// Monta a GetDados
+		aAdd(aNoFields,"TQ5_FILIAL")
+		aAdd(aNoFields,"TQ5_CODOCO")
+		aAdd(aNoFields,"TQ5_TIPO")
+
+		cKeyGet	  := "ST8->T8_CODOCOR+ST8->T8_TIPO"
+		cWhileGet := "TQ5->TQ5_FILIAL == '"+xFilial("TQ5")+"' .AND. TQ5->TQ5_CODOCO+TQ5->TQ5_TIPO == '"+ST8->T8_CODOCOR+ST8->T8_TIPO+"'"
+
+		dbSelectArea("TQ5")
+		dbSetOrder(1)
+		FillGetDados( nOpcx, "TQ5", 1, cKeyGet, {|| }, {|| .T.},aNoFields,,,,;
+		{|| NGMontaAcols("TQ5",&cKeyGet,cWhileGet)})
+
+		If Empty(aCols) .Or. nOpcx == 3
+			aCols :=BLANKGETD(aHeader)
+		Endif
+
+		PutFileInEof("TQ5")
+		aSize := MsAdvSize(,.f.,430)
+		nOpca := 0
+		Define MsDialog oDlgOco Title STR0009+" - "+UPPER(STR0011) From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel //'Ocorrências'
+		oPnlPai := TPanel():New(00,00,,oDlgOco,,,,,,aSize[5],aSize[6],.F.,.F.)
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oPnlTop := TPanel():New(00,00,,oPnlPai,,,,,,aSize[5],40,.F.,.F.)
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+		@ 6    , 6.4  Say OemtoAnsi(STR0017) of oPnlTop Pixel//"Ocorrência"
+		@ 4    , 40   MsGet cCodOco Size 30,10 When .F. of oPnlTop Pixel
+		@ 6    , 80   Say OemToAnsi(STR0018) of oPnlTop Pixel//"Nome Ocorr."
+		@ 4    , 120  MsGet cNomeOc Size 150,10 When .F. of oPnlTop Pixel
+		@ 23.6 , 6.4  Say OemToAnsi(STR0019) of oPnlTop Pixel//"Tipo Carac."
+		@ 21.6 , 40   MsGet cTipoDes Size 30,10 When .F. of oPnlTop Pixel
+
+		oPnlGet := TPanel():New(00,00,,oPnlPai,,,,,,aSize[5],aSize[6],.F.,.F.)
+		oPnlGet:Align := CONTROL_ALIGN_ALLCLIENT
+		dbSelectArea("TQ5")
+		oGetOco := MsNewGetDados():New(0,0,1000,1000,IIF(!INCLUI .and. !ALTERA,0,GD_INSERT+GD_UPDATE+GD_DELETE),;
+		{|| fLinOkOco() },{|| .T. },,,,9999,,,,oPnlGet,aHeader,aCols)
+		oGetOco:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oPnlTop:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPnlTop)}
+
+		Activate MsDialog oDlgOco On Init EnchoiceBar(oDlgOco,{||nOpca:=1,If(fTudOkOco(),oDlgOco:End(),nOpca := 0)},{|| oDlgOco:End()}) centered
+
+	EndIf
+	dbSelectArea("ST8")
+	dbSetOrder(01)
+	dbGoto(nSavRecST8)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTudOkOco
+Validacao de toda a GetDados
+
+@return Nil
+
+@sample
+fTudOkOco()
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fTudOkOco()
+
+	Local lRet := .T.
+
+	aCols := aClone(oGetOco:aCols)
+
+	lRet := fLinOkOco(.T.)
+
+	If  lRet
+		fGravOco()
+	EndIf
+Return lRet
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fLinOkOco
+Faz validacao da linha informada
+
+@return Nil
+
+@sample
+fLinOkOco(.F.)
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fLinOkOco(lFim)
+
+	Local nX := 0
+	Local nAt := oGetOco:nAt
+	Local nPOS := aSCAN( aHEADER, {|x| Trim( Upper(x[2]) ) == "TQ5_CODOCR"})
+	Local cCODOCR := aCols[nAt][nPos]
+	Local lRet  := .T.
+
+	Default lFim := .F.
+
+	If !aCols[nAt][Len(Acols[nAt])] .and. Empty(aCOLS[nAt][nPOS])
+		lRet := .F.
+	EndIf
+
+	If nPOS > 0
+		For nX := 1 To Len(aCOLS)
+			If nx <> nAt .and. !aCols[nAt][Len(Acols[nAt])]
+				If !Empty(aCOLS[nX][nPOS]) .And. aCOLS[nX][nPOS] == cCODOCR .and. !aCOLS[nX][Len(aCOLS[nX])]
+					Help(" ",1,"JAEXISTINF")
+					lRet := .F.
+				EndIf
+			EndIf
+		Next
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} M125CHKOCO
+Faz validacao do codigo da ocorrencia relacionada
+
+@return Nil
+
+@sample
+M125CHKOCO()
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function M125CHKOCO()
+
+	Local nAt      := oGetOco:nAt
+	Local nTIPOCOR := aSCAN(aHEADER,{|x| Trim(Upper(x[2])) == "TQ5_TIPOR"})
+	Local lRet     := .T.
+
+	dbSelectArea("ST8")
+	If dbSeek(xFilial("ST8")+M->TQ5_CODOCR)
+		If cTipoR == "P" .And. ST8->T8_TIPO <> "C"
+			//"NÃO CONFORMIDADE"###"Ocorrência inválida."###"Para problemas, relacione apenas ocorrências do tipo causa."
+			ShowHelpDlg(STR0013,{STR0022},2,{STR0020},2)
+			lRet := .F.
+		ElseIf cTipoR == "C" .And. ST8->T8_TIPO <> "S"
+			//"NÃO CONFORMIDADE"###"Ocorrência inválida."###"Para causas, relacione apenas ocorrências do tipo solução."
+			ShowHelpDlg(STR0013,{STR0022},2,{STR0021},2)
+			lRet := .F.
+		EndIf
+	EndIf
+
+	aCols[nAt,nTIPOCOR] := ST8->T8_TIPO
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravOco
+Grava as ocorrencias relacionadas
+
+@return Nil
+
+@sample
+fGravOco()
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fGravOco()
+
+	Local nx := 0
+	Local j := 0
+	Local nCODOCOR := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TQ5_CODOCR" })
+	Local nTIPOREL := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TQ5_TIPOR"  })
+
+	dbSelectArea("TQ5")
+	If Len(aCols) > 0
+		//Coloca os deletados por primeiro
+		aSORT(aCols,,, { |x, y| x[Len(aCols[1])] .and. !y[Len(aCols[1])] } )
+
+		For nx := 1 to Len(aCols)
+			If !Empty(aCols[nx][nCODOCOR]) .and. !aCols[nx][Len(aCols[nx])]
+				dbSelectArea("TQ5")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TQ5")+cCodOco+cTipoR+aCols[nx][nCODOCOR]+aCols[nx][nTIPOREL])
+					RecLock("TQ5",.F.)
+				Else
+					RecLock("TQ5",.T.)
+				EndIf
+				For j:=1 to FCount()
+					If "_FILIAL"$Upper(FieldName(j))
+						FieldPut(j, xFilial("TQ5"))
+					ElseIf "_CODOCO"$Upper(FieldName(j))
+						FieldPut(j, cCodOco)
+					ElseIf "TQ5_TIPO" == AllTrim(Upper(FieldName(j)))
+						FieldPut(j, cTipoR)
+					ElseIf (nPos := aScan(aHeader, {|x| Trim(Upper(x[2])) == Trim(Upper(FieldName(j))) }) ) > 0
+						FieldPut(j, aCols[nX][nPos])
+					Endif
+				Next j
+				TQ5->(MsUnlock())
+			Elseif !Empty(aCols[nx][nCODOCOR])
+				dbSelectArea("TQ5")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TQ5")+cCodOco+cTipoR+aCols[nx][nCODOCOR]+aCols[nx][nTIPOREL])
+					RecLock("TQ5",.F.)
+					dbDelete()
+					TQ5->(MsUnlock())
+				EndIf
+				dbSelectArea("TQ5")
+				Loop
+			EndIf
+		Next nx
+
+		//Deleta registros que foram alterados
+		dbselectarea("TQ5")
+		dbsetorder(01)
+		dbseek(xFilial("TQ5")+cCodOco+cTipoR)
+		While !Eof() .And. TQ5->TQ5_FILIAL == xFilial("TQ5") .And. TQ5->TQ5_CODOCO == cCodOco;
+		.And. TQ5->TQ5_TIPO == cTipoR
+
+			If aScan( aCols,{|x| x[nCODOCOR]+x[nTIPOREL] == TQ5->TQ5_CODOCR+TQ5->TQ5_TIPOR .AND. !x[Len(x)]}) == 0
+				RecLock("TQ5",.F.)
+				dbDelete()
+				TQ5->(MsunLock())
+			EndIf
+			dbSkip()
+		End
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT125VOC
+Filtra pesquisas e valida campo de acordo com a família
+Esta funcao e' utilizada em filtros de SXB e em Valid's de campos
+
+@return Nil
+
+@sample
+MNT125VOC("ST8")
+
+@author Jackson Machado
+@since 05/02/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MNT125VOC(cAlias,lSX3)
+	Local nPos
+	Local aArea    := GetArea()
+	Local cFami    := ""
+	Local cTipOs   := ""
+	Local l098     := .F.
+	Local l080     := .F.
+	Local lValid   := .F.
+	Local lRet     := .T.
+	Default cAlias := "ST8"
+	Default lSX3   := .F.
+
+	If IsInCallStack( 'MNTA435' )
+		dbSelectArea( 'STJ' )
+		dbSetOrder( 1 )
+		msSeek( FwxFilial('STJ') + (cAliOS435)->TJ_ORDEM )
+		cTipOs := STJ->TJ_TIPOOS
+		lValid := .T.
+	Elseif IsInCallStack("MNTA415")
+		nPos := aSCAN(aHeVal,{|x| TRIM(UPPER(x[2])) == "TPL_ORDEM"})
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		dbSeek(xFilial("STJ")+aCoVal[n125Pos,nPos])
+		cTipOs := STJ->TJ_TIPOOS
+		lValid := .T.
+	Elseif IsInCallStack("MNTA080")
+		l080   := .T.
+		lValid := .T.
+		cFami  := M->T9_CODFAMI
+		cTipOs := "B"
+	Elseif IsInCallStack("MNTA098")
+		l098 := .T.
+		nPos := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TZ_CODBEM"})
+		dbSelectArea("ST9")
+		dbSetOrder(1)
+		dbSeek(xFilial("ST9")+aCols[n,nPos])
+		lValid := .T.
+		cTipOs := "B"
+	Elseif IsInCallStack("MNTA400")
+		lValid := .T.
+		cTipOs := STJ->TJ_TIPOOS
+	Endif
+
+	If lValid .AND. cTipOs == "B"
+		If l098
+			cFami := ST9->T9_CODFAMI
+		ElseIf !l080
+			cFami := NGSEEK("ST9",STJ->TJ_CODBEM,1,"T9_CODFAMI")
+		Endif
+
+		If cAlias == "TQ5"
+			dbSelectArea("ST8")
+			dbSetOrder(1)
+			dbSeek(xFilial("ST8")+TQ5->TQ5_CODOCR+TQ5->TQ5_TIPOR)
+		Endif
+
+		// Como a TUS é uma tabela que registra ocorrencias que não irao ser utilizadas pela família,
+		// se achar a ocorrencia relacionada a familia na TUS retorna .F.
+		dbSelectArea("TUS")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TUS")+ST8->T8_CODOCOR+ST8->T8_TIPO+cFami)
+			If lSX3
+				MsgInfo(STR0026,STR0025)//"A ocorrência informada não está relacionada à família."###"ATENÇÃO"
+			Endif
+			lRet := .F.
+		Endif
+	Endif
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT125Fil
+Monta filtro para SXB de ocorrencias
+
+@author Alexandre Santos
+@since 25/05/18
+
+@return cReturn, Caracter, Filtro para execução do SXB
+/*/
+//---------------------------------------------------------------------
+Function MNT125Fil()
+
+	Local aArea   := GetArea()
+	Local cFamily := ""
+	Local cReturn := ""
+	Local cType   := ""
+	Local cCampo  := ReadVar()
+
+	Do Case
+		Case cCampo == 'M->TN_CODOCOR'
+			cType := 'P'
+		Case cCampo == 'M->TN_CAUSA'
+			cType := 'C'
+		Case cCampo == 'M->TN_SOLUCAO'
+			cType := 'S'
+	EndCase
+
+	If IsInCallStack( 'MNTA435' )
+		dbSelectArea( 'STJ' )
+		dbSetOrder( 1 )
+		msSeek( FwxFilial('STJ') + (cAliOS435)->TJ_ORDEM )
+	ElseIf IsInCallStack("MNTA415")
+		nPos := aSCAN(aHeVal,{|x| TRIM(UPPER(x[2])) == "TPL_ORDEM"})
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		dbSeek(xFilial("STJ")+aCoVal[n125Pos,nPos])
+	EndIf
+
+	cFamily := Posicione('ST9', 1, xFilial('ST9') + STJ->TJ_CODBEM, 'T9_CODFAMI')
+
+	/*
+		Deve-se filtrar as ocorrencias que estejam contidas na tabela ST8 e
+		não contidas na tabela TUS
+	*/
+	cReturn := "@"
+	cReturn +=	"T8_FILIAL = " + ValToSQL(xFilial("ST8"))
+	cReturn +=	" AND T8_TIPO = " + ValToSQL(cType)
+	cReturn +=	" AND D_E_L_E_T_ <> '*'"
+	cReturn +=	" AND T8_CODOCOR NOT IN ( "
+	cReturn +=							" SELECT TUS_CODOCO FROM " + RetSQLName("TUS")
+	cReturn +=							" WHERE TUS_FILIAL = " + ValToSQL(xFilial("TUS"))
+	cReturn +=							" AND TUS_TIPO = " + ValToSQL(cType)
+	cReturn +=							" AND TUS_FAMILI = " + ValToSQL(cFamily)
+	cReturn +=							" AND D_E_L_E_T_ <> '*')"
+
+	RestArea(aArea)
+
+Return (cReturn)
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT125F3
+Responsável pelo F3 do campo Ocorre. Rel. de acordo
+ com o campo de Tipo Causa.
+
+@author Guilherme Freudenburg
+@since 14/05/2018
+@return lRet, Lógica, Retorna verdadeiro, mediante a montagem da consulta padrão.
+/*/
+//---------------------------------------------------------------------
+Function MNT125F3()
+
+	Local lRet := .F.
+
+	If M->T8_TIPO == "C"
+		lRet := ConPad1( ,,, 'STV',,, .F. )
+	Else
+		lRet := ConPad1( ,,, 'STN',,, .F. )
+	EndIf
+
+	If lRet
+		cRetF3 := ST8->T8_CODOCOR
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTT125F3
+Responsável pelo retorno do F3 do campo
+ Ocorre. Rel (Função MNT125F3)
+
+@author Guilherme Freudenburg
+@since 14/05/2018
+@return Caracter, Retorno do valor do da consulta padrão.
+/*/
+//---------------------------------------------------------------------
+Function MNTT125F3()
+Return IIf( Type('cRetF3') != 'U', cRetF3, Space( TAMSX3('T8_CODOCOR')[1] ) )
+
+//--------------------------------------------------------
+/*/{Protheus.doc} fCreateObj
+Cria markbrowse
+
+@author Maria Elisandra de Paula
+@since 16/05/2019
+@param oPanel, objeto, onde o markbrowse será apresentado
+@param oTmpTbl1, objeto, tabela temporária
+/*/
+//--------------------------------------------------------
+Static Function fCreateObj( oPanel, oTmpTbl1 )
+
+	Local oModel := FWModelActive()
+	Local oModelTUS := oModel:GetModel('MNTA125_TUS')
+	Local nOperation := oModel:GetOperation()
+	Local aFieldsMk := {}
+	Local aPesq := {}
+	Local oMark := FWMarkBrowse():New()
+	Local cMarca := GetMark()
+	Local cTrbTemp := GetNextAlias()
+
+	aAdd( aFieldsMk,{ "Família", "T6_CODFAMI","C", TAMSX3( "T6_CODFAMI" )[1], 0})
+	aAdd( aFieldsMk,{ "Nome", "T6_NOME","C", TAMSX3( "T6_NOME" )[1],0})
+
+	aAdd( aPesq , { "Família", { { "T6_CODFAMI", "C", TAMSX3('T6_CODFAMI')[1], 0, "", "@!" } } } )
+	aAdd( aPesq , { "Nome", { { "T6_NOME", "C", TAMSX3('T6_NOME')[1], 0, "", "@!" } } } )
+
+	//-------------------------------------------------
+	//Cria tabela temporária baseada na ST6 - famílias
+	//-------------------------------------------------
+	fCreateTrb( cTrbTemp, cMarca, nOperation, @oTmpTbl1 )
+
+	//--------------------------
+	//Cria markbrowse
+	//--------------------------
+	oMark := FWMarkBrowse():New()
+	oMark:SetOwner( oPanel )
+	oMark:SetAlias( cTrbTemp )
+	oMark:SetFields( aFieldsMk )
+	oMark:SetFieldMark( "OK" )
+	oMark:SetMark( cMarca, cTrbTemp, "OK" )
+	oMark:SetAllMark({|| fAllMark( cTrbTemp, oMark ) })
+	oMark:SetAfterMark( {|| fAfterMark( oModelTUS, cTrbTemp, oMark ) } )
+	oMark:SetDescription( STR0029 ) //"Famílias da Ocorrência"
+	oMark:SetTemporary( .T. )
+	oMark:SetMenuDef( "" )
+	oMark:DisableConfig()
+	oMark:DisableFilter()
+	oMark:DisableReport()
+	oMark:SetSeek( .T., aPesq )
+	oMark:Activate()
+
+	//----------------------------------------------------
+	//desabilita browse nas operações visualizar e excluir
+	//----------------------------------------------------
+	If cValtochar( nOperation ) $ "15" 
+		oMark:Disable( .T. )
+	EndIf
+
+Return .T.
+
+//--------------------------------------------------------
+/*/{Protheus.doc} fAfterMark
+Ações ao marcar e desmarcar
+
+@author Maria Elisandra de Paula
+@since 16/05/2019
+@param oModelTUS, objeto, modelo da grid TUS
+@param cTrbTemp, string, nome da trb
+@param [lUpdView], boolean, se deve atualizar a view
+/*/
+//--------------------------------------------------------
+Static Function fAfterMark( oModelTUS, cTrbTemp, oMark, lUpdView )
+
+	Local nLenGrid := oModelTUS:Length()
+	Local oView
+
+	Default lUpdView := .T.
+
+	//--------------------------------------------------------------
+	//pesquisa todos os registros da grid, inclusive os deletados
+	//--------------------------------------------------------------
+	If ( oModelTUS:SeekLine({{ "TUS_FAMILI", (cTrbTemp)->T6_CODFAMI }}, .T. ))
+		If oModelTUS:IsDeleted() 
+			oModelTUS:UndeleteLine()//quando registro deletado, recupera
+		Else
+			oModelTUS:DeleteLine() //quando registro não está deletado, deleta
+		EndIf
+	Else
+		If ( nLenGrid == 0 ) ; //se a grid não contém linhas
+			.Or. ( nLenGrid > 1 ) ;
+			.Or. ( nLenGrid == 1 .And. !Empty( oModelTUS:GetValue( "TUS_FAMILI" ))) //grid com apenas uma linha carregada
+			oModelTUS:AddLine() //Adiciona uma linha vazia
+			nLenGrid++
+		EndIf
+		
+		//Carrega a linha da grid com a familia marcada/desmarcada
+		oModelTUS:GoLine( nLenGrid )
+		oModelTUS:SetValue( "TUS_FAMILI", (cTrbTemp)->T6_CODFAMI )
+	EndIf
+
+	If lUpdView
+		//---------------------------------------------------
+		//Define que view foi modificada
+		//para não causar msg de formulário não alterado
+		//---------------------------------------------------	
+		oView := FWViewActive()
+		oView:SetModified( .T. )
+	EndIf
+
+Return .T.
+
+//----------------------------------------
+/*/{Protheus.doc} fAllMark
+Ações ao marcar/desmarcar tudo
+
+@author Maria Elisandra de Paula
+@since 16/05/2019
+@param cTrbTemp, string, nome da trb
+@param oMark, objeto, browse de marcação
+
+/*/
+//----------------------------------------
+Static Function fAllMark( cTrbTemp, oMark )
+
+	Local oModel := FWModelActive()
+	Local oModelTUS := oModel:GetModel('MNTA125_TUS')
+	Local lRet := .T.
+	Local oView
+
+	//ação de marcar/desmarcar somente se campo do cabeçalho estiver preenchido
+	If !Empty( oModel:GetValue( "MNTA125_ST8", "T8_CODOCOR" ) )
+		
+		oMark:AllMark()
+		oMark:Refresh()
+
+		dbSelectArea( cTrbTemp )
+		dbGotop()
+		While !Eof()
+			//Atualiza grid TUS de acordo com markbrowse
+			fAfterMark( oModelTUS, cTrbTemp, oMark, .F. )
+			(cTrbTemp)->( dbSkip() )
+		EndDo
+
+		//--------------------------------------------------
+		//Define que view foi modificada
+		//para não causar msg de formulário não alterado
+		//--------------------------------------------------		
+		oView := FWViewActive()
+		oView:SetModified( .T. )
+		
+		dbSelectArea( cTrbTemp )
+		dbGotop()		
+	EndIf
+
+Return lRet
+
+//--------------------------------------------------------
+/*/{Protheus.doc} fCreateTrb
+Cria tabela temporária baseada na ST6
+
+@author Maria Elisandra de Paula
+@since 17/05/2019
+@param cTrbTemp, string, nome da tabela temporária
+@cMarca string, marca utilizada no merkbrowse
+@nOperation, numerico, operação corrente
+@oTmpTbl1, tabela temporária
+
+/*/
+//--------------------------------------------------------
+Static Function fCreateTrb( cTrbTemp, cMarca, nOperation, oTmpTbl1 )
+
+	Local aFieldsTrb := {}
+	Local cQuery := ""
+	Local cCodOcor := IIF( nOperation == 3, Space( TamSx3("T8_CODOCOR")[1] ), ST8->T8_CODOCOR )
+
+	aAdd( aFieldsTrb, { "T6_CODFAMI", "C", TamSx3( "T6_CODFAMI" )[1], 0, ""})
+	aAdd( aFieldsTrb, { "T6_NOME", "C", TamSx3( "T6_NOME" )[1], 0, "" })
+	aAdd( aFieldsTrb, { "OK", "C", 2,0, "" })
+
+	oTmpTbl1 := FWTemporaryTable():New( cTrbTemp, aFieldsTrb )
+	oTmpTbl1:AddIndex( "01", { "T6_CODFAMI" })
+	oTmpTbl1:AddIndex( "02", { "T6_NOME" })
+
+	oTmpTbl1:Create()
+
+	cQuery:= " SELECT T6_CODFAMI, T6_NOME,"
+	//As famílias cadastradas na TUS virão desmarcadas
+	cQuery+= " CASE WHEN TUS_FAMILI <> ' ' THEN ' ' "
+	cQuery+= " ELSE " + ValToSQL( cMarca ) + "END AS OK "
+	cQuery+= " FROM " + RetSqlname( "ST6" ) + " ST6 "
+	cQuery+= " LEFT JOIN " + RetSqlname( "TUS" ) + " TUS " 
+	cQuery+= "  ON ST6.T6_CODFAMI = TUS.TUS_FAMILI "
+	cQuery+= "  AND TUS.TUS_FILIAL = " + ValToSQL( xFilial( "TUS" ) )
+	cQuery+= "  AND TUS.D_E_L_E_T_ <> '*'"
+	cQuery+= "  AND TUS.TUS_CODOCO = " + ValToSQL( cCodOcor )
+	cQuery+= " WHERE ST6.D_E_L_E_T_ <> '*'
+	cQuery+= " AND ST6.T6_FILIAL = " + ValToSQL( xFilial( "ST6" ) )
+	cQuery+= " ORDER BY T6_CODFAMI "
+
+	SqlToTrb( cQuery, aFieldsTrb, cTrbTemp )
+
+Return
+
+//--------------------------------------------------------
+/*/{Protheus.doc} fKillObj
+Ações após desativar objeto
+
+@author Maria Elisandra de Paula
+@since 22/05/2019
+@param oPanel, objeto, onde foi criado markbrowse
+@param oTmpTbl1, objeto, tabela temporária
+/*/
+//--------------------------------------------------------
+Static Function fKillObj( oPanel, oTmpTbl1 )
+
+	If ValType( oPanel ) == "O"
+		oPanel:FreeChildren()
+	EndIf
+
+	If Valtype( oTmpTbl1 ) == "O"
+		oTmpTbl1:Delete()
+	EndIf
+
+Return .T.
+
+//--------------------------------------------------------
+/*/{Protheus.doc} MNT125VLD
+Função para realizar as validações de campo da tabela ST8
+
+@author João Ricardo Santini Zandoná
+@since 05/12/2022
+@param cCampo, caractere, campo a ser validado
+@return logico, retorna o resultado da validação realizada
+
+/*/
+//--------------------------------------------------------
+Function MNT125VLD( cCampo )
+
+	Local cAlsST8 := ''
+	Local cQryST8 := ''
+	Local oModel  := FWModelActive()
+	Local lReturn := .T.
+
+	Do Case
+		
+		Case cCampo == 'T8_CODOCOR'
+
+			lReturn := ExistChav( 'ST8', M->T8_CODOCOR )
+
+		Case cCampo == 'T8_TIPO'
+
+			If IsInCallStack( 'MNTA098' ) .And. M->T8_TIPO != 'C'
+					
+				Help( NIL, 1, STR0013, NIL, STR0030, 1, 0, NIL, NIL, NIL, NIL, NIL, { STR0031 } ) // "NÃO CONFORMIDADE" ### "Na rotina Rodízio de Estrutura só é permitido uso de ocorrências do tipo Causa" ### "Inclua uma ocorrência do tipo Causa"
+				lReturn := .F.
+
+			EndIf
+		
+			If lReturn
+				
+				lReturn := Pertence( 'CPS' )
+			
+			EndIf
+
+		Case cCampo == 'T8_TAREFA'
+
+			If !Empty( FWFldGet( 'T8_TAREFA' ) )
+
+				If SuperGetMv( 'MV_NGTARGE', .F., '2' ) == '1'
+
+					lReturn := ExistCPO( 'TT9', FWFldGet( 'T8_TAREFA' ), 1 )
+				
+				Else
+					
+					lReturn := ExistCPO( 'ST5', FWFldGet( 'T8_TAREFA' ), 5 )
+
+				EndIf
+
+				If lReturn .And. oModel:GetOperation() == MODEL_OPERATION_UPDATE .And.;
+					!Empty( ST8->T8_TAREFA ) .And. ST8->T8_TAREFA != FWFldGet( 'T8_TAREFA' )
+
+					cAlsST8 := GetNextAlias()
+
+					cQryST8 := 	"SELECT " 
+					cQryST8 += 		"1 "
+					cQryST8 += 	"FROM " 
+					cQryST8 += 		RetSQLName( 'STN' ) + " STN "
+					cQryST8 += 	"WHERE "
+					cQryST8 += 		"STN.TN_FILIAL = " + ValToSQL( FWxFilial( 'STN' ) ) + " AND "
+					cQryST8 += 		"STN.TN_TAREFA = " + ValToSQL( ST8->T8_TAREFA )     + " AND "
+					cQryST8 += 		"STN.D_E_L_E_T_ = ' ' "
+
+					cQryST8 += 	"UNION " 
+
+					cQryST8 += 	"SELECT " 
+					cQryST8 += 		"1 "
+					cQryST8 += 	"FROM " 
+					cQryST8 += 		RetSQLName( 'STU' ) + " STU "
+					cQryST8 += 	"WHERE "
+					cQryST8 += 		"STU.TU_FILIAL = " + ValToSQL( FWxFilial( 'STU' ) ) + " AND "
+					cQryST8 += 		"STU.TU_TAREFA = " + ValToSQL( ST8->T8_TAREFA )     + " AND "
+					cQryST8 += 		"STU.D_E_L_E_T_ = ' ' "
+
+					dbUseArea( .T., 'TOPCONN', TcGenQry( , , ChangeQuery( cQryST8 ) ), cAlsST8, .T., .T. )
+
+					If (cAlsST8)->( !EoF() )
+
+						Help( , , 'T8_TAREFA', , STR0032 +; // Não será possível alterar a tarefa,
+							STR0033 + Chr( 10 ) + Chr( 13 ) +; // visto que existe um vinculo com algum destes registros:
+							STR0034 + Chr( 10 ) +; // Ocorrências - STN
+							STR0035, 6, 0 ) // Ocorrências Histórico - STU 
+
+						lReturn := .F.
+
+					EndIf
+
+					(cAlsST8)->( dbCloseArea() )
+
+				EndIf
+
+			EndIf
+
+	End Case
+
+Return lReturn
+
+//--------------------------------------------------------
+/*/{Protheus.doc} Mnta125Rel
+Inicializador padrão dos campos ST8.
+@type function
+
+@author Alexandre Santos
+@since 04/08/2023
+
+@param cField , string, Campo a ser inicializado.
+@return string, Conteúdo atribuido ao campo.
+/*/
+//--------------------------------------------------------
+Function Mnta125Rel( cField )
+
+	Local cRet    := ''
+	Local oMod125 := FWModelActive()
+
+	Do Case                                                                                                      
+
+		Case cField == 'T8_NOMETAR'
+
+			If oMod125:GetOperation() == MODEL_OPERATION_UPDATE .And.;
+				!Empty( FWFldGet( 'T8_TAREFA' ) )
+
+				If SuperGetMv( 'MV_NGTARGE', .F., '2' ) == '1'
+
+					cRet := Posicione( 'TT9', 1, FWxFilial( 'ST8' ) +;
+						FWFldGet( 'T8_TAREFA' ), 'TT9_DESCRI' )
+					
+				Else
+						
+					cRet := Posicione( 'ST5', 5, FWxFilial( 'ST5' ) +;
+						FWFldGet( 'T8_TAREFA' ), 'T5_DESCRIC' )
+
+				EndIf
+
+			EndIf
+
+	End Case
+	
+Return cRet

@@ -1,0 +1,272 @@
+#INCLUDE "Mntc270.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC270
+Grafico de Horas X Area de  Manutencao (Oficinas)
+@author Thiago Olis Machado
+@since 15/08/01
+@version undefined
+@obs Revisão técnica em 07/10/2002
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC270()
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Private vVETHORAS := {}
+	Private cPer27G := PadR( "MNT27G", Len(Posicione("SX1", 1, "MNT27G", "X1_GRUPO")) )
+
+	//----------------------------------------------------------------
+	//| Variaveis utilizadas para qarametros!                        |
+	//| mv_par01     // Periodo Inicio                               |
+	//| mv_par02     // Periodo Fim                                  |
+	//| mv_par03     // De Tipo de Manutencao                        |
+	//| mv_par04     // Ate Tipo de Manutencao                       |
+	//| mv_par05     // De Area Manutencao                           |
+	//| mv_par06     // Ate Area de Manutencao                       |
+	//| mv_par07     // De Centro de Custo                           |
+	//| mv_par08     // Ate Centro de Custo                          |
+	//| mv_par09     // Caracteristica (1=Preventiva,2=Corretiva,    |
+	//|                                 3=Outros,4=Todas)            |
+	//----------------------------------------------------------------
+	If Pergunte(cPer27G,.T.)
+		Processa({|lEnd| MNTC270GRA()})
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return Nil
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC270GRA
+Processa as O.S.
+@author Thiago Olis Machado
+@since 15/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC270GRA()
+
+	Local oTmpTbl	//Objeto Tabela Temporária 1
+	Local oTmpTbl2	//Objeto Tabela Temporária 2
+
+	Private aCampos  := {}
+
+	Private cTRB	:= GetNextAlias()//Alias Tabela Temporária 1
+	Private cTRBV	:= GetNextAlias()//Alias Tabela Temporária 2
+
+	aCampos  := {}
+		AAdd(aCAMPOS,{"AREA"  ,"C",06,0})
+		AAdd(aCAMPOS,{"HORAS" ,"N",09,2})
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices
+	oTmpTbl:AddIndex( "Ind01" , {"AREA"} )
+	//Cria a tabela temporaria
+	oTmpTbl:Create()
+
+	Processa({|lEND| MNTC270STL()},STR0006+STR0007) //"Processando Itens das O.S. "// Normais
+	Processa({|lEND| MNTC270STT()},STR0006+STR0008) //"Processando Itens das O.S. "// Normais
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	If Reccount() == 0
+		Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico."###"ATENCAO"
+		oTmpTbl:Delete()//Deleta Tabela Temporária 1
+		Return .T.
+	EndIf
+
+	aDBF3 := {{"CODIGO" , "C", 010,0},;
+			  {"NOMECOD", "C", 100,0},;
+			  {"VALOR1" , "N", 012,2}}
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Cria Indices
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	ProcRegua(LastRec())
+	While !Eof()
+		IncProc()
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->AREA
+		(cTRBV)->NOMECOD := NGSEEK('STD',(cTRB)->AREA,1,'TD_NOME')
+		(cTRBV)->VALOR1  := NGRHODSEXN((cTRB)->HORAS,"D") //nHoras
+
+		DbselectArea(cTRB)
+		Dbskip()
+	End
+
+	cTITUD := STR0003 + DtoC(MV_PAR01) + STR0004 + DtoC(MV_PAR02)  //"Periodo de "###" Ate "
+	cTITUD += " - "+NGRETSX1BOX(cPer27G,"09")
+	//----------------------------------------------------------------
+	//| Alteracao 17/08/2006                                         |
+	//| Ricardo Dal Ponte                                            |
+	//----------------------------------------------------------------
+	// Incluso o parametro "4", para gerar o grafico com padrao pizza
+	vCRIGTXT := NGGRAFICO(" "+STR0009," " ," ",STR0005+" "+cTITUD," ",{"Área"},"A",(cTRBV),,"4")
+
+	oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+
+	oTmpTbl:Delete()//Deleta Tabela Temporária 1
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC270STL
+Processa os insumos (STL)
+@author Inácio Luiz Kolling
+@since 07/10/2002
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC270STL()
+
+	cCONDSTL := 'Alltrim(stl->tl_seqrela) <> "0" .And. stl->tl_tiporeg = "M"'
+
+	cCONDSTJ := 'stj->tj_termino = "S" .And. stj->tj_situaca = "L" .And. stj->tj_tipoos = "B" .And. '
+	cCONDSTJ := cCONDSTJ + '(stj->tj_dtmrfim >= MV_PAR01 .And. stj->tj_dtmrfim <= MV_PAR02) .And. '
+	cCONDSTJ := cCONDSTJ + '(stj->tj_tipo >= MV_PAR03 .And. stj->tj_tipo <= MV_PAR04) .And. '
+	cCONDSTJ := cCONDSTJ + '(stj->tj_codarea >= MV_PAR05 .And. stj->tj_codarea <= MV_PAR06)'
+	cCONDSTJ := cCONDSTJ + ' .And. (stj->tj_ccusto >= MV_PAR07 .And. stj->tj_ccusto <= MV_PAR08)'
+
+	DbSelectArea("STL")
+	DbSetOrder(06)
+	DbSeek(xFilial("STL")+DtoS(MV_PAR01),.T.)
+	ProcRegua(LastRec())
+	While !Eof() .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_DTINICI <= MV_PAR02
+		IncProc()
+		If &(cCONDSTL)
+			DbSelectArea("STJ")
+			DbSetOrder(01)
+			If DbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+				If &(cCONDSTJ) .And. MNC270TPSE(STJ->TJ_SERVICO)
+
+					vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+					STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+					STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+					MNTC270RB(stj->tj_codarea,nQTDHORAS)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STL")
+		DbSkip()
+	End
+	DbSelectArea("STL")
+	DbSetOrder(01)
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC270STT
+Processa os insumos (STT)
+@author Inácio Luiz Kolling
+@since 07/10/2002
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC270STT()
+
+	cCONDSTT := 'Alltrim(stt->tt_seqrela) <> "0" .And. stt->tt_tiporeg = "M"'
+
+	cCONDSTS := 'sts->ts_termino = "S" .And. sts->ts_situaca = "L" .And. sts->ts_tipoos = "B" .And. '
+	cCONDSTS := cCONDSTS + '(sts->ts_dtmrfim >= MV_PAR01 .And. sts->ts_dtmrfim <= MV_PAR02) .And. '
+	cCONDSTS := cCONDSTS + '(sts->ts_tipo >= MV_PAR03 .And. sts->ts_tipo <= MV_PAR04) .And. '
+	cCONDSTS := cCONDSTS + '(sts->ts_codarea >= MV_PAR05 .And. sts->ts_codarea <= MV_PAR06)'
+	cCONDSTS := cCONDSTS + ' .And. (sts->ts_ccusto >= MV_PAR07 .And. sts->ts_ccusto <= MV_PAR08)'
+
+	DbSelectArea("STT")
+	DbSetOrder(05)
+	DbSeek(xFilial("STT")+DtoS(MV_PAR01),.T.)
+	ProcRegua(LastRec())
+	While !Eof() .And. STT->TT_FILIAL == xFilial("STT") .And. STT->TT_DTINICI <= MV_PAR02
+		IncProc()
+		If &(cCONDSTT)
+			DbSelectArea("STS")
+			DbSetOrder(01)
+			If DbSeek(xFilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+				If &(cCONDSTS) .And. MNC270TPSE(STS->TS_SERVICO)
+					vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+					STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+					STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+					MNTC270RB(sts->ts_codarea,nQTDHORAS)
+				Endif
+			Endif
+		Endif
+		DbSelectArea("STT")
+		DbSkip()
+	End
+	DbSetOrder(01)
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC270RB
+Grava arquivo temporario
+@author Inácio Luiz Kolling
+@since 07/10/2002
+@version undefined
+@param cVAREA, characters
+@param nQTD, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTC270RB(cVAREA,nQTD)
+
+	// por que foi bloqueado ????? como fica qdo tipo nao ‚ por hora ???
+	//Calcula as Horas
+	nHORAS := 0
+	//      If (STL->TL_DTFIM - STL->TL_DTINICI) > 0
+	//         nHORAS := ((STL->TL_DTFIM - STL->TL_DTINICI)-1) * 1440
+	//      Endif
+	//      nHORAS := nHORAS + ( HtoM(STL->TL_HOFIM) - HtoM(STL->TL_HOINICI) )
+	//      nHORAS := nHORAS / 60
+
+	If !(cTRB)->(DbSeek(cVAREA))
+		(cTRB)->(DbAppend())
+		(cTRB)->AREA := cVAREA
+	Endif
+	(cTRB)->HORAS := (cTRB)->HORAS + nQTD
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC270TPSE
+Filtra o Tipo de Servico das OS, conforme MV_PAR09
+@author Marcos Wagner Junior
+@since 05/03/2008
+@version undefined
+@param cServico, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNC270TPSE(cServico)
+	Local lRet := .F.
+	Local aOldArea := GetArea()
+
+	If MV_PAR09 = 4
+		Return .T.
+	Endif
+
+	DbSelectArea("ST4")
+	Dbsetorder(1)
+	DbSeek(xFilial("ST4")+cServico)
+
+	DbSelectArea("STE")
+	Dbsetorder(1)
+	DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+
+	If STE->TE_CARACTE == "C" .AND. MV_PAR09 = 2
+		lRet := .T.
+	ElseIf STE->TE_CARACTE == "P" .AND. MV_PAR09 = 1
+		lRet := .T.
+	ElseIf STE->TE_CARACTE == "O" .AND. MV_PAR09 = 3
+		lRet := .T.
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet

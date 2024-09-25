@@ -1,0 +1,2528 @@
+#INCLUDE "Protheus.ch"
+#Include "DbTree.ch"
+#Include "SGAA340.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA340
+Programa para cadastro das Ocorrencias do  Plano Emergencial
+
+@type Function
+@author  Rafael Diogo Richter
+@since   08/11/2005
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SGAA340()
+
+Local aNGBEGINPRM	:= NGBEGINPRM()
+
+SGA340VPPE()
+
+
+Dbselectarea("TBV")
+DbSetOrder(1)
+
+mBrowse( 6,1,22,75,"TBV" )
+
+NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Inc
+Programa para Finalizacao da OS
+
+@type Function
+@author  Rafael Diogo Richter
+@since   12/07/2005
+@param cAlias, caracter, informa a tabela
+@param nRecno, numérico, passa o recno da tabela
+@param nOpcx, numérico, informa qual é a opção utilizada
+@param cCodPla, caracter, informa o número do plano
+@param xPar01, informa qual é a operação
+@return  lOk
+/*/
+//-------------------------------------------------------------------
+Function Sg340Inc(cAlias,nRecno,nOpcx,cCodPla ,xPar01)
+
+	Local lOK := .F.
+	Local nOK := 0
+	Local aPages := {},aTitles:= {}
+	Local nControl := 0
+	Local lGetd := .T.
+	Local aNoFields := {}
+	Local aSize 			:= MsAdvSize( .T. , .F. , 430 )//em pixels inicio dialog/ fim dialog
+	Local oPnl,oPnlTotal,oPnlTop
+	Local oTempTRB
+	Local cLocPla := ""
+
+	Default cCodPla := ""
+
+	Private nFolder := 1
+	Private lVisual := .F.
+	Private dDtOco
+	Private cHora
+	Private cCodOco
+	Private cObserv
+	Private aAviso := {}, aCont := {}
+	Private cPesq    := Space(20)
+	Private oTree 			 // Objeto para montar a arvore
+	Private oEnc01
+	Private cLocal   := Space( Len( TAF->TAF_CODNIV ) ) //Codigo do Nivel da Estrurura para o Filho
+	Private cCodEst  := Space(03) // Codigo da Estrutura toda
+	Private cFolderA := "FOLDER10" // Folder Verde Fechado
+	Private cFolderB := "FOLDER11" // Folder Verde Aberto
+	Private cDesc    := Space( Len( TAF->TAF_NOMNIV ) ) //Descricao do pai da estrutura
+	Private aLocal   := {}
+	Private cPlano, cNivOco := ""
+	Private aHeader := {}, aCols := {}
+	Private aHeadTC5 := {}, aColsTC5 := {}
+	Private aHeadTCI := {}, aColsTCI := {}
+	Private aSVHEADER := {{},{},{},{}}
+	Private aSVCOLS   := {{},{},{},{}}
+	Private oGet03,oGet04
+	Private lSel := .F.
+	Private cGET := ''
+	Private aOrigiTC5 := {}, aOrigiTCI := {}
+	Private vRetS := {}, lRetS := .F.
+	Private oMenu
+	Private aVETINR := {}
+	Private cTRBSGA := GetNextAlias()
+
+	If ValType(xPar01) == "C"
+		cLocPla := xPar01
+	EndIf
+
+	nExec := 0
+
+	vRetS := NGCADICBASE('TCI_CODOCO','A','TCI')
+	lRetS := If(!vRetS[1],.F.,.T.)
+
+	aCampos := {}
+
+	aAdd(aCampos,{"FILIAL"   ,"C",If(FindFunction("FWSizeFilial"),FwSizeFilial(),LEN(TBV->TBV_FILIAL)),0})
+	aAdd(aCampos,{"CODEST"   ,"C",03,0})
+	aAdd(aCampos,{"CODPRO"   ,"C",03,0})
+	aAdd(aCampos,{"DESCRI"   ,"C",60,0})
+	aAdd(aCampos,{"NIVEL"    ,"N",03,0})
+	aAdd(aCampos,{"NIVSUP"   ,"C",03,0})
+	aAdd(aCampos,{"RESPONS"  ,"C",06,0})
+	aAdd(aCampos,{"TIPO"     ,"C",01,0})
+	aAdd(aCampos,{"CODTIPO"  ,"C",16,0})
+	aAdd(aCampos,{"MODSGA"   ,"C",01,0})
+	aAdd(aCampos,{"MODMNT"   ,"C",01,0})
+	aAdd(aCampos,{"MODMDT"   ,"C",01,0})
+	aAdd(aCampos,{"CC"       ,"C",09,0})
+	aAdd(aCampos,{"CENTRAB"  ,"C",06,0})
+	aAdd(aCampos,{"DOCFIL"   ,"C",02,0})
+	aAdd(aCampos,{"DOCTO"    ,"C",16,0})
+	aAdd(aCampos,{"ORDEM"    ,"C",03,0})
+	aAdd(aCampos,{"DELETADO" ,"C",01,0})
+	aAdd(aCampos,{"FOLDERA"  ,"C",08,0})
+	aAdd(aCampos,{"FOLDERB"  ,"C",08,0})
+	aAdd(aCampos,{"CARGO"    ,"C",06,0})
+
+	oTempTRB := FWTemporaryTable():New( cTRBSGA, aCampos )
+	oTempTRB:AddIndex( "1", {"CODEST","NIVSUP"} )
+	oTempTRB:AddIndex( "2", {"CODEST","CODPRO"} )
+	oTempTRB:AddIndex( "3", {"CODEST","NIVSUP","ORDEM"} )
+	oTempTRB:AddIndex( "4", {"CODEST","CODTIPO","NIVSUP","CODPRO"} )
+	oTempTRB:Create()
+
+	Aadd(aTitles,OemToAnsi(STR0004)) //"Processos"
+	Aadd(aPages,"Header 1")
+	nControl++
+	Aadd(aTitles,OemToAnsi(STR0005)) //"Envolvidos"
+	Aadd(aPages,"Header 2")
+	nControl++
+	If lRetS
+		Aadd(aTitles,OemToAnsi(STR0006)) //"Resíduos"
+		Aadd(aPages,"Header 3")
+		nControl++
+	EndIf
+
+	//Define as colunas ( Níveis ) da estrutura
+	DbSelectArea("TAF")
+	DbSetOrder(1)
+	If DbSeek(xFilial("TAF")+'001'+'000')
+	cCodEst := TAF->TAF_CODEST
+	cProc   := TAF->TAF_CODNIV
+	cDesc   := TAF->TAF_NOMNIV
+	cResp   := TAF->TAF_MAT
+	QAA->(dbSeek(xFilial('QAA')+cResp))
+	cNome   := QAA->QAA_NOME
+	lPai    := .F.
+	EndIf
+
+	cProc := '001'
+
+	Define MsDialog oDlg7 Title Oemtoansi(STR0003) From aSize[ 7 ] , 0 To aSize[ 6 ] , aSize[ 5 ] Color CLR_BLACK, CLR_WHITE Of oMainWnd Pixel //"Ocorrências do Plano Emergencial"
+
+	//Panel criado para correta disposicao da tela
+		oPnlTotal := TPanel():New( , , , oDlg7 , , , , , , , , .F. , .F. )
+			oPnlTotal:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oFolder := TFolder():New(6.3,0,aTitles,aPages,oPnlTotal,,,,.F.,.F.,350,220,)
+	oFolder:aDialogs[1]:oFont	:= oDlg7:oFont
+	oFolder:aDialogs[2]:oFont	:= oDlg7:oFont
+	oFolder:Align					:= CONTROL_ALIGN_ALLCLIENT
+	If lRetS
+		oFolder:aDialogs[3]:oFont := oDlg7:oFont
+	EndIf
+
+	aNao := {"TBV_CODPLA",;
+				"TBV_DESPLA"}
+
+	aChoice  := NGCAMPNSX3("TBV",aNao)
+
+	oPnlTop:= TPanel():New( , , , oPnlTotal , , , , , , 0,120 , .F. , .F. )
+				oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	Dbselectarea("TBV")
+	RegToMemory("TBV",(nOpcx == 3))
+	oEnchoice := MsMGet():New("TBV",nRecno,nOpcx,,,,aChoice,,,3,,,,oPnlTop)
+	oEnchoice:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+
+	NGPOPUP(asMenu,@oMenu)
+	oDlg7:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg7)}
+	oEnchoice:oBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg7)}
+
+	//Folder 01
+	oPnl := TPanel():New( , , , oFolder:aDialogs[1] , , , , , , , , .F. , .F. )
+				oPnl:Align := CONTROL_ALIGN_ALLCLIENT
+
+				oPnl2 := TPanel():New( , , , oFolder:aDialogs[1] , , , , , , 0, 20, .F. , .F. )
+					oPnl2:Align := CONTROL_ALIGN_BOTTOM
+	oTree := DbTree():New(000, 000, 153, 335, oFolder:aDialogs[1],,, .T.)
+	oTree:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Processa({|lEnd| Sg340CTrb()},STR0007,STR0008,.T.) //"Aguarde..."###"Criando Arquivo Temporário..."
+	Processa({|lEnd| SgA340Tree(cProc)},STR0007,STR0009,.T.) //"Aguarde..."###"Carregando Estrutura..."
+
+	oTree:blDblClick := { || Sg340DbClick(nOpcx,cLocPla,cCodPla)}
+
+
+	@ 007,008 Bitmap oBmp1 Resource "Folder11" Size 8,8 Pixel Of oPnl2 Noborder When .F.
+	@ 008,018 Say OemToAnsi(STR0010) Size 37,7 Of oPnl2  Pixel //"Processo"
+	@ 007,130 Bitmap oBmp2 Resource "Folder8" Size 8,8 Pixel Of oPnl2 Noborder When .F.
+	@ 008,140 Say OemToAnsi(STR0011) Size 57,7 Of oPnl2 Pixel //"Plano Emergencial"
+	@ 007,265 Bitmap oBmp3 Resource "Folder6" Size 8,8 Pixel Of oPnl2 Noborder When .F.
+	@ 008,275 Say OemToAnsi(STR0012) Size 57,7 Of oPnl2 Pixel //"Ocorrência"
+
+	//Folder 02
+	dbSelectArea("TC5")
+	dbSetOrder(1)
+
+	If Str(nOpcx,1) $ "2/5"
+	oTree:BlDblClick := {||}
+	lGetd := .F.
+	EndIf
+
+	cAllOk := "AllwaysTrue()"
+	cLinOk := "Sg340LinOk('TC5')"
+
+	aHeadTC5 := {}
+	aColsTC5 := {}
+	aAdd(aNoFields, 'TC5_CODOCO')
+	cQuery := " SELECT * FROM "+RetSqlName("TC5")+" TC5 WHERE TC5.TC5_FILIAL = '"+xFilial("TC5")+"' AND TC5.TC5_CODOCO = '"+M->TBV_CODOCO+"'"+;
+				" AND TC5.D_E_L_E_T_ = ' '"
+	FillGetDados( nOpcx, "TC5", 1, xFilial("TC5")+M->TBV_CODOCO, {|| "TC5->TC5_FILIAL + TC5->TC5_CODOCO"}, {|| .T.},aNoFields,,,cQuery,,,@aHeadTC5,@aColsTC5)
+
+	If Empty(aColsTC5) .Or. nOpcx == 3
+	aColsTC5 := BlankGetd(aHeadTC5)
+	EndIf
+
+	aOrigiTC5	:= aClone(aColsTC5)
+	n           := Len(aCOLSTC5)
+	oGet03 := MsNewGetDados():New(005,022,150,302,IIF(!INCLUI.And.!ALTERA,0,GD_INSERT+GD_UPDATE+GD_DELETE),cLinOk,cAllOk,,,,9999,,,,oFolder:aDialogs[2],aHeadTC5,aColsTC5)
+	oGet03:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+	oGet03:oBROWSE:Default()
+	oGet03:oBROWSE:REFRESH()
+
+	//Folder 03
+	If lRetS
+		dbSelectArea("TCI")
+		dbSetOrder(1)
+
+		cAllOk := "AllwaysTrue()"
+		cLinOk := "Sg340LinOk('TCI')"
+
+		aHeadTCI := {}
+		aColsTCI := {}
+		aAdd(aNoFields, 'TCI_CODOCO')
+		cQuery := "SELECT * FROM "+RetSqlName("TCI")+" TCI WHERE TCI.TCI_FILIAL = '"+xFilial("TCI")+"' AND TCI.TCI_CODOCO = '"+M->TBV_CODOCO+"'"+;
+					" AND TCI.D_E_L_E_T_ = ' '"
+		FillGetDados( nOpcx, "TCI", 1, xFilial("TCI")+M->TBV_CODOCO, {|| "TCI->TCI_FILIAL + TCI->TCI_CODOCO"}, {|| .T.},aNoFields,,,cQuery,,,@aHeadTCI,@aColsTCI)
+
+		If Empty(aColsTCI) .Or. nOpcx == 3
+		aColsTCI := BlankGetd(aHeadTCI)
+		EndIf
+
+		aOrigiTCI	:= aClone(aColsTCI)
+		n           := Len(aCOLSTCI)
+		oGet04 := MsNewGetDados():New(005,022,150,302,IIF(!INCLUI.And.!ALTERA,0,GD_INSERT+GD_UPDATE+GD_DELETE),cLinOk,cAllOk,,,,9999,,,,oFolder:aDialogs[3],aHeadTCI,aColsTCI)
+		oGet04:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+		oGet04:oBrowse:Default()
+		oGet04:oBROWSE:REFRESH()
+	EndIf
+
+	Activate Dialog oDlg7 On Init ((EnchoiceBar(oDlg7,{|| lOk:=.T.,If(Sg340Obrig(nOpcx),oDlg7:End(),lOk := .F.)},{|| lOk:= .F.,oDlg7:End()})),If(nOpcx ==3 .And. !Empty(cLocPla),DblClick(cCodPla,cLocPla),Nil)) Centered
+
+	oTempTRB:Delete()
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340TBVNum
+Função para trazer o código auto-numerado.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   01/11/2005
+@return  cOco, caracter, retorna o número do código
+/*/
+//-------------------------------------------------------------------
+Function Sg340TBVNum()
+
+Local cAlias := Alias()
+Local cNum := GETSXENUM( "TBV", "TBV_CODOCO")
+
+If ExistBlock("CRIASXE")
+
+	cNum := ExecBlock("CRIASXE",.F.,.F.,{cAlias,"TBV_CODOCO","TBV",1})
+
+EndIf
+
+Return cNum
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG340CTRB
+Carrega as informacoes para gravar no TRB.
+
+@type Function
+@author  Thiago Olis Machado
+@since   06/09/2004
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340CTrb()
+
+	Local ny,nx,nh,cCodNiv := ''
+
+	dbSelectArea("TAF")
+	dbSetOrder(1)
+	dbSeek(xFilial("TAF"))
+	While !Eof() .And. TAF->TAF_FILIAL == xFilial("TAF")
+		dbSelectArea(cTRBSGA)
+		RecLock(cTRBSGA,.T.)
+		For ny := 1 To Fcount()-4
+			If ny  <> FCount()
+				DbSelectArea("TAF")
+				nx := "TAF->" + FieldName(ny)
+				DbSelectArea(cTRBSGA)
+				nh := "(cTRBSGA)->" + FieldName(ny)
+				&nh. := &nx.
+			EndIf
+		Next ny
+		MsUnLock(cTRBSGA)
+
+		dbSelectArea("TAF")
+		dbSkip()
+	End
+
+	dbSelectArea(cTRBSGA)
+	dbSetOrder(2)
+	dbGoBottom()
+	cCodNiv := (cTRBSGA)->CODPRO
+
+	dbSelectArea("TAF")
+	dbSetOrder(1)
+	dbSeek(xFilial("TAF"))
+	While !Eof() .And. TAF->TAF_FILIAL == xFilial("TAF")
+		IncProc() // Incrementa regua de processamento
+		DbSelectArea("TBC")
+		DbSetOrder(2)
+		DbSeek(xFilial('TBC')+TAF->TAF_CODEST+TAF->TAF_CODNIV)
+		Do While !Eof() .And. xFilial("TBC") == TBC->TBC_FILIAL .And.;
+									TBC->TBC_CODEST == TAF->TAF_CODEST .And.;
+									TBC->TBC_CODNIV == TAF->TAF_CODNIV
+
+			DbSelectArea("TBB")
+			DbSetOrder(1)
+			If DbSeek(xFilial('TBB')+TBC->TBC_CODPLA)
+				If FindFunction("Soma1Old")
+					cCodNiv := Soma1Old(AllTrim(cCodNiv))
+				Else
+					cCodNiv := Soma1(AllTrim(cCodNiv))
+				EndIf
+
+				Sga340GraTRB(TAF->TAF_CODEST,cCodNiv,TBB->TBB_DESPLA,TBC->TBC_CODNIV,TAF->TAF_ORDEM,TAF->TAF_MAT,;
+								TAF->TAF_INDCON,TBB->TBB_CODPLA,TAF->TAF_CCUSTO,TAF->TAF_CENTRA,TAF->TAF_DOCFIL,2,,TBB->TBB_CODPLA)
+			EndIf
+
+			DbSelectArea("TBC")
+			DbSetOrder(2)
+			DbSkip()
+		End
+
+		dbSelectArea("TAF")
+		dbSkip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA340TREE
+Monta a estrutura apartir do arquivo TAF e os Planos Emergenciais.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   10/11/2005
+@param   cPai, caracter, informa qual é o pai da estrutura
+@return  oTree, retorna a estrutura
+/*/
+//-------------------------------------------------------------------
+Function SgA340Tree(cPai)
+
+	Local cDescri
+	Private cCargo := Padr('LOC',TAMSX3("TBB_CODPLA")[1])
+
+	cFolderA := "FOLDER10" // Folder Verde Fechado
+	cFolderB := "FOLDER11" // Folder Verde Aberto
+	If Empty( cDesc )
+	Return oTree
+	EndIf
+
+	DbAddTree oTree Prompt cDesc Opened Resource cFolderA, cFolderB Cargo cPai+cCargo
+
+	DbSelectArea(cTRBSGA)
+	DbSetOrder(3)
+	If DbSeek(cCodEst+cPai)
+		ProcRegua(RecCount())
+		While !(cTRBSGA)->(Eof()) .And. (cTRBSGA)->NIVSUP == cPai
+
+				IncProc() // Incrementa regua de processamento
+
+				//Verifica se o modulo cadastrado eh compativel com o selecionado
+				If nModulo == 56 .And. Empty((cTRBSGA)->MODSGA)
+					(cTRBSGA)->(DbSkip())
+					Loop
+				ElseIf nModulo == 35 .And. Empty((cTRBSGA)->MODMDT)
+					(cTRBSGA)->(DbSkip())
+					Loop
+				ElseIf nModulo == 19 .And. Empty((cTRBSGA)->MODMNT)
+					(cTRBSGA)->(DbSkip())
+					Loop
+				EndIf
+
+			nRec    := Recno()
+			cComp   := (cTRBSGA)->CODPRO
+			cDescri := (cTRBSGA)->DESCRI
+			cNivSup := (cTRBSGA)->NIVSUP
+			cMat    := (cTRBSGA)->RESPONS
+			cIndCon := (cTRBSGA)->TIPO
+			cCodCon := (cTRBSGA)->CODTIPO
+			cCC     := (cTRBSGA)->CC
+			cCT     := (cTRBSGA)->CENTRAB
+			cFilDoc := (cTRBSGA)->DOCFIL
+			cOrdem  := (cTRBSGA)->ORDEM
+
+			If cIndCon <> '2'
+					(cTRBSGA)->(DbSkip())
+					Loop
+				EndIf
+
+				If !Empty((cTRBSGA)->FOLDERA)
+					aAdd( aEmergencia, {cComp,cCodCon} )
+					cFolderA := (cTRBSGA)->FOLDERB
+					cFolderB := (cTRBSGA)->FOLDERA
+				Else
+					cFolderA := 'Folder10'
+					cFolderB := 'Folder11'
+				EndIf
+
+			If Empty( (cTRBSGA)->CARGO )
+					cCargo := 'LOC'
+				Else
+					cCargo := (cTRBSGA)->CARGO
+
+				DbSelectArea('TC1')
+				DbSetOrder(1)//TC1_FILIAL+TC1_CODOCO+TC1_CODPLA+TC1_CODEST+TC1_CODNIV
+				If TC1->(DbSeek(xFilial('TC1')+M->TBV_CODOCO+cCargo+'001'))
+					cNivOco	:= cComp
+					cFolderA := 'Folder5'
+					cFolderB := 'Folder6'
+					cPlano   := cComp
+				EndIf
+
+			Endif
+
+			DbSelectArea(cTRBSGA)
+			If DbSeek(cCodEst+cComp)
+				SgA340Filho(cComp,cDescri,cNivSup,cMat,cCodCon,cIndCon,cCargo,cFolderA,cFolderB)
+			Else
+					DbAddItem oTree Prompt cDescri Resource cFolderA Cargo cComp+cCargo
+				Endif
+
+			DbSelectArea(cTRBSGA)
+			DbGoto(nRec)
+			DbSkip()
+		End
+	EndIf
+	oTree:TreeSeek(cPai+cCargo)
+	DbEndTree oTree
+
+Return oTree
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA340FILHO
+Monta a estrutura dos filhos apartir do arquivo TAF
+
+@author  Rafael Diogo Richter
+@since   23/08/2004
+
+@param   cPai, caracter, informa qual é o pai da estrutura
+@param 	 cDesc, caracter, informa qual é a descrição
+@param 	 cNivSup, caracter, informa qual é o nível superior
+@param   cMat, caracter, informa qual é a matrícula
+@param   cCodTipo, caracter, informa qual é o código do tipo
+@param   cTipo, caracter, informa qual é o tipo
+@param   cCargo, caracter, informa qual é o cargo
+@param   cFolderA, caracter, informa qual é o folder A
+@param   cFolderB, caracter, informa qual é o folder B
+
+/*/
+//-------------------------------------------------------------------
+Function SgA340Filho( cPai, cDesc, cNivSup, cMat, cCodTipo, cTipo, cCargo, cFolderA, cFolderB )
+
+	Local nRec
+
+	DbAddTree oTree Prompt cDesc Opened Resource cFolderA, cFolderB Cargo cPai+cCargo
+
+	aAlias := GetArea()
+
+	RestArea(aAlias)
+
+	While !(cTRBSGA)->(Eof()) .And. (cTRBSGA)->NIVSUP == cPai
+
+			IncProc() // Incrementa regua de processamento
+
+		// Verifica se o modulo cadastrado eh compativel com o selecionado
+			If nModulo == 56 .And. Empty((cTRBSGA)->MODSGA)
+
+				(cTRBSGA)->(DbSkip())
+
+				Loop
+
+			ElseIf nModulo == 35 .And. Empty((cTRBSGA)->MODMDT)
+
+				(cTRBSGA)->(DbSkip())
+
+				Loop
+
+			ElseIf nModulo == 19 .And. Empty((cTRBSGA)->MODMNT)
+
+				(cTRBSGA)->(DbSkip())
+
+				Loop
+
+			EndIf
+
+		nRec    := Recno()
+		cComp   := (cTRBSGA)->CODPRO
+		cDescri := (cTRBSGA)->DESCRI
+		cNivSup := (cTRBSGA)->NIVSUP
+		cMat    := (cTRBSGA)->RESPONS
+		cIndCon := (cTRBSGA)->TIPO
+		cCodCon := (cTRBSGA)->CODTIPO
+		cCC     := (cTRBSGA)->CC
+		cCT     := (cTRBSGA)->CENTRAB
+		cFilDoc := (cTRBSGA)->DOCFIL
+			cOrdem  := (cTRBSGA)->ORDEM
+
+		If cIndCon <> '2'
+				(cTRBSGA)->(DbSkip())
+				Loop
+			EndIf
+
+			If !Empty((cTRBSGA)->FOLDERA)
+				aAdd( aEmergencia, {cComp,cCodCon} )
+				cFolderA := (cTRBSGA)->FOLDERB
+				cFolderB := (cTRBSGA)->FOLDERA
+			Else
+				cFolderA := 'Folder10'
+				cFolderB := 'Folder11'
+			EndIf
+
+		If Empty( (cTRBSGA)->CARGO )
+
+				cCargo := 'LOC'
+
+			Else
+
+				cCargo := (cTRBSGA)->CARGO
+
+				DbSelectArea('TC1')
+			DbSetOrder(1)
+
+			If TC1->(DbSeek(xFilial('TC1')+M->TBV_CODOCO+cCargo+'001'))
+
+				cNivOco	:= cComp
+				cFolderA := 'Folder5'
+				cFolderB := 'Folder6'
+				cPlano := cComp
+
+			EndIf
+
+			EndIf
+
+		DbSelectArea(cTRBSGA)
+
+		If DbSeek(cCodEst+cComp)
+
+			Sga340Filho(cComp,cDescri,cNivSup,cMat,cCodCon,cIndCon,cCargo,cFolderA,cFolderB)
+
+		Else
+
+				DbAddItem oTree Prompt cDescri Resource cFolderA Cargo cComp+cCargo
+
+		Endif
+
+		DbGoto(nRec)
+
+		DbSkip()
+
+	End
+
+	DbEndTree oTree
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sga340GraTRB
+Grava os valores na tabela cTRBSGA.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   23/08/2004
+@param   cCodEst, caracter, informa qual é a estrutura
+@param   cComp, caracter, informa qual é o produto
+@param 	 cDescri, caracter, informa qual é a descrição
+@param 	 cNivSup, caracter, informa qual é o nível superior
+@param	 cOrdem, caracter, informa qual é a ordem
+@param   cMat, caracter, informa qual é a matrícula
+@param   cIndCon, caracter, informa qual é a condição 0=Ilustração;1=Bem;2=Local
+@param   cCodCon, caracter, informa qual é o conteúdo
+@param   cCC, caracter, informa qual é o centro de custo
+@param   cCT, caracter, informa qual é o centro de trabalho
+@param   cFilDoc, caracter, informa qual é a filial do documento
+@param   nTipo, caracter, informa qual é o tipo
+@param   dDataAva, caracter, informa qual é data
+@param   cCargo, caracter, informa qual é o cargo
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SgA340GraTRB(cCodEst,cComp,cDescri,cNivSup,cOrdem,cMat,cIndCon,cCodCon,cCC,cCT,cFilDoc,nTipo,dDataAva,cCargo)
+
+	If nTipo = 1
+		cFolderA := 'FOLDER13'
+		cFolderB := 'FOLDER12'
+	ElseIf nTipo == 2
+		cFolderA := 'FOLDER8'
+		cFolderB := 'FOLDER7'
+	ElseIf nTipo == 3
+		cFolderA := 'FOLDER6'
+		cFolderB := 'FOLDER5'
+	EndIf
+
+	RecLock(cTRBSGA,.T.)
+	(cTRBSGA)->CODEST  := cCodEst
+	(cTRBSGA)->CODPRO  := cComp
+	(cTRBSGA)->DESCRI  := cDescri
+	(cTRBSGA)->NIVSUP  := cNivSup
+	(cTRBSGA)->RESPONS := cMat
+	(cTRBSGA)->TIPO    := cIndCon
+	(cTRBSGA)->CODTIPO := cCodCon
+	(cTRBSGA)->CC      := cCC
+	(cTRBSGA)->CENTRAB := cCT
+	(cTRBSGA)->DOCFIL  := cFilDoc
+	If nModulo == 56
+		(cTRBSGA)->MODSGA  := 'X'
+	ElseIf nModulo == 35
+		(cTRBSGA)->MODMDT  := 'X'
+	ElseIf nModulo == 19
+		(cTRBSGA)->MODMNT  := 'X'
+	EndIf
+	(cTRBSGA)->ORDEM   := cOrdem
+	(cTRBSGA)->FOLDERA := cFolderA
+	(cTRBSGA)->FOLDERB := cFolderB
+	(cTRBSGA)->CARGO   := cCargo
+	MsUnLock(cTRBSGA)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Pesq
+Pesquisa na arvore os Locais.
+
+@type Function
+@author  Thiago Olis Machado
+@since   21/11/2005
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Pesq()
+
+	DbSelectArea("TAF")
+	DbSetOrder(9)
+	DbSeek(xFilial("TAF")+cPesq,.T.)
+
+	oTree:TreeSeek(TAF->TAF_CODNIV+"LOC")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340DbClick
+Pesquisa na arvore os Locais.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   10/02/2006
+@param   nOpcx, numérico, informa o tipo de opção a ser executada
+@param   cLocPla, caracter, informa a localização do plano
+@param   cCodPla, caracter, informa o código do plano
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340DbClick(nOpcx,cLocPla,cCodPla)
+
+	Local GetList:={},i,nx,nPlano := 0
+	Local aOldArea   := GetArea() // Guarda variaveis de alias e indice
+	Local aTitles    := {}, aPages:= {}, nControl:= 0
+	Local oFont      := TFont():New("Arial",12,12,,.F.,,.F.,,.F.,.F.)
+	Local nItensCont := 0
+	Local nopca,cGet
+	Local aSize      := MsAdvSize( .T. , .F. , 430 )
+	Local oWndPai, oPnlWnd, oPnlTop, oPnlBtm
+	Local aFields    := {}
+	Local aExc       := {}
+
+	Default cLocPla := ""
+
+	Private oDlgC, oGet01,oGet02, cCodAnt, aCodFun := {}, aColsCont := {}
+	Private aCols := {}, aHeader := {}
+	Private oMenu, oMenuGet01
+	Private lAltusR := .F.
+
+	If !Empty( cNivOco )
+
+		DbSelectArea( oTree:cArqTree )
+
+		// otree:getcargo()
+		// oTree:GetPrompt()
+
+		If cNivOco != SubStr( oTree:GetCargo(), 1, 3 ) .And. ( cTRBSGA )->CODTIPO != SubStr( oTree:GetCargo(), 4 )
+
+			// "ATENÇÃO"###"Não é possível selecionar mais de uma localização para a mesma"###"Ocorrência."
+			Help( Space( 1 ), 1, STR0013, , STR0014 + Space( 1 ) + STR0015, 3, 1 ) 
+
+			Return .F.
+
+		EndIf
+
+	EndIf
+
+	Aadd(aTitles,OemToAnsi(STR0016)) //"Participantes"
+	Aadd(aPages,"Header 1")
+	nControl++
+	Aadd(aTitles,OemToAnsi(STR0017)) //"Contatos Externos"
+	Aadd(aPages,"Header 2")
+	nControl++
+
+	cPlano := SubStr(oTree:GetCargo(),1,3)
+
+	nPlano := aScan( aEmergencia, {|x| x[1] == cPlano } )
+
+	If nPlano == 0
+		Return .F.
+	EndIf
+
+	If Empty(cLocPla)
+		dbSelectArea(cTRBSGA)
+		dbSetOrder(4)
+		dbSeek( cCodEst + Padr(cCodPla,Len((cTRBSGA)->CODTIPO)) + cLocPla + SubStr(oTree:GetCargo(),1,3) )
+		If cLocPla <> (cTRBSGA)->NIVSUP .And. Padr(cCodPla,Len((cTRBSGA)->CODTIPO)) <> (cTRBSGA)->CODTIPO
+			Return .F.
+		EndIf
+	Endif
+
+	cPlano := AllTrim(aEmergencia[nPlano][2])
+	TBB->(DbSeek(xFilial("TBB")+AllTrim(cPlano)))
+	cNome := TBB->TBB_DESPLA
+
+	//GetDados do Folder "Participantes"
+	aHeader	:= {}
+	aCols		:= {}
+	aAlter		:= {}
+	DbSelectArea("TBP")
+
+	If TBP->(DbSeek(xFilial('TBP')+cPlano))
+
+		nOpcx:=3
+		//Montando aHeader
+		nUsado  :=0
+		aHeader := {}
+		aFields := { "QAA_NOME", "QAC_DESC", "QAA_FONE"  , "TBX_AVISAD", ;
+					 "TBX_DATA", "TBX_HORA", "TAF_NOMRES", "TBX_OBSERV"  }
+
+		aExc    := { { 'TAF_NOMRES', 'X3_TITULO', STR0018 }, ;
+					 { 'TBX_OBSERV', 'X3_TITULO', STR0045 } }
+
+		aHeader := NGHeadExc( aFields, .F., .F., , aExc)
+		nUsado  := Len( aHeader )
+
+		aAlter	:= {"TBX_AVISAD","TBX_DATA","TBX_HORA","TBX_OBSERV"} //Campos que poderão ser editados na MsGetDados de Participantes
+
+		nNomePa := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "QAA_NOME"   })
+		nDescFu := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "QAC_DESC"   })
+		nFone   := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "QAA_FONE"   })
+		nAviso  := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_AVISAD" })
+		nData	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_DATA"   })
+		nHora	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_HORA"   })
+		nInform := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TAF_NOMRES" })
+		nObserv := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_OBSERV" })
+
+		DbSetOrder(1)
+
+		//Checa quantidade de linhas utilizadas
+		nCnt   := 0
+		nItens := 0
+
+		DbSelectArea("TBP")
+		Do While !EOF() .And. TBP->TBP_FILIAL == xFilial('TBP') .And. cPlano == TBP->TBP_CODPLA
+			nCnt := nCnt + 1
+			Dbskip()
+		End
+
+		If nCnt > 0
+
+			aCols:=Array(nCnt,nUsado+1)
+
+			dbSelectArea("TBP")
+			dbSetOrder(1)
+			dbSeek(xFilial('TBP')+cPlano)
+
+			nCnt := 0
+			nUsado:=0
+			Do While !EOF() .And. TBP->TBP_FILIAL == xFilial('TBP') .And. cPlano == TBP->TBP_CODPLA
+
+				nCnt := nCnt + 1
+				nUsado := nUsado + 1
+
+				//Montando aCols
+				If TBP->TBP_TIPPAR == "1" .Or. Empty(TBP->TBP_TIPPAR)
+
+					DbSelectArea("QAA")
+					DbSetOrder(1)
+					DbSeek(xFilial("QAA")+TBP->TBP_CODPAR)
+					aAdd( aCodFun, { TBP->TBP_CODPAR } )
+						aCols[nCnt][nNomePa] := QAA->QAA_NOME
+						aCols[nCnt][nFone]   := QAA->QAA_FONE
+						aCols[nCnt][nAviso]  := " "
+						aCols[nCnt][nData]   := CtoD(Space(8))
+						aCols[nCnt][nHora]   := Space(5)
+						aCols[nCnt][nInform] := Upper(SubStr( cUsuario, 7, 15 ))//aCols[nCnt][7] := QAA->QAA_NOME //Upper(SubStr( cUsuario, 7, 15 ))
+						aCols[nCnt][nObserv] := ""
+
+					DbSelectArea("QAC")
+					DbSetOrder(1)
+					DbSeek(xFilial("QAC")+TBP->TBP_CODFUN)
+						aCols[nCnt][nDescFu] := QAC->QAC_DESC
+
+
+				ElseIf TBP->TBP_TIPPAR == "2"
+
+					DbSelectArea("SRA")
+					DbSetOrder(1)
+					DbSeek(xFilial("SRA")+TBP->TBP_CODPAR)
+					aAdd( aCodFun, { TBP->TBP_CODPAR } )
+						aCols[nCnt][nNomePa] := SRA->RA_NOME
+						aCols[nCnt][nFone]   := SRA->RA_TELEFON
+						aCols[nCnt][nAviso]  := " "
+						aCols[nCnt][nData]   := CtoD(Space(8))
+						aCols[nCnt][nHora]   := Space(5)
+						aCols[nCnt][nInform] := Upper(SubStr( cUsuario, 7, 15 )) //Space(Len(SRA->RA_NOME))
+						aCols[nCnt][nObserv]	:= ""
+
+					DbSelectArea("SRJ")
+					DbSetOrder(1)
+					DbSeek(xFilial("SRJ")+TBP->TBP_CODFUN)
+					aCols[nCnt][nDescFu] := SRJ->RJ_DESC
+				EndIf
+
+
+				If lSel
+
+					aCols[nCnt][nAviso]  := aAviso[nCnt][4]
+					aCols[nCnt][nData]   := aAviso[nCnt][5]
+					aCols[nCnt][nHora]   := aAviso[nCnt][6]
+					aCols[nCnt][nInform] := aAviso[nCnt][7]
+					aCols[nCnt][nObserv] := aAviso[nCnt][8]
+
+				Else
+
+					DbSelectArea("TBX")
+					DbSetOrder(1)
+					DbSeek(xFilial("TBX")+M->TBV_CODOCO+TBP->TBP_CODPAR)
+					Do While !Eof() .And. xFilial("TBX") == TBX->TBX_FILIAL .And.;
+													TBV->TBV_CODOCO == TBX->TBX_CODOCO .And.;
+													TBP->TBP_CODPAR == TBX->TBX_MAT
+						aAdd( aAviso, { M->TBV_CODOCO,;
+											TBP->TBP_CODPAR,;
+											TBX->TBX_AVISAD,;
+											TBX->TBX_DATA,;
+											TBX->TBX_HORA,;
+											TBX->TBX_LOGIN,;
+											TBX->TBX_OBSERV } )
+
+						aCols[nCnt][nAviso] := TBX->TBX_AVISAD
+						aCols[nCnt][nData]  := TBX->TBX_DATA
+						aCols[nCnt][nHora]  := TBX->TBX_HORA
+						aCols[nCnt][nObserv]:= TBX->TBX_OBSERV
+
+						DbSelectArea("QAA")
+						DbSetOrder(6)
+						DbSeek(TBX->TBX_LOGIN)
+						aCols[nCnt][nInform] := Upper(SubStr( cUsuario, 7, 15 ))
+
+
+						DbSelectArea("TBX")
+						DbSkip()
+
+					EndDo
+				Endif
+
+				aCols[nCnt][ len(aCols[nCnt]) ] := .F.
+
+				nItens := nItens + 1
+				lRefresh := .T.
+				dbSelectArea('TBP')
+				dbSkip()
+
+			EndDo
+		EndIf
+
+		//Variaveis do Rodape do Modelo 2
+		nLinGetD:=0
+		//Titulo da Janela
+		cTitulo:= STR0019 //"Ocorrência do Plano Emergencial"
+
+		cTudoOk  := "SG340TUDO()"
+		cLinhaOk := "Sg340Lin()"
+
+		nOpcao := 1
+
+		If Empty(aCols)
+			aCols := BlankGetd(aHeader)
+		Endif
+
+		aSvHeader[2] := aCLONE(aHeader)
+		aSvCols[2]   := aCLONE(aCols)
+		n := Len(aCols)
+
+		//GetDados do Folder "Contatos Externos"
+		nOpcx:=3
+
+		//Montando aHeader
+		aHeader	:= {}
+		aCols	:= {}
+		nUsado  := 0
+		aHeader := {}
+		aCols   := {}
+		aFields := { "TBU_DESCON", "TBU_DESFOR", "TBU_FONE", "TBU_EMAIL" , ;
+					 "TC7_AVISAD", "TC7_DTCONT", "TC7_HRCONT"              }
+
+		aHeader := NGHeadExc( aFields, .F. )
+		nUsado  := Len(aHeader)
+
+		nDesCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TBU_DESCON" })
+		nDesFor	    := aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TBU_DESFOR" })
+		nFoneCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TBU_FONE"   })
+		nMailCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TBU_EMAIL"  })
+		nAvisCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_AVISAD" })
+		nDataCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_DTCONT" })
+		nHoraCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_HRCONT" })
+
+		DbSetOrder(1)
+
+		dbSelectArea("TBU")
+		dbSetOrder(1)
+		If TBU->(DbSeek(xFilial('TBU')+cPlano))
+
+			//Checa quantidade de linhas utilizadas
+			nCnt   := 0
+			nItensCont := 0
+
+			DbSelectArea("TBU")
+			dbSeek(xFilial('TBU')+cPlano)
+			Do While !EOF()                         .And.;
+				TBU->TBU_FILIAL == xFilial('TBU')   .And.;
+				cPlano == TBU->TBU_CODPLA
+				nCnt := nCnt + 1
+				Dbskip()
+			End
+
+			If nCnt > 0
+
+				aCols := Array(nCnt,nUsado+1)
+
+				nCnt   := 0
+				nItensCont := 0
+				dbSelectArea("TBU")
+				dbSetOrder(1)
+				dbSeek(xFilial('TBU')+cPlano)
+				Do While !EOF()								.And.;
+					TBU->TBU_FILIAL == xFilial('TBU')	.And.;
+					cPlano == TBU->TBU_CODPLA
+
+					nCnt := nCnt + 1
+					nUsado := nUsado + 1
+
+					//Montando aCols
+					aCols[nCnt][nDesCont]	:= TBU->TBU_DESCON
+					aCols[nCnt][nDesFor]	:= " "
+					aCols[nCnt][nFoneCont]	:= TBU->TBU_FONE
+					aCols[nCnt][nMailCont]	:= TBU->TBU_EMAIL
+					aCols[nCnt][nAvisCont]	:= " "
+					aCols[nCnt][nDataCont]	:= CtoD(Space(8))
+					aCols[nCnt][nHoraCont]	:= Space(5)
+
+					DbSelectArea("SA2")
+					DbSetOrder(1)
+					If DbSeek(xFilial("SA2")+TBU->TBU_FORNEC)
+						aCols[nCnt][nDesFor]	:= SA2->A2_NOME
+					EndIf
+
+					If lSel
+
+						aCols[nCnt][nAvisCont]	:= aCont[nCnt][3]
+						aCols[nCnt][nDataCont]	:= aCont[nCnt][4]
+						aCols[nCnt][nHoraCont]	:= aCont[nCnt][5]
+
+					Else
+						DbSelectArea("TC7")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TC7")+M->TBV_CODOCO+TBU->TBU_CODCON)
+
+							aCols[nCnt][nAvisCont]	:= TC7->TC7_AVISAD
+							aCols[nCnt][nDataCont]	:= TC7->TC7_DTCONT
+							aCols[nCnt][nHoraCont]	:= TC7->TC7_HRCONT
+
+							aAdd( aCont, { M->TBV_CODOCO,;
+											 TBU->TBU_CODCON,;
+											 TC7->TC7_AVISAD,;
+											 TC7->TC7_DTCONT,;
+											 TC7->TC7_HRCONT } )
+						EndIf
+					EndIf
+
+					aCols[nCnt][ len(aCols[nCnt]) ] := .F.
+
+					nItensCont := nItensCont + 1
+					lRefresh := .T.
+					dbSelectArea('TBU')
+					dbSkip()
+				EndDo
+			EndIf
+		EndIf
+
+		If Empty(aCols)
+		   aCols := BlankGetd(aHeader)
+		Endif
+		aSvHeader[3] := aClone(aHeader)
+		aSvCols[3]   := aClone(aCols)
+		n := Len(aCols)
+
+	  	DEFINE MSDIALOG oWndPai TITLE OemToAnsi(cTitulo) From aSize[ 7 ] , 0 To aSize[ 6 ] , aSize[ 5 ] OF oMainWnd Pixel
+
+			//Panel Principal
+			oPnlWnd       := TPanel():New( 0, 0, , oWndPai, , , , , , 0, 0 )
+			oPnlWnd:Align := CONTROL_ALIGN_ALLCLIENT
+
+			// Panel Topo
+			oPnlTop       := TPanel():New( 0, 0, , oPnlWnd, , , , , , 0, 40 )
+			oPnlTop:Align := CONTROL_ALIGN_TOP
+
+			// Panel AllClient
+			oPnlBtm       := TPanel():New( 0, 0, , oPnlWnd, , , , , , 0, 0 )
+			oPnlBtm:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oFolder2 := TFolder():New(1.5,0,aTitles,aPages,oPnlBtm,,,,.F.,.F.,317,116,)
+			oFolder2:aDialogs[1]:oFont := oWndPai:oFont
+			oFolder2:aDialogs[2]:oFont := oWndPai:oFont
+			oFolder2:Align := CONTROL_ALIGN_ALLCLIENT
+			oFolder2:bChange := {|| ChangeGet( oFolder2 )}
+
+			@ 0.7,1   SAY OemToAnsi(STR0021) of oPnlTop//"Plano"
+			@ 0.6,4   MSGET cPlano Size 038,08 of oPnlTop When .F.
+			@ 0.7,11  SAY OemToAnsi(STR0022) of oPnlTop//"Descricao"
+			@ 0.6,15  MSGET cNome Size 190,08 of oPnlTop When .F.
+
+			//Folder 01
+			aHeader := aClone(aSvHeader[2])
+			aCols   := aClone(aSvCols[2])
+			n := Len(aCols)
+
+			//oGet01 := MsNewGetDados():New(0,0,1000,1000,GD_UPDATE ,{|| .T. },{|| .T. },,aAlter,,nItens,,,,oFolder2:aDialogs[1],aHeader,aCols)
+			oGet01 := MSGetDados():New(1,1,102,315,4,cLinhaOk,cTudoOk,"",.F.,aAlter,,,nItens,,,,,oFolder2:aDialogs[1])
+			oGet01:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+			oGet01:lCanEditLine := .T.
+			oGet01:lEditLine    := .T.
+
+			//Função para criar um menu Popup, "Copiar para todos".
+			SG340POPUP(@oMenuGet01,oGet01:oBrowse)
+			oGet01:oBrowse:bRClicked := {|o,x,y| oMenuGet01:Activate(x,y,oGet01:oBrowse)}
+			oGet01:oBrowse:Default()
+			oGet01:oBrowse:Refresh()
+
+			//Folder 02
+			aHeader := aClone(aSvHeader[3])
+			aCols   := aClone(aSvCols[3])
+			n := Len(aCols)
+			oGet02 := MSGetDados():New(1,1,102,315,4,,,,.F.,,,,nItensCont,,,,,oFolder2:aDialogs[2])
+			oGet02:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+			oGet02:oBrowse:Default()
+			oGet02:oBROWSE:REFRESH()
+
+			aHeader := aClone(aSvHeader[2])
+			aCols   := aClone(aSvCols[2])
+			n := Len(aCols)
+
+			oFolder2:SetOption(1)
+
+			oGet01:oBrowse:Refresh()
+			oGet01:Refresh()
+
+		Activate Dialog oWndPai On Init (EnchoiceBar(oWndPai,{|| lOk:=.T.,If(Sg340Val(),oWndPai:End(),lOk := .F.)},{|| nOk:= 0,oWndPai:End()})) Centered
+
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Rad
+Sem descrição
+
+@type Function
+@author  Thiago Olis Machado
+@since   21/11/2005
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Rad()
+
+	If nAvisado == 2
+		oMemo:lReadOnly := .F.
+		oDtAviso:lReadOnly := .T.
+		oHrAviso:lReadOnly := .T.
+		dDtAviso := CtoD(Space(8))
+		cHrAviso := Space(5)
+		oMemo:Refresh()
+		oDtAviso:Refresh()
+		oHrAviso:Refresh()
+	Else
+		oMemo:lReadOnly := .T.
+		oDtAviso:lReadOnly := .F.
+		oHrAviso:lReadOnly := .F.
+		cMemo := " "
+		oMemo:Refresh()
+		oDtAviso:Refresh()
+		oHrAviso:Refresh()
+	EndIf
+
+Return .T.
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Lin
+Sem descrição
+
+@type Function
+@author  Thiago Olis Machado
+@since   21/11/2005
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Lin()
+
+Return .T.
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG340OBRIG
+Faz validacao antes de gravar.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   13/02/2006
+@param   nOpcx, numérico, informa o tipo de opção a ser executada
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Obrig(nOpcx)
+
+	Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+	Local i,x:= 0
+
+	// Verifica Enchoice
+	If !Obrigatorio(oEnchoice:aGets,oEnchoice:aTela)
+		Return .F.
+	EndIf
+
+	If !Sg340LinOk("TC5",.T.) //Valida o GetDados dos Envolvidos na Ocorrencia
+		Return .F.
+	EndIf
+	If lRetS .And. !Sg340LinOk("TC5",.T.) //Valida o GetDados dos Envolvidos na Ocorrencia
+		Return .F.
+	EndIf
+
+	If nOpcx == 3
+		If Len(aLocal) == 0
+			Help(" ",1,STR0013,,STR0032,3,1) //"Atenção"###"A seleção de um Plano Emergencial é obrigatória."
+			Return .F.
+		Else
+			For i:= 1 To Len( aLocal )
+				If aLocal[i][2]
+					x++
+				EndIf
+			Next
+		EndIf
+	EndIf
+
+	If !Sg340Grava(nOpcx)
+		Return .F.
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Grava
+Funcao para Gravacao.
+
+@type Function
+@author  Rafael Diogo Richter
+@since   13/02/2006
+@param   nOpcx, numérico, informa o tipo de opção a ser executada
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG340Grava(nOpcx)
+
+	Local i, y, nColDel
+	Local cValue
+	Local aCoTC5:= aClone(oGet03:aCols), aHeTC5 := aClone(oGet03:aHeader)
+	Local aCoTCI:= aClone(oGet04:aCols), aHeTCI := aClone(oGet04:aHeader)
+	Local cDATA := TBV->TBV_DATA
+	Local cHORA := TBV->TBV_HORA
+	Local cOCORR:= TBV->TBV_CODOCO
+
+
+	nPlano := aScan( aEmergencia, {|x| x[1] == cNivOco } )
+
+	If nPlano == 0
+	Return .F.
+	EndIf
+
+	cPlano := AllTrim(aEmergencia[nPlano][2])
+
+	DbSelectArea("TBB")
+	DbSetOrder(1)
+	DbSeek(xFilial("TBB")+cPlano)
+	cDesPla := SubStr(TBB->TBB_DESPLA,1,60)
+
+	//Manipula a tabela TBV
+	DbSelectArea('TBV')
+	DbSetOrder(1)
+	If DbSeek(xFilial('TBV')+M->TBV_CODOCO)
+	RecLock('TBV',.F.)
+	Else
+	RecLock('TBV',.T.)
+	EndIf
+
+	If nOpcx <> 5
+		For i := 1 To fCount()
+			cValue := 'M->' + FieldName(i)
+			If "_FILIAL" $ Upper(cValue) .And. nOpcx == 3
+				&cValue := xFilial('TBV')
+			ElseIf "_CODPLA" $ Upper(cValue) .And. nOpcx == 3
+				&cValue := cPlano
+			EndIf
+			FieldPut(i, &cValue)
+		Next i
+	Else
+	DbDelete()
+	EndIf
+
+	MsUnLock('TBV')
+
+	//Manipula a tabela TC1
+	If Empty((cTRBSGA)->CARGO)
+		cCargo := 'LOC'
+	Else
+		cCargo := (cTRBSGA)->CARGO
+	EndIf
+
+	If nOpcx == 5
+	TC1->(DbSetOrder(1))
+	If TC1->(DbSeek(xFilial('TC1')+M->TBV_CODOCO+cPlano+'001'))
+		While !TC1->(Eof()) .And. xFilial('TC1') == TC1->TC1_FILIAL .And.;
+									TC1->TC1_CODOCO == M->TBV_CODOCO	.And.;
+									TC1->TC1_CODPLA == cPlano		.And.;
+									TC1->TC1_CODEST == '001'
+				RecLock('TC1',.F.)
+				DbDelete()
+				MsUnLock('TC1')
+				TC1->(DbSkip())
+		End
+	EndIf
+	Else
+		For i:= 1 To Len( aLocal )
+		DbSelectArea(cTRBSGA)
+		DbSetOrder(2)
+		If DbSeek('001'+aLocal[i][1] )
+			DbSelectArea('TC1')
+			DbSetOrder(1)
+			If !DbSeek(xFilial('TC1')+M->TBV_CODOCO+cPlano+'001'+aLocal[i][1])
+				If aLocal[i][2]
+					RecLock('TC1',.T.)
+					TC1->TC1_FILIAL := xFilial('TC1')
+					TC1->TC1_CODOCO := M->TBV_CODOCO
+					TC1->TC1_CODPLA := cPlano
+					TC1->TC1_CODEST := '001'
+					TC1->TC1_CODNIV := aLocal[i][1]
+					TC1->TC1_NIVSUP := (cTRBSGA)->NIVSUP
+					MsUnLock('TC1')
+				EndIf
+			Else
+				If !aLocal[i][2]
+					RecLock('TC1',.F.)
+					DbDelete()
+					MsUnLock('TC1')
+				Else
+					RecLock('TC1',.F.)
+					TC1->TC1_FILIAL := xFilial('TC1')
+					TC1->TC1_CODOCO := M->TBV_CODOCO
+					TC1->TC1_CODPLA := cPlano
+					TC1->TC1_CODEST := '001'
+					TC1->TC1_CODNIV := aLocal[i][1]
+					TC1->TC1_NIVSUP := (cTRBSGA)->NIVSUP
+					MsUnLock('TC1')
+				EndIf
+			EndIf
+		Endif
+		Next
+	Endif
+
+	//Manipula a tabela TBX
+	For i:= 1 To Len(aAviso)
+		DbSelectArea('TBX')
+		DbSetOrder(1)
+
+
+		If DbSeek(xFilial('TBX')+M->TBV_CODOCO+aAviso[i][2]) //+M->TBP_CODPAR aCodFun
+		RecLock('TBX',.F.)
+		Else
+		RecLock('TBX',.T.)
+		EndIf
+
+		If nOpcx <> 5
+			TBX->TBX_FILIAL	:= xFilial('TBX')
+			TBX->TBX_CODOCO	:= M->TBV_CODOCO
+			TBX->TBX_MAT		:= aAviso[i][2]
+			TBX->TBX_AVISAD 	:= aAviso[i][4]
+			TBX->TBX_DATA		:= aAviso[i][5]
+			TBX->TBX_HORA		:= aAviso[i][6]
+			TBX->TBX_LOGIN	:= aAviso[i][7]
+			TBX->TBX_OBSERV 	:= aAviso[i][8]
+		Else
+			dbDelete()
+		EndIf
+		MsUnLock('TBX')
+
+	Next i
+
+
+	//Manipula a tabela TC2
+	If nOpcx == 3
+		cDATA := M->TBV_DATA
+		cHORA := M->TBV_HORA
+		cOCORR:= M->TBV_CODOCO
+	EndIf
+
+	DbSelectArea('TC2')
+	DbSetOrder(1)
+	If !DbSeek(xFilial('TC2')+cPlano+cOCORR+DTOS(cDATA)+cHORA)
+	RecLock('TC2',.T.)
+	Else
+		RecLock('TC2',.F.)
+	EndIf
+
+	If nOpcx <> 5
+	TC2->TC2_FILIAL := xFilial('TC2')
+	TC2->TC2_CODPLA := cPlano
+	TC2->TC2_CODOCO := M->TBV_CODOCO
+	TC2->TC2_DATA   := M->TBV_DATA
+	TC2->TC2_HORA   := M->TBV_HORA
+	ElseIf Found()
+	DbDelete()
+	EndIf
+
+	MsUnLock('TC2')
+
+	//Manipula a tabela TC3
+	If nOpcx <> 5
+		dbSelectArea('TBO')
+		dbSetOrder(1)
+		dbSeek(xFilial('TBO')+cPlano)
+		While !Eof() .And. xFilial("TBO") == TBO->TBO_FILIAL .And. TBO->TBO_CODPLA == cPlano
+			DbSelectArea('TC3')
+			DbSetOrder(2)
+			If DbSeek(xFilial('TC3')+cPlano+TBO->TBO_CODACA+M->TBV_CODOCO)
+			RecLock('TC3',.F.)
+			Else
+			RecLock('TC3',.T.)
+			EndIf
+
+			If nOpcx <> 5
+			TC3->TC3_FILIAL := xFilial('TC3')
+			TC3->TC3_CODPLA := cPlano
+			TC3->TC3_CODOCO := M->TBV_CODOCO
+			TC3->TC3_DTOCO  := M->TBV_DATA
+			TC3->TC3_HROCO  := M->TBV_HORA
+			TC3->TC3_CODACA := TBO->TBO_CODACA
+			TC3->TC3_DESACA := TBO->TBO_DESACA
+			Else
+			DbDelete()
+			EndIf
+			MsUnLock('TC3')
+
+			DbSelectArea('TBO')
+			DbSetOrder(1)
+			DbSkip()
+		End
+	Else
+		dbSelectArea('TC3')
+		dbSetOrder(1)
+		dbSeek(xFilial('TC3')+cPlano+M->TBV_CODOCO)
+		While !Eof() .And. TC3->TC3_FILIAL == xFilial("TC3") .And. TC3->TC3_CODPLA == cPlano .And. TC3->TC3_CODOCO == M->TBV_CODOCO
+		RecLock('TC3',.F.)
+		dbDelete()
+		MsUnLock('TC3')
+			dbSelectArea('TC3')
+			dbSetOrder(1)
+			dbSkip()
+		End
+	EndIf
+
+	//Manipula a tabela TC5
+
+	// Deleta o aCols antigo da base
+	For i := 1 To Len(aOrigiTC5)
+		dbSelectArea('TC5')
+		dbSetOrder(1)
+		If dbSeek( xFilial('TC5') + M->TBV_CODOCO + aOrigiTC5[i][2] + aOrigiTC5[i][3] )
+			RecLock('TC5',.F.)
+			DbDelete()
+			MsUnlock('TC5')
+		EndIf
+	Next i
+
+	// Organiza o aCols novo, movendo as linhas deletadas para cima
+	If Len(aCoTC5) > 0
+		aSORT(aCoTC5,,, { |x, y| x[Len(aCoTC5[1])] .And. !y[Len(aCoTC5[1])] } )
+	Endif
+
+	// Grava as novas linhas do aCols na base
+	For i := 1 To Len(aCoTC5)
+		If !aCoTC5[i][Len(aHeTC5)+1]
+			dbSelectArea('TC5')
+			RecLock('TC5',.T.)
+			TC5->TC5_FILIAL := xFilial('TC5')
+			TC5->TC5_CODOCO := M->TBV_CODOCO
+			For y := 1 To Len(aCoTC5[i]) - 1
+					If	AllTrim( aHeTC5[y][2] ) <> "TC5_ALI_WT" .And.;
+						AllTrim( aHeTC5[y][2] ) <> "TC5_REC_WT"
+
+						&("TC5->" + aHeTC5[y][2]) := aCoTC5[i][y]
+					EndIf
+			Next y
+			MsUnlock('TC5')
+		EndIf
+	Next i
+	If nOpcx == 5
+		dbSelectArea("TC5")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TC5")+M->TBV_CODOCO)
+			While !Eof() .And. TC5->TC5_CODOCO == M->TBV_CODOCO
+				RecLock("TC5",.F.)
+				dbDelete()
+				MsUnLock("TC5")
+				dbSkip()
+			End
+		Endif
+	Endif
+
+
+	//Manipula a tabela TC7
+	For i:= 1 To Len(aCont)
+		DbSelectArea('TC7')
+		DbSetOrder(1)
+		If DbSeek(xFilial('TC7')+M->TBV_CODOCO+aCont[i][2])
+		RecLock('TC7',.F.)
+		Else
+		RecLock('TC7',.T.)
+		EndIf
+
+		If nOpcx <> 5
+		TC7->TC7_FILIAL	:= xFilial('TC7')
+		TC7->TC7_CODOCO	:= aCont[i][1]
+		TC7->TC7_CODCON  	:= aCont[i][2]
+		TC7->TC7_AVISAD 	:= aCont[i][3]
+		TC7->TC7_DTCONT 	:= aCont[i][4]
+		TC7->TC7_HRCONT	:= aCont[i][5]
+
+		Else
+		DbDelete()
+		EndIf
+		MsUnLock('TC7')
+
+	Next i
+
+	//Manipula a tabela TCI
+	If lRetS
+		// Deleta o aCols antigo da base
+		For i := 1 To Len(aOrigiTCI)
+			dbSelectArea('TCI')
+			dbSetOrder(1)
+			If dbSeek( xFilial('TCI') + M->TBV_CODOCO + aOrigiTCI[i][1] )
+				RecLock('TCI',.F.)
+				DbDelete()
+				MsUnlock('TCI')
+			EndIf
+		Next i
+
+		// Organiza o aCols novo, movendo as linhas deletadas para cima
+		If Len(aCoTCI) > 0
+			aSORT(aCoTCI,,, { |x, y| x[Len(aCoTCI[1])] .And. !y[Len(aCoTCI[1])] } )
+		Endif
+		nPosRes := aScan( aHeTCI, { |x| Trim( Upper(x[2]) ) == 'TCI_CODRES'})
+		// Grava as novas linhas do aCols na base
+		For i := 1 To Len(aCoTCI)
+			If !aCoTCI[i][Len(aHeTCI)+1] .And. !Empty(aCoTCI[i][nPosRes])
+				dbSelectArea('TCI')
+				RecLock('TCI',.T.)
+				TCI->TCI_FILIAL := xFilial('TCI')
+				TCI->TCI_CODOCO := M->TBV_CODOCO
+				For y := 1 To Len(aCoTCI[i]) - 1
+						If	AllTrim( aHeTCI[y][2] ) <> "TCI_ALI_WT" .And.;
+							AllTrim( aHeTCI[y][2] ) <> "TCI_REC_WT" .And.;
+							AllTrim( aHeTCI[y][2] ) <> "TCI_DESCRE"
+
+							&("TCI->" + aHeTCI[y][2]) := aCoTCI[i][y]
+						EndIf
+				Next y
+				MsUnlock('TCI')
+			EndIf
+		Next i
+
+		If nOpcx == 5
+			dbSelectArea("TCI")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TCI")+M->TBV_CODOCO)
+				While !Eof() .And. TCI->TCI_CODOCO == M->TBV_CODOCO
+					RecLock("TCI",.F.)
+					dbDelete()
+					MsUnLock("TCI")
+					dbSkip()
+				End
+			Endif
+		Endif
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ENTRAGET
+Retorna aCols e aHeader quando se foca a GETDADOS
+
+@type Static Function
+@author  Thiago Olis Machado
+@since   14/08/2001
+@param   nG, numérico, informa o tipo
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function ENTRAGET(nG)
+
+	Local i := IIF(ng == 2, i:=1,i:=2)
+	Local cVAR := "oGet"+Strzero(i,2)
+
+	If ng == 3
+		aSvHeader[2]   := aClone(aHeader)
+		aSvCols[2]     := aClone(aCols)
+	Else
+		aSvHeader[3]   := aClone(aHeader)
+		aSvCols[3]     := aClone(aCols)
+	EndIf
+
+	aHeader    := aClone(aSvHeader[nG])
+	aCols	    := aClone(aSvCols[nG])
+	n          := Len(aCols)
+
+	lRefresh := .T.
+
+	&cVAR:oBrowse:Refresh()
+	&cVAR:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340ChangeBmp
+Funcao para trocar a cor do nível da estrutura.
+
+@author Rafael Diogo Richter
+@since 10/02/2006
+
+/*/
+//-------------------------------------------------------------------
+Function Sg340ChangeBmp()
+
+	Local cChave := ''
+
+	DbSelectArea( oTree:cArqTree )
+
+	If T_BMP001 = 5
+
+		// oTree:ChangeBmp( 'Folder10', 'Folder11' )
+		nPos := aScan( aLocal, { | x | x[ 1 ] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+
+	If nPos > 0
+
+			aLocal[ nPos, 2 ] := .F.
+
+	EndIf
+
+	Else
+
+		cChave := oTree:GetCargo()
+
+		oTree:ChangeBmp( 'Folder5', 'Folder6' )
+
+		aAdd( aLocal, { SubStr( oTree:GetCargo(), 1, 3 ), .T. } )
+
+		dbSelectArea( cTRBSGA )
+		( cTRBSGA )->( dbGotop() )
+
+		// Procura se o mesmo plano selecionado existe em outros níveis, para marcar o folder como ocorrência também
+		While ( cTRBSGA )->( !Eof() )
+
+			If AllTrim( SubStr( oTree:GetCargo(), 4 ) ) == AllTrim( ( cTRBSGA )->CODTIPO ) .And. ( cTRBSGA )->CODPRO != SubStr( oTree:GetCargo(), 1, 3 )
+
+				oTree:TreeSeek( ( cTRBSGA )->CODPRO + ( cTRBSGA )->CODTIPO )
+				oTree:ChangeBmp( 'Folder5', 'Folder6' )
+
+			EndIf
+
+			( cTRBSGA )->( dbSkip() )
+
+		End
+
+		oTree:TreeSeek( cChave )
+
+	cNivOco	:= SubStr( oTree:GetCargo(), 1, 3 )
+
+	EndIf
+
+	lSel := .T.
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Val
+Função para validar a tela de aviso antes de gravar.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   10/02/2006
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Val()
+
+	Local aHeadPart := {}, aColsPart := {}
+	Local aHeadCont := {}, aColsCont := {}
+	Local lRet := .T.
+	Local i := 1
+	Local nAviso, nData, nHora, nObserv
+	Local cAviso, cData, cHora, cObserv
+
+	If ofolder2:noption == 1
+		aHeadPart := aClone(aHeader)
+		aColsPart := aClone(aCols)
+		nAviso	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_AVISAD"	} )
+		nData	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_DATA" 	} )
+		nHora	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_HORA" 	} )
+		nObserv := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_OBSERV"	} )
+		cObserv := aHeadPart[nObserv][1]
+		cAviso	 := aHeadPart[nAviso][1]
+		cData	 := aHeadPart[nData][1]
+		cHora	 := aHeadPart[nHora][1]
+
+		If Len( aColsPart ) >= 1 .And. !Empty( aColsPart[1][1] )
+			While i <= Len(aColsPart) .And. lRet
+				If Empty( aColsPart[i][nAviso] )
+					MsgStop( STR0033, STR0013 ) //"É necessário que todos os Participantes estejam com o campo 'Avisado?' preenchido."###"ATENÇÃO"
+					lRet := .F.
+				ElseIf aColsPart[i][nAviso] == "1"
+					If Empty( aColsPart[i][nData] ) .Or. Empty( aColsPart[i][nHora] )
+						MsgStop( STR0049 +"'"+ cAviso +"'"+ STR0050 +"'"+ cData +"'"+ STR0054 +"'"+ cHora +"'"+ STR0051, STR0013 )//"Quando o campo "##" estiver como 'Sim', os campos "##" devem ser preenchidos"
+						lRet := .F.
+					EndIf
+				ElseIf aColsPart[i][nAviso] == "2"
+					If Empty( aColsPart[i][nObserv] )
+						MsgStop( STR0049 +"'"+ cAviso +"'"+ STR0052 +"'"+ cObserv +"'"+ STR0053, STR0013 )//Quando o campo "##" estiver como 'Não', o campo "##" deve ser preenchido"
+						lRet := .F.
+					EndIf
+				EndIf
+				i++
+			EndDo
+			i := 1
+		EndIf
+
+		//Se a validação criticar alguma linha do aCols, retorna falso
+		If !lRet
+			Return .F.
+		EndIf
+
+		aHeadCont := aClone(aSvHeader[3])
+		aColsCont := aClone(aSvCols[3])
+
+		nAviso	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_AVISAD"	} )
+		nData	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_DTCONT"	} )
+		nHora	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_HRCONT"	} )
+
+		If Len( aColsCont ) >= 1 .And. !Empty( aColsCont[1][1] )
+			While i <= Len(aColsCont) .And. lRet
+				If Empty( aColsCont[i][nAviso] )
+					MsgStop( STR0061, STR0013 ) //"É necessário que todos os Contatos Externos estejam com o campo 'Avisado?' preenchido."###"ATENÇÃO"
+					lRet := .F.
+				ElseIf aColsCont[i][nAviso] == "1"
+					If Empty( aColsCont[i][nData] ) .Or. Empty( aColsCont[i][nHora] )
+						MsgStop( STR0062 + STR0049 +"'"+ cAviso +"'"+ STR0050 +"'"+ cData +"'"+ STR0054 +"'"+ cHora +"'"+ STR0051, STR0013 )//"Na pasta de Contatos Externos, "##"Quando o campo "##" estiver como 'Sim', os campos "##" devem ser preenchidos"
+						lRet := .F.
+					EndIf
+				EndIf
+				i++
+			EndDo
+			i := 1
+		EndIf
+
+		//Se a validação criticar alguma linha do aCols, retorna falso
+		If !lRet
+			Return .F.
+		EndIf
+
+		aAviso := {}
+		i := 0
+		DbSelectArea("TBP")
+		dbSeek(xFilial('TBP')+cPlano)
+		Do While !EOF() .And. TBP->TBP_FILIAL == xFilial('TBP') .And. cPlano == TBP->TBP_CODPLA
+			i++
+			aAdd( aAviso ,{aCols[i][1];
+							,TBP->TBP_CODPAR;
+							,aCols[i][3];
+							,aCols[i][4];
+							,aCols[i][5];
+							,aCols[i][6];
+							,aCols[i][7];
+							,aCols[i][8]})
+
+			dbSelectArea("TBP")
+			dbSkip()
+		End
+
+		aCont := {}
+		i := 0
+		DbSelectArea("TBU")
+		dbSeek(xFilial('TBU')+cPlano)
+		Do While !EOF() .And. TBU->TBU_FILIAL == xFilial('TBU') .And. cPlano == TBU->TBU_CODPLA
+			i++
+			aAdd( aCont, { M->TBV_CODOCO;
+							,TBU->TBU_CODCON;
+							,aColsCont[i][5];
+							,aColsCont[i][6];
+							,aColsCont[i][7]} )
+			dbSelectArea("TBU")
+			dbSkip()
+		EndDo
+
+	ElseIf ofolder2:noption == 2
+		aHeadCont := aClone(aHeader)
+		aColsCont := aClone(aCols)
+		nAviso	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_AVISAD"	} )
+		nData	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_DTCONT"	} )
+		nHora	 := aScan( aHeadCont, { |x| AllTrim( Upper( X[2] ) ) == "TC7_HRCONT"	} )
+
+		cAviso	 := aHeadCont[nAviso][1]
+		cData	 := aHeadCont[nData][1]
+		cHora	 := aHeadCont[nHora][1]
+
+		If Len( aColsCont ) >= 1 .And. !Empty( aColsCont[1][1] )
+			While i <= Len(aColsCont) .And. lRet
+				If Empty( aColsCont[i][nAviso] )
+					MsgStop( STR0061, STR0013 ) //"É necessário que todos os Contatos Externos estejam com o campo 'Avisado?' preenchido.""###"ATENÇÃO"
+					lRet := .F.
+				ElseIf aColsCont[i][nAviso] == "1"
+					If Empty( aColsCont[i][nData] ) .Or. Empty( aColsCont[i][nHora] )
+						MsgStop( STR0049 +"'"+ cAviso +"'"+ STR0050 +"'"+ cData +"'"+ STR0054 +"'"+ cHora +"'"+ STR0051, STR0013 )//"Quando o campo "##" estiver como 'Sim', os campos "##" devem ser preenchidos"
+						lRet := .F.
+					EndIf
+				EndIf
+				i++
+			EndDo
+			i := 1
+		EndIf
+
+		//Se a validação criticar alguma linha do aCols, retorna falso
+		If !lRet
+			Return .F.
+		EndIf
+
+		aHeadPart := aClone(aSvHeader[2])
+		aColsPart := aClone(aSvCols[2])
+
+		nAviso	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_AVISAD"	} )
+		nData	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_DATA" 	} )
+		nHora	 := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_HORA" 	} )
+		nObserv := aScan( aHeadPart, { |x| AllTrim( Upper( X[2] ) ) == "TBX_OBSERV"	} )
+
+		cAviso	 := aHeadPart[nAviso][1]
+		cData	 := aHeadPart[nData][1]
+		cHora	 := aHeadPart[nHora][1]
+		cObserv := aHeadPart[nObserv][1]
+
+		If Len( aColsPart ) >= 1 .And. !Empty( aColsPart[1][1] )
+			While i <= Len(aColsPart) .And. lRet
+				If Empty( aColsPart[i][nAviso] )
+					MsgStop( STR0033, STR0013 ) //"É necessário que todos os Participantes estejam com o campo 'Avisado?' preenchido."###"ATENÇÃO"
+					lRet := .F.
+				ElseIf aColsPart[i][nAviso] == "1"
+					If Empty( aColsPart[i][nData] ) .Or. Empty( aColsPart[i][nHora] )
+						MsgStop( STR0063 + STR0049 +"'"+ cAviso +"'"+ STR0050 +"'"+ cData +"'"+ STR0054 +"'"+ cHora +"'"+ STR0051, STR0013 )//"Na pasta de Participantes, "##"Quando o campo "##" estiver como 'Sim', os campos "##" devem ser preenchidos"
+						lRet := .F.
+					EndIf
+				ElseIf aColsPart[i][nAviso] == "2"
+					If Empty( aColsPart[i][nObserv] )
+						MsgStop( STR0063 + STR0049 +"'"+ cAviso +"'"+ STR0052 +"'"+ cObserv +"'"+ STR0053, STR0013 )//"Na pasta de Participantes, "##Quando o campo "##" estiver como 'Não', o campo "##" deve ser preenchido"
+						lRet := .F.
+					EndIf
+				EndIf
+				i++
+			EndDo
+			i := 1
+		EndIf
+
+		//Se a validação criticar alguma linha do aCols, retorna falso
+		If !lRet
+			Return .F.
+		EndIf
+
+		aAviso := {}
+		i := 0
+		DbSelectArea("TBP")
+		dbSeek(xFilial('TBP')+cPlano)
+		Do While !EOF() .And. TBP->TBP_FILIAL == xFilial('TBP') .And. cPlano == TBP->TBP_CODPLA
+			i++
+			aAdd( aAviso ,{aColsPart[i][1];
+							,TBP->TBP_CODPAR;
+							,aColsPart[i][3];
+							,aColsPart[i][4];
+							,aColsPart[i][5];
+							,aColsPart[i][6];
+							,aColsPart[i][7];
+							,aColsPart[i][8]})
+
+			dbSelectArea("TBP")
+			dbSkip()
+		End
+
+		aCont := {}
+		i := 0
+		DbSelectArea("TBU")
+		dbSeek(xFilial('TBU')+cPlano)
+		Do While !EOF() .And. TBU->TBU_FILIAL == xFilial('TBU') .And. cPlano == TBU->TBU_CODPLA
+			i++
+			aAdd( aCont, { M->TBV_CODOCO;
+							,TBU->TBU_CODCON;
+							,aCols[i][5];
+							,aCols[i][6];
+							,aCols[i][7]} )
+			dbSelectArea("TBU")
+			dbSkip()
+		End
+
+	EndIf
+
+	Sg340ChangeBmp()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340LinOk
+Função responsável por validar as linhas da GetDados.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   12/02/2006
+@param   cTabela, caracter, indica a tabela usada
+@param   lFim, lógico, indica se o conteúdo vai ser falso ou verdadeiro
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340LinOk( cTabela, lFim )
+
+	Local f
+	Local aColsOk := {}, aHeadOk := {}
+	Local nPosCod := 0
+	Default lFim := .F.
+
+	If cTabela == "TCI" .And. lRetS <> .T.
+		Return .T.
+	Endif
+	//Nenhuma das GetDados eh de preenchimento obrigatório
+	If cTabela == "TC5"
+		aColsOk := aClone(oGet03:aCols)
+		aHeadOk := aClone(aHeadTC5)
+		nAt     := oGet03:nAt
+		nPosCod := aScan( aHeadTC5, { |x| Trim( Upper(x[2]) ) == 'TC5_TIPENV'})
+		nPosMat := aScan( aHeadTC5, { |x| Trim( Upper(x[2]) ) == 'TC5_CODMAT'})
+		nPosDes := aScan( aHeadTC5, { |x| Trim( Upper(x[2]) ) == 'TC5_NOME'})
+		If lFim .And. Len(aColsOk) == 1
+			If Empty(aColsOk[1][nPosCod])
+				Return .T.
+			Endif
+		Endif
+	Elseif cTabela == "TCI"
+		aColsOk := aClone(oGet04:aCols)
+		aHeadOk := aClone(aHeadTCI)
+		nAt  	  := oGet04:nAt
+		nPosCod := aScan( aHeadTCI, { |x| Trim( Upper(x[2]) ) == 'TCI_CODRES'})
+		If lFim .And. Len(aColsOk) == 1
+			If Empty(aColsOk[1][nPosCod])
+				Return .T.
+			Endif
+		Endif
+	Endif
+
+	//Percorre aCols
+	For f:= 1 to Len(aColsOk)
+		If !aColsOk[f][Len(aColsOk[f])]
+			If cTabela == "TC5"
+				If lFim .Or. f == nAt
+					//VerIfica se os campos obrigatórios estão preenchidos
+					If !Empty(aColsOk[f][nPosCod])
+						If aColsOk[f][nPosCod] == "1" .And. Empty(aColsOk[f][nPosMat])
+							//Mostra mensagem de Help
+							Help(1," ","OBRIGAT2",,aHeadOk[nPosMat][1],3,0)
+							Return .F.
+						Elseif aColsOk[f][nPosCod] == "2" .And. Empty(aColsOk[f][nPosDes])
+							//Mostra mensagem de Help
+							Help(1," ","OBRIGAT2",,aHeadOk[nPosDes][1],3,0)
+							Return .F.
+						Endif
+					Else
+						//Mostra mensagem de Help
+						Help(1," ","OBRIGAT2",,aHeadOk[nPosCod][1],3,0)
+						Return .F.
+					Endif
+				Endif
+			Else
+				If lFim .Or. f == nAt
+					//VerIfica se os campos obrigatórios estão preenchidos
+					If Empty(aColsOk[f][nPosCod])
+						//Mostra mensagem de Help
+						Help(1," ","OBRIGAT2",,aHeadOk[nPosCod][1],3,0)
+						Return .F.
+					Endif
+				Endif
+			Endif
+			If f <> nAt .And. !aColsOk[nAt][Len(aColsOk[nAt])]
+				If cTabela == "TC5"
+					If aColsOk[f][nPosCod] == "1"
+						If aColsOk[f][nPosMat] == aColsOk[nAt][nPosMat]
+							Help(" ",1,"JAEXISTINF",,aHeadOk[nPosMat][1])
+							Return .F.
+						Endif
+					Elseif aColsOk[f][nPosCod] == "2"
+						If aColsOk[f][nPosDes] == aColsOk[nAt][nPosDes]
+							Help(" ",1,"JAEXISTINF",,aHeadOk[nPosDes][1])
+							Return .F.
+						Endif
+					Endif
+				Else
+					If aColsOk[f][nPosCod] == aColsOk[nAt][nPosCod]
+						Help(" ",1,"JAEXISTINF",,aHeadOk[nPosCod][1])
+						Return .F.
+					Endif
+				Endif
+			Endif
+		Endif
+	Next f
+
+	PutFileInEof("TC5")
+	PutFileInEof("TCI")
+
+Return .T.
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340When
+Função para habilitar/desabilitar campos Matricula e Nome da GetDados.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   13/02/2006
+@param   nx, numérico, indica de onde está vindo a chamada
+
+@return  Lógico, Sempre Falso
+/*/
+//-------------------------------------------------------------------
+Function Sg340When(nx)
+
+	If nx == 1
+		If GdFieldGet('TC5_TIPENV') == "1"
+			Return .T.
+		ElseIf GdFieldGet('TC5_TIPENV') == "2"
+			Return .F.
+		ElseIf GdFieldGet('TC5_TIPENV') == "3"
+			Return .T.
+		EndIf
+	Else
+		If GdFieldGet('TC5_TIPENV') == "1"
+			Return .F.
+		ElseIf GdFieldGet('TC5_TIPENV') == "2"
+			Return .T.
+		ElseIf GdFieldGet('TC5_TIPENV') == "3"
+			Return .F.
+		EndIf
+	EndIf
+
+Return .F.
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Nome
+Função para trazer o Nome do usuário caso o campo matricula esteja preenchido.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   13/02/2006
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Nome()
+
+		Local nPosNome := GdFieldPos("TC5_NOME")
+
+		If !Empty(M->TC5_CODMAT)
+			If GdFieldGet('TC5_TIPENV') == "1"
+				DbSelectArea("QAA")
+				DbSetOrder(1)
+				DbSeek(xFilial("QAA")+M->TC5_CODMAT)
+				aCols[n][nPosNome] := QAA->QAA_NOME
+			ElseIf GdFieldGet('TC5_TIPENV') == "3"
+				DbSelectArea("SRA")
+				DbSetOrder(1)
+				DbSeek(xFilial("SRA") + Alltrim( M->TC5_CODMAT ) )
+				aCols[n][nPosNome] := SRA->RA_NOME
+			EndIf
+
+		EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Limpa
+Função para limpar os campos da GetDados conforme a escolha do tipo de envolvido na Ocorrência.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   13/02/2006
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Limpa()
+
+	If !Empty(aCols[n][1])
+		aCols[n][GdFieldPos("TC5_CODMAT")] := Space(Len(TC5->TC5_CODMAT))
+		aCols[n][GdFieldPos("TC5_NOME")] := Space(Len(TC5->TC5_NOME))
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Visual
+Deixa habilitado ou desabilitado os campos data e hora de aviso do folder
+Contatos externos conforme a escolha do campo avisado.
+
+@type    Function
+@author  Rafael Diogo Richter
+@since   19/04/2006
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg340Visual()
+
+	If aCols[n][5] == "1"
+		Return .T.
+	Else
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@type    Static Function
+@author  Rafael Diogo Richter
+@since   29/11/2006
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Rafael Diogo Richter
+@since
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := { {STR0038, "PesqBrw" , 0, 1    },; // "Pesquisar"
+					   {STR0039, "Sg340Inc", 0, 2    },; // "Visualizar"
+					   {STR0040, "Sg340Inc", 0, 3    },; // "Incluir"
+					   {STR0041, "Sg340Inc", 0, 4    },; // "Alterar"
+					   {STR0042, "Sg340Inc", 0, 5, 3 } } // "Excluir"
+
+Return aRotina
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA340RES
+Retorna aCols e aHeader quando se foca a GETDADOS
+
+@type    Function
+@author  Marcos Wagner Junior
+@since   11/04/2008
+
+@return  cRet, caracter
+/*/
+//-------------------------------------------------------------------
+Function SGAA340RES()
+
+	Local cRet := ""
+
+	If !Inclui
+		If !Empty(TCI->TCI_CODRES)
+			cRet := NGSEEK("SB1",TCI->TCI_CODRES,1,"SubStr(SB1->B1_DESC,1,20)")
+		Endif
+		Else
+			cRet := Space(Len(TRJ->TRJ_CAUJUR))
+		Endif
+
+Return cRet
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SG340DTVLD
+Função para validação dos campos de data da rotina
+
+@sample SG340DTVLD()
+
+@author Juliani Schlickmann Damasceno
+@since 29/11/2013
+@return
+/*/
+//---------------------------------------------------------------------------------------------------
+Function SG340DTVLD()
+
+	Local dDATACON := M->TC7_DTCONT
+	Local dDATAOCO := M->TBV_DATA
+	Local lRet 	 := .T.
+
+	//Não permite que a data de contato seja igual ou menor que a data atual
+	If !Empty(dDATACON) .And. (dDATACON > dDataBase)
+		ShowHelpDlg( STR0013 , { STR0043 } , 2 ,; //"ATENÇÃO" ## "A data de contato não pode ser maior que a data atual!"
+								{ STR0044 } , 2 ) //"Informe uma data inferior para a data de contato!"
+		lRet := .F.
+	ElseIf dDATACON < dDATAOCO
+		ShowHelpDlg( STR0013 , { STR0057 } , 2 ,; //"ATENÇÃO"##"A data de contato não pode ser inferior à data da ocorrência."
+								{ STR0056 + DTOC( dDATAOCO ) + "." } , 2 ) //"Informe uma data igual ou superior a "
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SG340WHAVS()
+Função para validar o folder de Participantes da MsGetDados.
+Se o campo aviso for = 1 (Sim), o campo memo "Motivo" será desabilitado.
+Se o campo aviso for = 2 (Não), os campos de "Data/Hora" serão desabilitados.
+
+@return lRet
+
+@sample SG340WHAVS()
+
+@author Gabriel Augusto Werlich
+@since 14/01/2014
+/*/
+//---------------------------------------------------------------------------------------------------
+Function SG340WHAVS(nParam)
+
+	Local nAviso := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_AVISAD" })
+	Local lRet   := .F.
+
+	If nAviso > 0 .And. !Empty(aCols[n][nAviso])
+		If aCols[n][nAviso] == "2"
+			lRet := ( nParam == 1 ) // Chamada pelo campo Observacao
+		Else
+			lRet := ( nParam == 2 ) // Chamada pelos campos de Data e Hora
+		Endif
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SG340VLAVS()
+Função para validar o folder de Participantes da MsGetDados.
+Se o campo aviso for = 1 (Sim), o campo memo "Motivo" será desabilitado.
+Se o campo aviso for = 2 (Não), os campos de "Data/Hora" serão desabilitados.
+
+@return lRet
+
+@sample SG340VLAVS()
+
+@author Gabriel Augusto Werlich
+@since 14/01/2014
+/*/
+//---------------------------------------------------------------------------------------------------
+Function SG340VLAVS()
+
+	Local nData
+	Local nHora
+	Local nObserv
+
+	If !Pertence("12")
+		Return .F.
+	Endif
+
+	nData	  := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_DATA" })
+	nHora	  := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_HORA" })
+	nObserv  := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TBX_OBSERV"})
+
+	If M->TBX_AVISAD == "1"
+
+		If nObserv > 0
+			aCols[n][nObserv] := ""
+		Endif
+
+	ElseIf M->TBX_AVISAD == "2"
+
+		If nData > 0 .And. nHora > 0
+			aCols[n][nData] := CtoD("")
+			aCols[n][nHora] := "  :  "
+		Endif
+
+	EndIf
+
+	oGet01:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} Sg340Copy()
+"Função para copiar para todos" ao clicar em uma linha da getdados com o botão direito,
+surgirá a opção "Copiar para todos" os registros que não estiverem com a opção "Avisado?" serão
+replicados para os demais registros.
+
+@return Nil
+
+@sample Sg340Copy()
+
+@author Gabriel Augusto Werlich
+@since 20/01/2014
+/*/
+//---------------------------------------------------------------------------------------------------
+Function Sg340Copy()
+
+	Local f
+	Local nAvisCopy := aCols[n][4]
+	Local nDataCopy := aCols[n][5]
+	Local nHoraCopy := aCols[n][6]
+	Local nObsvCopy := aCols[n][8]
+
+	For	f:= 1 to Len(aCols)
+		If f <> n .And. Empty(aCols[f][4])
+			aCols[f][4] := nAvisCopy
+			aCols[f][5] := nDataCopy
+			aCols[f][6] := nHoraCopy
+			aCols[f][8] := nObsvCopy
+		Endif
+	Next
+
+	oGet01:oBrowse:Refresh()
+
+Return Nil
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SG340POPUP()
+Ao clicar em uma linha da GetDados, aparecerá uma opção de menu "Copiar para todos".
+
+@return Nil
+
+@sample SG340POPUP()
+
+@author Gabriel Augusto Werlich
+@since 20/01/2014
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function SG340POPUP(oMenu, oParent)
+
+	oMenu := TMenu():New(0,0,0,0,.T.,,oParent)
+	oMenu:Add( TMenuItem():New(oMenu:Owner(),STR0046,,,,{|| Sg340Copy() },,,,,,,,,.T.) ) // "Copiar para Todos"
+
+Return Nil
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} Function SGA340VPPE()
+Função para deixar variáveis privates
+
+@sample SGA340VPPE()
+
+@author Juliani Schlickmann Damasceno
+@since 10/07/2014
+/*/
+//---------------------------------------------------------------------------------------------------
+Function SGA340VPPE()
+
+	_SetOwnerPrvt("aRotina" , MenuDef())
+	_SetOwnerPrvt("cCadastro" , STR0003) //"Ocorrências do Plano Emergencial"
+	_SetOwnerPrvt("aEmergencia" , {})
+	_SetOwnerPrvt("lAviCont" , .F.)
+
+Return Nil
+
+//-----------------------------------------------------------------------------------
+/*/{Protheus.doc} Function DblClick()
+Função para trazer direto a tela de marcação da ocorrência,
+feita para a árvore lógica
+
+@sample DblClick()
+
+@author Juliani Schlickmann Damasceno
+@since 10/07/2014
+/*/
+//------------------------------------------------------------------------------------
+Static Function DblClick(cCodPla,cLocPla)
+
+	If !Empty(cLocPla)
+		dbSelectArea(cTRBSGA)
+		dbSetOrder(4)
+		dbSeek( cCodEst + Padr(cCodPla,Len((cTRBSGA)->CODTIPO)) + cLocPla )
+		dbSelectArea(oTree:cArqTree)
+		oTree:TreeSeek((cTRBSGA)->CODPRO+Padr(cCodPla,Len((cTRBSGA)->CARGO)))
+		Eval(oTree:blDblClick)
+	EndIf
+
+Return Nil
+
+//-----------------------------------------------------------------------------------
+/*/{Protheus.doc} Function VALTBVDATA()
+Validação do campo TBV_DATA
+
+@sample VALTBVDATA()
+
+@author Bruno Lobo de Souza
+@since 29/12/2014
+/*/
+//------------------------------------------------------------------------------------
+Function VALTBVDATA()
+
+	Local lRet := .T.
+
+	If M->TBV_DATA > dDataBase
+		lRet := .F.
+		ShowHelpDlg( STR0013, { STR0047 }, 2,; //"ATENÇÃO" ## "A data da ocorência do plano emergêncial não pode ser posterior que a data atual."
+			{ STR0048 }, 2 ) // "Informe uma data inferior para a ocorência do plano emergêncial."
+	EndIf
+
+Return lRet
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} ChangeGet()
+Realiza backup do aCols modificado e carrega novo aCols de acordo
+com mudança de Aba.
+
+@param oFolder, Objeto, Objeto do TFolder
+
+@author Jackson Machado
+@since	06/01/2015
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function ChangeGet( oFolder )
+
+	If oFolder:nOption == 1
+		EntraGet(2)
+	ElseIf oFolder:nOption == 2
+		EntraGet(3)
+	EndIf
+
+Return Nil
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} SG340DTVAL()
+Valida data de Ocorrência
+
+@author Gabriel Augusto Werlich
+@since	26/02/2015
+@return lRet
+/*/
+//----------------------------------------------------------------
+Function SG340DTVAL()
+
+	Local lRet := .T.
+	Local dData := StoD( Space( 8 ) )
+	dData := M->TBV_DATA
+
+	If M->TBX_DATA < dData
+		ShowHelpDlg( STR0013 , { STR0055 } , 2 ,; //"ATENÇÃO" ## A data de aviso não pode ser inferior que a data da ocorrência"
+								{ STR0056 + DTOC( dData ) + "." } , 2 ) //"Informe uma data igual ou superior á "
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} SG340HRVAL()
+Valida hora de Ocorrência
+
+@author Gabriel Augusto Werlich
+@since	26/02/2015
+@param nParam, numérico
+@return lRet
+/*/
+//----------------------------------------------------------------
+Function SG340HRVAL( nParam )
+
+	Local lRet  := .T.
+	Local nDataCont
+	Local nDataAviso
+	Local nHoraCheg
+	Local nDataCheg
+
+	If nParam == 1
+
+		nDataAviso	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TBX_DATA" })
+		If nDataAviso > 0 .And. M->TBV_DATA == aCols[n][nDataAviso] .And. M->TBX_HORA < M->TBV_HORA
+			ShowHelpDlg( STR0013 , { STR0059 } , 2 ,; //"ATENÇÃO"##"A hora de aviso não pode ser inferior à hora da ocorrência."
+									{ STR0058 + M->TBV_HORA + "." } , 2 ) //"Informe a hora igual ou superior a "
+			lRet := .F.
+		EndIF
+
+	ElseIf nParam == 2
+
+		nDataCont	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_DTCONT" })
+		If nDataCont > 0 .And. M->TBV_DATA == aCols[n][nDataCont] .And. M->TC7_HRCONT < M->TBV_HORA
+			ShowHelpDlg( STR0013 , { STR0060 } , 2 ,; //"ATENÇÃO"##"A hora de contato não pode ser inferior à hora da ocorrência."
+									{ STR0058 + M->TBV_HORA + "."} , 2 ) //"Informe a hora igual ou superior a "
+			lRet := .F.
+		EndIf
+
+	ElseIf nParam == 3
+
+		nDataCheg	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_DTCHEG" })
+		nHoraCheg	:= aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == "TC7_HRCHEG" })
+		If nDataCheg > 0 .And. TC2->TC2_DATA == aCols[n][nDataCheg] .And. TC2->TC2_HORA >  M->TC7_HRCHEG
+			ShowHelpDlg( STR0013 , { STR0060 } , 2 ,; //"ATENÇÃO"##"A hora de contato não pode ser inferior à hora da ocorrência."
+									{ STR0058 + TC2->TC2_HORA + "."} , 2 ) //"Informe a hora igual ou superior a "
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SG340VLCMB()
+Função para validar o folder de Contatos Externos da MsGetDados.
+Se o campo aviso for = 2 (Não), os campos de "Data/Hora" serão limpos.
+
+@return .T. or .F.
+
+@sample SG340VLCMB()
+
+@author Gabriel Augusto Werlich
+@since 26/02/2015
+/*/
+//---------------------------------------------------------------------------------------------------
+Function SG340VLCMB()
+
+	Local nData
+	Local nHora
+
+	If !Pertence("12")
+		Return .F.
+	Endif
+
+	nData	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TC7_DTCONT" })
+	nHora	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TC7_HRCONT" })
+
+	If M->TC7_AVISAD == "2"
+
+		If nData > 0 .And. nHora > 0
+			aCols[n][nData] := CtoD("")
+			aCols[n][nHora] := "  :  "
+		Endif
+
+	EndIf
+
+	oGet02:oBrowse:Refresh()
+
+Return .T.

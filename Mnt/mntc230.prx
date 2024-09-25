@@ -1,0 +1,431 @@
+#INCLUDE "Mntc230.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------                      
+/*/{Protheus.doc} MNTC230
+Horas Paradas na Manuten‡ao ( Planejada X Nao Planejada )
+@author Thiago Olis Machado
+@since 06/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC230()
+
+	//----------------------------------------------------------------
+	//| Variaveis utilizadas para Parametros!                        |
+	//| mv_par01     // Periodo Inicio                               |
+	//| mv_par02     // Periodo Fim                                  |
+	//| mv_par03     // De Tipo de Manutencao                        |
+	//| mv_par04     // Ate Tipo de Manutencao                       |
+	//| mv_par05     // De Area Manutencao                           |
+	//| mv_par06     // Ate Area de Manutencao                       |
+	//| mv_par07     // De Centro de Custo                           |
+	//| mv_par08     // Ate Centro de Custo                          |
+	//| mv_par09     // De Bem                                       |
+	//| mv_par10     // Ate Bem                                      |
+	//| mv_par11     // De Familia de Bem                            |
+	//| mv_par12     // Ate Familia de Bem                           |
+	//| mv_par13     // De Servico                                   |
+	//| mv_par14     // Ate Servico                                  |
+	//----------------------------------------------------------------
+	
+	Private lOutro := .F.
+	
+	SetKey( VK_F9, { | | NGVersao( "MNTC230" , 2 ) } )
+
+	If Pergunte("MNT23G",.T.)
+		Processa({|lEnd| NG230GRA()})
+	EndIf
+
+Return Nil
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG230GRA
+Processa as O.S.
+@author Thiago Olis Machado
+@since 06/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG230GRA()
+
+	Local cCodBem := ""
+	Local oTmpTbl1
+	Local oTmpTbl2
+	
+	Private cTRB	:= GetNextAlias() //Alias Tabela Temporaria 1
+	Private cTRBV	:= GetNextAlias() //Alias Tabela Temporaria 2
+		
+	cCONDSTJ := 'STJ->TJ_SITUACA = "L" .And. STJ->TJ_TERMINO = "S" .And. STJ->TJ_TIPOOS = "B"'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_TIPO    >= MV_PAR03 .And. STJ->TJ_TIPO    <= MV_PAR04)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CODAREA >= MV_PAR05 .And. STJ->TJ_CODAREA <= MV_PAR06)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CODBEM  >= MV_PAR09 .And. STJ->TJ_CODBEM  <= MV_PAR10)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_SERVICO >= MV_PAR13 .And. STJ->TJ_SERVICO <= MV_PAR14)'
+
+	cCONDSTS := 'STS->TS_SITUACA = "L" .And. STS->TS_TERMINO = "S" .And. STS->TS_TIPOOS = "B"'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_TIPO    >= MV_PAR03 .And. STS->TS_TIPO    <= MV_PAR04)'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CODAREA >= MV_PAR05 .And. STS->TS_CODAREA <= MV_PAR06)'  
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CODBEM  >= MV_PAR09 .And. STS->TS_CODBEM  <= MV_PAR10)'  
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_SERVICO >= MV_PAR13 .And. STS->TS_SERVICO <= MV_PAR14)'  
+
+	aCampos  := {}                                            	
+		AAdd(aCAMPOS,{"ANOMESC"  ,"C",07,0})
+		AAdd(aCAMPOS,{"NOMEMANO" ,"C",18,0})
+		AAdd(aCAMPOS,{"HORASP"   ,"N",09,2})
+		AAdd(aCAMPOS,{"HORASN"   ,"N",09,2})
+		AAdd(aCAMPOS,{"HORASO"   ,"N",09,2})
+	
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices 
+	oTmpTbl1:AddIndex( "Ind01" , {"ANOMESC"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	//----------------------------------------------------------------------------
+	//| Processa arquivo de O.S.                                                 |
+	//----------------------------------------------------------------------------
+	
+	DbSelectArea("STJ")
+	DbSetOrder(07)  
+	nReg1 := (LastRec() - Recno())
+	DbSeek(xFilial("STJ")+MV_PAR07,.T.)     
+
+	DbSelectArea("STS")
+	DbSetOrder(04)
+	nReg2 := (LastRec() - Recno())
+	DbSeek(xFilial("STS")+MV_PAR07,.T.)  
+
+	//FILTRA O PERIODO DE MANUTENCAO
+	vSEQMES := {}
+	MV012   := MV_PAR01
+	nCONT   := 1
+	nDIA    := day(mv012)
+	nMES    := Month(mv012) 
+	nANO    := year(mv012)
+
+	nLopINI := val(SubStr(dtos(mv012), 1, 6))
+	nLopFIM := val(SubStr(dtos(MV_PAR02), 1, 6))
+
+	While nLopINI <= nLopFIM
+
+		dData:= mv012 
+		cMes := SubStr(MESEXTENSO(Str(Month(dData))),1,3)
+		cAno := AllTrim(Str(Year(dData)))
+
+		cANOMES := STR(nANO,4)+Strzero(nMES,2)
+		DbSelectArea(cTRB)
+		If !(cTRB)->(DbSeek(cANOMES))
+			(cTRB)->(DbAppend())
+			(cTRB)->ANOMESC  := cANOMES
+			(cTRB)->NOMEMANO := MESEXTENSO(nMES)+"/"+ STR(nANO,4) //' De '
+			(cTRB)->HORASP   := 0
+			(cTRB)->HORASN   := 0
+			(cTRB)->HORASO   := 0
+		EndIf
+
+		Aadd(vSEQMES,{Alltrim(Str(nMES))+Alltrim(Str(nANO)),nCONT})
+
+		nCONT += 1
+		nMES  += 1
+
+		If nMES > 12
+			nMES := nMES -12
+			nANO := nANO + 1
+		EndIf 
+
+		nDIA1 := NGDIASMES(nMES,nANO)
+		nDIA1 := If(nDIA <= nDIA1,nDIA,nDIA1)
+		mv012 := cTod(Str(nDIA1)+Str(nMes)+Str(nAno))
+
+		nLopINI := val(SubStr(dtos(mv012), 1, 6))
+	End
+
+	DbSelectArea("STJ")
+	ProcRegua(nReg1)
+	While !Eof() .And. STJ->TJ_FILIAL  == xFilial("STJ") .And. STJ->TJ_CCUSTO <= MV_PAR08
+
+		IncProc()
+		If &(cCONDSTJ)
+
+			If !Empty(STJ->TJ_DTPRFIM)
+				If STJ->TJ_DTPRFIM < MV_PAR01 .Or. STJ->TJ_DTPRFIM > MV_PAR02 
+					Dbskip()
+					Loop
+				EndIf 
+			Else 
+				If STJ->TJ_DTMRFIM < MV_PAR01 .Or. STJ->TJ_DTMRFIM > MV_PAR02 
+					Dbskip()
+					Loop
+				EndIf 
+			EndIf     
+
+			DbSelectArea("ST9")
+			DbSetOrder(1)
+			DbSeek(xFILIAL("ST9")+STJ->TJ_CODBEM)
+
+			If ST9->T9_CODFAMI < MV_PAR11 .Or. ST9->T9_CODFAMI > MV_PAR12
+				DbSelectArea("STJ")
+				Dbskip()
+				Loop
+			EndIf
+
+			DbSelectArea("ST4")
+			DbSeek(xFilial("ST4")+STJ->TJ_SERVICO)
+
+			DbSelectArea("STE")
+			DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+			If STE->TE_CARACTE == "C"
+				cTIPO_OS := "C"
+			ElseIf STE->TE_CARACTE == "P"
+				cTIPO_OS := "P"
+			Else
+				cTIPO_OS := "O"
+				lOutro := .t.
+			EndIf
+
+			DbSelectArea("STJ")
+			//Calcula a Duracao da Manutencao
+			DbSelectArea("STF")
+			DbSeek(xFilial("STF")+STJ->TJ_CODBEM+STJ->TJ_SERVICO+STJ->TJ_SEQRELA)
+			If !Empty(STJ->TJ_DTPRINI)
+				dINI := STJ->TJ_DTPRINI
+				hINI := STJ->TJ_HOPRINI
+			Else
+				dINI := STJ->TJ_DTMRINI
+				hINI := STJ->TJ_HOMRINI
+			EndIf
+
+			If !Empty(STJ->TJ_DTPRFIM)
+				dFIM := STJ->TJ_DTPRFIM
+				hFIM := STJ->TJ_HOPRFIM
+			Else
+				dFIM := STJ->TJ_DTMRFIM
+				hFIM := STJ->TJ_HOMRFIM
+			EndIf
+
+			If MV_PAR15 == 1 //Se considera bem - (calendário)
+				cCodBem := STJ->TJ_CODBEM //Calcula tempo baseado em calendário do bem
+			Else
+				cCodBem := "" //Calcula tempo corrido
+			EndIf
+			//Função que retorna o tempo de funcionamento de um equipamento em determinado periodo
+			nREA := NGCALEBEM( dINI,hINI,dFIM,hFIM,cCodBem )
+			nREA := NGCONVERHORA( HTON( nREA ),'D','S' )
+			nREA := If(nREA < 0.00, 0.00, nREA)
+
+			If nREA > 0.00
+				nMES := Month(dFIM)
+				nANO := Year(dFIM)
+				cAno := StrZero(nAno,4)
+				cMES := StrZero(nMES,2)
+
+				nPOSC230 := Ascan(vSEQMES,{|x| x[1] == Alltrim(Str(nMES))+Alltrim(Str(nANO))})
+				cANOMES := STR(nANO,4)+Strzero(nMES,2)
+
+				DbSelectArea(cTRB)
+				If !(cTRB)->(DbSeek(cANOMES))
+					(cTRB)->(DbAppend())
+					(cTRB)->ANOMESC  := cANOMES
+					(cTRB)->NOMEMANO := MESEXTENSO(nMES) + '/' + STR(nANO,4)
+				EndIf
+				If cTIPO_OS == "P"
+					(cTRB)->HORASP := (cTRB)->HORASP + nREA
+				ElseIf cTIPO_OS == "C"
+					(cTRB)->HORASN := (cTRB)->HORASN + nREA
+				Else
+					(cTRB)->HORASO := (cTRB)->HORASO + nREA
+				EndIf
+			EndIf      
+		EndIf   
+		DbSelectArea("STJ")
+		DbSkip()
+	End
+
+	ProcRegua(nReg2)
+	DbSelectArea("STS")
+	While !Eof() .And. STS->TS_FILIAL  == xFilial("STS") .And. STS->TS_CCUSTO <= MV_PAR08
+
+		IncProc()     
+		If &(cCONDSTS)
+
+			If !Empty(STS->TS_DTPRFIM)
+				If STS->TS_DTPRFIM < MV_PAR01 .Or. STS->TS_DTPRFIM > MV_PAR02 
+					Dbskip()
+					Loop
+				EndIf 
+			Else 
+				If STS->TS_DTMRFIM < MV_PAR01 .Or. STS->TS_DTMRFIM > MV_PAR02 
+					Dbskip()
+					Loop
+				EndIf 
+			EndIf     
+
+			DbSelectArea("ST9")
+			DbSetOrder(1)
+			DbSeek(xFILIAL("ST9")+STS->TS_CODBEM)
+
+			If ST9->T9_CODFAMI < MV_PAR11 .Or. ST9->T9_CODFAMI > MV_PAR12
+				DbSelectArea("STS")
+				Dbskip()
+				Loop
+			EndIf
+
+			DbSelectArea("ST4")
+			DbSeek(xFilial("ST4")+STS->TS_SERVICO)
+
+			DbSelectArea("STE")
+			DbSeek(xFilial("STE") + ST4->T4_TIPOMAN)
+			If STE->TE_CARACTE == "C"
+				cTIPO_OS := "C"
+			ElseIf STE->TE_CARACTE == "P"
+				cTIPO_OS := "P"
+			Else
+				cTIPO_OS := "O"
+				lOutro := .T.
+			EndIf
+
+			DbSelectArea("STS")
+			//Calcula a Duracao da Manutencao
+			DbSelectArea("STF")
+			DbSeek(xFilial("STF") + STS->TS_CODBEM + STS->TS_SERVICO+STS->TS_SEQRELA)
+			If !Empty(STS->TS_DTPRINI)
+				dINI := STS->TS_DTPRINI
+				hINI := STS->TS_HOPRINI
+			Else
+				dINI := STS->TS_DTMRINI
+				hINI := STS->TS_HOMRINI
+			EndIf
+
+			If !Empty(STS->TS_DTPRFIM)
+				dFIM := STS->TS_DTPRFIM
+				hFIM := STS->TS_HOPRFIM
+			Else
+				dFIM := STS->TS_DTMRFIM
+				hFIM := STS->TS_HOMRFIM
+			EndIf
+
+			If MV_PAR15 == 1 //Se considera bem - (calendário)
+				cCodBem := STS->TS_CODBEM //Calcula tempo baseado em calendário do bem
+			Else
+				cCodBem := "" //Calcula tempo corrido
+			EndIf
+			//Função que retorna o tempo de funcionamento de um equipamento em determinado periodo
+			nREA := NGCALEBEM( dINI,hINI,dFIM,hFIM,cCodBem )
+			nREA := NGCONVERHORA( HTON( nREA ),'D','S' )
+			nREA := If( nREA < 0.00,0.00,nREA )
+
+			If nREA > 0.00
+				nMES := Month(dFIM)
+				nANO := Year(dFIM)
+
+				nPOSC230 := Ascan(vSEQMES,{|x| x[1] == Alltrim(Str(nMES))+Alltrim(Str(nANO))})
+				cANOMES := STR(nANO,4)+Strzero(nMES,2)
+
+				DbSelectArea(cTRB)
+				If !(cTRB)->(DbSeek(cANOMES))
+					(cTRB)->(DbAppend())
+					(cTRB)->ANOMESC  := cANOMES
+					(cTRB)->NOMEMANO := MESEXTENSO(nMES) + '/' + STR(nANO,4)
+				EndIf
+				If cTIPO_OS == "P"
+					(cTRB)->HORASP   := (cTRB)->HORASP + nREA
+				ElseIf cTIPO_OS == "C"
+					(cTRB)->HORASN   := (cTRB)->HORASN + nREA
+				Else
+					(cTRB)->HORASO   := (cTRB)->HORASO + nREA
+				EndIf
+			EndIf
+		EndIf  
+		DbSelectArea("STS")
+		DbSkip()
+	End
+
+	//---------------------------------------------------------------------
+	//| Inicio da Montagem do Gr fico                                     |
+	//---------------------------------------------------------------------
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	If Reccount() == 0
+		Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico."###"ATENCAO"
+		oTmpTbl1:Delete()//Deleta Arquivo Temporario 1
+		Return .T.
+	EndIf
+
+	If lOutro      
+		aDBF3 := {{"ANOMESC" , "C", 07,0},;
+				  {"NOMEMANO", "C", 18,0},;
+				  {"VALOSP"  , "N", 12,2},;
+				  {"VALOSN"  , "N", 12,2},;
+				  {"VALOSO"  , "N", 12,2}}
+	Else
+		aDBF3 := {{"ANOMESC" , "C", 07,0},;
+				  {"NOMEMANO", "C", 18,0},;
+				  {"VALOSP"  , "N", 12,2},;
+				  {"VALOSN"  , "N", 12,2}}
+	Endif
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Cria indices
+	oTmpTbl2:AddIndex( "Ind02" , {"ANOMESC"} )
+	//Cria a tabela Temporaria 
+	oTmpTbl2:Create()
+
+	DbSelectArea(cTRB)
+	DbSetOrder(1)
+	DbGoTop()
+
+	While !Eof()  
+		DbSelectArea(cTRBV)
+		If !(cTRBV)->(DbSeek((cTRB)->ANOMESC))
+			(cTRBV)->(DbAppend())
+			(cTRBV)->ANOMESC  := (cTRB)->ANOMESC
+			(cTRBV)->NOMEMANO := (cTRB)->NOMEMANO
+			(cTRBV)->VALOSP   := 0
+			(cTRBV)->VALOSN   := 0
+			If lOutro
+				(cTRBV)->VALOSO   := 0
+			Endif
+		EndIf
+
+		(cTRBV)->VALOSP   := (cTRBV)->VALOSP + (cTRB)->HORASP
+		(cTRBV)->VALOSN   := (cTRBV)->VALOSN + (cTRB)->HORASN
+		If lOutro
+			(cTRBV)->VALOSO   := (cTRBV)->VALOSO + (cTRB)->HORASO
+		Endif
+
+		DbSelectArea(cTRB)
+		DbSkip()
+	End
+
+	DbSelectArea(cTRBV)
+	DbGoTop()
+	//---------------------------------------------------------------
+	//| 1 - linha titulo do grafico (janela)						|
+	//| 2 - linha titulo da direita do grafico						|
+	//| 3 - linha titulo superior do grafico						|
+	//| 4 - linha titulo da direita do grafico						|
+	//| 5 - linha titulo da inferior do grafico						|
+	//| 6 - linha series do grafico									|
+	//| 7 - leitura ("A" - Arquivo temporario,"M" - Matriz)			|
+	//| 8 - alias doa arquivo temporario com os dados /ou			|
+	//| 9 - matriz com os dados										|
+	//|---------------------------------------------------------------
+	cTITUD := STR0016 + DtoC(MV_PAR01) + STR0017 + DtoC(MV_PAR02) //"Periodo de "###" Ate "
+	vSERPR:={}
+		Aadd(vSERPR,STR0020) //"Preventiva"
+		Aadd(vSERPR,STR0022) //"Corretiva"
+	If lOutro
+		Aadd(vSERPR,STR0025) //"Outros"
+	Endif
+
+	vCRIGTXT := NGGRAFICO(" "+STR0023," " ," ",STR0018+" "+cTITUD,"  ",vSERPR,"A",(cTRBV),,,,,,.T.)
+
+	oTmpTbl2:Delete()//Deleta Tabela Temporaria 2
+
+	oTmpTbl1:Delete()//Deleta Tabela Temporaria 1
+
+Return .T.

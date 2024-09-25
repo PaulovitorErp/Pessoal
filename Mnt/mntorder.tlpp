@@ -1,0 +1,451 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include 'mntorder.ch'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MntOrderGet
+Método Get para Leitura de Ordem de Serviço SIGAMNT/SIGAGFR
+
+@param cOrderCode, String, Código da O.S.
+
+@author Cauê Girardi Petri
+@since	11/10/2023
+@return	Lógico, Define se o processo foi concluido com sucesso
+/*/
+//---------------------------------------------------------------------
+
+@Get ( endpoint = 'mntOrder/order/:orderCode' )
+function MntOrderGet()
+
+    local lRet       := .t.
+    local jPath      := oRest:getPathParamsRequest()
+    local cOrderCode := jPath[ 'orderCode' ]
+	local oError
+	local bLastError
+
+	bLastError := ErrorBlock( { |oError| MntWSError( oError ),lRet:= .F., Break(oError) } )
+
+    Begin Sequence
+
+        If lRet
+
+            DbSelectArea( 'STJ' )
+            DbSetOrder( 1 )
+            If DbSeek( FwxFilial('STJ') + PadR( cOrderCode, TAMSX3( 'TJ_ORDEM' )[1] ) )
+
+                oRest:SetResponse('{ ')
+
+                fExecSTJ()           //Ordem de Serviço
+                fExecSTL(cOrderCode) //Insumos
+                fExecTTC(cOrderCode) //Sintomas
+                fExecSTQ(cOrderCode) //CheckList
+                fExecTPL(cOrderCode) //Resposta da Checklist
+
+                oRest:SetResponse( '}' )
+
+                printf( 'Ordem ' + cOrderCode + ' enviada com sucesso' )
+
+            Else
+
+                printf( STR005 )
+                
+                oRest:setFault('{"error": "' + STR005 +'"}')
+                oRest:setStatusCode(400)
+
+            EndIf
+
+        EndIf
+
+	End Sequence
+
+    ErrorBlock(bLastError)
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} printf
+Função para apresentar ou não mensagens no server, utilizado geralmente
+para testes de desenvolvimento
+
+@author	Cauê Girardi Petri
+@since  21/03/2023
+@return string, log + data e hora
+/*/
+//---------------------------------------------------------------------
+Static Function printf(cLog)
+return FwLogMsg( 'INFO', cValToChar( ThreadId() ), 'REST', 'mntOrder', '', '01', cLog, 0, 0, {} )
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecSTJ
+Função para colocar na tela os dados da STJ (Ordem de Serviço)
+
+@author	Cauê Girardi Petri
+@since  18/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecSTJ()
+
+    oRest:SetResponse( '"order":{')
+
+    fLoadField( 'STJ' )
+
+    oRest:SetResponse('}')
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecSTL
+Função para colocar na tela os dados da STL (Insumos)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  19/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecSTL(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'STL' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('STL') + cOrderCode )
+
+        oRest:SetResponse(',"inputs":[')
+
+        While STJ->TJ_FILIAL == STL->TL_FILIAL .AND. STJ->TJ_PLANO == STL->TL_PLANO;
+            .AND. STJ->TJ_ORDEM == STL->TL_ORDEM
+
+            If nCount >= 1
+
+                oRest:SetResponse(',')
+
+            EndIf
+
+            oRest:SetResponse( '{' )
+
+            oRest:SetResponse( '"fields":{' ) 
+
+            fLoadField( 'STL' )
+
+            oRest:SetResponse('}')
+
+            //Procura e escreve as ocorrencias do insumo
+            fExecSTN(cOrderCode)
+
+            oRest:SetResponse('}')
+
+            STL->( DbSkip() )
+
+            nCount++
+
+        End
+
+        oRest:SetResponse(']') 
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecTTC
+Função para colocar na tela os dados da TTC (Sintomas da O.S.)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  27/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecTTC(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'TTC' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('TTC') + cOrderCode )
+
+        oRest:SetResponse( ',"symptoms":[' ) 
+        
+
+        While STJ->TJ_FILIAL == TTC->TTC_FILIAL .AND. STJ->TJ_PLANO == TTC->TTC_PLANO;
+            .AND. STJ->TJ_ORDEM == TTC->TTC_ORDEM
+
+            If nCount >= 1
+
+                oRest:SetResponse(',')
+
+            EndIf
+
+            oRest:SetResponse( '{' ) 
+
+            fLoadField('TTC')
+
+            oRest:SetResponse( '}' ) 
+
+            TTC->( DbSkip() )
+
+            nCount++
+
+        End
+
+        oRest:SetResponse( ']' ) 
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecSTN
+Função para colocar na tela os dados da STN (Ocorrência do Insumo)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  19/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecSTN(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'STN' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('STN') + cOrderCode )
+
+        oRest:SetResponse( ',"ocurrences":[' ) 
+        
+
+        While STL->TL_FILIAL == STN->TN_FILIAL .AND. STL->TL_PLANO == STN->TN_PLANO;
+            .AND. STL->TL_ORDEM == STN->TN_ORDEM
+
+            If nCount >= 1
+
+                oRest:SetResponse(',')
+
+            EndIf
+
+            oRest:SetResponse( '{' ) 
+
+            fLoadField('STN')
+
+            oRest:SetResponse( '}' ) 
+
+            STN->( DbSkip() )
+
+            nCount++
+
+        End
+
+        oRest:SetResponse( ']' ) 
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecSTQ
+Função para colocar na tela os dados da STQ (Checklists)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  20/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecSTQ(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'STQ' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('STQ') + cOrderCode )
+
+        oRest:SetResponse( ',"checklists":[' ) 
+
+        While STJ->TJ_FILIAL == STQ->TQ_FILIAL .AND. STJ->TJ_PLANO == STQ->TQ_PLANO;
+            .AND. STJ->TJ_ORDEM == STQ->TQ_ORDEM
+
+            If nCount >= 1
+
+                oRest:SetResponse(',')
+
+            EndIf
+
+            oRest:SetResponse('{')
+
+            oRest:SetResponse( '"fields":{' )
+
+            fLoadField('STQ')
+
+            oRest:SetResponse( '}' ) 
+
+            //Procura e escreve as repostas do checklist
+            fExecTPQ(cOrderCode)
+
+            STQ->( DbSkip() )
+
+            oRest:SetResponse('}')
+
+            nCount++
+
+        End
+
+        oRest:SetResponse( ']' )
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecTPQ
+Função para colocar na tela os dados da TPQ (Resposta das checklists)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  20/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecTPQ(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'TPQ' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('TPQ') + cOrderCode )
+
+        oRest:SetResponse( ',"answers":[' )
+        
+        While STQ->TQ_FILIAL == TPQ->TPQ_FILIAL .AND. STQ->TQ_PLANO == TPQ->TPQ_PLANO;
+            .AND. STQ->TQ_ORDEM == TPQ->TPQ_ORDEM .AND. STQ->TQ_ETAPA == TPQ->TPQ_ETAPA
+
+            If nCount >= 1
+
+                oRest:SetResponse(',')
+
+            EndIf
+
+            oRest:SetResponse( '{' )
+
+            fLoadField( 'TPQ' )
+
+            oRest:SetResponse('}')
+
+            TPQ->( DbSkip() )
+
+            nCount++
+
+        End
+
+        oRest:SetResponse( ']' )
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fExecTPL
+Função para colocar na tela os dados da TPL (Motivo de Atraso)
+
+@param cOrderCode, String, Código da O.S.
+
+@author	Cauê Girardi Petri
+@since  20/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fExecTPL(cOrderCode)
+
+    Local nCount := 0
+
+    DbSelectArea( 'TPL' )
+    DbSetOrder( 1 )
+    If DbSeek( FwxFilial('TPL') + cOrderCode )
+
+        oRest:SetResponse( ',"reasonsForDelay":[' ) 
+
+        While STJ->TJ_FILIAL == TPL->TPL_FILIAL .AND. STJ->TJ_ORDEM == TPL->TPL_ORDEM
+            
+        If nCount >= 1
+
+            oRest:SetResponse(',')
+
+        EndIf
+
+            oRest:SetResponse( '{' )
+
+            fLoadField( 'TPL' )
+
+            oRest:SetResponse('}' )
+
+            TPL->( DbSkip() )
+
+            nCount++
+
+        End
+
+        oRest:SetResponse( ']' )
+
+    EndIf
+
+Return
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} fLoadField
+Função para carregar os campos de cada tabela
+
+@param cAliasTab , String, Alias atual
+
+@author	Cauê Girardi Petri
+@since  20/10/2023
+/*/
+//--------------------------------------------------------------------------------
+Static Function fLoadField( cAliasTab )
+
+    Local aCampos   := {}
+    Local ni        := 0
+    Local cResult   := ''
+
+    RegToMemory( cAliasTab, .F. )
+    aCampos := NGHeader( cAliasTab, , .F. )
+
+    For ni := 1 to Len(aCampos)
+
+
+        If aCampos[ ni,10 ] <> 'V'
+
+            If aCampos[ni][8] == 'C' .OR. aCampos[ni][8] == 'M'
+
+                cResult := '"' + &( cAliasTab + '->' + aCampos[ni][2]) + '"'
+
+            ElseIf aCampos[ni][8] == 'D'
+
+                cResult := '"' + DtoS( &( cAliasTab + '->' +  aCampos[ni][2] ) ) + '"'
+
+            Else
+
+                cResult := cValToChar( &( cAliasTab + '->' +  aCampos[ni][2] ) )
+
+            EndIf
+
+        Else
+
+            cResult := '"' + AllTrim( &( Posicione("SX3",2,aCampos[ni,2],"X3_RELACAO") ) ) + '"'
+
+        EndIf
+
+        If !Empty( cResult )
+
+            If ni > 1
+
+                oRest:SetResponse( ', ' ) 
+
+            EndIf
+
+            oRest:SetResponse( '"'+ aCampos[ni][2] + '"' + ': ' + cResult )
+
+        EndIf
+
+    Next ni
+
+Return

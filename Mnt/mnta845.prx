@@ -1,0 +1,1291 @@
+#INCLUDE "MNTA845.ch"
+#INCLUDE "PROTHEUS.CH"
+#Include 'FWMVCDEF.CH'
+
+Static lMntFin := SuperGetMv('MV_NGMNTFI',.F.,'N') == 'S' // Integração Manutenção de Ativos e Financeiro
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA845
+Permite consultar e corrigir os erros de inconsistencias de multas
+@author Vitor Bonet
+@since 20/11/2018
+@version p12
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA845()
+
+	Local aCoors      := {}
+	Local aBrowse     := {}
+	Local aBrowse2    := {}
+	Local aIndex      := {}
+	Local aIndex2     := {}
+	Local aNGBeginPrm := {}
+	Local aDBF8452    := {}
+	Local aDBF8453    := {}
+	Local lRet        := .T.
+	Local nSizeMul    := 0
+	Local oPanelUp
+	Local oPaneDown
+	Local oFWLayer
+	Local oPanel1Right
+	Local oPanel2Right
+	Local oRelacZA4
+
+	If MNTAmIIn( 95 )
+
+		aNGBeginPrm := NGBeginPrm()
+		aCoors      := FWGetDialogSize( oMainWnd )
+		nSizeMul    := FWTamSX3( 'TRX_MULTA' )[1]
+		
+		Private oDlgPrinc
+		Private oBrowseUp
+		Private oBrowseDown
+		Private oTemp1	//Tabela Temporaria 1
+		Private oTemp2	//Tabela Temporaria 2
+		Private lTemIte	   := .T.
+		Private lTemMultas := .F.
+		Private cPerg      := "MNT845"
+		Private cTRB2	   := GetNextAlias()
+		Private cTRB	   := GetNextAlias()
+		Private cCadastro  := OemtoAnsi(NGSX2NOME("TRX"))
+		Private lParTMS    := SuperGetMv("MV_NGMNTMS",.F.,"N") == "N"
+		Private oNG845Nao  := LoadBitmap( GetResources(),"BR_VERMELHO")
+		Private cTitulo    := STR0001 //"Acerto das Inconsistências de Multas"
+		Private nSizeFil   := If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(SM0->M0_CODFIL))
+		Private lIntFin    := lMntFin //Não retirar - utilizado dentro do MNTA765
+		Private cCHANGEKEY := ""
+		Private cGerSeq    := ""
+		Private aParcelas  := {}
+		Private Titulo     := STR0036 //"Inconsistências De Multas"
+
+		If lRet
+
+			MNTA765VAR() // Define variavies private
+
+			// Variaveis utilizadas para parametros!
+			// MV_PAR01     De Data Infracao
+			// MV_PAR02     Ate Data Infracao
+
+			If !Pergunte(cPerg,.T.)
+				Return
+			EndIf
+
+			aDBF8453  := TRX->( dbStruct() )
+			aAdd( aDBF8453, { 'FILIAL', 'C', nSizeFil, 0 } )
+			aAdd( aDBF8453, { 'MULTA' , 'C', nSizeMul, 0 } )
+			aAdd( aDBF8453, { 'INCONS', 'C', 08      , 0 } )
+			aAdd( aDBF8453, { 'INDESC', 'C', 50      , 0 } )
+			aAdd( aDBF8453, { 'LEGEN' , 'C', 01      , 0 } )
+
+			// Intancia classe FWTemporaryTable
+			oTemp1  := FWTemporaryTable():New( cTRB, aDBF8453 )
+			oTemp1:AddIndex( "Index01" , {"INCONS"}  )
+			oTemp1:AddIndex( "Index02" , {"FILIAL","MULTA"} )
+			oTemp1:Create()
+
+			// Tabela que contem o registro das multas rejeitadas
+			aDBF8452  := TRX->( dbStruct() )
+			aAdd( aDBF8452, { 'LEGEN'  , 'C', 01      , 0 } )
+			aAdd( aDBF8452, { 'MULTA'  , 'C', nSizeMul, 0 } )
+			aAdd( aDBF8452, { 'DATAINF', 'D', 08      , 0 } )
+			aAdd( aDBF8452, { 'HORAINF', 'C', 05      , 0 } )
+			aAdd( aDBF8452, { 'STATUSM', 'C', 01      , 0 } )
+			aAdd( aDBF8452, { 'CODINCO', 'C', 01      , 0 } )
+			aAdd( aDBF8452, { 'CODBEM' , 'C', 16      , 0 } )
+			aAdd( aDBF8452, { 'DESBEM' , 'C', 20      , 0 } )
+			aAdd( aDBF8452, { 'CIDADE' , 'C', 15      , 0 } )
+			aAdd( aDBF8452, { 'ESTADO' , 'C', 02      , 0 } )
+			aAdd( aDBF8452, { 'FILIAL' , 'C', nSizeFil, 0 } )
+			aAdd( aDBF8452, { 'ALTERR' , 'C', 01      , 0 } )
+			aAdd( aDBF8452, { 'PLACA'  , 'C', 08      , 0 } )
+
+			// Intancia classe FWTemporaryTable
+			oTemp2  := FWTemporaryTable():New( cTRB2, aDBF8452 )
+			oTemp2:AddIndex( "Index01" , {"CODINCO"}  )
+			oTemp2:AddIndex( "Index02" , {"FILIAL","MULTA", "CODINCO"} )
+			oTemp2:Create()
+
+			Processa({ |lEnd| MNT845PROC() },STR0010) // "Aguarde ..Processando registros de inconsistêcias lógicas"
+
+			If !lTemMultas
+				Help(" ",1,"NGATENCAO",, STR0011 +Chr(13)+Chr(10)+ STR0012 ,3,1) // "Nao existe dados para montar a tela de Acerto de Inconsistências"###" de Multas dentro do periodo selecionado."
+				//Deleta arquivo temporario
+				oTemp1:Delete()
+				oTemp2:Delete()
+				Return .T.
+			EndIf
+
+			Define MsDialog oDlgPrinc Title cTitulo From aCoors[1], aCoors[2] To aCoors[3], aCoors[4] Pixel
+
+			// Cria o conteiner onde serão colocados os browses
+			oFWLayer := FWLayer():New()
+			oFWLayer:Init( oDlgPrinc, .F., .T. )
+
+			// Define Painel Superior
+			oFWLayer:AddLine( 'UP', 30, .F. )                     // Cria uma "linha" com 50% da tela
+			oFWLayer:AddCollumn( 'LEFT' ,  0.5, .T., 'UP' )        // Na "linha" criada eu crio uma coluna com 50% da tamanho dela
+			oFWLayer:AddCollumn( 'RIGHT',  99.5, .T., 'UP' )        // Na "linha" criada eu crio uma coluna com 50% da tamanho dela
+			oPanelUp := oFWLayer:GetColPanel( 'RIGHT', 'UP' )       // Pego o objeto desse pedaço do container
+			oPanel1Right := oFWLayer:GetColPanel( 'LEFT', 'UP' )  // Pego o objeto do pedaço direito
+
+			// Painel Inferior
+			oFWLayer:AddLine( 'DOWN', 70, .F. )                   // Cria uma "linha" com 50% da tela
+			oFWLayer:AddCollumn( 'LEFT' ,  0.5, .T., 'DOWN' )        // Na "linha" criada eu crio uma coluna com 50% da tamanho dela
+			oFWLayer:AddCollumn( 'RIGHT',  99.5, .T., 'DOWN' )        // Na "linha" criada eu crio uma coluna com 50% da tamanho dela
+			oPaneDown  := oFWLayer:GetColPanel( 'RIGHT' , 'DOWN' )  // Pego o objeto do pedaço esquerdo
+			oPanel2Right := oFWLayer:GetColPanel( 'LEFT', 'DOWN' )  // Pego o objeto do pedaço direito
+
+			//Definindo as colunas que serão usadas no browse
+			aAdd( aBrowse, { STR0014, 'INCONS', 'C', 01, 0 } ) // Código do Erro
+			aAdd( aBrowse, { STR0015, 'INDESC', 'C', 50, 0 } ) // Descrição
+
+			aAdd( aBrowse2, { STR0020, 'FILIAL' , 'C', nSizeFil, 0 } ) // Filial
+			aAdd( aBrowse2, { STR0021, 'MULTA'  , 'C', nSizeMul, 0 } ) // Multa
+			aAdd( aBrowse2, { STR0022, 'DATAINF', 'D', 08      , 0 } ) // Data da Infração
+			aAdd( aBrowse2, { STR0023, 'HORAINF', 'C', 05      , 0 } ) // Hora da Infração
+			aAdd( aBrowse2, { STR0071, 'CODINCO', 'C', 01      , 0 } ) // Código da Inconsistência
+			aAdd( aBrowse2, { STR0024, 'CODBEM' , 'C', 16      , 0 } ) // Código do Bem
+			aAdd( aBrowse2, { STR0025, 'DESBEM' , 'C', 20      , 0 } ) // Descrição do Bem
+			aAdd( aBrowse2, { STR0026, 'CIDADE' , 'C', 15      , 0 } ) // Cidade
+			aAdd( aBrowse2, { STR0027, 'ESTADO' , 'C', 02      , 0 } ) // Estado
+			aAdd( aBrowse2, { STR0072, 'PLACA'  , 'C', 08      , 0 } ) // Placa
+
+			SetFunName("zTmpCad")
+
+			aAdd(aIndex , "CODINCO" )
+			aAdd(aIndex2, "CODINCO" )
+
+			// FWmBrowse Superior Erros
+			oBrowseUp:= FWmBrowse():New()
+			oBrowseUp:SetOwner( oPanelUp )     // Aqui se associa o browse ao componente de tela
+			oBrowseUp:SetDescription( STR0013 )// Erros
+			oBrowseUp:SetAlias( cTRB )
+			oBrowseUp:DisableReport()          // Remove botão de imprimir Browse
+			oBrowseUp:SetMenuDef( '' )         // Define de onde virao os botoes deste browse
+			oBrowseUp:SetProfileID( '1' )
+			oBrowseUp:ForceQuitButton()
+			oBrowseUp:SetTemporary(.T.)
+			oBrowseUp:SetFields(aBrowse)
+			oBrowseUp:DisableDetails()
+			oBrowseUp:AddLegend("(cTRB)->LEGEN == '2'", "GREEN", STR0064) // "Inconsistências Corrigidas."
+			oBrowseUp:AddLegend("(cTRB)->LEGEN == '1'", "RED"  , STR0065) // "Inconsistências Pendentes."
+			oBrowseUp:Activate()
+
+			// Multas
+			oBrowseDown:= FWmBrowse():New()
+			oBrowseDown:SetOwner( oPaneDown )
+			oBrowseDown:SetDescription( STR0019 ) // "Multas Rejeitadas"
+			oBrowseDown:DisableReport()           // Remove botão de imprimir Browse
+			oBrowseDown:SetMenuDef( 'MNTA845' )   // Referencia uma funcao que nao tem menu para que nao exiba nenhum botao
+			oBrowseDown:DisableDetails()
+			oBrowseDown:SetAlias( cTRB2 )
+			oBrowseDown:SetProfileID( '2' )
+			oBrowseDown:SetTemporary(.T.)
+			oBrowseDown:SetParam({||ProcessMessage()})
+			oBrowseDown:AddLegend("(cTRB2)->LEGEN == '2'", "GREEN", STR0066) // "Inconsistência Corrigida."
+			oBrowseDown:AddLegend("(cTRB2)->LEGEN == '1'", "RED"  , STR0067) // "Inconsistência Pendente."
+			oBrowseDown:SetFields(aBrowse2)
+
+			// Relacionamento entre os Browses
+			oRelacZA4:= FWBrwRelation():New()
+			oRelacZA4:AddRelation( oBrowseUp  , oBrowseDown , {  { 'FILIAL', 'FILIAL' }, { 'CODINCO' , 'INCONS'  } } )
+			oRelacZA4:Activate()
+
+			// Ativa o Browse Filho
+			oBrowseDown:Activate()
+
+			Activate MsDialog oDlgPrinc Center
+
+		EndIf
+
+		NGRETURNPRM( aNGBeginPrm )
+
+	EndIf
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Opções de menu padrão.
+
+@author Vitor Bonet
+@since 20/11/2018
+@version P12
+@return aRotina - Estrutura
+	[n,1] Nome a aparecer no cabecalho
+	[n,2] Nome da Rotina associada
+	[n,3] Reservado
+	[n,4] Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+		6 - Alteração sem inclusão de registros
+		7 - Cópia
+		8 - Imprimir
+	[n,5] Nivel de acesso
+	[n,6] Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	ADD OPTION aRotina Title STR0005  Action "MNT845PoReg(4)" OPERATION 4 ACCESS 0 // "Alterar"
+	ADD OPTION aRotina Title STR0003  Action "MNT845PoReg(1)" OPERATION 2 ACCESS 0 // "Visualizar"
+	ADD OPTION aRotina Title STR0018  Action "MNT845IMPR"     OPERATION 8 ACCESS 0 // "Imprimir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Regras de Modelagem da gravacao
+
+@author Vitor Bonet
+@since 20/11/2018
+@version P12
+
+@return oModel, Objeto, Modelo de dados (MVC)
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	// Cria a estrutura a ser usada no Modelo de Dados
+	Local oStru := FWFormStruct( 1, "TRX", /*bAvalCampo*/, /*lViewUsado*/ )
+	Local oModel
+
+	// Retira campo obrigatório do Model, quando não está integrado ao Financeiro
+	If !lMntFin
+		oStru:RemoveField( 'TRX_PREFIX' )
+		oStru:RemoveField( 'TRX_TIPO' )
+		oStru:RemoveField( 'TRX_NUMSE2' )
+		oStru:RemoveField( 'TRX_NATURE' )
+		oStru:RemoveField( 'TRX_CONPAG' )
+	EndIf
+
+	// Remove campos de código do Memo.
+	oStru:RemoveField('TRX_MMSYP')
+	oStru:RemoveField('TRX_MMPAGA')
+	oStru:RemoveField('TRX_MMCOND')
+	oStru:RemoveField('TRX_MMRECU')
+	oStru:RemoveField('TRX_MMREST')
+
+	// Realiza correção de dicionário ao entrar na rotina.
+	oStru:SetProperty( 'TRX_DTENRE' , MODEL_FIELD_VALUES, {} )
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New( 'MNTA845', /*bPreValidacao*/, { |oModel| fTudoOk(oModel) }/*bPosValidacao*/, { | oModel | fMCommit( oModel ) }/*bCommit*/, /*bCancel*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields( 'MULTAS', /*cOwner*/, oStru )
+
+	// Adiciona a descricao do Modelo de Dados
+	oModel:SetDescription( STR0021 ) // Multa
+
+	// Adiciona a descricao do Componente do Modelo de Dados
+	oModel:GetModel( 'MULTAS' ):SetDescription( STR0021 ) // Multa
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+
+@author Vitor Bonet
+@since 20/11/2018
+@version P12
+
+@return oView,  Objeto, Objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	// Cria a estrutura a ser usada na View
+	Local oStru := FWFormStruct( 2, "TRX" )
+	// Cria um objeto de Modelo de Dados baseado no ModelDef do fonte informado
+	Local oModel   := FWLoadModel( 'MNTA845' )
+	Local oView
+
+	// Retira campo obrigatório do Model, quando não está integrado ao Financeiro
+	If !lMntFin
+		oStru:RemoveField( 'TRX_PREFIX' )
+		oStru:RemoveField( 'TRX_TIPO' )
+		oStru:RemoveField( 'TRX_NUMSE2' )
+		oStru:RemoveField( 'TRX_NATURE' )
+		oStru:RemoveField( 'TRX_CONPAG' )
+	EndIf
+
+	// Remove campos de código do Memo.
+	oStru:RemoveField('TRX_MMSYP')
+	oStru:RemoveField('TRX_MMPAGA')
+	oStru:RemoveField('TRX_MMCOND')
+	oStru:RemoveField('TRX_MMRECU')
+	oStru:RemoveField('TRX_MMREST')
+
+	// Realiza correção de dicionário ao entrar na rotina.
+	oStru:SetProperty( 'TRX_DTENRE' , MVC_VIEW_COMBOBOX, {} )
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+
+	// Define qual o Modelo de dados será utilizado
+	oView:SetModel( oModel )
+
+	// Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( 'VIEW', oStru, 'MULTAS' )
+
+	// Criar "box" horizontal para receber algum elemento da view
+	oView:CreateHorizontalBox( 'EMCIMA' , 100 )
+
+	// Relaciona o ID da View com o "box" para exibicao
+	oView:SetOwnerView( 'VIEW', 'EMCIMA'   )
+
+	// Liga a identificacao do componente
+	oView:EnableTitleView( 'VIEW' )
+
+	//Inclusão de itens nas Ações Relacionadas de acordo com O NGRightClick
+	NGMVCUserBtn(oView)
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT845PROC
+Carrega os arquivos temporarios
+@author Vitor Bonet
+@since 20/11/2018
+@version p12
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT845PROC()
+
+	cAliasQry := GetNextAlias()
+
+	BeginSql Alias cAliasQry
+		SELECT TRX.TRX_MULTA, TRX.TRX_DTINFR, TRX.TRX_RHINFR, TSO.TSO_STATUS, TSO.TSO_INCONS,
+				TRX.TRX_PLACA, TRX.TRX_FILIAL, TRX.TRX_CIDINF, TRX.TRX_UFINF
+		FROM %Table:TRX% TRX, %Table:TSO% TSO
+			WHERE TRX.TRX_DTINFR >= %exp:DTOS(MV_PAR01)% AND TRX.TRX_DTINFR <= %exp:DTOS(MV_PAR02)%
+				AND TRX.TRX_MULTA = TSO.TSO_MULTA
+				AND TSO.TSO_STATUS  = '1'
+				AND TRX.%NotDel%
+				AND TSO.%NotDel%
+		ORDER BY TRX.TRX_MULTA
+	EndSql
+
+	DbGoTop()
+	While !Eof()
+
+		DbSelectArea(cTRB2)
+		If !DbSeek(TRX->TRX_MULTA)
+			DbSelectArea(cTRB2)
+			(cTRB2)->(DbAppend())
+			(cTRB2)->ALTERR  := 'N'
+			(cTRB2)->MULTA   := (cAliasQry)->TRX_MULTA
+			(cTRB2)->PLACA   := (cAliasQry)->TRX_PLACA
+			(cTRB2)->HORAINF := (cAliasQry)->TRX_RHINFR
+			(cTRB2)->STATUSM := (cAliasQry)->TSO_STATUS
+			(cTRB2)->CODINCO := (cAliasQry)->TSO_INCONS
+			(cTRB2)->CIDADE  := (cAliasQry)->TRX_CIDINF
+			(cTRB2)->ESTADO  := (cAliasQry)->TRX_UFINF
+			(cTRB2)->FILIAL  := (cAliasQry)->TRX_FILIAL
+			(cTRB2)->DATAINF := STOD((cAliasQry)->TRX_DTINFR)
+			(cTRB2)->LEGEN  := '1'
+			(cTRB2)->CODBEM  := IF(!lParTMS,NGSEEK("DA3",(cAliasQry)->TRX_PLACA,3,'DA3_CODBEM'),;
+			POSICIONE('ST9',14,(cAliasQry)->TRX_PLACA+"A",'T9_CODBEM'))
+			If !Empty((cTRB2)->CODBEM)
+				(cTRB2)->DESBEM  := SubStr(IF(!lParTMS,NGSEEK("DA3",(cAliasQry)->TRX_PLACA,3,'DA3_DESC'),;
+				POSICIONE("ST9",14,(cAliasQry)->TRX_PLACA+"A",'T9_NOME')),1,20)
+			Else
+				(cTRB2)->DESBEM  := ''
+			Endif
+
+			dbSelectArea(cTRB)
+			dbSetOrder(1)
+			If!dbSeek((cAliasQry)->TSO_INCONS)
+				(cTRB)->(DbAppend())
+				(cTRB)->FILIAL := (cAliasQry)->TRX_FILIAL
+				(cTRB)->MULTA := (cAliasQry)->TRX_MULTA
+				(cTRB)->LEGEN  := '1'
+				If (cAliasQry)->TSO_INCONS = '1'
+					(cTRB)->INCONS := (cAliasQry)->TSO_INCONS
+					(cTRB)->INDESC := STR0030 // "Inconsistência de Data"
+				ElseIf (cAliasQry)->TSO_INCONS = '2'
+					(cTRB)->INCONS := (cAliasQry)->TSO_INCONS
+					(cTRB)->INDESC := STR0031 // "Inconsistência de Local"
+				ElseIf (cAliasQry)->TSO_INCONS = '3'
+					(cTRB)->INCONS := (cAliasQry)->TSO_INCONS
+					(cTRB)->INDESC := STR0032 // "Inconsistência de Recurso"
+				ElseIf (cAliasQry)->TSO_INCONS = '4'
+					(cTRB)->INCONS := (cAliasQry)->TSO_INCONS
+					(cTRB)->INDESC := STR0033 // "Pendencia de Restituicao"
+				Endif
+			EndIf
+			DbSelectArea(cTRB)
+			DbSkip()
+
+			// Possui Multas inconsistentes
+			lTemMultas := .T.
+
+		EndIf
+
+		DbSelectArea(cAliasQry)
+		DbSkip()
+	End
+
+	(cTRB)->( DbGoTop() )
+	(cTRB2)->( DbGoTop() )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA845VLD
+Validação das Perguntas "De Data Infração ?" e "Até Data  Infração ?"
+@author Andrey Martim Pegorini
+@since 16/07/10
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA845VLD()
+
+	If ReadVar() == "MV_PAR01"
+		If (MV_PAR01 > dDataBase)
+			Help(,,'HELP',, STR0051, 1, 0) // "Data Inicial não poderá ser maior que a Data Atual"
+			Return .F.
+		ElseIf (MV_PAR02 != CTOD("  /  /  "))  .And.;
+		(MV_PAR01 > MV_PAR02) .And.;
+		(MV_PAR01 != CTOD("  /  /  "))
+			Help(,,'HELP',, STR0052, 1, 0) // "Data Inicial não poderá ser maior que a Data Final"
+			Return .F.
+		EndIf
+	ElseIf ReadVar() == "MV_PAR02"
+		If (MV_PAR02 > dDataBase)
+			Help(,,'HELP',, STR0053, 1, 0) // "Data Final não poderá ser maior que a Data Atual"
+			Return .F.
+		ElseIf (MV_PAR01 != CTOD("  /  /  "))  .And.;
+		(MV_PAR02 < MV_PAR01) .And.;
+		(MV_PAR02 != CTOD("  /  /  "))
+			Help(,,'HELP',, STR0054, 1, 0) // "Data Final não poderá ser menor Data Inicial"
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTudoOk
+Verifica se está tudo Ok
+
+@param oModel, Objeto, Modelo de dados.
+
+@author Vitor Bonet
+@since 20/11/2018
+
+@return Lígico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fTudoOk(oModel)
+
+	Local lRet     := .T.
+	Local lNotif   := .F.
+	Local cCompara := ""
+	Local aOldArea := GetArea()
+	Local lItemCTA := If(NGCADICBASE("TRX_ITEMCT","A","TRX",.F.),.T.,.F.)
+
+	Private lAltParc   := .F.
+	Private cParSE2Doc
+
+	If TYPE ("cCHANGEKEY") == "U"
+		Private cCHANGEKEY := ""
+	EndIf
+	If TYPE ("aParcelas") == "U"
+		Private aParcelas  := {}
+	EndIf
+
+	If lEditResp .And. (Inclui .Or. Altera)
+		If Empty(oModel:GetValue('MULTAS','TRX_REPON') )
+			Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3("TRX_REPON")) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+			Return .F.
+		Else
+			cCompara := NGSEEK("TSH",oModel:GetValue('MULTAS','TRX_CODINF'),1,"TSH_RESPON")
+			If oModel:GetValue('MULTAS','TRX_REPON') <> cCompara
+				If !MsgYesNo(STR0057+Chr(13)+Chr(10)+; // "O Responsável pela Multa diverge do Responsável pela Infração."
+				STR0021+MNTA765NRP(oModel:GetValue('MULTAS','TRX_REPON'))+Chr(13)+Chr(10)+; // "Multa: "
+				STR0058+MNTA765NRP(cCompara)+Chr(13)+Chr(10)+Chr(13)+Chr(10)+; // "Infração: "
+				STR0059) // "Confirmar?"
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If GetNewPar( "MV_NGINTMB", "2" ) == "1" .And. Empty( oModel:GetValue('MULTAS','TRX_CCUSTO'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3("TRX_CCUSTO")) + STR0056 + CRLF +;
+		STR0063, 1, 0) // "O campo "###" deverá ser preenchido."###"Necessário devido ao processo de mobilidade (MV_NGINTMB)."
+		Return .F.
+	Endif
+
+	If oModel:GetValue('MULTAS','TRX_RECNOT') == '1' .AND. Empty(oModel:GetValue('MULTAS','TRX_NOTDT'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_NOTDT')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	Endif
+
+	If oModel:GetValue('MULTAS','TRX_INFRAC') == '1' .AND. Empty(oModel:GetValue('MULTAS','TRX_DTIND'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTIND')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	Endif
+
+	If oModel:GetValue('MULTAS','TRX_RECURS') == '1' .AND. Empty(oModel:GetValue('MULTAS','TRX_DTENRE'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTENRE')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	Endif
+
+	If oModel:GetValue('MULTAS','TRX_SEGINS') == '1' .AND. Empty(oModel:GetValue('MULTAS','TRX_DTENR2'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTENR2')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	Endif
+
+	If oModel:GetValue('MULTAS','TRX_PAGTO') == "1" .And. Empty(oModel:GetValue('MULTAS','TRX_DTPGTO') )
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTPGTO')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	EndIf
+
+	If oModel:GetValue('MULTAS','TRX_PAGTO') == "1" .And. Empty(oModel:GetValue('MULTAS','TRX_VALPAG')) .And. !(oModel:GetValue('MULTAS','TRX_VALOR') == oModel:GetValue('MULTAS','TRX_DESCON'))
+		Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_VALPAG')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+		Return .F.
+	EndIf
+
+	If (Inclui .Or. Altera)
+		If oModel:GetValue('MULTAS','TRX_SITREC') <> "1" .And. Empty(oModel:GetValue('MULTAS','TRX_DTFIRE'))
+			Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTFIRE')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+			Return .F.
+		Endif
+		If oModel:GetValue('MULTAS','TRX_SITRE2') <> "1" .And. Empty(oModel:GetValue('MULTAS','TRX_DTFIR2'))
+			Help(,,'HELP',, STR0055 + AllTrim(RetTitSX3('TRX_DTFIR2')) + STR0056, 1, 0) // "O campo "###" deverá ser preenchido."
+			Return .F.
+		Endif
+	EndIf
+
+	If lMntFin .And. !lNotif .And. !lAntesAlt .And. (Altera .Or. (Inclui .And. IsInCallStack("MNTA766"))) .And. ;
+	!MNT765OAOK(.T.) // Verifica se o Orgão Autuador possui Fornecedor e Loja
+		Return .F.
+	Endif
+
+	If lItemCTA
+		// [Financeiro] Verifica se houve alteracao nas parcelas e no Item da Conta Contábil.
+		lAltParc := lMntFin .And. Altera .And. ((oModel:GetValue('MULTAS','TRX_VALOR') <> TRX->TRX_VALOR) .Or.;
+													(oModel:GetValue('MULTAS','TRX_DESCON') <> TRX->TRX_DESCON) .Or.;
+													(oModel:GetValue('MULTAS','TRX_ITEMCT') <> TRX->TRX_ITEMCT) .Or.;
+													(oModel:GetValue('MULTAS','TRX_DTVECI') <> TRX->TRX_DTVECI))
+	Else
+		// [Financeiro] Verifica se houve alteracao nas parcelas e no Item da Conta Contábil.
+		lAltParc := lMntFin .And. Altera .And. ((oModel:GetValue('MULTAS','TRX_VALOR') <> TRX->TRX_VALOR) .Or.;
+													(oModel:GetValue('MULTAS','TRX_DESCON') <> TRX->TRX_DESCON) .Or.;
+													(oModel:GetValue('MULTAS','TRX_DTVECI') <> TRX->TRX_DTVECI))
+	EndIf
+
+	dbSelectArea("TRZ")
+	dbSetOrder(01)
+	dbSeek(xFilial("TRZ")+oModel:GetValue('MULTAS','TRX_CODOR'))
+
+	// [Financeiro] Verifica se deve atualizar modulo financeiro
+	If lMntFin .And. !lNotif .And. lNaoValida .And. (!Altera .Or. lAltParc) // .And. FindFunction('NGGERASE2')
+
+		//Define parcelas iniciais para o registro atual
+		MNT765PAR()
+
+		MsgRun( STR0061, STR0062, {|| lRet := ProcIntFin( aParcelas, lAltParc, 4, oModel ) } ) // "Analisando Módulo Financeiro"###"Aguarde"
+		If !lRet
+			Return .F.
+		EndIf
+	Endif
+
+
+	If oModel:GetValue('MULTAS','TRX_STSOL') == '2' .AND. Empty(oModel:GetValue('MULTAS','TRX_DTEFET'))
+		Help(" ",1,"NGATENCAO",,STR0060,2,1)// "Campo 'Dt. Ef. Rest' deverá ser preenchido!"
+		Return .F.
+	Endif
+
+	RestArea(aOldArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMCommit
+Pós-validação do modelo de dados, recarrega também as tabelas temporárias
+
+@author Vitor Bonet
+@since 20/11/2018
+@param oModel - Objeto do modelo de dados (Obrigatório)
+@return Lígico - Retorna verdadeiro caso validacoes estejam corretas
+/*/
+//---------------------------------------------------------------------
+Static Function fMCommit( oModel )
+
+	Local nLin       := (cTRB)->(Recno())
+	Local nLin2      := (cTRB2)->(Recno())
+	Local lGravaInc2 := .T.
+	Local cIf        := ""
+	Local cBemTMS    := ''
+
+	// Grava Modelo da TMW
+	FWFormCommit( oModel )
+
+	//-------------------------------
+	// Atualiza as inconsistencias
+	//-------------------------------
+	cTRXFil := NGTROCAFILI("TRX",If(!Empty(oModel:GetValue('MULTAS','TRX_FILMOT')),oModel:GetValue('MULTAS','TRX_FILMOT'),xFilial("TRX")))
+	cTSOFil := NGTROCAFILI("TSO",cTRXFil)
+
+	// Inconsistencia de Data
+	If (oModel:GetValue('MULTAS','TRX_NOTDT') > oModel:GetValue('MULTAS','TRX_DTINFR')+30)
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'1')
+			RecLock("TSO",.F.)
+		Else
+			RecLock("TSO",.T.)
+			TSO->TSO_FILIAL := cTSOFil
+			TSO->TSO_MULTA  := oModel:GetValue('MULTAS','TRX_MULTA')
+			TSO->TSO_INCONS := '1'
+		Endif
+		TSO->TSO_STATUS := '1'
+		MsUnLock("TSO")
+		// Inclui Multa TRB2
+		dbSelectArea(cTRB2)
+		dbSetOrder(02)
+		If !dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+			RecLock(cTRB2,.T.)
+			(cTRB2)->FILIAL  := cTSOFil
+			(cTRB2)->MULTA   := oModel:GetValue('MULTAS','TRX_MULTA')
+			(cTRB2)->DATAINF := oModel:GetValue('MULTAS','TRX_DTINFR')
+			(cTRB2)->HORAINF := oModel:GetValue('MULTAS','TRX_RHINFR')
+			(cTRB2)->CODINCO := "1"
+			(cTRB2)->CODBEM  := oModel:GetValue('MULTAS','TRX_CODBEM')
+			(cTRB2)->CIDADE  := oModel:GetValue('MULTAS','TRX_CIDINF')
+			(cTRB2)->ESTADO  := oModel:GetValue('MULTAS','TRX_UFINF')
+			(cTRB2)->PLACA   := oModel:GetValue('MULTAS','TRX_PLACA')
+			(cTRB2)->LEGEN   := '1'
+			MsUnLock(cTRB2)
+		Else
+			RecLock(cTRB2,.F.)
+			(cTRB2)->LEGEN   := '1'
+			MsUnLock(cTRB2)
+		Endif
+	Else
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'1')
+			RecLock("TSO",.F.)
+			TSO->TSO_STATUS := '2'
+			MsUnLock("TSO")
+			// Altera Legenda da Multa
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2 , .F.)
+				(cTRB2)->LEGEN := '2'
+				MsUnLock(cTRB2)
+			Endif
+		Endif
+	Endif
+
+	If Type("lMntTms") == "L" .And. lMntTms  // Verifica a integracao com o TMS
+
+		cIf := "AllTrim((cAliasQry)->DUY_DESCRI) == AllTrim(oModel:GetValue('MULTAS','TRX_CIDINF'))"
+
+		dbSelectArea("DA3")
+		dbSetOrder(3)
+		If dbSeek(xFilial("DA3") + oModel:GetValue('MULTAS','TRX_PLACA'))
+			cBemTMS := DA3->DA3_COD
+		EndIf
+
+		// Inconsistencia de Local
+		cAliasQry := GetNextAlias()
+
+		BeginSql Alias cAliasQry
+			SELECT DUY.DUY_DESCRI,
+				   DUY.DUY_GRPVEN
+			FROM %Table:DUY% DUY
+			INNER JOIN %Table:DVM% DVM ON DVM.DVM_CDRDES = DUY.DUY_GRPVEN AND DVM.%NotDel%
+			INNER JOIN %Table:DTQ% DTQ ON DTQ.DTQ_ROTA = DVM.DVM_ROTEIR AND DTQ.%NotDel%
+				AND DTQ.DTQ_VIAGEM IN
+					(SELECT DTR.DTR_VIAGEM
+						FROM %Table:DTR% DTR
+							WHERE DTR.DTR_DATINI >= %exp:DtoS(oModel:GetValue('MULTAS','TRX_DTINFR'))%
+								AND DTR.DTR_DATFIM <= %exp:DtoS(oModel:GetValue('MULTAS','TRX_DTINFR'))%
+								AND DTR.DTR_CODVEI = %exp:cBemTMS%
+								AND DTR.%NotDel%  )
+			WHERE DUY.%NotDel%
+		EndSql
+
+		dbSelectArea(cAliasQry)
+		dbGotop()
+		While (cAliasQry)->(!Eof()) .AND. lGravaInc2
+			If &(cIf)
+				lGravaInc2 := .F.
+				Exit
+			Endif
+			dbSkip()
+		End
+
+		If lGravaInc2
+			dbSelectArea("TSO")
+			dbSetOrder(01)
+			If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'2')
+				RecLock("TSO",.F.)
+			Else
+				RecLock("TSO",.T.)
+				TSO->TSO_FILIAL := cTSOFil
+				TSO->TSO_MULTA  := oModel:GetValue('MULTAS','TRX_MULTA')
+				TSO->TSO_INCONS := '2'
+			Endif
+			TSO->TSO_STATUS := '1'
+			MsUnLock("TSO")
+			// Inclui Multa TRB2
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If !dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2,.T.)
+				(cTRB2)->FILIAL  := cTSOFil
+				(cTRB2)->MULTA   := oModel:GetValue('MULTAS','TRX_MULTA')
+				(cTRB2)->DATAINF := oModel:GetValue('MULTAS','TRX_DTINFR')
+				(cTRB2)->HORAINF := oModel:GetValue('MULTAS','TRX_RHINFR')
+				(cTRB2)->CODINCO := "2"
+				(cTRB2)->CODBEM  := oModel:GetValue('MULTAS','TRX_CODBEM')
+				(cTRB2)->CIDADE  := oModel:GetValue('MULTAS','TRX_CIDINF')
+				(cTRB2)->ESTADO  := oModel:GetValue('MULTAS','TRX_UFINF')
+				(cTRB2)->PLACA   := oModel:GetValue('MULTAS','TRX_PLACA')
+				(cTRB2)->LEGEN   := '1'
+				MsUnLock(cTRB2)
+			Else
+				RecLock(cTRB2,.F.)
+				(cTRB2)->LEGEN   := '1'
+				MsUnLock(cTRB2)
+			Endif
+		Else
+			dbSelectArea("TSO")
+			dbSetOrder(01)
+			If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'2')
+				RecLock("TSO",.F.)
+				TSO->TSO_STATUS := '2'
+				MsUnLock("TSO")
+				// Altera legenda da multa
+				dbSelectArea(cTRB2)
+				dbSetOrder(02)
+				If dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+					RecLock(cTRB2 , .F.)
+					(cTRB2)->LEGEN := '2'
+					MsUnLock(cTRB2)
+				Endif
+			Endif
+		Endif
+		(cAliasQry)->(dbCloseArea())
+
+	EndIf
+
+	// Inconsistencia de Recurso
+	If oModel:GetValue('MULTAS','TRX_CABREC') = '1'
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'3')
+			RecLock("TSO",.F.)
+		Else
+			RecLock("TSO",.T.)
+			TSO->TSO_FILIAL := cTSOFil
+			TSO->TSO_MULTA  := oModel:GetValue('MULTAS','TRX_MULTA')
+			TSO->TSO_INCONS := '3'
+		Endif
+		If Empty(TRX->TRX_DTENRE)
+			TSO->TSO_STATUS := '1'
+		Else
+			TSO->TSO_STATUS := '2'
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2,.F.)
+				(cTRB2)->LEGEN   := '2'
+				MsUnLock(cTRB2)
+			Endif
+		Endif
+		MsUnLock("TSO")
+		If Empty(TRX->TRX_DTENRE)
+			// Inclui Multa TRB2
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If !dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2,.T.)
+				(cTRB2)->FILIAL  := cTSOFil
+				(cTRB2)->MULTA   := oModel:GetValue('MULTAS','TRX_MULTA')
+				(cTRB2)->DATAINF := oModel:GetValue('MULTAS','TRX_DTINFR')
+				(cTRB2)->HORAINF := oModel:GetValue('MULTAS','TRX_RHINFR')
+				(cTRB2)->CODINCO := "3"
+				(cTRB2)->CODBEM  := oModel:GetValue('MULTAS','TRX_CODBEM')
+				(cTRB2)->CIDADE  := oModel:GetValue('MULTAS','TRX_CIDINF')
+				(cTRB2)->ESTADO  := oModel:GetValue('MULTAS','TRX_UFINF')
+				(cTRB2)->PLACA   := oModel:GetValue('MULTAS','TRX_PLACA')
+				(cTRB2)->LEGEN   := '1'
+				MsUnLock(cTRB2)
+			Else
+				RecLock(cTRB2,.F.)
+				(cTRB2)->LEGEN   := '1'
+				MsUnLock(cTRB2)
+			Endif
+		EndIf
+	Else
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'3')
+			RecLock("TSO",.F.)
+			TSO->TSO_STATUS := '2'
+			MsUnLock("TSO")
+			// Altera a legenda da multa
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2 , .F.)
+				(cTRB2)->LEGEN := '2'
+				MsUnLock(cTRB2)
+			Endif
+		Endif
+	Endif
+
+	// Inconsistencia de Restituicao
+	If oModel:GetValue('MULTAS','TRX_RESTIT') = '2' .And. oModel:GetValue('MULTAS','TRX_RECURS') = '1' .AND. oModel:GetValue('MULTAS','TRX_PAGTO') = '1' .And.;
+		( (oModel:GetValue('MULTAS','TRX_SEGINS') != '1' .AND. oModel:GetValue('MULTAS','TRX_SITREC') = '2') .OR. (oModel:GetValue('MULTAS','TRX_SEGINS')  = '1' .AND. oModel:GetValue('MULTAS','TRX_SITRE2') = '2') )
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'4')
+			RecLock("TSO",.F.)
+		Else
+			RecLock("TSO",.T.)
+			TSO->TSO_FILIAL := cTSOFil
+			TSO->TSO_MULTA  := oModel:GetValue('MULTAS','TRX_MULTA')
+			TSO->TSO_INCONS := '4'
+		Endif
+		TSO->TSO_STATUS := '1'
+		MsUnLock("TSO")
+		// Inclui Multa TRB2
+		dbSelectArea(cTRB2)
+		dbSetOrder(02)
+		If !dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+			RecLock(cTRB2,.T.)
+			(cTRB2)->FILIAL  := cTSOFil
+			(cTRB2)->MULTA   := oModel:GetValue('MULTAS','TRX_MULTA')
+			(cTRB2)->DATAINF := oModel:GetValue('MULTAS','TRX_DTINFR')
+			(cTRB2)->HORAINF := oModel:GetValue('MULTAS','TRX_RHINFR')
+			(cTRB2)->CODINCO := "4"
+			(cTRB2)->CODBEM  := oModel:GetValue('MULTAS','TRX_CODBEM')
+			(cTRB2)->CIDADE  := oModel:GetValue('MULTAS','TRX_CIDINF')
+			(cTRB2)->ESTADO  := oModel:GetValue('MULTAS','TRX_UFINF')
+			(cTRB2)->PLACA   := oModel:GetValue('MULTAS','TRX_PLACA')
+			(cTRB2)->LEGEN   := '1'
+			MsUnLock(cTRB2)
+		Else
+			RecLock(cTRB2,.F.)
+			(cTRB2)->LEGEN   := '1'
+			MsUnLock(cTRB2)
+		Endif
+	Else
+		dbSelectArea("TSO")
+		dbSetOrder(01)
+		If dbSeek(cTSOFil+oModel:GetValue('MULTAS','TRX_MULTA')+Space(Len(TRX->TRX_MULTA)-Len(oModel:GetValue('MULTAS','TRX_MULTA')))+'4')
+			RecLock("TSO",.F.)
+			TSO->TSO_STATUS := '2'
+			MsUnLock("TSO")
+			// Altera legenda da multa
+			dbSelectArea(cTRB2)
+			dbSetOrder(02)
+			If dbSeek(cTSOFil + oModel:GetValue('MULTAS','TRX_MULTA') + TSO->TSO_INCONS)
+				RecLock(cTRB2, .F.)
+				(cTRB2)->LEGEN := '2'
+				MsUnLock(cTRB2)
+			Endif
+		Endif
+	EndIf
+
+	// Adequação da tabela temporaria de erro (cTRB)
+	dbSelectArea(cTRB2)
+	DbGoTop()
+	While !Eof()
+		dbSelectArea(cTRB)
+		dbSetOrder(1)
+		If !dbSeek((cTRB2)->CODINCO)
+			(cTRB)->(DbAppend())
+			(cTRB)->FILIAL := (cTRB2)->FILIAL
+			(cTRB)->MULTA := (cTRB2)->MULTA
+			(cTRB)->LEGEN   := '1'
+			If (cTRB2)->CODINCO = '1'
+				(cTRB)->INCONS := (cTRB2)->CODINCO
+				(cTRB)->INDESC := STR0030 // "Inconsistência de Data"
+			ElseIf (cTRB2)->CODINCO = '2'
+				(cTRB)->INCONS := (cTRB2)->CODINCO
+				(cTRB)->INDESC := STR0031 // "Inconsistência de Local"
+			ElseIf (cTRB2)->CODINCO = '3'
+				(cTRB)->INCONS := (cTRB2)->CODINCO
+				(cTRB)->INDESC := STR0032 // "Inconsistência de Recurso"
+			ElseIf (cTRB2)->CODINCO = '4'
+				(cTRB)->INCONS := (cTRB2)->CODINCO
+				(cTRB)->INDESC := STR0033 // "Pendencia de Restituicao"
+			Endif
+		EndIf
+		DbSelectArea(cTRB2)
+		(cTRB2)->(DbSkip())
+	End
+
+	dbSelectArea(cTRB)
+	DbGoTop()
+	While !Eof()
+		cAliasQry := GetNextAlias()
+
+	BeginSql Alias cAliasQry
+		SELECT COUNT(*) RESULT
+		FROM %Table:TSO% TSO
+		WHERE TSO.TSO_INCONS = %exp:(cTRB)->INCONS%
+			AND TSO.TSO_STATUS = '1'
+			AND TSO.%NotDel%
+	EndSql
+
+		dbSelectArea(cAliasQry)
+		If (cAliasQry)->RESULT == 0
+			// Altera legenda da inconsistência
+			dbSelectArea(cTRB)
+			dbSetOrder(01)
+			If dbSeek((cTRB)->INCONS)
+				RecLock(cTRB , .F.)
+				(cTRB)->LEGEN := '2'
+				MsUnLock(cTRB)
+			Endif
+		Else
+			// Altera legenda da inconsistência
+			dbSelectArea(cTRB)
+			dbSetOrder(01)
+			If dbSeek((cTRB)->INCONS)
+				RecLock(cTRB , .F.)
+				(cTRB)->LEGEN := '1'
+				MsUnLock(cTRB)
+			Endif
+		EndIf
+		(cTRB)->(DbSkip())
+	End
+
+	// Atuali!za os Browse
+	oBrowseUp:GoTo(nLin, .T.)
+	oBrowseDown:GoTo(nLin2, .T.)
+	oDlgPrinc:CommitControls()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ProcIntFin
+Verifica integracao com modulo Financeiro
+
+@param aParcelas, Array   , Contem as parcelas pagas.
+@param lAltParc , Lógica  , Determina se ocorreu uma alteração parcial.
+@param nOpc     , Numérico, Determina a opção selecionada.
+@param oModel   , Objeto  , Modelo de dados da rotina.
+
+@author  Vitor Bonet
+@since   23/11/2018
+@version p12
+/*/
+//-------------------------------------------------------------------
+Static Function ProcIntFin( aParcelas, lAltParc, nOpc, oModel )
+
+	Local nI		:= 0
+	Local lRet 		:= .T.
+	Local lTitFin 	:= .T. //variável para confirmar geração de título financeiro
+	Local lMNTA7655	:= ExistBlock("MNTA7655")
+
+	// Caso nao haja parcelas definidas, gera novas parcelas a apartir da chave atual
+	If !NGFICONDP(,,oModel:GetValue('MULTAS','TRX_VALOR'),oModel:GetValue('MULTAS','TRX_CONPAG'),oModel:GetValue('MULTAS','TRX_DTEMIS'))
+		Return .F.
+	Endif
+
+	// Se houve alteração no valor da multa e não houve nenhuma parcela paga referente à mesma,
+	// deleta as parcelas antigas, para geração de novas parcelas a partir deste novo valor
+	If lAltParc .And. MNTPARCPAG(.F.)
+		fDelParc()
+		nOpc := 3
+	Endif
+
+	For nI := 1 to Len(aParcelas)
+		If nI == 1 .AND. Inclui
+			oModel:LoadValue( "MULTAS" , "TRX_DTVECI" , aParcelas[nI][1] )
+		Endif
+
+		// Ponto de Entrada para gravação do campo Desconto
+		If lMNTA7655
+			aParcelas[nI][5] := ExecBlock("MNTA7655",.F.,.F.,{,,oModel})
+		EndIf
+
+	Next
+
+	// Ponto de entrada para confirmar geração de título financeiro
+	If ExistBlock("MNTA7659")
+		lTitFin := ExecBlock("MNTA7659",.F.,.F.,{oModel})
+	EndIf
+
+	If lTitFin
+		oIntFIN := NGIntFin():New()
+		oIntFIN:setOperation(nOpc)
+		oIntFIN:setRelated("TRX")
+		oIntFIN:setValue("E2_PREFIXO",oModel:GetValue('MULTAS','TRX_PREFIX'))
+		oIntFIN:setValue("E2_NUM",IIF(oModel:GetValue('MULTAS','TRX_NUMSE2')==Nil,NGSEQSE2(),oModel:GetValue('MULTAS','TRX_NUMSE2')))
+		oIntFIN:setValue("E2_TIPO",oModel:GetValue('MULTAS','TRX_TIPO'))
+		oIntFIN:setValue("E2_NATUREZ",oModel:GetValue('MULTAS','TRX_NATURE'))
+		oIntFIN:setValue("E2_FORNECE",TRZ->TRZ_FORNEC)
+		oIntFIN:setValue("E2_LOJA",TRZ->TRZ_LOJA)
+		oIntFIN:setValue("E2_EMISSAO",oModel:GetValue('MULTAS','TRX_DTEMIS'))
+		oIntFIN:setValue("E2_ORIGEM",FunName())
+		oIntFIN:setValue("E2_MOEDA",1)
+		oIntFIN:setValue("E2_CCD",oModel:GetValue('MULTAS','TRX_CCUSTO'))
+		oIntFIN:setValue("E2_CCUSTO",oModel:GetValue('MULTAS','TRX_CCUSTO'))
+
+		// Verificar se o campo Item Contabil esta na base
+		If NGCADICBASE("TRX_ITEMCT","A","TRX",.F.)
+			oIntFIN:setValue("E2_ITEMD",oModel:GetValue('MULTAS','TRX_ITEMCT'))
+		Else
+			oIntFIN:setValue("E2_ITEMD",'')
+		EndIf
+
+		oIntFIN:setParcelas(aParcelas)
+
+		If !oIntFIN:geraTitulo()
+			Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT845IMPR
+Impressao de Inconsistencias de Multas
+@author Marcos Wagner Junior
+@since 24/05/07
+@version p12
+/*/
+//---------------------------------------------------------------------
+Function MNT845IMPR()
+
+	Local cString    := "TRX"
+	Local cDesc1     := STR0036 // "Inconsistências de Multas"
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTA845"
+
+	Private aReturn  := {STR0037, 1,STR0038, 1, 2, 1," ",1 } // "Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cTitulo  := cDesc1
+	Private Tamanho  := "G"
+
+	// Envia controle para a funcao SETPRINT
+	wnrel:=SetPrint(cString,wnrel,,cTitulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	EndIf
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| MNA845Imp(@lEnd,wnRel,cTitulo,tamanho)},cTitulo)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA845Imp
+Impressao do Relatorio
+@author Elisangela Costa
+@since 20/01/06
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param cTitulo, , descricao
+@param tamanho, , descricao
+@type function
+@obs uso MNT845IMPR
+/*/
+//---------------------------------------------------------------------
+Static Function MNA845Imp(lEnd,wnRel,cTitulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+
+	Private li       := 80
+	Private m_pag    := 1
+	Private Cabec1   := STR0039 // "Multa        Data Infração   Hora Infração   Bem                Descrição              Cidade            UF   Motorista   Nome                                       Origem da Multa   Status"
+	Private Cabec2   := " "
+	Private nomeprog := "MNTA845"
+
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234
+	___________________________________________________________________________________________________________________________________________________________________________________________________
+	Multa        Data Infração   Hora Infração   Bem                Descrição              Cidade            UF   Motorista   Nome                                       Origem da Multa   Status
+
+	xxxxxxxxxx   99/99/99        99:99           xxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxx   xx   xxxxxx      xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxx     xxxxxxxxxxxx
+
+	*/
+
+	lPRI845 := .T.
+
+	cAliasQry2 := GetNextAlias()
+
+	BeginSql Alias cAliasQry2
+		SELECT TRX.TRX_MULTA, TRX.TRX_DTINFR, TRX.TRX_RHINFR, TSO.TSO_STATUS, TSO.TSO_INCONS,
+				TRX.TRX_PLACA, TRX.TRX_FILIAL, TRX.TRX_CIDINF, TRX.TRX_UFINF, TRX.TRX_CODMO,
+				DA4.DA4_NOME, TRX.TRX_ORIGEM, TRX.TRX_STATUS
+		FROM %Table:TRX% TRX, %Table:TSO% TSO, %Table:DA4% DA4
+		WHERE TRX.TRX_DTINFR  >= %exp:DTOS(MV_PAR01)%
+			AND TRX.TRX_DTINFR <= %exp:DTOS(MV_PAR02)%
+			AND TRX.TRX_MULTA   = TSO.TSO_MULTA
+			AND TRX.TRX_CODMO   = DA4.DA4_COD
+			AND TSO.TSO_STATUS  = '1'
+			AND TRX.%NotDel%
+			AND TSO.%NotDel%
+			AND DA4.%NotDel%
+		ORDER BY TSO.TSO_INCONS, TRX.TRX_MULTA
+	EndSql
+
+	DbGoTop()
+
+	While !Eof()
+
+		cIncons := (cAliasQry2)->TSO_INCONS
+		cDesc := ''
+		If cIncons = '1'
+			cDesc := STR0040 // "1 - Inconsistência de Data"
+		Elseif cIncons = '2'
+			cDesc := STR0041 // "2 - Inconsistência de Local"
+		Elseif cIncons = '3'
+			cDesc := STR0042 // "3 - Inconsistência de Recurso"
+		Elseif cIncons = '4'
+			cDesc := STR0043 // "4 - Pendência de Restituição"
+		Endif
+
+		If lPRI845
+			NGSOMALI(58)
+			lPRI845 := .F.
+		Else
+			NGSOMALI(58)
+			NGSOMALI(58)
+		EndIf
+
+		@Li,000 Psay cDesc
+		NGSOMALI(58)
+
+		While !Eof() .And. (cAliasQry2)->TSO_INCONS = cIncons
+			NGSOMALI(58)
+			@Li,000 Psay (cAliasQry2)->TRX_MULTA  Picture '@!'
+			@Li,013 Psay STOD((cAliasQry2)->TRX_DTINFR) Picture "99/99/9999"
+			@Li,029 Psay (cAliasQry2)->TRX_RHINFR Picture "@!"
+			@Li,045 Psay IF(!lParTMS,NGSEEK("DA3",(cAliasQry2)->TRX_PLACA,3,'DA3_CODBEM'),;
+			POSICIONE("ST9",14,(cAliasQry2)->TRX_PLACA+"A",'T9_CODBEM'))
+			If !Empty((cAliasQry2)->TRX_PLACA)
+				@Li,064 Psay SubStr(IF(!lParTMS,NGSEEK("DA3",(cAliasQry2)->TRX_PLACA,3,'DA3_DESC'),;
+				POSICIONE("ST9",14,(cAliasQry2)->TRX_PLACA+"A",'T9_NOME')),1,20)
+			Else
+				@Li,064 Psay ''
+			Endif
+			@Li,087 Psay (cAliasQry2)->TRX_CIDINF Picture "@!"
+			@Li,105 Psay (cAliasQry2)->TRX_UFINF  Picture "@!"
+			@Li,110 Psay (cAliasQry2)->TRX_CODMO  Picture "@!"
+			@Li,122 Psay (cAliasQry2)->DA4_NOME   Picture "@!"
+			cDesc := ''
+			If (cAliasQry2)->TRX_ORIGEM = '1'
+				cDesc := STR0044 // "Auto Policial"
+			Elseif (cAliasQry2)->TRX_ORIGEM = '2'
+				cDesc := STR0045 // "Radar"
+			Endif
+			@Li,165 Psay cDesc   					  Picture "@!"
+			cDesc := ''
+			If (cAliasQry2)->TRX_STATUS = '1'
+				cDesc := STR0046 // "Registrado"
+			Elseif (cAliasQry2)->TRX_STATUS = '2'
+				cDesc := STR0047 // "Em Andamento"
+			Elseif (cAliasQry2)->TRX_STATUS = '3'
+				cDesc := STR0048 // "Concluído"
+			Endif
+			@Li,183 Psay cDesc			 		     Picture "@!"
+			dbSkip()
+		End
+
+		If !Eof()
+			NGSOMALI(58)
+			@Li,000 Psay Replicate("-",220)
+		Endif
+	End
+
+	(cAliasQry2)->(dbCloseArea())
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT845PoReg
+Posiciona na Multa para visualizar ou alterar.
+@author  Vitor Bonet
+@since   21/11/2018
+@version p12
+/*/
+//-------------------------------------------------------------------
+Function MNT845PoReg(nOpcX)
+
+	dbSelectArea("TRX")
+	dbSetOrder(1)
+	DbSeek(xFilial("TRX") + (cTRB2)->MULTA)
+
+	FWExecView( IIf(nOpcX == 1, STR0003/*Visualizar*/, STR0005/*Alterar*/)/*cTitulo*/, "MNTA845"/*cPrograma*/, nOpcX/*nOperation*/, /*oDlg*/,;
+					{|| .T. }/*bCloseOnOk*/, /*bOk*/, /*nPercReducao*/, /*aEnableButtons*/, /*bCancel*/)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fDelParc
+Deleta parcelas atuais
+@author  Vitor Bonet
+@since   07/12/2018
+@version p12
+/*/
+//-------------------------------------------------------------------
+Static Function fDelParc()
+	Local lRet := .T.
+
+	oIntFIN := NGIntFin():New()
+	oIntFIN:setOperation(5)
+	oIntFIN:setRelated("TRX")
+	oIntFIN:setValue("E2_PREFIXO",TRX->TRX_PREFIX)
+	oIntFIN:setValue("E2_NUM",TRX->TRX_NUMSE2)
+	oIntFIN:setValue("E2_TIPO",TRX->TRX_TIPO)
+	oIntFIN:setValue("E2_NATUREZ",TRX->TRX_NATURE)
+	oIntFIN:setValue("E2_FORNECE",TRZ->TRZ_FORNEC)
+	oIntFIN:setValue("E2_LOJA",TRZ->TRZ_LOJA)
+	oIntFIN:setValue("E2_EMISSAO",TRX->TRX_DTEMIS)
+	oIntFIN:setValue("E2_ORIGEM",FunName())
+	oIntFIN:setValue("E2_MOEDA",1)
+	oIntFIN:setValue("E2_CCD",TRX->TRX_CCUSTO)
+	oIntFIN:setValue("E2_CCUSTO",TRX->TRX_CCUSTO)
+
+	oIntFIN:setParcelas(aParcelas)
+
+	If !oIntFIN:geraTitulo()
+		Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+		lRet := .F.
+	EndIf
+
+Return lRet

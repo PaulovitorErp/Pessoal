@@ -1,0 +1,207 @@
+#INCLUDE "mntc051.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC051
+Ordens de servico da familia
+@author Inacio Luiz Kolling
+@since 21/09/98
+@version undefined
+@param lPerg, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC051(lPerg)
+	//------------------------------------------------------------------------
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		 |
+	//------------------------------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+
+	//Tabela Temporaria
+	Local oTempTable             // Objeto Tabela Temporaria
+	Local aDBF
+	Local aFIELD
+	
+	Private cTRB := GetNextAlias() //Alias 
+	
+	
+	Private cCadastro := OemToAnsi(STR0004) //"Ordem de Servico da Familia"
+	Private lCORRET   := .F.
+	Private aRotina   := {{STR0002 ,"MNTC051PE",0 ,1},;  //"Pesquisar"
+						  {STR0003 ,"MNTC051VI" ,0 ,2}}  //"Visualizar"
+
+	lPerg := If(lPerg = Nil,.T.,.F.)
+
+	If lPerg
+		Return
+	Else
+		If IsIncallStack("MNTA050")
+			oModel   := FWModelActive()
+			MV_PAR01 := oModel:GetValue( 'MNTA050_ST6', 'T6_CODFAMI')
+		Else
+			MV_PAR01 := M->T6_CODFAMI
+		EndIf
+	EndIf
+
+	aDBF := {{"ORDEM"    , "C", 06,0} ,;
+			 {"PLANO"    , "C", 06,0} ,;
+			 {"CODBEM"   , "C", 16,0} ,;
+			 {"NOMEBEM"  , "C", 30,0} ,;
+			 {"SERVICO"  , "C", 06,0} ,;
+			 {"NOMESER"  , "C", 30,0} ,;
+			 {"SEQRELA"  , "C", 03,0} ,;
+			 {"DTPPINI"  , "D", 08,0} ,;
+			 {"DTMPINI"  , "D", 08,0}}
+	
+	 
+	//Instancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices 
+	oTempTable:AddIndex( "Ind01" , {"ORDEM"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aFIELD := {{STR0005  ,"ORDEM"   ,"C",6,0,"@!"},;       //"Ordem Serv."
+ 			   {STR0006  ,"PLANO"   ,"C",6,0,STR0007},;    //"Plano Manut."###"@!"
+ 			   {STR0008  ,"CODBEM"  ,"C",16,0,"@!"},;      //"Bem"
+			   {STR0009  ,"NOMEBEM" ,"C",30,0,"@!"},;      //"Nome do Bem"
+			   {STR0010  ,"SERVICO" ,"C",6,0,"@!"},;       //"Servico"
+			   {STR0011  ,"NOMESER" ,"C",30,0,"@!"},;      //"Nome do Servico"
+			   {STR0012  ,"SEQRELA" ,"C",3,0,"@!"} ,;      //"Sequencia"
+			   {STR0013  ,"DTPPINI" ,"D",8,0,"99/99/99"},; //"Dt.Par.Pr.I."
+			   {STR0014  ,"DTMPINI" ,"D",8,0,"99/99/99"} } //"Dt.Man.Pr.I."
+
+	DbSelectArea("ST9")
+	DbSetorder(04)
+	cFIL := xFilial("ST9")
+
+	If DbSeek(xFilial('ST9')+MV_PAR01)
+		Processa({|| C051STJPRO()})
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(01)
+
+	dbSelectArea(cTRB)
+	dbGotop()
+	mBrowse( 6, 1,22,75,cTRB,aFIELD)
+
+	//------------------------------------------------------------------
+	//| Desativa tecla F12                                             |
+	//------------------------------------------------------------------
+	Set Key VK_F12  To
+
+	
+	oTempTable:Delete()//Deleta Arquivo temporario
+
+	//------------------------------------------------------------------
+	//| Recupera a Ordem Original do arquivo principal                 |
+	//------------------------------------------------------------------
+	dbSelectArea("ST6")
+	dbSetOrder(01)
+
+	//------------------------------------------------------------------
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                   |  
+	//------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C051STJPRO
+Processa o STJ 
+@author Inacio Luiz Kolling 
+@since 20/09/98
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function C051STJPRO()
+
+	nREC := 0
+	DbSeek(xFilial("ST9")+MV_PAR01)
+	DbEval({|| nREC++},,{||ST9->T9_CODFAMI == MV_PAR01})
+	ProcRegua(nREC)               
+
+	DbSeek(xFilial("ST9")+MV_PAR01)
+	While !Eof() .And. ST9->T9_FILIAL == cFIL .And. ST9->T9_CODFAMI == MV_PAR01
+
+		IncProc()
+		DbSelectArea("STJ")
+		DbSetorder(02)
+		If DbSeek(xFilial("STJ")+"B"+ST9->T9_CODBEM)
+			While !Eof() .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And.;
+			STJ->TJ_CODBEM == ST9->T9_CODBEM 
+
+				If STJ->TJ_SITUACA = "L" .And. STJ->TJ_TERMINO = 'N'
+
+					DbSelectArea(cTRB)
+					(cTRB)->(DbAppend())
+					(cTRB)->ORDEM     := STJ->TJ_ORDEM
+					(cTRB)->PLANO     := STJ->TJ_PLANO
+					(cTRB)->CODBEM    := STJ->TJ_CODBEM
+					(cTRB)->NOMEBEM   := Substr(ST9->T9_NOME,1,30)
+					(cTRB)->SERVICO   := STJ->TJ_SERVICO
+					(cTRB)->SEQRELA   := STJ->TJ_SEQRELA
+					(cTRB)->DTPPINI   := STJ->TJ_DTPPINI
+					(cTRB)->DTMPINI   := STJ->TJ_DTMPINI
+					(cTRB)->NOMESER   := NGSEEK('ST4',STJ->TJ_SERVICO,1,'Substr(T4_NOME,1,30)')
+
+				EndIf
+				DbSelectArea("STJ")
+				DbSkip()
+			End
+		EndIf
+		DbSelectArea("ST9")
+		DbSkip()
+	End
+Return .T.    
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC051PE
+Pesquisa especifica para ordem de servico 
+@author Elisangela Costa
+@since 19/03/2004
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC051PE()
+
+	cORDEMC51 := Space(Len(STJ->TJ_ORDEM))
+
+	Define MsDialog oDlg5 From 300,120 To 390,330 Title OemToAnsi(STR0002) Pixel 
+
+	@ 0.5,1 say OemtoAnsi(STR0005)
+	@ 0.5,5 Msget cORDEMC51 Picture '@!' SIZE 20,10
+
+	@ 2.7,15 Button "OK" SIZE 25,10 Action MNTC051POS()
+
+	Activate MsDialog oDlg5 Centered
+
+Return .T.
+
+Static Function MNTC051POS()
+
+	DbSelectArea(cTRB)
+	DbSeek(cORDEMC51)
+	oDlg5:End()
+	
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC051VI
+Funcao para visualizar um registro do mBrowse
+@author Vitor Emanuel Batista
+@since 24/11/2011
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC051VI()
+
+	dbSelectArea("STJ")
+	DbSetOrder(1)
+	dbSeek(xFilial("STJ")+(cTRB)->ORDEM+(cTRB)->PLANO)
+	NGCAD01("STJ",Recno(),2)
+
+Return .T.

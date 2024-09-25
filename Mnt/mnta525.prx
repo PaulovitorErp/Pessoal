@@ -1,0 +1,519 @@
+#include "MNTA525.ch"
+#include "Protheus.ch"
+
+// A partir do release 12.1.33, o parâmetro MV_NGMNTFR será descontinuado
+// O gestão de frotas será contemplado nativamente no padrão do produto (indiferente da configuração do parâmetro)
+Static lFrota := IIF( FindFunction('MNTFrotas'), MNTFrotas(), GetNewPar('MV_NGMNTFR','N') == 'S' )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA525()
+Cadastro de Bens Penhorados
+
+@author Ricardo Dal Ponte
+@since 21/03/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTA525()
+
+	Local aNGBEGINPRM := {}
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		//-----------------------------------------------------
+		// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+		//-----------------------------------------------------
+		aNGBEGINPRM := NGBEGINPRM()
+
+		Private cT9STATUS,cMEMODESCR :="",aRotina,cCadastro,aChkDel
+		Private cNGSTPHR  := Alltrim(GETMV("MV_NGSTPHR")) //Parametro de Bem Penhorado
+		Private cNGSTLPH  := Alltrim(GETMV("MV_NGSTLPH")) //Parametro de Bem Liberado de Penhora
+
+		If Empty(cNGSTPHR) .Or. Empty(cNGSTLPH)
+			MsgInfo(STR0024+CHR(13); //"Um ou mais parâmetros utilizados nesta rotina não estáo configurados!"
+					+STR0025,STR0023) //"Verificar os parametros MV_NGSTPHR e MV_NGSTLPH."###"NÃO CONFORMIDADE"
+			Return
+		EndIf
+
+		aRotina := MenuDef()
+
+		//-----------------------------------------------------
+		// Define o cabecalho da tela de atualizacoes
+		//-----------------------------------------------------
+		cCadastro := OemtoAnsi(STR0033) //"Cadastro de Bens Penhorados"
+		aCHKDEL   := {}
+
+		//-----------------------------------------------------
+		// Endereca a funcao de BROWSE
+		//-----------------------------------------------------
+		NGDBAREAORDE("TS3",1)
+		mBrowse(6,1,22,75,"TS3")
+
+		//-----------------------------------------------------
+		// Devolve variaveis armazenadas (NGRIGHTCLICK)
+		//-----------------------------------------------------
+		NGRETURNPRM(aNGBEGINPRM)
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525PLACA()
+Carrega a informacao de Placa para a tela
+
+@author Ricardo Dal Ponte
+@since 22/03/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525PLACA()
+
+	If Inclui .And. lFrota
+	   M->TS3_PLACA := NGSEEK("ST9",M->TS3_CODBEM,1,"T9_PLACA")
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525INCLUI()
+Inclusao/Alteracao de veiculos penhorados
+
+@author Ricardo Dal Ponte
+@since  22/03/2007
+@param	nVOP, Numérico, Opção da rotina 3 - Inclusão / 4 - Alteração
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525INCLUI(nVOP)
+
+	// Release menor ou igual a 23
+	Local lRPORel23 := GetRPORelease() <= '12.1.023'
+	Local cCDDESC   := ""
+
+	Private nOldValVen := TS3->TS3_VALACA
+
+	If nVOP == 4 .And. lRPORel23
+	   M->TS3_DESCR := MsMM(TS3->TS3_CDDESC)
+	   cCDDESC := TS3->TS3_CDDESC
+	Endif
+
+	bNGGRAVA := {|| A525FINAL(nVOP)}
+
+	DbSelectArea("TS3")
+	nRET := NGCAD01("TS3",RECNO(),nVOP)
+
+	If nRET == 1
+		dbSelectArea("TS3")
+		If nVOP == 3  //SE INCLUSAO
+			RecLock("TS3",.F.)
+			cFilialAtu      := IIf(lFrota .And. !Empty(TS3->TS3_PLACA), A525FILIAL(TS3->TS3_PLACA), A525FILIAL(TS3->TS3_CODBEM))
+			TS3->TS3_T9STAT := cT9STATUS
+			TS3->TS3_FILIAL := xFilial("TS3", cFilialAtu)
+			TS3->( MsUnlock() )
+		EndIf
+		If lRPORel23
+			nSMM := IIf(nVOP == 3 .Or. nVOP == 4, 1, 2)
+			IIf( nVOP == 3,MSMM(,TamSX3("TS3_DESCR")[1],,cMEMODESCR,nSMM,,,"TS3","TS3_CDDESC"),;
+						MSMM(cCDDESC,,,cMEMODESCR,nSMM,,,"TS3","TS3_CDDESC"))
+		EndIf
+		EvalTrigger()  // Processa Gatilhos
+	Else
+	   If nVOP == 3
+	      RollBackSxe()
+	   Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525FINAL()
+Consistencia final
+
+@author Ricardo Dal Ponte
+@since 22/03/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525FINAL(nOpci)
+
+	Local lRPORel23  := GetRPORelease() <= '12.1.023' // Release menor ou igual a 23
+	Local cFilBem    := Space(02)
+	Local nValorVena := 0
+	Local aOldArea   := GetArea()
+	Local nContPen   := 0
+
+	If lRPORel23
+		cMEMODESCR := M->TS3_DESCR
+	EndIf
+
+	If M->TS3_STATUS = "2" .And. Empty(M->TS3_DTLIB)
+	   HELP(" ",1,STR0007,,STR0014,3,1) //"ATENÇÃO"###"Não foi informada Data de Liberação."
+	   Return .F.
+	EndIf
+
+	cFilBem := If(lFrota .and. !Empty(TS3->TS3_PLACA),A525FILIAL(M->TS3_PLACA,2),A525FILIAL(M->TS3_CODBEM,2))
+	If NGIFDBSEEK("ST9",M->TS3_CODBEM,1,.F.,cFilBem)
+		If NGIFDBSEEK("TS3",M->TS3_CODBEM,1,.F.,cFilBem)
+			While !Eof() .AND. xFilial("TS3",cFilBem) == TS3->TS3_FILIAL .AND. M->TS3_CODBEM == TS3->TS3_CODBEM
+				If TS3->TS3_STATUS == "1"
+					nValorVena += TS3->TS3_VALACA
+					nContPen++
+				Endif
+				dbSkip()
+			End
+		Endif
+		If nOpci <> 3
+			nValorVena -= nOldValVen
+			nValorVena += M->TS3_VALACA
+		Else
+			nValorVena += M->TS3_VALACA
+		Endif
+		If ST9->T9_VALVENA == 0
+			If MsgYesNo(STR0028+STR0029)//"Para execução de penhoras para os bens é necessário que seja informado um valor venal para o mesmo."###"Deseja cadastrar o valor venal agora?"
+				If !fCadValVen()
+					RestArea(aOldArea)
+					Return .f.
+				Endif
+			Else
+				RestArea(aOldArea)
+				Return .f.
+			Endif
+		Endif
+		If nValorVena > ST9->T9_VALVENA
+			MsgStop(STR0026,STR0007)//"O valor total de penhora do bem ultrapassou o valor venal do mesmo."###"ATENÇÃO"
+			RestArea(aOldArea)
+			Return .f.
+		Endif
+
+	   RecLock("ST9",.F.)
+	   cT9STATUS := ST9->T9_STATUS
+	   ST9->T9_STATUS := If(M->TS3_STATUS = "1",cNGSTPHR,If(nContPen > 1,cNGSTPHR,cNGSTLPH)) //cNGSTPHR=VEICULO PENHORADO/cNGSTLPH=LIBERADO DE PENHORA
+	   MsUnLock("ST9")
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525EXCLUI()
+Exclusao de veiculos penhorados
+
+@author Ricardo Dal Ponte
+@since 23/03/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525EXCLUI()
+
+	Local cCODBEM := "",cT9STAT := ""
+	cCODBEM := TS3->TS3_CODBEM
+	cT9STAT := TS3->TS3_T9STAT
+	nRET    := NGCAD01("TS3",RECNO(),5,3)
+
+	If nRET = 1
+	   If NGIFDBSEEK("ST9",cCODBEM,1,.F.) .And. (ST9->T9_STATUS = cNGSTPHR .Or. ST9->T9_STATUS = cNGSTLPH)
+	      RecLock("ST9",.F.)
+	      ST9->T9_STATUS := cT9STAT
+	      MsUnLock("ST9")
+	   EndIf
+	   DbSelectArea("TS3")
+	Endif
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525DTENT()
+Validacao da Data Ent. Acao x Data Ind. Vei
+
+@author Marcos Wagner Junior
+@since 08/08/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525DTENT()
+
+	If !Empty(M->TS3_DTACAO) .AND. !Empty(M->TS3_DTIND) .And. M->TS3_DTACAO < M->TS3_DTIND
+	   MsgStop(STR0008,STR0007)//"Data de Entrada da Ação deverá ser igual ou maior que a Data de Indicação do Bem"###"ATENÇÃO"
+	   Return .f.
+	Endif
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525DTLIB()
+Validacao de Liberacao x Data Ind. Vei
+
+@author Marcos Wagner Junior
+@since 08/08/2007
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525DTLIB()
+
+	If !Empty(M->TS3_DTLIB) .AND. !Empty(M->TS3_DTIND) .And. M->TS3_DTLIB < M->TS3_DTIND
+	   MsgStop(STR0009,STR0007)//"Data de Liberação deverá ser igual ou maior que a Data de Indicação do Bem"###"ATENÇÃO"
+	   Return .f.
+	Endif
+
+	If INCLUI
+	   Return A525CHAVE()
+	EndIf
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525CHAVE()
+Validacao da Chave da tabela
+
+@author Felipe N. Welter
+@since 19/03/2009
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A525CHAVE()
+
+	If !Empty(M->TS3_CODBEM) .And. !Empty(M->TS3_DTIND)
+	   If lFrota .And. !Empty(M->TS3_PLACA)
+		   NGIFDBSEEK("ST9",M->TS3_PLACA,14,.f.)
+		   cFilVld := A525FILIAL(M->TS3_PLACA)
+		Else
+			NGIFDBSEEK("ST9",M->TS3_CODBEM,1,.f.)
+		   cFilVld := A525FILIAL(M->TS3_CODBEM)
+		Endif
+	   NGIFDBSEEK("TS3",M->TS3_CODBEM,1,.f.,cFilVld)
+	   While !Eof() .And. TS3->TS3_FILIAL = cFilVld .And. M->TS3_CODBEM == TS3->TS3_CODBEM
+	      If M->TS3_DTIND == TS3->TS3_DTIND
+	         HELP(" ",1,STR0007,,STR0016+CHR(13)+STR0017,3,1) //"ATENÇÃO"###"Jà existe um registro com a mesma"###"informação de Bem + Dt.Ind.Bem"
+	         Return .F.
+	      EndIf
+	      dbSkip()
+	   End
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525FILIAL()
+Retorna:
+ 1. A filial que deve ser gravada na TS3
+ 2. A filial do veiculo ST9
+
+@param  cPlaca, Caractér, Placa do Veículo
+    	nOpc,   Numérico, Opcao para retorno conforme descricao
+    	[cFil],	Caractér, Filial para troca
+    	[cEmp],	Caractér, Empresa para troca
+@author Felipe N. Welter
+@since 19/03/2009
+@return
+/*/
+//---------------------------------------------------------------------
+Function A525FILIAL(cPlaca,nOpc,cFil,cEmp)
+
+	Local aArea  := GetArea(),aAreaST9 := ST9->(GetArea()),aAreaTS3 := TS3->(GetArea())
+	Local cWhile := IIf(lFrota .And. !Empty(TS3->TS3_PLACA),"ST9->T9_PLACA","ST9->T9_CODBEM")
+	Local nInd	 := IIf(lFrota .And. !Empty(TS3->TS3_PLACA),14,1)
+	Default nOpc := 1
+	Default cEmp := cEmpAnt
+
+	If (cEmpAnt != cEmp)
+	   NgPrepTbl({{"ST9"},{"TS3"}},cEmp,cFil)
+	EndIf
+
+	NGIFDBSEEK("ST9",cPlaca+"A",nInd,.f.)
+	cFilBem := ST9->T9_FILIAL
+	If ST9->T9_SITBEM != "A"
+	   While !Eof() .and. &(cWhile) == cPlaca
+	      If ST9->T9_SITBEM = 'A'
+	         cFilBem := ST9->T9_FILIAL
+	         Exit
+	      EndIf
+	      DbSkip()
+	   End
+	EndIf
+
+	cFilBem    := IIf(Empty(cFilBem),Space(02),cFilBem)
+	cFilialAtu := IIf(!Empty(cFilBem),cFilBem,NGTROCAFILI("TS3",xFilial("TS3"),cFil,cEmp))
+	cFil       := xFilial("TS3", cFilialAtu)
+
+	If (cEmpAnt != cEmp)
+	   NgPrepTbl({{"ST9"},{"TS3"}},SM0->M0_CODIGO,SM0->M0_CODFIL)
+	EndIf
+	RestArea(aAreaTS3)
+	RestArea(aAreaST9)
+	RestArea(aArea)
+
+Return IIf(nOpc == 2, cFilBem, cFil)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef()
+Utilizacao de Menu Funcional.
+
+Parametros do array a Rotina:
+          1. Nome a aparecer no cabecalho
+          2. Nome da Rotina associada
+          3. Reservado
+          4. Tipo de Transa‡„o a ser efetuada:
+              1 - Pesquisa e Posiciona em um Banco de Dados
+              2 - Simplesmente Mostra os Campos
+              3 - Inclui registros no Bancos de Dados
+              4 - Altera o registro corrente
+              5 - Remove o registro corrente do Banco de Dados
+          5. Nivel de acesso
+          6. Habilita Menu Funcional
+
+@author Rafael Diogo Richter
+@since 02/02/2008
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {{STR0001,"AxPesqui"      , 0 , 1},;   //"Pesquisar"
+	                  {STR0002,"NGCAD01"       , 0 , 2},;   //"Visualizar"
+	                  {STR0003,"A525INCLUI(3)" , 0 , 3},;   //"Incluir"
+	                  {STR0004,"A525INCLUI(4)" , 0 , 4},;   //"Alterar"
+	                  {STR0005,"A525EXCLUI"    , 0 , 5, 3}} //"Excluir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT525PLACA()
+Validacao da placa
+
+@author Rafael Diogo Richter
+@since 18/06/2008
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT525PLACA()
+
+	Local lAtivo := .t.
+	NGIFDBSEEK("ST9",M->TS3_PLACA,14,.f.)
+	cFilBem := ST9->T9_FILIAL
+	If M->TS3_PLACA <> ST9->T9_PLACA
+	   HELP(" ",1,STR0007,,STR0012,3,1) //"ATENÇÃO"###"Placa Invalida."
+	   Return .F.
+	EndIf
+
+	If ST9->T9_SITBEM = 'I'
+	   lAtivo := .f.
+	   While !Eof() .and. ST9->T9_PLACA == M->TS3_PLACA .And. !lAtivo
+	      If ST9->T9_SITBEM = 'A'
+	         cFilBem := ST9->T9_FILIAL
+	         lAtivo  := .T.
+	      EndIf
+	      DbSkip()
+	   End
+	EndIf
+	If !lATIVO
+	   HELP(" ",1,STR0007,,STR0013,3,1) //"ATENÇÃO"###"Veículo Inativo!"
+	   Return .F.
+	EndIf
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A525VALBEM()
+Validacao do Bem digitado
+
+@author Marcos Wagner Junior
+@since 05/06/2008
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function A525VALBEM()
+
+	Local aAreaOld := GetArea(),lRet := .t.
+	If NGIFDBSEEK("ST9",M->TS3_CODBEM,1,.f.)
+	   If (ST9->T9_SITBEM $ "IT") .OR. ST9->T9_CATBEM $ "3"
+	      MsgStop(STR0018,STR0007)//"O Bem digitado não pode ser um pneu ou está inativo ou foi transferido!"###"ATENÇÃO"
+	      lRet := .f.
+	   Endif
+	Else
+	   Help(" ",1,"REGNOIS")
+	   lRet := .f.
+	Endif
+
+	If lRet
+	   lRet := A525CHAVE()
+	EndIf
+	RestArea(aAreaOld)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT525BEM()
+Carrega o nome do bem com base na placa
+
+@author Rafael Diogo Richter
+@since 19/06/2008
+@return cDesBem
+/*/
+//---------------------------------------------------------------------
+Function MNT525BEM()
+
+	Local cDesBem := "",aAreaST9 := GetArea()
+	If !Inclui
+	   If (!Empty(TS3->TS3_PLACA),NGIFDBSEEK("ST9",TS3->TS3_PLACA,14,.f.),NGIFDBSEEK("ST9",TS3->TS3_CODBEM,1,.f.))
+	   cDesBem := ST9->T9_NOME
+	EndIf
+	RestArea(aAreaST9)
+
+Return cDesBem
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCadValVen()
+Cadastro do valor venal
+
+@author Jackson Machado
+@since 22/09/2011
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function fCadValVen()
+
+	Local nExec := 0
+	Local oDlg
+	Local nValVen := 0
+	Local cFoco := ""
+
+	Define Msdialog oDlg From 0,0 To 150,400 Title Oemtoansi(STR0030+ST9->T9_CODBEM) Pixel//"Valor Venal Bem - "
+		oDlg:lEscClose := .F.
+
+		oPanel1 := TPanel():New(00,00,,oDlg,,,,,,400,100,.F.,.F.)
+		oPanel1:Align := CONTROL_ALIGN_ALLCLIENT
+
+		   @ 1,1  Say Oemtoansi(STR0031) COLOR CLR_HBLUE of oPanel1//"Valor Venal"
+		   @ 1,5.2  MsGet nValVen Picture "@E 999,999,999.99" of oPanel1 HASBUTTON
+
+		   @ 90,90  MsGet cFoco Picture "@!" of oPanel1
+	Activate Msdialog oDlg On Init EnchoiceBar(oDlg, {|| nExec:=1,If(nValVen > 0 ,oDlg:End(),MsgStop(STR0032))},{|| nExec:=2,oDlg:End()}) Centered//"Valor não pode ser menor ou igual a zero."
+
+	If nExec == 1
+		RecLock("ST9",.f.)
+		ST9->T9_VALVENA := nValVen
+		MsUnLock("ST9")
+	Else
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT525STA()
+Limpa data de liberação
+
+@author Jackson Machado
+@since 28/02/2012
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT525STA()
+
+	If M->TS3_STATUS <> "2"
+		M->TS3_DTLIB := STOD(Space(8))
+	Endif
+
+Return .T.

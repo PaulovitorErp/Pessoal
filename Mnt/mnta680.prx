@@ -1,0 +1,880 @@
+#INCLUDE "MNTA680.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA680
+Recebimento Fisico dos Pneus
+@author Evaldo Cevinscki Jr.
+@since 02/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA680()
+
+	//Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local bKeyF9
+	Local bKeyF10
+	Local bKeyF11
+	Local bKeyF12
+	Local aOldMenu
+	Local aNGCAD02 := {}
+	Local oTmpTbl1
+
+	Private asMenu
+	Private cTRBB := GetNextAlias()
+
+	If NGSX2MODO("ST9") == "C" .OR. NGSX2MODO("TQS") == "C"
+		MsgInfo(STR0033,STR0024) //"A rotina não funcionará com a tabela ST9 e/ou TQS compartilhada!"###"ATENÇÃO"
+		Return
+	EndIf
+
+	bKeyF9  := SetKey(VK_F9)
+	bKeyF10 := SetKey(VK_F10)
+	bKeyF11 := SetKey(VK_F11)
+	bKeyF12 := SetKey(VK_F12)
+
+	SetKey(VK_F10,Nil)
+	SetKey(VK_F11,Nil)
+	SetKey(VK_F12,Nil)
+
+	aOldMenu := aClone(asMenu)
+	asMenu   := NGRIGHTCLICK("MNTA680")
+
+	aNGCAD02:={ If(Type("aCHOICE")   == "A",aClone(aChoice),{}),;
+				If(Type("aVARNAO")   == "A",aClone(aVARNAO),{}),;
+				If(Type("aGETNAO")   == "A",aClone(aGETNAO),{}),;
+				If(Type("cGETWHILE") == "C",cGETWHILE,NIL),;
+				If(Type("cGETMAKE")  == "C",cGETMAKE,NIL),;
+				If(Type("cGETKEY")   == "C",cGETKEY,NIL),;
+				If(Type("cGETALIAS") == "C",cGETALIAS,NIL),;
+				If(Type("cTUDOOK")   == "C",cTUDOOK,NIL),;
+				If(Type("cLINOK")    == "C",cLINOK,NIL),;
+				If(Type("aRELAC")    == "A",aClone(aRELAC),{}),;
+				If(Type("aCHKDEL")   == "A",aClone(aCHKDEL),{}),;
+				If(Type("bngGRAVA")  == "A",aClone(bngGRAVA),{}),;
+				If(Type("aNGBUTTON") == "A",aClone(aNGBUTTON),{})}
+
+	//Valida MV_NGBEMTR
+	Private cBEMTR := AllTrim(GetMv("MV_NGBEMTR"))
+
+	cMsg := ""
+	If !Empty(cBEMTR)
+		dbSelectArea("TQY")
+		dbSetOrder(01)
+		If dbSeek(xFilial("TQY")+cBEMTR)
+			If !Empty(TQY->TQY_CATBEM) .And. TQY->TQY_CATBEM != "3"
+				cMsg := STR0034+CHR(13) // "Categoria do status informada no parametro MV_NGBEMTR nao é genérico"
+				cMsg += STR0035+CHR(13) // "nem corresponde a categoria 'Pneu'. Para realizar o recebimento de pneus"
+				cMsg += STR0036+CHR(13) // "é necessário que este parâmetro esteja associado a um status cadastrado,"
+				cMsg += STR0037         // "com categoria 'Pneu' ou em branco."
+			EndIf
+		Else
+			cMsg := STR0038+CHR(13) // "Nao existe status correspondente ao parametro MV_NGBEMTR. Para realizar "
+			cMsg += STR0039+CHR(13) // "o recebimento de pneus é necessário que este parâmetro esteja associado a "
+			cMsg += STR0040         // "um status cadastrado, com categoria 'Pneu' ou em branco."
+		EndIf
+	Else
+		cMsg := STR0041+CHR(13) // "Parametro MV_NGBEMTR (para status 'Transferido') está vazio. Para realizar "
+		cMsg += STR0039+CHR(13) // "o recebimento de pneus é necessário que este parâmetro esteja associado a "
+		cMsg += STR0042         // "um status cadastrado, com categoria 'Pneu' ou em branco."
+	EndIf
+
+	If !Empty(cMsg)
+		MsgInfo(cMsg)
+		Return .F.
+	EndIf
+
+	Private lLOTE    := .T.
+	Private lDTTRAN  := .T.
+	Private lHRTRAN  := .T.
+	Private lFILORI  := .T.
+	Private lFILDES  := .T.
+	Private lUSUENV  := .T.
+	Private lOBSENV  := .T.
+	Private nSelec   := 0
+	Private TIPOACOM
+	Private aRotina  := MenuDef()
+
+	aCHOICE   := {}
+	aVARNAO   := {}
+
+	aGETNAO   := {{ "TR3_LOTE" , "M->TR2_LOTE"}}
+
+	bNGGRAVA  := {|| MNTA680INC() }
+	cCadastro := OemtoAnsi(STR0004)  //"Recebimento Físico dos Pneus"
+
+	aDBF := {}
+	aAdd(aDBF,{"ASSI"  , "C" , 02,0})
+	aAdd(aDBF,{"PNEU"  , "C" , 16,0 })
+	aAdd(aDBF,{"LOTE  ", "C" , 06,0 })
+	aAdd(aDBF,{"MEDIDA", "C" , 06,0 })
+	aAdd(aDBF,{"DESMED", "C" , 20,0 })
+	aAdd(aDBF,{"TIPMOD", "C" , 20,0 })
+	aAdd(aDBF,{"SULCO" , "N" , 06,2 })
+	aAdd(aDBF,{"CODPRO", "C" , 15,0 })
+	aAdd(aDBF,{"ALMOX" , "C" , 02,0 })
+	aAdd(aDBF,{"MEDSOL", "C" , 20,0 })
+	aAdd(aDBF,{"SULMIN", "N" , 06,2 })
+	aAdd(aDBF,{"SULMAX", "N" , 06,2 })
+	aAdd(aDBF,{"TPMSOL", "C" , 20,0 })
+	aAdd(aDBF,{"SOLPN" , "C" , 06,0 })
+	aAdd(aDBF,{"ITEM"  , "C" , 02,0 })
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRBB, aDBF )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"PNEU","MEDIDA"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	dbSelectArea("TR2")
+	dbSetOrder(1)
+	nINDTR2    := IndexOrd()
+	aIndTR2    := {}
+	bFiltraBrw := {|| Nil}
+	condTR2    := 'dtos(TR2->TR2_DTREC) = " " .AND. TR2->TR2_FILIAL = xFilial("TR2")'
+	bFiltraBrw := {|| FilBrowse("TR2",@aIndTR2,@condTR2)}
+	Eval(bFiltraBrw)
+
+	MBROWSE(6,1,22,75,"TR2")
+	aEval(aIndTR2,{|x| Ferase(x[1]+OrdBagExt())})
+	dbSelectArea("TR2")
+	Set Filter To
+	dbSetOrder(1)
+	dbSeek(xFilial("TR2"))
+
+	oTmpTbl1:Delete()
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	SetKey(VK_F9,bKeyF9)
+	SetKey(VK_F10,bKeyF10)
+	SetKey(VK_F11,bKeyF11)
+	SetKey(VK_F12,bKeyF12)
+
+	asMenu := aClone(aOldMenu)
+
+	aCHOICE := aClone(aNGCAD02[1])
+	aVARNAO := aClone(aNGCAD02[2])
+	AGETNAO := aClone(aNGCAD02[3])
+
+	IIf(aNGCAD02[4] != NIL,cGETWHILE := aNGCAD02[4],)
+	IIf(aNGCAD02[5] != NIL,cGETMAKE  := aNGCAD02[5],)
+	IIf(aNGCAD02[6] != NIL,cGETKEY   := aNGCAD02[6],)
+	IIf(aNGCAD02[7] != NIL,cGETALIAS := aNGCAD02[7],)
+	IIf(aNGCAD02[8] != NIL,cTUDOOK   := aNGCAD02[8],)
+	IIf(aNGCAD02[9] != NIL,cLINOK    := aNGCAD02[9],)
+
+	aRELAC    := aClone(aNGCAD02[10])
+	aCHKDEL   := aClone(aNGCAD02[11])
+	bngGRAVA  := aClone(aNGCAD02[12])
+	aNGBUTTON := aClone(aNGCAD02[13])
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA680INC
+Alimenta campos relacionais
+@author Paulo Pego
+@since XX/XX/XXXX
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA680INC()
+
+	If !Empty(M->TR2_DTREC) .and. !Empty(M->TR2_DTTRAN)
+		If M->TR2_DTREC < TR2->TR2_DTTRAN
+			HELP(" ",1,STR0024,,STR0006,3,1)  //"ATENÇÃO"###"Data de recebimento não pode ser inferior a data de Transferencia."
+			Return .F.
+		EndIf
+		If M->TR2_DTREC > dDATABASE
+			HELP(" ",1,STR0024,,STR0007,3,1)  //"ATENÇÃO"###"Data de recebimento não pode ser superior que a data atual."
+			Return .F.
+		EndIf
+		If M->TR2_DTREC == dDATABASE .And. (M->TR2_HRREC > SUBSTR(TIME(),1,5))
+			HELP(" ",1,STR0024,,STR0008,3,1)  //"ATENÇÃO"###"Hora de recebimento não pode ser superior a Hora atual."
+			Return .F.
+		EndIf
+		If M->TR2_DTREC == M->TR2_DTTRAN .And. M->TR2_HRREC < TR2->TR2_HRTRAN
+			HELP(" ",1,STR0024,,STR0009,3,1)  //"ATENÇÃO"###"Hora de recebimento não pode ser inferior a Hora de transferencia."
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA680MB
+Monta o arquivo temporario inicial mostrado no browse
+@author Soraia de Carvalho
+@since 17/11/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA680MB()
+
+	Private lInverte := .F.
+	Private cMarca   := GetMark()
+	Private aCols    := {}
+	Private oMark
+	private cLote    := TR2->TR2_LOTE
+
+	aAdd(aMark,{"ASSI"   ,NIL," "    ,})
+	aAdd(aMark,{"PNEU"   ,NIL,STR0010,}) //"Pneu"
+	aAdd(aMark,{"DESMED" ,NIL,STR0011,}) //"Medida"
+	aAdd(aMark,{"TIPMOD" ,NIL,STR0012,}) //"Modelo"
+	aAdd(aMark,{"SULCO"  ,NIL,STR0013,}) //"Sulco"
+	aAdd(aMark,{"CODPRO" ,NIL,STR0014,}) //"Código Produto"
+	aAdd(aMark,{"MEDSOL" ,NIL,STR0015,}) //"Medida Sol."
+	aAdd(aMark,{"SULMIN" ,NIL,STR0016,}) //"Sul.Min"
+	aAdd(aMark,{"SULMAX" ,NIL,STR0017,}) //"Sul.Max"
+	aAdd(aMark,{"TPMSOL" ,NIL,STR0018,}) //"T.Modelo Sol."
+	aAdd(aMark,{"SOLPN"  ,NIL,STR0019,}) //"Sol. Pneus"
+	aAdd(aMark,{"ITEM"   ,NIL,STR0020,}) //"Item"
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TQS.TQS_CODBEM,TQS_MEDIDA,ST9.T9_TIPMOD,TQS.TQS_SULCAT,TR3.TR3_CODPRO, TR3.TR3_LOTE, "
+	cQuery += "        SCP.CP_MEDIDA,SCP.CP_SULCMI,SCP.CP_LOCAL,SCP.CP_SULCMA,SCP.CP_TIPMOD,SCP.CP_SOLICIT,SCP.CP_ITEM, "
+	cQuery += "        (SELECT TQR.TQR_DESMOD FROM "+RetSqlName("TQR")+" TQR "+"WHERE TQR.D_E_L_E_T_ <> '*' AND TQR.TQR_TIPMOD = ST9.T9_TIPMOD  AND TQR.TQR_FILIAL = '"+xFilial("TQR")+"') AS MODELO,"
+	cQuery += "        (SELECT TQR.TQR_DESMOD FROM "+RetSqlName("TQR")+" TQR "+"WHERE TQR.D_E_L_E_T_ <> '*' AND TQR.TQR_TIPMOD = SCP.CP_TIPMOD  AND TQR.TQR_FILIAL = '"+xFilial("TQR")+"') AS MODSOL,"
+	cQuery += "        (SELECT TQT.TQT_DESMED FROM "+RetSqlName("TQT")+" TQT "+"WHERE TQT.D_E_L_E_T_ <> '*' AND TQT.TQT_MEDIDA = TQS.TQS_MEDIDA AND TQT.TQT_FILIAL = '"+xFilial("TQT")+"') AS MEDIDA,"
+	cQuery += "        (SELECT TQT.TQT_DESMED FROM "+RetSqlName("TQT")+" TQT "+"WHERE TQT.D_E_L_E_T_ <> '*' AND TQT.TQT_MEDIDA = SCP.CP_MEDIDA  AND TQT.TQT_FILIAL = '"+xFilial("TQT")+"') AS MEDSOL"
+	cQuery += "   FROM " + RetSqlName("TQS")+" TQS, " + RetSqlName("ST9")+" ST9, " + RetSqlName("SCP")+" SCP, " + RetSqlName("TR3")+" TR3 "
+	cQuery += "  WHERE TR3.TR3_LOTE   = " + ValToSQL(cLote)
+  	cQuery += "    AND TR3.TR3_LOTE   = SCP.CP_LOTE
+  	cQuery += "    AND ST9.T9_CODBEM  = TR3.TR3_CODBEM
+	cQuery += "    AND ST9.T9_CODBEM  = TQS.TQS_CODBEM
+  	cQuery += "    AND TR3.TR3_NUMSMA = SCP.CP_NUM
+  	cQuery += "    AND TR3.TR3_ITEMSM = SCP.CP_ITEM
+	cQuery += "    AND TR3.TR3_RECEBI <> '"+'S'+"'"
+	If NGSX2MODO( "TQS" ) == "E"
+		cQuery += "    AND TQS.TQS_FILIAL <> '"+xFilial("TQS")+"' "
+		cQuery += "    AND TR3.TR3_FILIAL =  '"+xFilial("TR3")+"' "
+	EndIf
+	cQuery += "    AND ST9.D_E_L_E_T_ <> '*' "
+	cQuery += "    AND TR3.D_E_L_E_T_ <> '*' "
+	cQuery += "    AND TQS.D_E_L_E_T_ <> '*' "
+	cQuery += "    AND SCP.D_E_L_E_T_ <> '*' "
+	cQuery += "  ORDER BY TR3.TR3_LOTE "
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	dbSelectArea(cTRBB)
+	DbGoTop()
+	While !EoF()
+		RecLock((cTRBB), .F.)
+		DbDelete()
+		//MsUnLock(cTRBB)
+		(cTRBB)->(MsUnLock())
+		DbSkip()
+	End
+
+	dbSelectArea(cALIASQRY)
+	While !EoF()
+
+		IncProc(STR0021,STR0022)  //"Aguarde..."###"Processando Registros..."
+
+		dbSelectArea(cTRBB)
+		DbSetOrder(01)
+		If !DbSeek((cAliasQry)->TQS_CODBEM)
+			RecLock((cTRBB), .T.)
+			(cTRBB)->PNEU   := (cAliasQry)->TQS_CODBEM
+			(cTRBB)->LOTE   := (cAliasQry)->TR3_LOTE
+			(cTRBB)->MEDIDA := (cAliasQry)->TQS_MEDIDA
+			(cTRBB)->DESMED := SUBSTR((cAliasQry)->MEDIDA,1,20)
+			(cTRBB)->TIPMOD := SUBSTR((cAliasQry)->MODELO,1,20)
+			(cTRBB)->SULCO  := (cAliasQry)->TQS_SULCAT
+			(cTRBB)->CODPRO := (cAliasQry)->TR3_CODPRO
+			(cTRBB)->MEDSOL := SUBSTR((cAliasQry)->MEDSOL,1,20)
+			(cTRBB)->SULMIN := (cAliasQry)->CP_SULCMI
+			(cTRBB)->SULMAX := (cAliasQry)->CP_SULCMA
+			(cTRBB)->TPMSOL := SUBSTR((cAliasQry)->MODSOL,1,20)
+			(cTRBB)->SOLPN  := (cAliasQry)->CP_SOLICIT
+			(cTRBB)->ITEM   := (cAliasQry)->CP_ITEM
+			(cTRBB)->ALMOX  := (cAliasQry)->CP_LOCAL
+			MsUnLock(cTRBB)
+		EndIf
+		dbSelectArea(cALIASQRY)
+		DbSkip()
+	End
+	(cALIASQRY)->(dbCloseArea())
+
+	dbSelectArea(cTRBB)
+	If Reccount() == 0
+		MsgInfo(STR0023,STR0024) //"Nao existe dados para montar a tela de recebimento."###"ATENÇÃO"
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA680VE
+Inverte a marcacao
+@author Thiago Olis Machado
+@since 05/05/2006
+@version undefined
+@param cMarca, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA680VE(cMarca)
+
+	dbSelectArea(cTRBB)
+	DbGotop()
+	Procregua(LastRec())
+	While !Eof()
+		IncProc(STR0025+(cTRBB)->PNEU) //"Marcando e/ou Desmarcando Pneus "
+		RecLock((cTRBB),.F.)
+		If (cTRBB)->ASSI = "  "
+			(cTRBB)->ASSI := cMarca
+			nSelec ++
+			oMark:oBrowse:Refresh()
+		Else
+			nSelec --
+			(cTRBB)->ASSI := "  "
+		EndIf
+		MsUnLock(cTRBB)
+		DbSkip()
+	End
+	DbGotop()
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA680IN
+Monta tela Pai e filho
+@author Thiago Olis Machado
+@since 05/05/2006
+@version undefined
+@param cAlias, characters
+@param nReg, numeric
+@param nOpcX, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA680IN(cAlias,nReg,nOpcX)
+
+	Local aArea   := GetArea()
+	Local LVar01  := 1,nLinhas:=0,bCampo,ah,ny,sc,nc,aNgCadBtn := {}
+	Local GetList := {},i,x, lCLICK, cKey, aNAO
+	Local cFilCaP := xFilial(cAlias)
+	Local cFilCaF := xFilial(cTRBB)
+	Local aOldRot := aClone(aRotina)
+	Local oPanel
+
+	Private oDlg, oGet,nLinNG, oMenu
+	Private aVarNao := {}
+
+	//+-------------------------------------------------------------------+
+	//| Monta a entrada de dados do arquivo                          	  |
+	//+-------------------------------------------------------------------+
+	Private aMark 	  := {}
+	Private lInverte 	  := .F.
+	Private cMarca   	  := GetMark()
+	Private aTELA[0][0],aGETS[0],aHeader[0],aCOLS[0],Continua,nUsado:=0
+	Private aAC := {STR0026,STR0027}, aCRA:= {STR0027,STR0028,STR0026} //"Abandona"###"Confirma"###"Confirma"###"Redigita"###"Abandona"
+	Private aSize := MsAdvSize(,.F.,430), aObjects := {}
+
+	aRotina := {{STR0001,"AxPesqui",0,1},;  //"Pesquisar"
+				{STR0002,"NGCAD01" ,0,2},;  //"Visualizar"
+				{STR0029,"NGCAD01" ,0,3},;  //"Receber Pneus"
+				{STR0003,"MNA680IN",0,4,0}} //"Receber Pneus"
+
+	If nOpcx = 3
+		nOpcx := 4
+	EndIf
+
+	lLOTE   := .F.
+	lDTTRAN := .F.
+	lHRTRAN := .F.
+	lFILORI := .F.
+	lFILDES := .F.
+	lUSUENV := .F.
+	lOBSENV := .F.
+
+	aAdd(aObjects,{070,070,.T.,.T.})
+	aAdd(aObjects,{100,100,.T.,.T.})
+
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.T.)
+
+	bCampo  := {|nCPO| Field(nCPO)}
+
+	dbSelectArea(cALIAS)
+	dbSetOrder(1)
+
+	FOR i := 1 TO FCount()
+		M->&(EVAL(bCampo,i)) := &(EVAL(bCampo,i))
+	Next i
+
+	M->TR2_USUREC := SubStr(cUsuario,7,15)
+
+	aPos1 := {15,1,78,315}
+	nOpca := 0
+	MNA680MB()
+
+	DbSelectarea(cTRBB)
+	DbGotop()
+
+	dbSelectArea("TR2")
+	DEFINE MSDIALOG oDlg TITLE Ccadastro From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd PIXEL
+
+	oPanel := TPanel():New(,,,oDlg)
+	oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oEnchoice := Msmget():New("TR2", nReg, 4,,,,,aPosObj[1],,3,,,,oPanel)
+	oEnchoice:oBox:Align := CONTROL_ALIGN_TOP
+
+	oMark := MsSelect():New((cTRBB),"ASSI",,aMark,@lInverte,@cMarca,{aPosObj[2,1],aPosObj[2,2],aPosObj[2,3],aPosObj[2,4],},,,oPanel)
+	oMark:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+	oMark:oBrowse:lHasMark = .T.
+	oMark:oBrowse:lCanAllMark := .T.
+	oMark:oBrowse:bAllMark := { || Processa({ || MNA680VE(cMarca) }) }
+
+	NGPOPUP(asMenu,@oMenu)
+	oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+	oEnchoice:oBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{|| IF(MNT680ALL(),(nOpca:=1,oDlg:End()),nOpca := 0)},{||nOpca:= 0,oDlg:End()}) CENTERED
+
+	//Volta a habilitar campos que estavam desabilitados
+	lLOTE   := .T.
+	lDTTRAN := .T.
+	lHRTRAN := .T.
+	lFILORI := .T.
+	lFILDES := .T.
+	lUSUENV := .T.
+	lOBSENV := .T.
+
+	RestArea(aArea)
+	aRotina := aClone(aOldRot)
+
+Return nOPCA
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT680ALL
+Grava dados na TR3, ST9
+@author Marcos Wagner Junior
+@since 13/11/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT680ALL()
+
+	Local cFieldMarca  := "ASSI"
+	Local nFor, nRecNo := 0
+	Local oTmpTbl2
+	Local oTmpTbl3
+
+	Private cTRBST9 := GetNextAlias() //Alias Tab. Temp. 2
+	Private cTRBTQS := GetNextAlias() //Alias Tab. Temp. 3
+
+	Private cSTEST := AllTrim(GetMv("MV_NGSTEST"))
+	Private cSTTRA := AllTrim(GetMv("MV_NGSTATR"))
+
+	Private nCont      := 1
+	Private nEnviado   := 0
+	Private nRecebido  := 0
+	Private aVetInr    := {}
+	Private lGera	   := .F.
+	Private lTR4_ORDEM := TR4->( FieldPos("TR4_ORDEM") ) > 0
+	Private cOrdemMov  := ""
+	Private cOrdemMov  := ""
+	Private cDestinEst := ""
+
+	If IsMark(cFieldMarca,cMarca,lInverte)
+		nRecno  := Recno()
+		nSelec  := 0
+	EndIf
+
+	If Empty(M->TR2_DTREC) .OR. Empty(M->TR2_HRREC) .OR. Empty(M->TR2_USUREC)
+		MsgStop(STR0030)      //"Um ou mais campos obrigatórios não foram preenchidos"
+		Return .F.
+	EndIf
+
+	//Valida a data de recebimento
+	If !MNTA680INC()
+		Return .F.
+	EndIf
+
+	dbSelectArea(cTRBB)
+	DbGotop()
+	While !Eof()
+		nEnviado++
+		If !Empty((cTRBB)->ASSI)
+			lGera := .T.
+			nRecebido++
+		EndIf
+		DbSkip()
+	End
+
+	If !lGera
+		MsgStop(STR0031)      //"Não existem pneus selecionados para gerar o recebimento"
+		Return .F.
+	EndIf
+
+	If nEnviado != nRecebido
+		MsgStop(STR0032)   //"Quantidade de pneus enviados difere da quantidade de pneus recebidos."
+		Return .F.
+	EndIf
+
+	dbSelectArea(cTRBB)
+	DbGotop()
+	While !Eof()
+
+		If nCont == 1
+			dbSelectArea("TR2")
+			DbSetOrder(01)
+			If DbSeek(xFilial("TR2")+(cTRBB)->LOTE)
+				RecLock("TR2", .F.)
+				TR2->TR2_DTREC  := M->TR2_DTREC
+				TR2->TR2_HRREC  := M->TR2_HRREC
+				TR2->TR2_USUREC := M->TR2_USUREC
+				TR2->TR2_CCUSTO := M->TR2_CCUSTO
+				TR2->TR2_OBSREC := M->TR2_OBSREC
+				MsUnlock("TR2")
+			EndIf
+			nCont ++
+		EndIf
+
+
+		If !Empty((cTRBB)->ASSI)
+
+			dbSelectArea('TR3')
+			DbSetOrder(02)
+			If DbSeek(M->TR2_FILDES+(cTRBB)->PNEU)
+				RecLock('TR3',.F.)
+				TR3->TR3_RECEBI := "S"
+				MsUnLock('TR3')
+			EndIf
+
+			dbSelectArea("ST9")
+			DbSetOrder(01)
+			If DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+				RecLock("ST9",.F.)
+				ST9->T9_STATUS  := cBEMTR
+				ST9->T9_SITBEM  := 'T'
+				MsUnLock("ST9")
+
+				dbSelectArea("TQZ")
+				DbSetOrder(01)
+				If !DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU+dtos(TR2->TR2_DTREC)+TR2->TR2_HRREC+cSTTRA)
+					RecLock("TQZ",.T.)
+					TQZ->TQZ_FILIAL  := TR2->TR2_FILORI
+					TQZ->TQZ_CODBEM  := (cTRBB)->PNEU
+					TQZ->TQZ_DTSTAT  := TR2->TR2_DTREC
+					TQZ->TQZ_HRSTAT  := TR2->TR2_HRREC
+					TQZ->TQZ_STATUS  := cBEMTR
+					TQZ->TQZ_PRODUT  := (cTRBB)->CODPRO
+					TQZ->TQZ_ALMOX   := (cTRBB)->ALMOX
+					MsUnLock("TQZ")
+				EndIf
+
+				dbSelectArea("TQS")
+				DbSetOrder(01)
+				If DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+					dbSelectArea("TQV")
+					DbSetOrder(01)
+					If !DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU+DtoS(TR2->TR2_DTREC)+TR2->TR2_HRREC+TQS->TQS_BANDAA)
+						RecLock("TQV",.T.)
+						TQV->TQV_FILIAL  := TR2->TR2_FILORI
+						TQV->TQV_CODBEM  := (cTRBB)->PNEU
+						TQV->TQV_DTMEDI  := TR2->TR2_DTREC
+						TQV->TQV_HRMEDI  := TR2->TR2_HRREC
+						TQV->TQV_BANDA   := TQS->TQS_BANDAA
+						TQV->TQV_DESENH  := TQS->TQS_DESENH
+						TQV->TQV_SULCO   := TQS->TQS_SULCAT
+						MsUnLock("TQV")
+					EndIf
+				EndIf
+
+			EndIf
+
+			//+--------------------------------------------------------------------------------------+
+			//| Processa transferencia de saldo do produto entre filiais, somando um pneu no estoque |
+			//+--------------------------------------------------------------------------------------+
+			If FindFunction("MNTMOVTM") .And. FindFunction("NGREGRAEST")
+				If !Empty(TR3->TR3_CODPRO)
+					MntMovEst("DE0", ST9->T9_LOCPAD, Padr( TR3->TR3_CODPRO,TAMSX3("B2_COD")[1] ), 1, dDATABASE, NextNumero("SD3",2,"D3_DOC",.T.),;
+								xFilial("SD3"), M->TR2_CCUSTO,, CriaVar( 'D3_NUMSEQ' ),,,,,ST9->T9_ITEMCTA)
+				EndIf
+			Else
+				cCodST9Est := AllTrim(TR3->TR3_CODPRO)
+				cCodST9Alm := ST9->T9_LOCPAD
+				cCodLoc    := NGSEEK('SD3',cCodST9Est,3,'D3_LOCALIZ') //D3_FILIAL+D3_COD+D3_LOCAL+D3_NUMSEQ+D3_CF
+				cCodST9CC  := M->TR2_CCUSTO
+				If !Empty(cCodST9Est)
+					INCLUI := .T.   //Para validar a A241QTDGRA()
+					NGMOVEST("DE0")
+					RecLock("SD3",.F.)
+					SD3->D3_ITEMCTA := ST9->T9_ITEMCTA
+					MsUnLock("SD3")
+					INCLUI := .F.  //Para validar a A241QTDGRA()
+				EndIf
+			EndIf
+
+			dbSelectArea("TQZ")
+			DbSetOrder(01)
+			If !DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU+dtos(TR2->TR2_DTREC)+TR2->TR2_HRREC+cSTEST)
+				RecLock("TQZ",.T.)
+				TQZ->TQZ_FILIAL  := TR2->TR2_FILDES
+				TQZ->TQZ_CODBEM  := (cTRBB)->PNEU
+				TQZ->TQZ_DTSTAT  := TR2->TR2_DTREC
+				TQZ->TQZ_HRSTAT  := TR2->TR2_HRREC
+				TQZ->TQZ_STATUS  := cSTEST
+				TQZ->TQZ_PRODUT  := (cTRBB)->CODPRO
+				TQZ->TQZ_ALMOX   := (cTRBB)->ALMOX
+				MsUnLock("TQZ")
+			EndIf
+
+			dbSelectArea("TQS")
+			DbSetOrder(01)
+			If DbSeek(TR2->TR2_FILDES+(cTRBB)->PNEU)
+				dbSelectArea("TQV")
+				DbSetOrder(01)
+				If !DbSeek(TR2->TR2_FILDES+(cTRBB)->PNEU+DtoS(TR2->TR2_DTREC)+TR2->TR2_HRREC+TQS->TQS_BANDAA)
+					RecLock("TQV",.T.)
+					TQV->TQV_FILIAL  := TR2->TR2_FILDES
+					TQV->TQV_CODBEM  := (cTRBB)->PNEU
+					TQV->TQV_DTMEDI  := TR2->TR2_DTREC
+					TQV->TQV_HRMEDI  := TR2->TR2_HRREC
+					TQV->TQV_BANDA   := TQS->TQS_BANDAA
+					TQV->TQV_DESENH  := TQS->TQS_DESENH
+					TQV->TQV_SULCO   := TQS->TQS_SULCAT
+					MsUnLock("TQV")
+				EndIf
+			EndIf
+
+
+			dbSelectArea("ST9")
+			DbSetOrder(01)
+			If	!DbSeek(TR2->TR2_FILDES+(cTRBB)->PNEU)
+
+				DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+				nCONTST9 := ST9->T9_POSCONT
+				aDBFXTRB := DbStruct()
+
+				//Instancia classe FWTemporaryTable
+				oTmpTbl2:= FWTemporaryTable():New( cTRBST9, aDBFXTRB )
+				//Adiciona os Indices
+				oTmpTbl2:AddIndex( "Ind01" , {"T9_CODBEM"}  )
+				//Cria a tabela temporaria
+				oTmpTbl2:Create()
+
+				dbSelectArea(cTRBST9)
+				RecLock((cTRBST9),.T.)
+				dbSelectArea("ST9")
+				For nFor := 1 To Fcount()
+					ny   := "(cTRBST9)->" + Fieldname(nFor)
+					nx   := "ST9->" + Fieldname(nFoR)
+					&ny. := &nx.
+				Next nFor
+				dbSelectArea(cTRBST9)
+				MsUnlock(cTRBST9)
+
+				dbSelectArea("ST9")
+				RecLock("ST9",.T.)
+				dbSelectArea(cTRBST9)
+				For nFor := 1 To Fcount()
+					ny   := "ST9->" + Fieldname(nFor)
+					nx   := "(cTRBST9)->" + Fieldname(nFoR)
+					If "_FILIAL"$Upper(ny)
+						&ny. := TR2->TR2_FILDES
+					ElseIf "_CCUSTO"$Upper(ny) .And. !Empty(M->TR2_CCUSTO)
+						&ny. := M->TR2_CCUSTO
+					ElseIf "_SITBEM"$Upper(ny)
+						&ny. := "A"
+					ElseIf "_STATUS"$Upper(ny)
+						&ny. := cSTEST
+					Else
+						&ny. := &nx.
+					EndIf
+				Next nFoR
+				dbSelectArea("ST9")
+				MsUnlock('ST9')
+
+				//Deleta os Arquivos temporarios fisicamente
+				oTmpTbl2:Delete()
+			Else
+
+				RecLock("ST9",.F.)
+				ST9->T9_STATUS := cSTEST
+				ST9->T9_SITBEM := "A"
+				MsUnlock('ST9')
+
+				DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+				RecLock("ST9",.F.)
+				ST9->T9_STATUS := cBEMTR
+				ST9->T9_SITBEM := "T"
+				MsUnlock('ST9')
+
+			EndIf
+
+			TIPOACOM := If(st9->t9_temcont = 'S',.T.,.F.)
+			If TIPOACOM .And. nCONTST9 > 0
+				dbSelectArea("STP")
+				DbSetOrder(5)
+				If !DbSeek(TR2->TR2_FILDES+ST9->T9_CODBEM)
+					NGGRAVAHIS(ST9->T9_CODBEM,ST9->T9_POSCONT,ST9->T9_VARDIA,;
+					ST9->T9_DTULTAC,ST9->T9_CONTACU,ST9->T9_VIRADAS,TR2->TR2_HRREC,;
+					1,"M",TR2->TR2_FILDES,TR2->TR2_FILDES)
+				Else
+					NGTRETCON(ST9->T9_CODBEM,TR2->TR2_DTREC,nCONTST9,TR2->TR2_HRREC,1,,,"C",TR2->TR2_FILDES)
+				EndIf
+			EndIf
+
+			dbSelectArea("TQS")
+			DbSetOrder(01)
+
+			DbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+			nCONTST9 := ST9->T9_POSCONT
+			aDBFXTRB := DbStruct()
+
+			//Instancia classe FWTemporaryTable
+			oTmpTbl3:= FWTemporaryTable():New( cTRBTQS, aDBFXTRB )
+			//Adiciona os Indices
+			oTmpTbl3:AddIndex( "Ind01" , {"TQS_CODBEM"} )
+			//Cria a tabela temporaria
+			oTmpTbl3:Create()
+
+			dbSelectArea(cTRBTQS)
+			RecLock((cTRBTQS),.T.)
+			dbSelectArea("TQS")
+
+			If !dbSeek(TR2->TR2_FILDES+(cTRBB)->PNEU)
+				dbSeek(TR2->TR2_FILORI+(cTRBB)->PNEU)
+				For nFor := 1 To Fcount()
+					ny   := "(cTRBTQS)->" + Fieldname(nFor)
+					nx   := "TQS->" + Fieldname(nFoR)
+					&ny. := &nx.
+				Next nFor
+				dbSelectArea(cTRBTQS)
+				MsUnlock(cTRBTQS)
+
+				dbSelectArea("TQS")
+				RecLock("TQS",.T.)
+				dbSelectArea(cTRBTQS)
+				For nFor := 1 To Fcount()
+					ny   := "TQS->" + Fieldname(nFor)
+					nx   := "(cTRBTQS)->" + Fieldname(nFoR)
+					If "_FILIAL"$Upper(ny)
+						&ny. := TR2->TR2_FILDES
+					Else
+						&ny. := &nx.
+					EndIf
+				Next nFoR
+				dbSelectArea('TQS')
+				MsUnlock('TQS')
+			Else
+				For nFor := 1 To Fcount()
+					ny   := "(cTRBTQS)->" + Fieldname(nFor)
+					nx   := "TQS->" + Fieldname(nFoR)
+					&ny. := &nx.
+				Next nFor
+				dbSelectArea(cTRBTQS)
+				MsUnlock(cTRBTQS)
+
+				dbSelectArea("TQS")
+				DbSetOrder(1)
+				dbSeek(TR2->TR2_FILDES+(cTRBB)->PNEU)
+				RecLock("TQS",.F.)
+				TQS->TQS_SULCAT := (cTRBTQS)->TQS_SULCAT
+				TQS->TQS_DTMEAT := (cTRBTQS)->TQS_DTMEAT
+				TQS->TQS_HRMEAT := (cTRBTQS)->TQS_HRMEAT
+				TQS->TQS_BANDAA := (cTRBTQS)->TQS_BANDAA
+				TQS->TQS_DESENH := (cTRBTQS)->TQS_DESENH
+				TQS->TQS_KMOR   := (cTRBTQS)->TQS_KMOR
+				TQS->TQS_KMR1   := (cTRBTQS)->TQS_KMR1
+				TQS->TQS_KMR2   := (cTRBTQS)->TQS_KMR2
+				TQS->TQS_KMR3   := (cTRBTQS)->TQS_KMR3
+				TQS->TQS_KMR4   := (cTRBTQS)->TQS_KMR4
+				TQS->TQS_DOT    := (cTRBTQS)->TQS_DOT
+				TQS->TQS_EIXO   := (cTRBTQS)->TQS_EIXO
+				TQS->TQS_TIPEIX := (cTRBTQS)->TQS_TIPEIX
+				TQS->TQS_PLACA  := (cTRBTQS)->TQS_PLACA
+				TQS->TQS_POSIC  := (cTRBTQS)->TQS_POSIC
+				dbSelectArea('TQS')
+				MsUnlock('TQS')
+			EndIf
+			//Deleta os Arquivos temporarios fisicamente
+			oTmpTbl3:Delete()
+			nSelec ++
+
+		ElseIf Empty((cTRBB)->ASSI)
+
+			dbSelectArea('TR3')
+			DbSetOrder(02)
+			If DbSeek(M->TR2_FILDES+(cTRBB)->PNEU)
+				RecLock('TR3',.F.)
+				TR3->TR3_RECEBI := "N"
+				MsUnLock('TR3')
+			EndIf
+
+		EndIf
+
+		dbSelectArea("SCP")
+		DbSetOrder(01)
+		If DbSeek(TR3->TR3_FILIAL+TR3->TR3_NUMSMA+TR3->TR3_ITEMSM)
+			RecLock('SCP',.F.)
+			SCP->CP_QUJE := nSelec
+			SCP->CP_NUMSC:= TR3->TR3_ITEMSM
+			//SCP->CP_ITEM := TR3->TR3_NUMSEQ
+			MsUnLock('SCP')
+
+			//no processo de Transferencia de Pneus, a SA nao eh integrada.
+			//If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+			//	NGMUReques(SCP->(RecNo()),"SCP",.F.,3)
+			//EndIf
+
+		EndIf
+
+		/*If nSelec > 1
+		dbSelectArea('TRBB')
+		RecLock('TRBB',.F.)
+		TRBB->ASSI := Space(02)
+		MsUnLock('TRBB')
+		EndIf */
+
+		dbSelectArea(cTRBB)
+		DbSkip()
+	End
+
+	DbGoTo(nRecno)
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+@author Rafael Diogo Richter
+@since 02/02/2008
+@version undefined
+@return Array com opcoes da rotina.
+@type function
+@obs ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+	Local aRotina :=	{{STR0001,"AxPesqui",0,1},;  //"Pesquisar"
+						 {STR0002,"NGCAD01" ,0,2},;  //"Visualizar"
+						 {STR0003,"MNA680IN",0,4,0}} //"Receber Pneus"
+
+	//+----------------------------------------------------------+
+	//|	Parametros do array a Rotina:                 	     	 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transação a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 		     	 |
+	//+----------------------------------------------------------+
+
+Return aRotina

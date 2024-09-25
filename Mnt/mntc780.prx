@@ -1,0 +1,330 @@
+#INCLUDE "mntc780.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC780
+Consulta Geral das etapas realizadas no Bem
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC780()
+	//---------------------------------------------------------------------
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  	  |
+	//---------------------------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private aRotina := {{STR0001 ,"AxPesqui"  , 0 , 1   },;  //"Pesquisa"
+						{STR0002 ,"NGCAD01"   , 0 , 2   },;  //"Visualizar"
+						{STR0004 ,"MNC780CON" , 0 , 4, 0}}   //"Consulta"
+	Private lUSATAR := If(FindFunction("NGUSATARPAD"),NGUSATARPAD(),.F.)
+
+	cCadastro := OemToAnsi(STR0005) //"Consulta Etapas Realizadas"
+
+	mBrowse( 6, 1,22,75,"ST9")
+
+	//---------------------------------------------------------------------
+	//| Recupera a Ordem Original do arquivo principal               	  |
+	//---------------------------------------------------------------------
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+
+	//---------------------------------------------------------------------
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                      |
+	//---------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC780CON
+Monta um browse das manutencoes do Bem
+
+@author Inacio Luiz Kolling
+@since 25/11/97
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC780CON
+
+	Local OldRot := Aclone(aROTINA)
+	Local cCadas := cCadastro
+	Local oTempTable //Objeto Tabela Temporária
+	Local aPesq	   := {}
+	Local nTamNome := TAMSX3("TPA_DESCRI")[1] //Busca tamanho do campo de Descrição.
+
+	Private cTRB	:= GetNextAlias() //Alias Tabela Temporária
+
+	cCadastro    := OemToAnsi(STR0008) //"Etapas Realizadas"
+
+	//---------------------------------------------------------------------
+	//| Variaveis utilizadas para parametros                         	  |
+	//| mv_par01     // de data inicio                                	  |
+	//| mv_par02     // ate data fim									  |
+	//---------------------------------------------------------------------
+
+	If !Pergunte("MNT78C",.T.)
+		Return
+	Endif
+
+	aRotina := {{STR0002 ,"VISUAC780" , 0 , 2},;    //"Visualizar"
+				{STR0009 ,"MNC780OP"  , 0 , 2 , 0}} //"Opcoes Etapa"
+
+	aDBF    := {{"ETAPA"    , "C", 06		,0} ,;
+				{"NOMETAPA" , "C", nTamNome	,0} ,;
+				{"CODBEM"   , "C", 16		,0} ,;
+				{"DATARA"   , "D", 08		,0} ,;
+				{"POSCONT"  , "N", 09		,0} ,;
+				{"ORDEM"    , "C", 06		,0} ,;
+				{"PLANO"    , "C", 06		,0} ,;
+				{"TAREFA"   , "C", 06		,0} ,;
+				{"ARQUIVO"  , "C", 03		,0}}
+	If lUSATAR
+		Aadd(aDBF,{"SEQTARE" ,"C",06,0})
+	Endif
+
+	//Instancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"ETAPA","DATARA"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aFIELD2 := {{STR0010 ,"ETAPA"    ,"C",06		,0,"@!"},;       //"Etapa"
+				{STR0011 ,"NOMETAPA" ,"C",nTamNome	,0,"@!"},;       //"Nome Etapa"
+				{STR0012 ,"TAREFA"   ,"C",06		,0,"@!"},;       //"Tarefa"
+				{STR0013 ,"DATARA"   ,"C",08		,0,"99/99/99"},; //"Data Real."
+				{STR0014 ,"POSCONT"  ,"N",09		,0,"999999999"}} //"Contador"
+
+	Processa({|| C780STJ()})
+
+	dbSelectArea(cTRB)
+	dbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , {STR0010 + " + " + STR0013,{{"","C" , 255 , 0 ,"","@!"} }} ) // Indices de pesquisa
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRB)
+	oBrowse:SetFields(aFIELD2)
+	oBrowse:SetProfileID( '2' )
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	oTempTable:Delete()//Deleta Tabela Temporária
+
+	dbSelectArea("TPA")
+
+	aRotina   := Aclone(OldRot)
+	cCadastro := cCadas
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C780STJ
+Processa as Etapas Realizadas STJ STQ
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C780STJ()
+	dbSelectArea("STJ")
+	dbSetOrder(2)
+	dbSeek(xfilial('STJ')+"B"+ST9->T9_CODBEM)
+	ProcRegua(Reccount())
+	While !eof() .and. STJ->TJ_FILIAL == xfilial('STJ') .and. ;
+	STJ->TJ_TIPOOS = "B" .And. STJ->TJ_CODBEM == ST9->T9_CODBEM
+
+		IncProc()
+		If STJ->TJ_DTMRFIM >= MV_PAR01 .and. STJ->TJ_DTMRFIM <= MV_PAR02;
+		.and. STJ->TJ_TERMINO = 'S'
+
+			dbSelectArea("STQ")
+			dbSetOrder(1)
+			dbSeek(xfilial('STQ')+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+
+			While !eof() .and. STQ->TQ_FILIAL == xfilial('STQ') .and.;
+			STQ->TQ_ORDEM == STJ->TJ_ORDEM .and. STQ->TQ_PLANO == STJ->TJ_PLANO
+
+				If !Empty(STQ->TQ_OK)
+					GRAVAC780(STQ->TQ_ETAPA,STJ->TJ_CODBEM,STJ->TJ_DTMRFIM,;
+					STJ->TJ_POSCONT,STJ->TJ_ORDEM,STJ->TJ_PLANO,;
+					STQ->TQ_TAREFA,"STQ",If(lUSATAR,STQ->TQ_SEQTARE,))
+				Endif
+
+				dbSelectArea("STQ")
+				dbSkip()
+			End
+		Endif
+		dbSelectArea("STJ")
+		dbSkip()
+	End
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C780STS
+Processa as Etapas Realizadas STS STX
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C780STS()
+	dbSelectArea("STS")
+	dbSetOrder(2)
+	dbSeek(xfilial('STS')+"B"+ST9->T9_CODBEM)
+	ProcRegua(Reccount())
+	While !eof() .and. STS->TS_FILIAL == xfilial('STS') .and. ;
+	STS->TS_TIPOOS = "B" .And. STS->TS_CODBEM == ST9->T9_CODBEM
+
+		IncProc()
+
+		If STS->TS_DTMRFIM >= MV_PAR01 .and. STS->TS_DTMRFIM <= MV_PAR02;
+		.and. STS->TS_TERMINO = 'S'
+
+			dbSelectArea("STX")
+			dbSetOrder(1)
+			dbSeek(xfilial('STX')+STS->TS_ORDEM+STS->TS_PLANO)
+
+			While !eof() .and. STX->TX_FILIAL == xfilial('STX') .and.;
+			STX->TX_ORDEM == STS->TS_ORDEM .and. STX->TX_PLANO == STS->TS_PLANO
+
+				If !Empty(STX->TX_OK)
+					GRAVAC780(STX->TX_ETAPA,STS->TS_CODBEM,STS->TS_DTMRFIM,;
+					STS->TS_POSCONT,STS->TS_ORDEM,STS->TS_PLANO,;
+					STX->TX_TAREFA,"STX",If(lUSATAR,STX->TX_SEQTARE,))
+				Endif
+
+				dbSelectArea("STX")
+				dbSkip()
+			End
+		Endif
+		dbSelectArea("STS")
+		dbSkip()
+	End
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GRAVAC780
+Grava os dados no arquivo temporário
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+
+@param cETAPA, characters
+@param cCODBEM, characters
+@param dDTMRFIM, date
+@param nPOSCONT, numeric
+@param cORDEM, characters
+@param cPLANO, characters
+@param cTAREFA, characters
+@param cARQ, characters
+@param cSEQTAR, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Function GRAVAC780(cETAPA,cCODBEM,dDTMRFIM,nPOSCONT,cORDEM,cPLANO,cTAREFA,;
+	cARQ,cSEQTAR)
+	DbSelectArea(cTRB)
+	(cTRB)->(DbAppend())
+	(cTRB)->ETAPA    := cETAPA
+	(cTRB)->NOMETAPA := NGSEEK("TPA",cETAPA,1,"TPA->TPA_DESCRI")
+	(cTRB)->CODBEM   := cCODBEM
+	(cTRB)->DATARA   := dDTMRFIM
+	(cTRB)->POSCONT  := nPOSCONT
+	(cTRB)->ORDEM    := cORDEM
+	(cTRB)->PLANO    := cPLANO
+	(cTRB)->TAREFA   := cTAREFA
+	(cTRB)->ARQUIVO  := cARQ
+
+	If cSEQTAR <> Nil
+		(cTRB)->SEQTARE := cSEQTAR
+	Endif
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} VISUAC780
+Posiciona no registro corresponde do arquivo
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function VISUAC780
+
+	Local cCadas := cCadastro
+	cCadastro    := OemToAnsi("Cadastro Etapas")
+	aTrocaF3     := {}
+
+	If (cTRB)->ARQUIVO == 'STQ'
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		STJ->(DbSeek(xFilial('STJ')+(cTRB)->ORDEM+(cTRB)->PLANO))
+
+		If Val(STJ->TJ_PLANO) == 0 .And. lUSATAR
+			aAdd(aTrocaF3,{"TQ_TAREFA","TT9"})
+		EndIf
+
+		dbSelectArea("STQ")
+		dbSetOrder(1)
+		cChaveA := xFilial('STQ')+(cTRB)->ORDEM+(cTRB)->PLANO+(cTRB)->TAREFA+(cTRB)->ETAPA
+		If lUSATAR
+			cChaveA += (cTRB)->SEQTARE
+		Endif
+		If DbSeek(cChaveA)
+			NGCAD01("STQ",Recno(),2)
+		Endif
+	Else
+		dbSelectArea("STS")
+		dbSetOrder(1)
+		STS->(DbSeek(xFilial('STS')+(cTRB)->ORDEM+(cTRB)->PLANO))
+
+		If Val(STJ->TJ_PLANO) == 0 .And. lUSATAR
+			aAdd(aTrocaF3,{"TX_TAREFA","TT9"})
+		EndIf
+
+		dbSelectArea("STX")
+		dbSetOrder(1)
+		cChaveA := xFilial('STX')+(cTRB)->ORDEM+(cTRB)->PLANO+(cTRB)->TAREFA+(cTRB)->ETAPA
+		If lUSATAR
+			cChaveA += (cTRB)->SEQTARE
+		Endif
+		STQ->(DbSeek(cChaveA))
+		NGCAD01("STX",Recno(),2)
+	Endif
+
+	dbSelectArea(cTRB)
+	cCadastro := cCadas
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC780OP
+Monta um browse das Opcoes da Etapa X respostas das opcoes
+
+@author Inacio Luiz Kolling
+@since 25/11/99
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC780OP
+	dbSelectArea("STQ")
+	dbSetOrder(1)
+	cChaveA := xFilial('STX')+(cTRB)->ORDEM+(cTRB)->PLANO+(cTRB)->TAREFA+(cTRB)->ETAPA
+	If lUSATAR
+		cChaveA += (cTRB)->SEQTARE
+	Endif
+	STQ->(DbSeek(cChaveA))
+	TPQRESPOS()
+	dbSelectArea(cTRB)
+Return

@@ -1,0 +1,2182 @@
+#INCLUDE "SGAR200.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "MSOLE.CH"
+#INCLUDE "topconn.ch"
+
+#DEFINE _nVERSAO 02 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR200
+Relatório do Laudo de Plano de Gerenciamento de Resíduos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Function SGAR200()
+
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+	Local aPerg := {}
+
+	Private cTabPla := If( NGCADICBASE( "TAA_UNIMED" , "A" , "TAA" , .F. ) , "TAA" , "TNI" )
+	Private aTabCps := If( NGCADICBASE( "TAA_UNIMED" , "A" , "TAA" , .F. ) , ;
+								{ "TAA_CODPLA" , "TAA_NOME", "TAA_DTIMPL","TAA_DTINPR","TAA_DTFIPR","TAA_DTINRE","TAA_DTFIRE","TAA_OQUE","TAA_COMO","TAA_ONDE","TAA_OBS" } , ;
+								{ "TNI_CODPLA" , "TNI_NOMPLA", "TNI_DTIMPL","TNI_DTINPR","TNI_DTFIPR","TNI_DTINRE","TNI_DTFIRE","TNI_OQUE","TNI_COMO","TNI_ONDE","TNI_OBS" } )
+	Private nTipoDoc 		:= 0
+	Private cPathEst 		:= Alltrim(GetMv("MV_DIREST")) // PATH DO ARQUIVO A SER ARMAZENADO NA ESTACAO DE TRABALHOZ
+	Private cCodEmpresa 	:= If(FindFunction("FWGrpCompany"),FWGrpCompany(),SM0->M0_CODIGO)
+	Private cPerg 			:= "" // "SGAR200"
+
+	// valida se update foi aplicado
+	IF !NGCADICBASE('TO0_ATIVID','A','TO0',.F.) .Or. !AliasInDic( "TH0" )
+		NGINCOMPDIC( "UPDSGA17","TPSI88" )
+		Return .F.
+	Endif
+
+	If (MsgYesNo(STR0077) == .T.) // ###"Realizar consulta padrão por Funcionário(Sim) ou Usuário(Não) ?"
+		cConPad := "SRA"
+		cPerg   := "SGAR200B"
+		cTamCpo := TamSx3("RA_MAT")[1]
+	Else
+		cConPad := "QAA"
+		cPerg   := "SGAR200A"
+		cTamCpo := TamSx3("QAA_MAT")[1]
+	EndIf
+
+	SGAREL200()
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAREL200
+Função de Impressão do Plano de Gerenciamento de Resídos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Function SGAREL200()
+
+	Local oRadOp,oDlg,i
+
+	Private cPathBmp 			:= Alltrim(GetMv("MV_DIRACA"))			// Path do arquivo logo .bmp do cliente
+	Private nModeloImp    	:= 1
+	Private lMdtUnix 			:= If( GetRemoteType() == 2 .or. isSRVunix() , .T. , .F. ) //Verifica se servidor ou estacao é Linux
+	Private cTitulo        	:= " "
+	Private nQbrAux 			:= 0
+
+	cPathEst := Alltrim(GetMv("MV_DIREST")) 			// PATH DO ARQUIVO A SER ARMAZENADO NA ESTACAO DE TRABALHOZ
+
+	lRet  := .f.
+
+	DEFINE MSDIALOG oDlg FROM  0,0 TO 150,320 TITLE STR0003 PIXEL //"Selecione o Modelo do Relatório"
+
+	@ 10,10 TO 55,150 LABEL STR0005 of oDlg Pixel //"Modelo do Relatório"
+	@ 20,14 RADIO oRadOp VAR nModeloImp ITEMS "Word",STR0004 SIZE 70,15 PIXEL OF oDlg //"Gráfico"
+
+	DEFINE SBUTTON FROM 59,90  TYPE 1 ENABLE OF oDlg ACTION EVAL({|| lRET := .T.,oDlg:END()})
+	DEFINE SBUTTON FROM 59,120 TYPE 2 ENABLE OF oDlg ACTION oDlg:END()
+
+	ACTIVATE MSDIALOG oDlg CENTERED
+
+	If lRet
+
+		If nModeloImp == 1 //Word
+
+			RptStatus({|lEnd| RelatWord(@lEnd)})
+
+		Else //Grafico
+
+			RptStatus({|lEnd| RelatGraf(@lEnd)})
+
+		Endif
+
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} RelatWord
+Função de Impressão em Word do Plano de Gerenciamento de Resídos e Plano
+de Gerenciamento de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function RelatWord()
+
+	Local cTitAux := " "
+	Local cTitul2 := " "
+	Local cTitulo := " "
+	Local cBarraRem := "\"
+	Local cBarraSrv := "\"
+	Local cSMCOD := If(FindFunction("FWGrpCompany"),FWGrpCompany(),SM0->M0_CODIGO)
+	Local cSMFIL := If(FindFunction("FWCodFil"),FWCodFil(),SM0->M0_CODFIL)
+
+	Private cArqDot  := ""
+	Private cArqBmp  := "LGRL"+cSMCOD+cSMFIL+".BMP"  	// Nome do arquivo logo do cliente
+	Private cArqBmp2 := "LGRL"+cSMCOD+".BMP"         	// Nome do arquivo logo do cliente
+	Private cPathDot := Alltrim(GetMv("MV_DIRACA"))	 	// Path do arquivo modelo do Word
+	Private cRootPath
+	Private cFileLogo
+	Private cPathBmp := AllTrim(GetSrvProfString("StartPath","\"))
+	Private cPathBm2 := cPathBmp
+	Private cVar     := "cVAR",nVar := 1
+	Private cVar1    := "cTIT",nVar1 := 1
+	Private oWord
+
+	If GetRemoteType() == 2  //estacao com sistema operacional unix
+		cBarraRem := "/"
+	Endif
+	If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+		cBarraSrv := "/"
+	Endif
+
+	If !Pergunte(cPerg)
+		return
+	Endif
+
+	SetRegua(0)
+
+	nTipoDoc := IIF(TO0->TO0_TIPREL == "B",1,2)  //Indica se o doc é o PGR ou PGRSS
+
+	cArqDot  := "pgrppra.dot"							// Nome do arquivo modelo do Word (Tem que ser .dot)
+
+	cPathDot += If(Substr(cPathDot,len(cPathDot),1) != cBarraSrv,cBarraSrv,"") + cArqDot
+	cPathEst += If(Substr(cPathEst,len(cPathEst),1) != cBarraRem,cBarraRem,"")
+
+	cPathBmp += If(Substr(cPathBmp,len(cPathBmp),1) != cBarraSrv,cBarraSrv,"") + cArqBmp
+	cPathBm2 += If(Substr(cPathBm2,len(cPathBm2),1) != cBarraSrv,cBarraSrv,"") + cArqBmp2
+
+	//Cria diretorio se nao existir
+	MontaDir(cPathEst)
+
+	//Se existir .dot na estacao, apaga!
+	If File( cPathEst + cArqDot )
+		Ferase( cPathEst + cArqDot )
+	EndIf
+
+	If !File(cPathDot)
+		MsgStop(STR0073+chr(10)+STR0075,STR0074) //"O arquivo pgrppra.dot não foi encontrado no servidor."###"Verificar o parâmetro 'MV_DIRACA'"###"Atenção"
+		Return
+	EndIf
+	CpyS2T(cPathDot,cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+												// para que o wordview e o proprio word possam preparar o arquivo para impressao e
+												// ou visualizacao .... copia o DOT que esta no ROOTPATH Protheus para o PATH da
+												// estacao , por exemplo C:\WORDTMP
+												//__copyfile(cPathDot,cPathEst+cArqDot)
+
+	//Se existir .bmp (Logo) na estacao, apaga!
+	If File(cPathBmp)
+		If File( cPathEst + cArqBmp )
+			Ferase( cPathEst + cArqBmp )
+		EndIf
+		__copyfile(cPathBmp,cPathEst+cArqBmp)
+	ElseIf File(cPathBm2)
+		If File( cPathEst + cArqBmp2 )
+			Ferase( cPathEst + cArqBmp2 )
+		EndIf
+		__copyfile(cPathBm2,cPathEst+cArqBmp2)
+		cArqBmp := cArqBmp2
+	EndIf	// para que o wordview e o proprio word possam preparar o arquivo para impressao e
+			// ou visualizacao .... copia o DOT que esta no ROOTPATH Protheus para o PATH da
+			// estacao , por exemplo C:\WORDTMP
+
+	Dbselectarea("TO0")
+	TO0->(Dbsetorder(1))  // TO0_FILIAL+TO0_LAUDO
+	If TO0->(Dbseek(xFilial("TO0")+Mv_par01))
+
+		cArqSaida	:= "Documento1"	// Nome do arquivo de saida
+
+		oWord := OLE_CreateLink('TMsOleWord97')//Cria link como Word
+
+		OLE_SetProperty(oWord,oleWdVisible,  .F.)
+		OLE_SetProperty(oWord,oleWdPrintBack,.F.)
+
+		OLE_NewFile(oWord,cPathEst + cArqDot) //Abrindo o arquivo modelo automaticamente
+
+		cMatriz   := " "
+
+		//Imprime Logo
+		cFileLogo := cPathEst + cArqBmp
+
+		If ExistBlock("SGAR2003")
+			cFileLogo := ExecBlock('SGAR2003',.F.,.F.) //Permitir informar em branco, caso o cliente não queira imprimir logotipo
+		Endif
+
+		If !lMdtUnix //Se for windows
+			If File( cFileLogo )
+				OLE_SetDocumentVar(oWord,"Cria_Var",cFileLogo)
+				OLE_ExecuteMacro(oWord,"Insere_logo")
+			Endif
+		Endif
+
+		If ExistBlock("SGAR2002")
+			ExecBlock('SGAR2002',.F.,.F.)
+		Endif
+
+		nTipoDoc := IIF(TO0->TO0_TIPREL == "B",1,2)  //Indica se o doc é o PGR ou PGRSS
+
+		If nTipoDoc == 1
+			cTitAux := STR0014	// PGR
+			cTitulo := STR0001 	//"Plano de Gerenciamento de Resíduos"
+			cTitul2 := ""
+		Else
+			cTitAux := STR0015	// PGRSS
+			cTitulo := STR0001 	//"Plano de Gerenciamento de Resíduos"
+			cTitul2 := STR0002 	//"de Serviços de Saúde"
+		Endif
+
+		OLE_SetDocumentVar(oWord,"tituloPri",cTitAux) //"PPRA"
+		OLE_SetDocumentVar(oWord,"titulo1",cTitulo)
+		OLE_SetDocumentVar(oWord,"titulo2",cTitul2)
+
+		ReportPrint(,oWord)
+
+		OLE_ExecuteMacro(oWord,"Atualiza")
+
+		cRootPath := GetPvProfString( GetEnvServer(), "RootPath", "ERROR", GetADV97() )
+		cRootPath := IF( RIGHT(cRootPath,1) == cBarraSRV,SubStr(cRootPath,1,Len(cRootPath)-1), cRootPath)
+
+		OLE_SetProperty(oWord,oleWdVisible,.t.)
+		OLE_ExecuteMacro(oWord,"Maximiza_Tela")
+		OLE_ExecuteMacro(oWord,"Begin_Text") // Vai ao inicio do documento
+
+		If !lMdtUnix //Se for windows
+			If fDIRR200(cRootPath+cBarraSRV+"SPOOL"+cBarraSRV)
+				OLE_SaveAsFile(oWord,cRootPath+cBarraSRV+"SPOOL"+cBarraSRV+cArqSaida,,,.f.,oleWdFormatDocument)
+			ElseIf fDIRR200(cPathEst)
+				OLE_SaveAsFile(oWord,cPathEst+cArqSaida,,,.f.,oleWdFormatDocument)
+			Else
+				OLE_SaveAsFile(oWord,cPathEst+cArqSaida,,,.f.,oleWdFormatDocument)
+			Endif
+		Endif
+
+		MsgInfo(STR0071) //"Alterne para o programa do Ms-Word para visualizar o documento ou clique no botao para fechar."
+
+		OLE_CloseFile(oWord) //Fecha o documento
+		OLE_CloseLink(oWord) //Fecha o documento
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fDIRR200
+Verifica se o diretorio existe.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function fDIRR200( cCaminho )
+
+	Local lDir := .F.
+	Local cBARRAS   := If(isSRVunix(),"/","\")
+	Local cBARRAD := If(isSRVunix(),"//","\\")
+
+	If !Empty(cCaminho) .and. !(cBARRAD$cCaminho)
+		cCaminho := alltrim(cCaminho)
+		if Right(cCaminho,1) == cBarras
+			cCaminho := SubStr(cCaminho,1,len(cCaminho)-1)
+		Endif
+		lDir :=(Ascan( Directory(cCaminho,"D"),{|_Vet | "D" $ _Vet[5] } ) > 0)
+	EndIf
+
+Return lDir
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} RelatGraf
+Função de Impressão do Plano de Gerenciamento de Resídos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function RelatGraf()
+
+	Private oPrtLaudo
+	Private lQuebraPg := .F.
+	Private nLinFinal := 3000
+
+	If !Pergunte(cPerg)
+		return
+	Endif
+
+	SetRegua(0)
+
+	nTipoDoc := IIF(TO0->TO0_TIPREL == "B",1,2)  //Indica se o doc é o PGR ou PGRSS
+
+	If nTipoDoc == 1 //Indica se é PGR OU PGRSS
+		cTitulo := STR0001 //"Plano de Gerenciamento de Resíduos"
+	Else
+		cTitulo := STR0001+" "+STR0002 //"Plano de Gerenciamento de Resíduos"###"de Serviços de Saúde"
+	Endif
+
+	oPrtLaudo:= TReport():New(cPerg,cTitulo,cPerg,{|oPrtLaudo| ReportPrint(oPrtLaudo)},IIF(nTipoDoc == 1,STR0012,STR0013) ) //"O Relatório apresentará o Plano de Gerenciamento de Resíduos de acordo com os parâmetros informados."###"O Relatório apresentará o Plano de Gerenciamento de Resíduos de Serviço de Saúde de acordo com os parâmetros informados."
+
+	oPrtLaudo:SetPortrait()
+	oPrtLaudo:HideParamPage()
+	oPrtLaudo:HideHeader()
+	oPrtLaudo:HideFooter()
+
+	oPrtLaudo:PrintDialog()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Imprime o Relatório Gráfico ou Word.
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint( oPrtLaudo, oWord )
+
+	Local cSMCOD  := If(FindFunction("FWGrpCompany"),FWGrpCompany(),SM0->M0_CODIGO)
+	Local cSMFIL  := If(FindFunction("FWCodFil"),FWCodFil(),SM0->M0_CODFIL)
+	Local cLaudo  := MV_PAR01
+	Local cCoord  := MV_PAR02
+	Local cGeren  := MV_PAR03
+	Local nI 	  	:= 1
+	Local cAprova := ""
+	Local nMrg    := 800
+
+	Private oFont08	:= TFont():New("Verdana",08,08,,.F.,,,,.F.,.F.)
+	Private oFont08b	:= TFont():New("Verdana",08,08,,.T.,,,,.F.,.F.)
+	Private oFont10b	:= TFont():New("Verdana",10,10,,.T.,,,,.F.,.F.)
+	Private oFont10	:= TFont():New("Verdana",10,10,,.F.,,,,.F.,.F.)
+	Private oFont12b	:= TFont():New("Verdana",12,12,,.T.,,,,.F.,.F.)
+	Private oFont12 	:= TFont():New("Verdana",12,12,,.F.,,,,.F.,.F.)
+	Private oFont12bs	:= TFont():New("Verdana",12,12,,.T.,,,,.T.,.T.)
+	Private oFont12s	:= TFont():New("Verdana",12,12,,.F.,,,,.T.,.T.)
+	//Private oFont13	:= TFont():New("Verdana",12,12,,.F.,,,,.F.,.F.)
+	Private oFont28b	:= TFont():New("Verdana",28,28,,.T.,,,,.F.,.F.)
+	Private oFont24b	:= TFont():New("Verdana",28,28,,.T.,,,,.F.,.F.)
+	Private oFont50b	:= TFont():New("Verdana",50,50,,.T.,,,,.F.,.F.)
+
+	//Caminho do logoppp.bmp
+	Private cStartDir := AllTrim(GetSrvProfString("StartPath","\"))
+	Private cStartLogo := " "
+
+	Private nLin :=0
+
+	If File(cStartDir+"LGRL"+cSMCOD+cSMFIL+".BMP")
+		cStartLogo := cStartDir+"LGRL"+cSMCOD+cSMFIL+".BMP"
+	ElseIf File(cStartDir+"LGRL"+cSMCOD+".BMP")
+		cStartLogo := cStartDir+"LGRL"+cSMCOD+".BMP"
+	Endif
+
+	If nModeloImp == 2 //Grafico
+
+		fStartLogo(cStartLogo)
+
+		//PÁGINA DE CAPA
+
+		oPrtLaudo:IncRow(200)
+		If nTipoDoc == 1 //Indica se é PGR OU PGRSS
+			oPrtLaudo:Say(1300,1000,STR0014,oFont50b) //"PGR"
+			oPrtLaudo:Say(1600,210,cTitulo,oFont24b)
+		Else
+			oPrtLaudo:Say(1300,900,STR0015,oFont50b) //"PGRSS"
+			cTit1 := Substr(cTitulo,1,35)
+			cTit2 := Substr(cTitulo,36)
+			oPrtLaudo:Say(1600,210,cTit1,oFont24b)
+			oPrtLaudo:Say(1750,620,cTit2,oFont24b)
+		Endif
+
+		fSomaLin(,,.T.)
+
+	EndIf
+
+	//PÁGINA DE IDENTIFICAÇÃO DO EMPREENDIMENTO
+
+	//POSICIONA NOS REGISTROS
+	DbSelectArea("TO0")
+	TO0->(DbSetOrder(1)) // TO0_FILIAL+TO0_LAUDO
+	If !TO0->(DbSeek(xFilial("TO0")+cLaudo))
+		Return
+	EndIf
+
+	If TO0->(FieldPos("TO0_TIPAPR")) > 0 .And. TO0->TO0_TIPAPR == "1"
+		DbSelectArea("QAA")
+		QAA->(DbSetOrder(1)) // QAA_FILIAL+QAA_MAT
+		If QAA->(DbSeek(xFilial("QAA")+TO0->TO0_APROVA))
+			cAprova := ALLTRIM(QAA->QAA_NOME)
+		Else
+			cAprova := ""
+		EndIf
+	Else
+		DbSelectArea("SRA")
+		SRA->(DbSetOrder(1)) // RA_FILIAL+RA_MAT
+		If SRA->(DbSeek(xFilial("SRA")+TO0->TO0_APROVA))
+			cAprova := ALLTRIM(SRA->RA_NOME)
+		Else
+			cAprova := ""
+		EndIf
+	EndIf
+
+	If TO0->(FieldPos("TO0_TIPELA")) > 0 .And. TO0->TO0_TIPELA == "1"
+		DbSelectArea("QAA")
+		QAA->(DbSetOrder(1)) // QAA_FILIAL+QAA_MAT
+		If QAA->(DbSeek(xFilial("QAA")+TO0->TO0_CODUSU))
+			cRespon := ALLTRIM(QAA->QAA_NOME)
+		Else
+			cRespon := ""
+		EndIf
+	Else
+		DbSelectArea("TMK")
+		TMK->(DbSetOrder(1)) // TMK_FILIAL+TMK_CODUSU
+		If TMK->(DbSeek(xFilial("TMK")+TO0->TO0_CODUSU))
+			cRespon := ALLTRIM(TMK->TMK_NOMUSU)
+		Else
+			cRespon := ""
+		EndIf
+	EndIf
+
+	DbSelectArea("TAR")
+	TAR->(DbSetOrder(1)) // TAR_FILIAL+TAR_CODATI
+	If TAR->(DbSeek(xFilial("TAR")+TO0->TO0_ATIVID))
+		cAtivida := ALLTRIM(TAR->TAR_DESATI)
+	Else
+		cAtivida := ""
+	EndIf
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL+RA_MAT
+	If SRA->(DbSeek(xFilial("SRA")+cCoord))
+		cCoord := SRA->RA_NOME
+	EndIf
+
+	If SRA->(DbSeek(xFilial("SRA")+cGeren))
+		cGeren := SRA->RA_NOME
+	EndIf
+
+	cEndereco := IIF(Empty(SM0->M0_ENDCOB),"",AllTrim(SM0->M0_ENDCOB))
+	cEndereco += IIF(Empty(SM0->M0_BAIRCOB),"",", "+AllTrim(SM0->M0_BAIRCOB))
+	cEndereco += IIF(Empty(SM0->M0_CIDCOB),"",", "+AllTrim(SM0->M0_CIDCOB))
+	cEndereco += IIF(Empty(SM0->M0_ESTCOB),"",", "+AllTrim(SM0->M0_ESTCOB))
+
+	If nModeloImp == 1 //Word
+
+		OLE_SetDocumentVar(oWord,"cEmpre",SM0->M0_NOMECOM)
+		OLE_SetDocumentVar(oWord,"cEndEmp",cEndereco)
+		OLE_SetDocumentVar(oWord,"cCNPJ",TRANSFORM(SM0->M0_CGC,"@R 99.999.999/9999-99"))
+		OLE_SetDocumentVar(oWord,"cAtivid",cAtivida)
+		OLE_SetDocumentVar(oWord,"cRespon",cRespon)
+		OLE_SetDocumentVar(oWord,"cCoord",cCoord)
+		OLE_SetDocumentVar(oWord,"cGerente",cGeren)
+		OLE_SetDocumentVar(oWord,"cElabora",cRespon)
+		OLE_SetDocumentVar(oWord,"cAprovado",cAprova)
+
+		OLE_ExecuteMacro(oWord,"Somalinha")
+
+	Else //Grafico
+
+		oPrtLaudo:Say(nlin,150,Upper(STR0016),oFont12b) //"Identificação da Empreendimento"
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0017+":",oFont10b) //"Empreendimento:"
+		oPrtLaudo:Say(nlin,nMrg,Alltrim(SM0->M0_NOMECOM),oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0018+":",oFont10b) //"Endereço:"
+		oPrtLaudo:Say(nlin,nMrg,Alltrim(cEndereco),oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0019+":",oFont10b) //"CNPJ:"
+		oPrtLaudo:Say(nlin,nMrg,TRANSFORM(SM0->M0_CGC,"@R 99.999.999/9999-99"),oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0020+":",oFont10b) //"Atividade:"
+		oPrtLaudo:Say(nlin,nMrg,cAtivida,oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0021+":",oFont10b) //"Responsável Técnico pelo PGR:"
+		oPrtLaudo:Say(nlin,nMrg,cRespon,oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0007+":",oFont10b) //"Coordenador"
+		oPrtLaudo:Say(nlin,nMrg,cCoord,oFont10)
+
+		fSomaLin()
+		oPrtLaudo:Say(nlin,150,STR0008+":",oFont10b) //"Gerente"
+		oPrtLaudo:Say(nlin,nMrg,cGeren,oFont10)
+
+		fSomaLin(1600)
+		oPrtLaudo:Say(nlin,0150,STR0045+":",oFont10b) //"Elaborado/revisado por"
+		oPrtLaudo:Say(nlin,1200,STR0046+":",oFont10b) //"Aprovado para uso"
+
+		fSomaLin(150)
+		oPrtLaudo:Say(nlin,0150,Replicate("_",40),oFont10)
+		oPrtLaudo:Say(nlin,0950,Replicate("_",10),oFont10)
+		oPrtLaudo:Say(nlin,1200,Replicate("_",40),oFont10)
+		oPrtLaudo:Say(nlin,2000,Replicate("_",10),oFont10)
+
+		fSomaLin(40)
+		nPosTam := If( Len(Alltrim(cAprova)) > 20 , 150 , 250 )
+		nPosApr := Int(Len(Alltrim(cAprova))/2)+nPosTam
+		nPosTam := If( Len(Alltrim(cRespon)) > 20 , 150 , 250 )
+		nPosRes := Int(Len(Alltrim(cRespon))/2)+nPosTam
+
+		oPrtLaudo:Say(nlin,0050+nPosRes,cRespon,oFont10)
+		oPrtLaudo:Say(nlin,1000,STR0047,oFont10) // Data
+		oPrtLaudo:Say(nlin,1100+nPosApr,cAprova,oFont10)
+		oPrtLaudo:Say(nlin,2050,STR0047,oFont10) // Data
+
+	EndIf
+
+	// LEITURA DOS ITENS DO RELATORIO
+	cMemo := Alltrim(TO0->TO0_DESCRI)
+	If NGCADICBASE("TO0_MMSYP2","A","TO0",.F.)
+		If !Empty(TO0->TO0_MMSYP2)
+
+			cMMSYP2 := NgMemo( TO0->TO0_MMSYP2, .T. )
+
+			If !Empty(cMMSYP2)
+				If !Empty(cMemo)
+					cMemo += Chr(13)+Chr(10)
+				Endif
+				cMemo += cMMSYP2
+			Endif
+		Endif
+	ElseIf NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+		If !Empty(TO0->TO0_DESC2)
+			If !Empty(cMemo)
+				cMemo += Chr(13)+Chr(10)
+			Endif
+			cMemo += Alltrim(TO0->TO0_DESC2)
+		Endif
+	Endif
+
+	If !Empty(cMemo)  //Memo vazio
+
+		aAux := StrTokArr(cMemo,Chr(13)+Chr(10))
+
+	Else
+
+		Return
+
+	EndIf
+
+	fSomaLin(,,.T.)
+
+	For nI := 1 to Len(aAux)
+
+		IncRegua()
+
+		cTexto := Alltrim(aAux[nI])
+
+		If Substr(cTexto,1,1) == "#" 			// TITULO
+			cConteudo := Alltrim(Substr(cTexto,2,Len(cTexto)-2))
+			fTitl200(cConteudo)
+		ElseIf Substr(cTexto,1,2) == "@!" 	// IMAGEM
+			cConteudo := Alltrim(Substr(cTexto,3,Len(cTexto)-4))
+			fImag200(cConteudo)
+		ElseIf Substr(cTexto,1,2) == "@%" 	// ARQUIVO
+			cConteudo := Alltrim(Substr(cTexto,3,Len(cTexto)-4))
+			fFile200(cConteudo)
+		ElseIf cTexto == "@PAGINA@" 			// QUEBRA
+			fSomaLin(,,.T.)
+		ElseIf Substr(cTexto,1,1) == "@" 	// ATALHO
+			cConteudo := Substr(cTexto,2,Len(cTexto)-2)
+			fAtlh200(cConteudo)
+		Else                   			  		// TEXTO
+			nTipo     := 1
+			fText200(cTexto)
+		EndIf
+
+	Next nI
+
+	nLenMemo := Len(cMemo)
+	nPerMemo := 0
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCronograma
+Imprime o cronograma de Programas
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function fCronograma()
+
+	Local nCntMes
+	Local cAliTmp	:= GetNextAlias()
+	Local aDBF		 := {}
+	Local cLaudoPos := TO0->TO0_LAUDO
+	Local nLinAux   := 0
+	Local aPlanos   := {}
+	Local cMemoAux  := ""
+	Local cMesUlt   := ""
+	Local nQuantLn  := 0
+	Local dDtIni	  := TO0->TO0_DTINIC
+	Local dDtFim	  := TO0->TO0_DTFIM
+	Local dDtIPla   := cToD("")
+	Local dDtFPla   := cToD("")
+	Local aAnos	  := {}
+	Local oTempTRB
+
+	Local aColMes   := {}
+	Local nDivPer   := 920
+	Local nTamTitl  := 160
+	Local nWidthRel := 2420
+	Local nMes
+
+	//Monta o TRB
+	aAdd( aDBF , { "ANO" , "C" , 4 , 0 } )
+	aAdd( aDBF , { "MES" , "C" , 2 , 0 } )
+	aAdd( aDBF , { "CODPLA" , "C" , TAMSX3( aTabCps[ 1 ] )[ 1 ] , 0 } )
+
+	oTempTRB := FWTemporaryTable():New( cAliTmp, aDBF )
+	oTempTRB:AddIndex( "1", {"ANO","CODPLA","MES"} )
+	oTempTRB:AddIndex( "2", {"CODPLA"} )
+	oTempTRB:Create()
+
+	dbSelectArea( "TOZ" ) // Planos de Ação x Laudo
+	TOZ->( dbSetOrder( 1 ) )
+	If TOZ->( dbSeek( xFilial( "TOZ" ) + cLaudoPos ) )
+
+		// Posiciona na tabela de Planos de Acao (TNI/TAA)
+		DbSelectArea(cTabPla)
+		(cTabPla)->(DbSetOrder(1))
+
+		While TOZ->(!Eof()) .AND. cLaudoPos == TOZ->TOZ_LAUDO
+
+			If (cTabPla)->(DbSeek(xFilial(cTabPla)+TOZ->TOZ_PLANO))
+
+
+				dDtIPla  := (cTabPla)->&(aTabCps[ 4 ])//If( (cTabPla)->&(aTabCps[ 4 ]) < dDtIni , dDtIni , (cTabPla)->&(aTabCps[ 4 ]) ) // Data de Inicio do Plano
+				dDtFPla  := (cTabPla)->&(aTabCps[ 5 ])//If( (cTabPla)->&(aTabCps[ 5 ]) > dDtFim , dDtFim , (cTabPla)->&(aTabCps[ 5 ]) ) // Data Fim do Plano
+
+				If Empty(dDtIPla) .or. Empty(dDtFPla)
+					TOZ->( dbSkip() )
+					Loop
+				EndIf
+
+				nMesCnt  := Month(dDtIPla)
+				nYearCnt := Year(dDtIPla)
+
+				// Percorre os meses entre o inicio e fim do plano de acao atual
+				While STOD( cValToChar(nYearCnt) + StrZero(nMesCnt,2) + "01" ) <= ;
+						STOD( cValToChar(Year(dDtFPla)) + StrZero(Month(dDtFPla),2) + "01" )
+
+					// Relaciona um Plano de acao a um Ano
+					If ( nPosic := aScan( aAnos , { | x | x[ 1 ]  == nYearCnt } ) ) == 0
+						aAdd( aAnos , { nYearCnt , { TOZ->TOZ_PLANO } } )
+					Else // Adiciona apenas o plano a um ano ja controlado
+						If aScan( aAnos[ nPosic , 2 ] , { | x | x == TOZ->TOZ_PLANO } ) == 0
+							aAdd( aAnos[ nPosic , 2 ] , TOZ->TOZ_PLANO )
+						EndIf
+					EndIf
+
+					RecLock( cAliTmp , .T. )
+					( cAliTmp )->ANO	  := cValToChar(nYearCnt)
+					( cAliTmp )->MES	  := STRZERO(nMesCnt,2)
+					( cAliTmp )->CODPLA := TOZ->TOZ_PLANO
+					( cAliTmp )->(MsUnLock())
+
+					nMesCnt++
+
+					If nMesCnt > 12
+						nYearCnt++
+						nMesCnt := 1
+					EndIF
+
+				End
+			EndIf
+			TOZ->( dbSkip() )
+		End
+	EndIf
+
+	If nModeloImp == 1 //Word
+
+		OLE_ExecuteMacro(oWord,"Somalinha")
+		cAnoOld := ""
+		cPlaOld := ""
+
+		// Percorre todos os planos anteriormente selecionados
+		dbSelectArea( cAliTmp )
+		dbSetOrder( 1 )
+		dbGoTop()
+		While ( cAliTmp )->( !Eof() )
+
+			// Se houve mudanca no ano dos planos verificados
+			If cAnoOld <> ( cAliTmp )->ANO
+
+				If !Empty( cAnoOld ) .And. nPosic > 0
+					cVar1 := "cTXT"+Strzero(nVar1,6)
+					OLE_ExecuteMacro(oWord,"Somalinha")
+					OLE_ExecuteMacro(oWord,"Nao_Identar")
+					OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+					nVar1++
+					OLE_ExecuteMacro(oWord,"Somalinha")
+					OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+					OLE_SetDocumentVar(oWord,"Linhas",Len( aAnos[ nPosic , 2 ] )+2)
+					OLE_ExecuteMacro(oWord,"table_Crono")
+
+					OLE_ExecuteMacro(oWord,"Somalinha")
+					OLE_ExecuteMacro(oWord,"Somalinha")
+				EndIf
+
+				// Referencia o ano atual
+				cAnoOld := ( cAliTmp )->ANO
+				cMemoAux := ""
+			EndIf
+
+			// Verifica linha do array contendo o ano verificado
+			nPosic := aScan( aAnos , { | x | x[ 1 ] == Val(( cAliTmp )->ANO) } )
+
+			// Adiciona meses a string de impressao
+			If Empty( cMemoAux )
+				cMemoAux := STR0078 + "#*" + cValToChar(( cAliTmp )->ANO) + Replicate("#*", 12)
+				cMemoAux += STR0079 //"#*Jan#*Fev#*Mar#*Abr#*Mai#*Jun#*Jul#*Ago#*Set#*Out#*Nov#*Dez#*"
+			EndIf
+
+			// Verifica se o plano verificado e' diferente do anteior
+			If cPlaOld <> ( cAliTmp )->CODPLA
+
+			// Completa string de impressao com o restante dos meses (serao os meses/colunas desmarcados)
+				If !Empty( cPlaOld ) .And. Val( cMesUlt ) < 12
+					For nCntMes := Val(cMesUlt)+1 To 12
+						cMemoAux += "#*"
+					Next nCntMes
+				EndIf
+
+				// Armazena plano atual
+				cPlaOld  := ( cAliTmp )->CODPLA
+				cMemoAux += NGSEEK( cTabPla , ( cAliTmp )->CODPLA , 1 , aTabCps[ 2 ] )+"#*"
+
+				// Completa string de impressao com o restante dos meses (serao os meses/colunas desmarcados)
+				If Val( ( cAliTmp )->MES ) > 1
+					For nCntMes := 1 To Val( ( cAliTmp )->MES ) - 1
+						cMemoAux += "#*"
+					Next nCntMes
+				EndIf
+
+			EndIf
+
+			// Efetua marcacao do mes
+			cMemoAux += "X#*"
+			cMesUlt := ( cAliTmp )->MES
+			( cAliTmp )->( dbSkip() )
+
+		End
+
+		If !Empty( cMesUlt ) .And. Val( cMesUlt ) < 12
+			For nCntMes := Val(cMesUlt)+1 To 12
+				cMemoAux += "#*"
+			Next nCntMes
+		EndIf
+
+		If !Empty( cAnoOld ) .And. nPosic > 0
+
+			cVar1 := "cTXT"+Strzero(nVar1,6)
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Nao_Identar")
+			OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+			nVar1++
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",Len( aAnos[ nPosic , 2 ] )+2)
+			OLE_ExecuteMacro(oWord,"table_Crono")
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+		Else
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+		EndIf
+
+	Else
+
+		cAnoOld := ""
+		cPlaOld := ""
+		nLinAux := nLin
+		aColMes := {}
+
+		For nMes := 1 To 12
+			aAdd(aColMes, nDivPer + (125*nMes))
+		Next nMes
+
+		// Percorre todos os planos anteriormente selecionados
+		dbSelectArea( cAliTmp )
+		dbSetOrder( 1 )
+		dbGoTop()
+		While ( cAliTmp )->( !Eof() )
+
+			nLinCron := 100
+			lChangeY := .F.
+
+			// Se houve mudanca no ano dos planos verificados
+			If cAnoOld <> ( cAliTmp )->ANO
+				lChangeY := .T.
+				fSomaLin()
+				If !Empty(cAnoOld)
+					fSomaLin()
+				Endif
+
+				oPrtLaudo:Line(nLin,100,nLin+nTamTitl,100)
+				oPrtLaudo:Line(nLin,100,nLin,2420)
+				oPrtLaudo:Line(nLin,nWidthRel,nLin+nTamTitl,nWidthRel)
+				oPrtLaudo:Line(nLin+nTamTitl,100,nLin+nTamTitl,nWidthRel)
+
+				oPrtLaudo:Say(nLin+60,500,STR0078,oFont10b) //"Etapa"
+
+				oPrtLaudo:Line(nLin,nDivPer,nLin+nTamTitl,nDivPer)
+				oPrtLaudo:Line(nLin + (nTamTitl/2),nDivPer,nLin + (nTamTitl/2),nWidthRel)
+
+				oPrtLaudo:Say(nLin+20,1605,( cAliTmp )->ANO,oFont10b)
+
+				For nMes := 1 To 12
+					oPrtLaudo:Line(nLin + (nTamTitl/2),aColMes[nMes],nLin+nTamTitl,aColMes[nMes])
+					oPrtLaudo:Say(nLin + (nTamTitl/2)+30,aColMes[nMes]-102,GetMes(nMes),oFont10b)
+				Next nMes
+
+				// Referencia o ano atual
+				cAnoOld  := ( cAliTmp )->ANO
+				nLinCron := nTamTitl
+
+			EndIf
+
+			If cPlaOld <> ( cAliTmp )->CODPLA .Or. lChangeY
+				cPlaOld  := ( cAliTmp )->CODPLA
+				fSomaLin(nLinCron)
+				LineCron(cPlaOld, "", aColMes, nWidthRel, nDivPer, .T.)
+			Endif
+
+			LineCron(cPlaOld, (cAliTmp)->MES, aColMes, nWidthRel, nDivPer, .F.)
+
+			( cAliTmp )->( dbSkip() )
+
+		End
+
+		fSomaLin()
+
+	EndIf
+
+	oTempTRB:Delete()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GetMes
+Retorna abreviacao de mes conforme indicador numerico.
+
+@author Alessandro Smaha
+@since 18/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function GetMes( nMes )
+
+	Local aMes := {;
+						STR0080,;
+						STR0081,;
+						STR0082,;
+						STR0083,;
+						STR0084,;
+						STR0085,;
+						STR0086,;
+						STR0087,;
+						STR0088,;
+						STR0089,;
+						STR0090,;
+						STR0091 ;
+					}
+
+Return aMes[ nMes ]
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} LineCron
+Imprime linha do cronograma.
+
+@author Alessandro Smaha
+@since 18/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function LineCron( cPlaOld, cMes, aColMes, nWidthRel, nDivPer, lNew )
+
+	Local nTamLine := 100
+	Local cDescPla := SubStr(AllTrim(NGSeek( cTabPla , cPlaOld , 1 , aTabCps[ 2 ] )),1,35)
+	Local nMes
+
+	cMes := PadL(AllTrim(cMes),2,"0")
+
+	If lNew
+		oPrtLaudo:Say(nLin+30,120,cDescPla,oFont08)
+
+		oPrtLaudo:Line(nLin,100,nLin+nTamLine,100)
+		oPrtLaudo:Line(nLin,nWidthRel,nLin+nTamLine,nWidthRel)
+		oPrtLaudo:Line(nLin+nTamLine,100,nLin+nTamLine,nWidthRel)
+
+		oPrtLaudo:Line(nLin,nDivPer,nLin+nTamLine,nDivPer)
+
+		For nMes := 1 To 12
+			oPrtLaudo:Line(nLin,aColMes[nMes],nLin+nTamLine,aColMes[nMes])
+			//oPrtLaudo:Say(nLin+30,aColMes[nMes]-65,"",oFont12)
+		Next nMes
+	ElseIf !Empty(cMes) .And. (cMes >= "01" .And. cMes <= "12")
+		oPrtLaudo:Say(nLin+30,aColMes[Val(cMes)]-75,"X",oFont12)
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBoxLayout
+Imprime o box para desenhar as tabelas
+
+@author Alessandro Smaha
+@since 18/03/2013
+
+@param  nLinAux - Linha anterior para começar a desenhar o box
+aColuna - Array de colunas para desenhar o box
+
+/*/
+//---------------------------------------------------------------------
+Static Function fBoxLayout( nLinAux, aColuna )
+
+	Local nI := 0
+	Local nTamArr := Len(aColuna)-1
+
+	For nI := 1 to nTamArr
+		oPrtLaudo:Box(nLinAux,aColuna[nI]-10,nLin,aColuna[nI+1]-10)
+	Next nI
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPlanosAcao
+Imprime os planos de ações
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function fPlanosAcao( aPlanos )
+
+	Local aColunas	:= {140,550,900,1250,1600,1930,2422}
+	Local nLinAux		:= 0
+	Local nI			:= 0
+	Local cNomeFun	:= ""
+	Local cMemoAux	:= ""
+	Local nQuantLn	:= 0
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) // RA_FILIAL+RA_MAT
+
+	DbSelectArea("QAA")
+	SRA->(DbSetOrder(1))
+
+	DbSelectArea(cTabPla)
+	(cTabPla)->(DbSetOrder(1)) // TNI_FILIAL+TNI_CODPLA
+
+	If nModeloImp == 1 		// Formato Word
+
+		OLE_ExecuteMacro(oWord,"Somalinha")
+
+	ElseIf nModeloImp == 2 		// Formato Grafico
+
+		If Len(aPlanos) > 0
+			fSomaLin()
+
+			// Verifica se está próximo ao final do arquivo para quebrar a página
+			If nLin+91 > nLinFinal
+				fSomaLin(,,.T.)
+			EndIf
+
+			nLinAux := nLin
+			nQbrAux := 0
+
+			fPrintLine(STR0057,aColunas[01],oFont10b,15) 		//"Descrição do Plano"
+			fPrintLine(STR0058,aColunas[02],oFont10b,11) 		//"O Que?"
+			fPrintLine(STR0059,aColunas[03],oFont10b,11) 		//"Como?"
+			fPrintLine(STR0060,aColunas[04],oFont10b,11) 		//"Onde?"
+			fPrintLine(STR0064,aColunas[05],oFont10b,15) 		//"Responsavel"
+			fPrintLine(STR0065,aColunas[06],oFont10b,20,.T.) 	//"Observacao"
+
+			fBoxLayout(nLinAux,aColunas)
+
+			// Verifica se está próximo ao final do arquivo para quebrar a página
+			If nLin+91 > nLinFinal
+				fSomaLin(,,.T.)
+			EndIf
+		EndIf
+	EndIf
+
+	For nI := 1 to len(aPlanos)
+
+		If (cTabPla)->(DbSeek(xFilial(cTabPla)+aPlanos[nI]))
+
+			nLinAux := nlin
+			nQbrAux := 0
+			lQuebraPg := .F.
+
+			If cTabPla == "TNI"
+				If SRA->(DbSeek(xFilial("SRA")+TNI->TNI_FUNRES))
+					cNomeFun := Alltrim(SRA->RA_NOME)
+				EndIf
+			Else
+				cNomeFun := ""
+				dbSelectArea("TC9")
+				dbSetOrder(1)
+				dbSeek(xFilial("TC9")+aPlanos[nI])
+				While TC9->(!Eof()) .And. xFilial("TC9") == TC9->TC9_FILIAL .And. ;
+					TC9->TC9_CODPLA == aPlanos[nI]
+					If !Empty(cNomeFun)
+						cNomeFun += ", "
+					EndIf
+					If TC9->TC9_TIPRES == "2" .And. SRA->(DbSeek(xFilial("SRA")+TC9->TC9_CODRES))
+						cNomeFun += Alltrim(SRA->RA_NOME)
+					Else
+						If QAA->(DbSeek(xFilial("QAA")+TC9->TC9_CODRES))
+							cNomeFun += AllTrim(QAA->QAA_NOME)
+						EndIf
+					EndIf
+					TC9->(dbSkip())
+				End
+			EndIf
+
+			cNomePla := Alltrim((cTabPla)->&(aTabCps[2]))
+			cOquePla := Alltrim((cTabPla)->&(aTabCps[8]))
+			cComoPla := Alltrim((cTabPla)->&(aTabCps[9]))
+			cOndePla := Alltrim((cTabPla)->&(aTabCps[10]))
+			cObsvPla := Alltrim((cTabPla)->&(aTabCps[11]))
+
+			If nModeloImp == 1 		// Formato Word
+
+				cMemoAux += cNomePla + "#*"
+				cMemoAux += cOquePla+"#*"
+				cMemoAux += cComoPla+"#*"
+				cMemoAux += cOndePla+"#*"
+				cMemoAux += cNomeFun+"#*"
+				cMemoAux += cObsvPla+"#*"
+				nQuantLn++
+
+			ElseIf nModeloImp == 2 		// Formato Grafico
+
+				// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+				nQbrCol1 := nQbrCol2 := nQbrCol3 := nQbrCol4 := nQbrCol5 := nQbrCol6 := 1
+
+				fPrintLine(cNomePla	,aColunas[01],oFont10,15,		,@nQbrCol1)
+				fPrintLine(cOquePla	,aColunas[02],oFont10,11,		,@nQbrCol2)
+				fPrintLine(cComoPla	,aColunas[03],oFont10,11,		,@nQbrCol3)
+				fPrintLine(cOndePla	,aColunas[04],oFont10,11,		,@nQbrCol4)
+				fPrintLine(cNomeFun	,aColunas[05],oFont10,15,		,@nQbrCol5)
+				fPrintLine(cObsvPla	,aColunas[06],oFont10,20,.T.	,@nQbrCol6)
+				fBoxLayout(nLinAux,aColunas)
+
+				If lQuebraPg
+
+					nQbrAux := 0
+					lQuebraPg := .F.
+					fSomaLin(,,.T.)
+					nLinAux := nLin
+
+					fPrintLine(cNomePla	,aColunas[01],oFont10,15,		,@nQbrCol1)
+					fPrintLine(cOquePla	,aColunas[02],oFont10,11,		,@nQbrCol2)
+					fPrintLine(cComoPla	,aColunas[03],oFont10,11,		,@nQbrCol3)
+					fPrintLine(cOndePla	,aColunas[04],oFont10,11,		,@nQbrCol4)
+					fPrintLine(cNomeFun	,aColunas[05],oFont10,11,		,@nQbrCol5)
+					fPrintLine(cObsvPla	,aColunas[06],oFont10,20,.T.	,@nQbrCol6)
+					fBoxLayout(nLinAux,aColunas)
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	Next nI
+
+	If nModeloImp == 1 		// Formato Word
+
+		If !Empty(cMemoAux)
+
+			cVar1 := "cTXT"+Strzero(nVar1,6)
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Nao_Identar")
+			OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+			nVar1++
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+			OLE_ExecuteMacro(oWord,"table_Planos")
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+		Else
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+		EndIf
+
+	ElseIf nModeloImp == 2 // Formato Grafico
+
+		fSomaLin()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fStartLogo
+Imprime o logo do cliente nas páginas
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cStartLogo - caminho e nome do logo do cliente
+
+/*/
+//---------------------------------------------------------------------
+Static Function fStartLogo( cStartLogo )
+
+	If !Empty(cStartLogo) .and. File(cStartLogo)
+		oPrtLaudo:SayBitMap(100,150,cStartLogo,300,150)
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTitl200
+Imprime o Título selecionado no laudo
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cConteudo - Conteudo que será impresso
+
+/*/
+//---------------------------------------------------------------------
+Static Function fTitl200( cConteudo )
+
+	Local cTitAux 	:= ""
+
+	nPos := At("}",cConteudo)
+	cCNS := Substr(cConteudo,1,nPos)
+	cTitAux := Substr(cConteudo,nPos+1)
+
+	nColImp := 150
+
+	If nModeloImp == 1 		// Formato Word
+
+		cVar1 := "cTXT"+Strzero(nVar1,6)
+		OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+		nVar1++
+
+		OLE_ExecuteMacro(oWord,"Cria_Titulo")
+
+		If ("N" $ Upper(cCNS)) // N=Negrito
+			OLE_ExecuteMacro(oWord,"Com_Negrito")
+		Else
+			OLE_ExecuteMacro(oWord,"Sem_Negrito")
+		Endif
+
+		If ("C" $ Upper(cCNS)) // C=Centralizar
+			OLE_ExecuteMacro(oWord,"Centralizar")
+		Else
+			OLE_ExecuteMacro(oWord,"Justificar")
+		Endif
+
+		If ("S" $ Upper(cCNS)) // S=Sublinhar
+			OLE_ExecuteMacro(oWord,"Com_Sublinhar")
+		Else
+			OLE_ExecuteMacro(oWord,"Sem_Sublinhar")
+		Endif
+
+		OLE_SetDocumentVar(oWord,cVar1,cTitAux)
+
+		OLE_ExecuteMacro(oWord,"Somalinha")
+		OLE_ExecuteMacro(oWord,"Somalinha")
+
+	ElseIf nModeloImp == 2	// Formato Gráfico
+
+		If ("C" $ Upper(cCNS)) //C=Centralizar
+			nDiff := Round( (90 - Len(cTitAux)) / 2 , 0 )
+			If nDiff > 0
+				nColImp := 150 + (nDiff*23.3)
+			Endif
+		Endif
+		If ("N" $ Upper(cCNS)) //N=Negrito
+			If ("S" $ Upper(cCNS)) //S=Sublinhar
+				oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12bs)
+			Else
+				oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12b)
+			Endif
+		Else
+			If ("S" $ Upper(cCNS)) //S=Sublinhar
+				oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12s)
+			Else
+				oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12)
+			Endif
+		Endif
+
+		fSomaLin()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fImag200
+Imprime a imagem selecionada para montar o laudo
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cConteudo - Caminho da imagem que será impressa
+
+/*/
+//---------------------------------------------------------------------
+Static Function fImag200( cConteudo )
+
+	Local nBmpHeight := 0
+	Local oBmp
+	Local cFileArq := "", nPos
+	Local cBarraSrv := "\"
+
+	If nModeloImp == 1 		// Formato Word
+
+		If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+			cBarraSrv := "/"
+		Endif
+
+		nPos := Rat(cBarraSrv,cConteudo)
+
+		If nPos > 0
+			cFileArq := AllTrim(Substr(cConteudo,nPos+1))
+		Endif
+
+		CpyS2T(Alltrim(cConteudo),cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+
+		If File( cPathEst+cFileArq )
+			OLE_SetDocumentVar(oWord,"Cria_Var",cPathEst+cFileArq)
+			OLE_ExecuteMacro(oWord,"Insere_img")
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+		Endif
+
+	ElseIf nModeloImp == 2	// Formato Gráfico
+
+		oBmp := TBitmap():New(0,0,0,0,,,.F.,,,,,.F.,,,,,.T.)
+		oBmp:Hide()
+
+		If oBmp:Load(,cConteudo)
+
+			oBmp:nClrPane   	:= CLR_WHITE
+			oBmp:lAutoSize    := .T.
+			oBmp:lTransparent := .T.
+			oBmp:Refresh()
+
+			nBmpHeight := oBmp:nClientHeight
+
+			oPrtLaudo:SayBitmap(nlin,150,cConteudo)
+
+			fSomaLin(nBmpHeight+80)
+
+		EndIf
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAtlh200
+Rotina para imprimir o atalho informado na montagem do laudo
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cConteudo - nome do atalho informado na montagem do laudo
+
+/*/
+//---------------------------------------------------------------------
+Static Function fAtlh200( cConteudo )
+
+	Local lMetas   := .T.
+	Local nLinAux  := 0
+	Local lOkInfo  := .F.
+	Local cMemoAux := ""
+	Local nMrg     := 420
+	Local aColun   := {}
+	Local lPGRSS   := Posicione("TO0",1,xFilial("TO0") + MV_PAR01,"TO0_TIPREL") == "9"
+
+	//Se o tipo do laudo da rotina(MDTA210) for '9 = Residuos Serviço de Saude' ele irá imprimir a coluna de Rss
+	If lPGRSS
+		aColun := {110,510,790,945,1390,1840,2070,2425}
+	Else
+		aColun := {110,530,840,840,1390,1840,2070,2425}
+	Endif
+
+	If Upper(Alltrim(cConteudo)) == "IDENTIFICAÇÃO E PLANEJAMENTO DO GERENCIAMENTO"
+
+		DbSelectArea("TAX")  // Resíduos
+		TAX->(DbSetOrder(1)) // TAX_FILIAL+TAX_CODRES
+		TAX->(DbGoTop())
+
+		DbSelectArea("SB1")	// Produtos
+		SB1->(DbSetOrder(1)) // B1_FILIAL+B1_COD
+
+		DbSelectArea("TAF")  // Nível Organizacional
+		TAF->(DbSetOrder(8)) // TAF_FILIAL+TAF_CODNIV
+
+		DbSelectArea("TB7")  // Classificação Destinação
+		TB7->(DbSetOrder(1)) // TB7_FILIAL+TB7_CODRES+TB7_TIPO+TB7_CODTIP
+
+		DbSelectArea("TB6")  // Tipo de Destinação
+		TB6->(DbSetOrder(1)) // TB6_FILIAL+TB6_CODTIP+TB6_TIPO
+
+		DbSelectArea("TBW")  // Produtos do tipo Destinação
+		TBW->(DbSetOrder(1)) // TBW_FILIAL+TBW_CODTIP+TBW_TIPO+TBW_CODPRO
+
+		DbSelectArea("TB4")  // Destino de Ocorrências
+		TB4->(DbSetOrder(2))	//TB4_FILIAL+TB4_CODRES+TB4_CODDES
+
+		DbSelectArea("TO0")	//Laudos
+		TO0->(DbSetOrder(1))	//TO0_FILIAL+TO0_LAUDO
+
+		If nModeloImp == 1 		// Formato Word
+
+			// Titulo
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+			nQuantLn := 0
+
+		ElseIf nModeloImp == 2 		// Formato Grafico
+
+			fSomaLin()
+
+			If nLin+90 > nLinFinal
+				fSomaLin(,,.T.)
+			EndIf
+
+			nLinAux := nlin
+			nQbrAux := 0
+			lQuebraPg := .F.
+
+			// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+			nQbrCol1 := nQbrCol2 := nQbrCol3 := nQbrCol4 := nQbrCol5 := nQbrCol6 := nQbrCol7 := 1
+
+			fPrintLine(STR0038,aColun[01],oFont10b,,,		,@nQbrCol1) //"Resíduo"
+			fPrintLine(STR0039,aColun[02],oFont10b,,,		,@nQbrCol2) //"NBR-10004"
+			If lPGRSS
+				fPrintLine(STR0040,aColun[03],oFont10b,,,		,@nQbrCol3) //"Rss"
+			Endif
+			fPrintLine(STR0041,aColun[04],oFont10b,,,		,@nQbrCol4) //"Acondicionamento"
+			fPrintLine(STR0042,aColun[05],oFont10b,,,		,@nQbrCol5) //"Armazenamento Temporário"
+			fPrintLine(STR0043,aColun[06],oFont10b,,,		,@nQbrCol6) //"Coleta"
+			fPrintLine(STR0044,aColun[07],oFont10b,,.T.	,@nQbrCol7) //"Destinação Final"
+
+			nLin += 5
+			fBoxLayout(nLinAux,aColun)
+
+			If lQuebraPg
+
+				nQbrAux := 0
+				lQuebraPg := .F.
+				fSomaLin(,,.T.)
+				nLinAux := nLin
+
+				fPrintLine(STR0038,aColun[01],oFont10b,,,		,@nQbrCol1) //"Resíduo"
+				fPrintLine(STR0039,aColun[02],oFont10b,,,		,@nQbrCol2) //"NBR-10004"
+				If lPGRSS
+					fPrintLine(STR0040,aColun[03],oFont10b,10,,		,@nQbrCol3) //"Rss"
+				Endif
+				fPrintLine(STR0041,aColun[04],oFont10b,,,		,@nQbrCol4) //"Acondicionamento"
+				fPrintLine(STR0042,aColun[05],oFont10b,,,		,@nQbrCol5) //"Armazenamento Temporário"
+				fPrintLine(STR0043,aColun[06],oFont10b,,,		,@nQbrCol6) //"Coleta"
+				fPrintLine(STR0044,aColun[07],oFont10b,,.T.	,@nQbrCol7) //"Destinação Final"
+
+				nLin += 3
+				fBoxLayout(nLinAux,aColun)
+
+			EndIf
+
+		EndIf
+
+		TAX->( dbSeek( xFilial( "TAX" ) ) )
+		While TAX->(!Eof()) .And. TAX->TAX_FILIAL == xFilial( "TAX" )
+
+			cFonteGer := "" //FOI REMOVIDO DO RELATÓRIO, SS 017795 - MIT044
+			cResiduo  := ""
+			cNBR  	   := ""
+			cRss	   := ""
+			cAmzTemp  := ""
+			cTipo     := ""
+			cColeta   := ""
+			cDestino  := ""
+			nLinAux   := nLin
+
+			// Residuo
+			If SB1->(DbSeek(xFilial("SB1")+TAX->TAX_CODRES))
+				cResiduo := Alltrim(SB1->B1_DESC)
+
+				cNBR  := NgSeek("TCS",TAX->TAX_CLASSE,1,"TCS->TCS_DESCRI")
+
+				// Rss
+				If TAX->TAX_RSS == '1'
+					cRss := ''		 // Branco
+				ElseIf TAX->TAX_RSS == '2'
+					cRss := STR0049 // Grupo A
+				ElseIf TAX->TAX_RSS == '3'
+					cRss := STR0050 // Grupo B
+				ElseIf TAX->TAX_RSS == '4'
+					cRss := STR0051 // Grupo C
+				ElseIf TAX->TAX_RSS == '5'
+					cRss := STR0052 // Grupo D
+				ElseIf TAX->TAX_RSS == '6'
+					cRss := STR0053 // Grupo E
+				EndIf
+
+			EndIf
+
+			dbSelectArea( "TH0" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TH0" ) + TAX->TAX_CODRES )
+				While TH0->( !Eof() ) .And. xFilial( "TH0" ) == TH0->TH0_FILIAL .And. TH0->TH0_CODRES == TAX->TAX_CODRES
+					If !Empty(cAmzTemp)
+						cAmzTemp += ", "
+					EndIf
+					cAmzTemp += AllTrim( Posicione("TB2",1,xFilial("TB2")+TH0->TH0_DESTIN,"TB2_DESLOC") )
+					TH0->( dbSkip() )
+				End
+			EndIf
+
+
+
+			If TB7->(DbSeek(xFilial("TB7")+TAX->TAX_CODRES))
+				While xFilial("TB7") == TB7->TB7_FILIAL .AND. TAX->TAX_CODRES == TB7->TB7_CODRES .AND. TB7->(!EOF())
+
+					// Armazenamento Temporário e Destinação Final
+					If TB6->(DbSeek(xFilial("TB6")+TB7->(TB7_CODTIP+TB7_TIPO)))
+
+						If TB6->TB6_TIPO $ '1/2/3/4/5'  // Disposicao Final
+							cDestino += IIF(Empty(cDestino),"",", ")+Alltrim(TB6->TB6_DESCRI)
+
+						ElseIf TB6->TB6_TIPO == '6' //Acondicionamento é definido pela rotina de Ocorrencias (SGAA150)
+							cTipo += IIF(Empty(cTipo),"",", ")+Alltrim(TB6->TB6_DESCRI)
+						Endif
+
+					EndIf
+
+					//Coletas
+					If TB7->TB7_COLETA == '1'
+						cColeta += IIF(Empty(cColeta),"",", ")+STR0035 // "Comum"
+					ElseIf TB7->TB7_COLETA == '2'
+						cColeta += IIF(Empty(cColeta),"",", ")+STR0036 // "Seletiva"
+					EndIf
+					TB7->(DbSkip())
+				EndDo
+
+			EndIf
+
+			If nModeloImp == 1 		// Formato Word
+				If Empty( cMemoAux )
+					cMemoAux += If( lPGRSS , "7" , "6" ) + "#*" //Realizada trativa no DOT para que primeira posicao represente quantidade de colunas
+					cMemoAux += STR0038 + "#*"
+					cMemoAux += STR0039 + "#*"
+					If lPGRSS
+						cMemoAux += STR0040 + "#*"
+					EndIf
+					cMemoAux += STR0041 + "#*"
+					cMemoAux += STR0042 + "#*"
+					cMemoAux += STR0043 + "#*"
+					cMemoAux += STR0044 + "#*"
+					nQuantLn++
+				EndIf
+
+				cMemoAux += cResiduo+"#*"
+				cMemoAux += cNBR+"#*"
+				If lPGRSS
+					cMemoAux += cRss+"#*"
+				EndIf
+				cMemoAux += cTipo+"#*"
+				cMemoAux += cAmzTemp+"#*"
+				cMemoAux += cColeta+"#*"
+				cMemoAux += cDestino+"#*"
+				nQuantLn++
+
+			ElseIf nModeloImp == 2 		// Formato Grafico
+
+				If nLin+90 > nLinFinal
+					fSomaLin(,,.T.)
+				EndIf
+
+				nLinAux := nlin
+				nQbrAux := 0
+				lQuebraPg := .F.
+
+				// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+				nQbrCol1 := nQbrCol2 := nQbrCol3 := nQbrCol4 := nQbrCol5 := nQbrCol6 := nQbrCol7 := 1
+
+				fPrintLine(cResiduo,aColun[1]	,oFont08,11,	,@nQbrCol1)
+				fPrintLine(cNBR,aColun[2] 		,oFont08,09,		,@nQbrCol2)
+				If lPGRSS
+					fPrintLine(cRss,aColun[3]		,oFont08,,		,@nQbrCol3)
+				Endif
+				fPrintLine(cTipo,aColun[4]		,oFont08,12,	,@nQbrCol5)
+				fPrintLine(cAmzTemp,aColun[5]	,oFont08,12,	,@nQbrCol4)
+				fPrintLine(cColeta,aColun[6]	,oFont08,10,	,@nQbrCol6)
+				fPrintLine(cDestino,aColun[7]	,oFont08,10,.T.,@nQbrCol7)
+
+				// Desenha o box para os campos
+				fBoxLayout(nLinAux,aColun)
+
+				If lQuebraPg
+
+					nQbrAux := 0
+					lQuebraPg := .F.
+					fSomaLin(,,.T.)
+					nLinAux := nLin
+
+					fPrintLine(cResiduo,aColun[1]	,oFont08,11,	,@nQbrCol1)
+					fPrintLine(cNBR,aColun[2] 		,oFont08,09,		,@nQbrCol2)
+					If lPGRSS
+						fPrintLine(cRss,aColun[3]		,oFont08,,		,@nQbrCol3)
+					Endif
+					fPrintLine(cAmzTemp,aColun[4]	,oFont08,12,	,@nQbrCol4)
+					fPrintLine(cTipo,aColun[5]		,oFont08,12,	,@nQbrCol5)
+					fPrintLine(cColeta,aColun[6]	,oFont08,10,	,@nQbrCol6)
+					fPrintLine(cDestino,aColun[7]	,oFont08,10,.T.,@nQbrCol7)
+
+					fBoxLayout(nLinAux,aColun)
+
+				EndIf
+
+			EndIf
+
+			TAX->(DbSkip())
+		EndDo
+
+		If nModeloImp == 1 		// Formato Word
+
+			If !Empty(cMemoAux)
+				cVar1 := "cTXT"+Strzero(nVar1,6)
+				OLE_ExecuteMacro(oWord,"Nao_Identar")
+				OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+				nVar1++
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+				OLE_ExecuteMacro(oWord,"Table_Identi")
+
+				cMemoAux := ""
+				nQuantLn := 1
+
+				OLE_ExecuteMacro(oWord,"Somalinha")
+				OLE_ExecuteMacro(oWord,"Somalinha")
+
+				// Limpa tabela auxiliar
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+			EndIf
+
+		EndIf
+
+	ElseIf Upper(Alltrim(cConteudo)) == "INDICADORES E METAS"
+
+		fIndMetas()
+
+		If !NGCADICBASE('TAA_METINI','A','TAA',.F.)
+			lMetas := .F.
+		EndIf
+
+		If nModeloImp == 1 		// Formato Word
+
+			// Titulo
+			cVar1 := "cTXT"+Strzero(nVar1,6)
+			OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+			nVar1++
+			OLE_ExecuteMacro(oWord,"Cria_Titulo")
+			OLE_ExecuteMacro(oWord,"Sem_Sublinhar")
+			OLE_ExecuteMacro(oWord,"Com_Negrito")
+			OLE_ExecuteMacro(oWord,"Alinhar_Esquerda")
+			OLE_SetDocumentVar(oWord,cVar1,Upper(STR0025)) // "Indicadores e Metas"
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+			nQuantLn := 0
+
+		ElseIf nModeloImp == 2 		// Formato Grafico
+
+			oPrtLaudo:Say(nlin,150,Upper(STR0025),oFont12b) // "Indicadores e Metas"
+			fSomaLin()
+
+		EndIf
+
+		While TRBIM->(!Eof())
+		//Data de abertura do objetivo e meta deve ser maior ou igual á data inicial do laudo e maior ou igual a data final do laudo.
+	//Data de fechamento do objetivo e meta deve ser maior ou igual que a data inicial do laudo e menor ou igual a data final do laudo
+			If  (	TRBIM->TBH_ABERTU >= DtoS(TO0->TO0_DTINIC) .AND. TRBIM->TBH_ABERTU <= DtoS(TO0->TO0_DTFIM) ) .OR. ;
+				(	TRBIM->TBH_FECHAM >= DtoS(TO0->TO0_DTINIC) .AND. TRBIM->TBH_FECHAM <= DtoS(TO0->TO0_DTFIM) )
+
+				lOkInfo := .T.
+
+				DbSelectArea("TAA")  // Plano de Ação
+				TAA->(DbSetOrder(1)) // TAA_FILIAL+TAA_CODPLA+DTOS(TAA_DTIMPL)
+				TAA->(DbSeek(xFilial("TAA")+TRBIM->(TAA_CODPLA+TAA_DTIMPL)))
+
+				If nModeloImp == 1 		// Formato Word
+
+					If lMetas
+						cTexto := STR0030+" "+ALLTRIM(STR(TRBIM->TAA_METINI))+" "+STR0031+" "+ALLTRIM(STR(TRBIM->TAA_METFIM))+"." // De###Até
+					Else
+						cTexto := STR0031+" "+ALLTRIM(STR(TRBIM->TAA_PERCEN)) // Até
+					EndIf
+
+					cMemoAux += STR0026+"#*" 							// Objetivo
+					cMemoAux += Alltrim(TRBIM->TBH_DESCRI)+"#*"
+					cMemoAux += STR0027+"#*"							// Indicador
+					cMemoAux += Alltrim(TRBIM->TAA_NOME)+"#*"
+					cMemoAux += STR0028+"#*"							// Meta
+					cMemoAux += cTexto+"#*"
+					cMemoAux += STR0029+"#*"							// Observação
+					cMemoAux += AllTrim(TAA->TAA_OBS)+"#*"
+
+					cMemoAux += "#*"						 				// Espações entre grupos de informações
+					cMemoAux += "#*"
+
+					nQuantLn += 5
+
+				ElseIf nModeloImp == 2 		// Formato Grafico
+
+					// OBJETIVO
+					If nLin+90 > nLinFinal
+						fSomaLin(,,.T.)
+					EndIf
+
+					nLinAux := nlin
+					nQbrAux := 0
+					lQuebraPg := .F.
+
+					// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+					nQbrCol1 := 1
+
+					fPrintLine(STR0026+":",150,oFont10b) //"Objetivo"
+					fPrintLine(Alltrim(TRBIM->TBH_DESCRI),nMrg,oFont10,90,.T.,@nQbrCol1)
+
+					If lQuebraPg
+
+						nQbrAux := 0
+						lQuebraPg := .F.
+						fSomaLin(,,.T.)
+						nLinAux := nLin
+
+						fPrintLine(Alltrim(TRBIM->TBH_DESCRI),nMrg,oFont10,90,.T.,@nQbrCol1)
+
+					EndIf
+
+					// INDICADOR
+					fSomaLin(40)
+
+					If nLin+90 > nLinFinal
+						fSomaLin(,,.T.)
+					EndIf
+
+					nLinAux := nlin
+					nQbrAux := 0
+					lQuebraPg := .F.
+
+					// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+					nQbrCol1 := 1
+
+					fPrintLine(STR0027+":",150,oFont10b) //"Indicador"
+					fPrintLine(Alltrim(TRBIM->TAA_NOME),nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					If lQuebraPg
+
+						nQbrAux := 0
+						lQuebraPg := .F.
+						fSomaLin(,,.T.)
+						nLinAux := nLin
+
+						fPrintLine(Alltrim(TRBIM->TAA_NOME),nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					EndIf
+
+					// META
+					If lMetas
+						cTexto := STR0030+" "+ALLTRIM(STR(TRBIM->TAA_METINI))+" "+STR0031+" "+ALLTRIM(STR(TRBIM->TAA_METFIM))+"." // De###Até
+					Else
+						cTexto := STR0031+" "+ALLTRIM(STR(TRBIM->TAA_PERCEN)) // Até
+					EndIf
+
+					fSomaLin(40)
+
+					If nLin+90 > nLinFinal
+						fSomaLin(,,.T.)
+					EndIf
+
+					nLinAux := nlin
+					nQbrAux := 0
+					lQuebraPg := .F.
+
+					// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+					nQbrCol1 := 1
+
+					fPrintLine(STR0028+":",150,oFont10b) //"Meta"
+					fPrintLine(cTexto,nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					If lQuebraPg
+
+						nQbrAux := 0
+						lQuebraPg := .F.
+						fSomaLin(,,.T.)
+						nLinAux := nLin
+
+						fPrintLine(cTexto,nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					EndIf
+
+					// OBSERVAÇÃO
+					fSomaLin(40)
+
+					If nLin+90 > nLinFinal
+						fSomaLin(,,.T.)
+					EndIf
+
+					nLinAux := nlin
+					nQbrAux := 0
+					lQuebraPg := .F.
+
+					// variáveis Controla a quebra de textos para desenhar os boxes corretamente.
+					nQbrCol1 := 1
+
+					fPrintLine(STR0029+":",150,oFont10b) //"Observação"
+					fPrintLine(AllTrim(TAA->TAA_OBS),nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					If lQuebraPg
+
+						nQbrAux := 0
+						lQuebraPg := .F.
+						fSomaLin(,,.T.)
+						nLinAux := nLin
+
+						fPrintLine(AllTrim(TAA->TAA_OBS),nMrg,oFont10,50,.T.,@nQbrCol1)
+
+					EndIf
+
+					fSomaLin()
+
+				EndIf
+
+			EndIf
+
+			TRBIM->(DbSkip())
+
+		EndDo
+
+		If nModeloImp == 1 		// Formato Word
+
+			If !Empty(cMemoAux)
+				cVar1 := "cTXT"+Strzero(nVar1,6)
+				OLE_ExecuteMacro(oWord,"Nao_Identar")
+				OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+				nVar1++
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+				OLE_ExecuteMacro(oWord,"Table_Metas")
+
+				cMemoAux := ""
+				nQuantLn := 1
+
+				OLE_ExecuteMacro(oWord,"Somalinha")
+				OLE_ExecuteMacro(oWord,"Somalinha")
+
+				// Limpa tabela auxiliar
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+			EndIf
+
+		EndIf
+
+	ElseIf Upper(Alltrim(cConteudo)) == "CRONOGRAMA DE PROGRAMAS"
+
+		fCronograma() //Imprime o conteúdo de Cronograma de Programas
+
+	ElseIf Upper(Alltrim(cConteudo)) == "PLANOS DE AÇÃO"
+
+		fPlanosAcao( fRetPlanos() ) //Imprime o conteúdo de Planos de Ação
+
+	EndIf
+
+	fSomaLin()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintLine
+Rotina para imprimir o texto informado e em qual coluna será impresso
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cTexto - Texto para impressao
+nColuna - Posicao para impressao do texto
+
+/*/
+//---------------------------------------------------------------------
+Static Function fPrintLine( cTexto, nColuna, oFonte, nTamCpo, lUltimo, nPosQbr )
+
+	Local cTextTemp := ""
+	Local nLinMemo := 0
+	Local nLinPos  := 0
+	Local nQuebra  := 0
+	Local nJ 		:= 0
+	Local nLinAnt := nLin
+	Default nTamCpo  := 16
+	Default lUltimo  := .F.
+	Default nPosQbr  := 1
+
+	nLinMemo := MLCOUNT(cTexto,nTamCpo)
+
+	For nLinPos := nPosQbr to nLinMemo
+		cTextTemp := Alltrim(MemoLine(cTexto,nTamCpo,nLinPos))
+		If !Empty(cTextTemp)
+			If nLin < nLinFinal
+				oPrtLaudo:Say(nLin,nColuna,cTextTemp,oFonte)
+				fSomaLin(40)
+				nQuebra++
+			Else
+				lQuebraPg := .T.
+				If nPosQbr == 1
+					nPosQbr := nLinPos
+				EndIf
+			EndIf
+
+		EndIf
+	Next nLinPos
+
+	If nQuebra > nQbrAux
+		nQbrAux := nQuebra
+	EndIf
+
+	nLin := nLinAnt
+
+	If lUltimo
+		For nJ := 1 to nQbrAux
+			fSomaLin(40)
+		Next nJ
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSomaLin
+Rotina para somar linhas
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  nQuant - Quantidade de linhas para saltar
+lInicio - Zera a contagem de linhas
+lNewPag - Zera as linha e finaliza a página
+
+/*/
+//---------------------------------------------------------------------
+Static Function fSomaLin( nQuant, lInicio, lNewPag, nLinAux, aColunas )
+
+	Default nQuant  := 80
+	Default lInicio := .F.
+	Default lNewPag := .F.
+	Default nLinAux := 0
+	Default aColunas := {}
+
+	If nModeloImp == 1 		// Formato Word
+
+		If lNewPag
+
+			OLE_ExecuteMacro(oWord,"Quebra_Pag")
+
+		EndIf
+
+	ElseIf nModeloImp == 2 //Grafico
+
+		nLin += nQuant
+
+		If lNewPag
+			oPrtLaudo:EndPage()
+			oPrtLaudo:SayBitMap(100,150,cStartLogo,300,150)
+			nLin := 300
+		ElseIf lInicio
+			nLin := 300
+			oPrtLaudo:SayBitMap(100,150,cStartLogo,300,150)
+		EndIf
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIndMetas
+Select para buscar as metas para serem impressas ao selecionar o atalho na montagem do layout
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+/*/
+//---------------------------------------------------------------------
+Static Function fIndMetas()
+
+	Local   cQry   := ""
+
+	cQry := " SELECT TBH_DESCRI,TAA_NOME,TAA_METINI,TAA_METFIM,TAA_PERCEN,TAA_FILIAL,TAA_CODPLA,TAA_DTIMPL,TBH_ABERTU,TBH_FECHAM
+	cQry += " FROM "+RETSQLNAME('TBH')+" TBH
+	cQry += " 	LEFT JOIN "+RETSQLNAME('TBI')+" TBI ON TBI_FILIAL = TBH_FILIAL AND TBI_OBJETI = TBH_CODOBJ AND TBI.D_E_L_E_T_ <> '*'
+	cQry += " 	LEFT JOIN "+RETSQLNAME('TAA')+" TAA ON TAA_FILIAL = TBI_FILIAL AND TAA_CODPLA = TBI_META "
+	cQry += " 		AND TAA_FILIAL = '"+xFilial("TAA")+"' AND TAA.D_E_L_E_T_ <> '*'
+	cQry += " WHERE TBH.D_E_L_E_T_ <> '*'
+	cQry += " ORDER BY TBH_CODOBJ
+
+	If Select("TRBIM") <> 0
+		TRBIM->(dbclosearea())
+	EndIf
+
+	TcQuery cQry new Alias "TRBIM"
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fText200
+Imprime o texto informado
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cConteudo - Texto para impressao
+
+/*/
+//---------------------------------------------------------------------
+Static Function fText200( cConteudo )
+
+	Local nMrg := 150
+
+	If nModeloImp == 1 		// Formato Word
+
+		cVar1 := "cTXT"+Strzero(nVar1,6)
+		OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+		nVar1++
+
+		OLE_ExecuteMacro(oWord,"Cria_Texto")
+
+		OLE_ExecuteMacro(oWord,"Sem_Negrito")
+		OLE_ExecuteMacro(oWord,"Justificar")
+		OLE_ExecuteMacro(oWord,"Sem_Sublinhar")
+
+		OLE_SetDocumentVar(oWord,cVar1,cConteudo)
+
+		OLE_ExecuteMacro(oWord,"Somalinha")
+		OLE_ExecuteMacro(oWord,"Somalinha")
+
+	ElseIf nModeloImp == 2	// Formato Gráfico
+
+		oPrtLaudo:Say(nlin,nMrg,cConteudo,oFont10)
+		fSomaLin()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR200
+Imprime o arquivo informado
+
+@author Alessandro Smaha
+@since 06/03/2013
+
+@param  cConteudo - Caminho do arquivo
+
+/*/
+//---------------------------------------------------------------------
+Static Function fFile200( cConteudo )
+
+	Local cFileArq := "", nPos
+	Local cBarraSrv := "\"
+
+	If nModeloImp != 1 //Se nao for em formato WORD, nao imprime
+		Return
+	Endif
+
+	If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+		cBarraSrv := "/"
+	Endif
+
+	nPos := Rat(cBarraSrv,cConteudo)
+	If nPos > 0
+		cFileArq := AllTrim(Substr(cConteudo,nPos+1))
+	Endif
+
+	CpyS2T(Alltrim(cConteudo),cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+
+	If File( cPathEst+cFileArq )
+		cTeste := cPathEst+cFileArq
+		OLE_ExecuteMacro(oWord,"Somalinha")
+		OLE_SetDocumentVar(oWord,"Cria_Var",cPathEst+cFileArq)
+		OLE_ExecuteMacro(oWord,"Insere_doc")
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR200PER
+Valida os campos de pergunta para o relatório
+
+@author Gabriel Augusto Werlich
+@since 04/02/2014
+
+@param nParam  - Número do parâmetro (MV)
+
+@return lRet - Lógico, .T. se valido, .F. caso contrário
+
+/*/
+//---------------------------------------------------------------------
+Function SGAR200PER( nParam )
+
+	Local lRet := .F.
+
+	If nParam == 1
+
+		DbSelectArea("TO0")
+		TO0->(DbSetOrder(1)) // TO0_FILIAL+TO0_LAUDO
+		If TO0->(DbSeek(xFilial("TO0")+MV_PAR01))
+			lRet := TO0->TO0_TIPREL $ "9/B/A"
+		EndIf
+
+		If !lRet
+			Help( " ",1, 'SGAR20001')
+		EndIf
+
+	ElseIf nParam == 2
+
+		If cPerg == "SGAR200A" // QAA
+			lRet := ExistCpo("QAA",MV_PAR02)
+		Else // cPerg == "SGAR200B" // SRA Funcionários
+			lRet := ExistCpo("SRA",MV_PAR02)
+		EndIf
+
+	ElseIf nParam == 3
+
+		If cPerg == "SGAR200A" // QAA Usuários
+			lRet := ExistCpo("QAA",MV_PAR03)
+		Else // cPerg == "SGAR200B" // SRA Funcionários
+			lRet := ExistCpo("SRA",MV_PAR03)
+		EndIf
+
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fRetPlanos
+Função para imprimir o conteúdo dos planos de ação.
+
+@author Gabriel Augusto Werlich
+@since 04/02/2014
+
+@return aPlanos
+
+/*/
+//---------------------------------------------------------------------
+Static Function fRetPlanos()
+
+	Local aPlanos := {}
+
+	// Conteúdo
+	DbSelectArea("TOZ")
+	TOZ->(DbSetOrder(1)) //	TOZ_FILIAL+TOZ_LAUDO+TOZ_PLANO
+	If TOZ->(DbSeek(xFilial("TOZ")+TO0->TO0_LAUDO))
+
+		DbSelectArea(cTabPla)
+		(cTabPla)->(DbSetOrder(1)) //
+
+		While TOZ->(!Eof()) .AND. TO0->TO0_LAUDO == TOZ->TOZ_LAUDO
+
+			If (cTabPla)->(DbSeek(xFilial(cTabPla)+TOZ->TOZ_PLANO))
+				aAdd(aPlanos,TOZ->TOZ_PLANO)
+			EndIf
+
+			TOZ->(DbSkip())
+		End While
+
+	EndIf
+
+Return aPlanos
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG200VDes
+Validação do campo TB4_CODDES.
+Verifica se a chave correspondente em tela existe na tabela de Destino
+padrões.
+
+@author Gabriel Augusto Werlich
+@since 04/02/2014
+
+@return lRet - Lógico, .T. se valido, .F. caso contrário
+
+/*/
+//---------------------------------------------------------------------
+Function SG200VDes()
+
+	Local lRet := .T.
+
+	If IsInCallStack( "SGAA150" )
+		lRet := ExistCPO( "TH0" , M->TB0_CODRES + M->TB4_CODDES )
+	Else
+		lRet := ExistCPO( "TB2" , M->TB4_CODDES )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG200SXBDe
+Função para consulta padrão TB2DES.
+
+@author Gabriel Augusto Werlich
+@since 04/02/2014
+
+@return lRet - Lógico, .T. se valido, .F. caso contrário
+
+/*/
+//---------------------------------------------------------------------
+Function SG200SXBDe()
+
+	Local lRet	:= .T.
+	Local aArea
+
+	If IsInCallStack( "SGAA150" )
+		lRet := TB2->TB2_TIPO == "1"
+
+		If lRet
+			aArea := GetArea()
+			dbSelectArea( "TH0" )
+			dbSetOrder( 1 )
+			lRet := dbSeek( xFilial( "TH0" ) + M->TB0_CODRES + TB2->TB2_CODDES )
+			RestArea( aArea )
+		EndIf
+	Else
+		lRet := TB2->TB2_TIPO == "1"
+	EndIf
+
+Return lRet

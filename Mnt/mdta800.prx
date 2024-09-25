@@ -1,0 +1,2001 @@
+#INCLUDE "mdta800.ch"
+#Include "Protheus.ch"
+#INCLUDE "COLORS.CH"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA800
+Programacao de Entrega de EPI
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  .T., Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA800()
+
+	//Guarda conteudo e declara variaveis padroes
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	//Define Array contendo as Rotinas a executar do programa
+	Private aRotina := MenuDef()
+
+	//Define o cabecalho da tela de atualizacoes
+
+	Private cCadastro := OemtoAnsi(STR0001) //"Programação de Entrega de Epi"
+
+	Private nIndTNF    := NGRETORDEM("TNF","TNF_FILIAL+TNF_NUMSA+TNF_ITEMSA",.F.)
+	Private cUsaInt1   := AllTrim(GetMv("MV_NGMDTES")) //Indica se tem integração com estoque
+	Private lMdtGerSA  := If( SuperGetMv("MV_NG2SA",.F.,"N") == "S", .T. , .F. ) //Indica se gera SA ao inves de requisitar do estoque
+	Private lGera_SA   := If( lMdtGerSA .And. cUsaInt1 == "S" .And. ;
+							NGCADICBASE("TNF_ITEMSA","D","TNF",.F.) .And.;
+							NGCADICBASE("TNF_NUMSA" ,"D","TNF",.F.) .And.;
+							NGCADICBASE("TLY_FORNEC","D","TLY",.F.) .And.;
+							NGCADICBASE("TLY_LOJA"  ,"D","TLY",.F.) .And.;
+							NGCADICBASE("TLY_NUMCAP","D","TLY",.F.) , .T. , .F. )
+
+	//Endereca a funcao de BROWSE
+
+	DbSelectArea("TLX")
+	DbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TLX")
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@sample MenuDef( )
+
+@param aEpis, Array, Contém os códigos dos EPIs a serem adicionados
+na programação agrupados pelas origens da necessidade do EPI.
+@param aOrigens, Array, Contém o as origens da necessidade dos EPIs,
+como risco, função, tarefa etc...Contém somente o que contempla o
+funcionário posicionado no momento
+
+@Obs Parametros do array a Rotina:
+1. Nome a aparecer no cabecalho
+2. Nome da Rotina associada
+3. Reservado
+4. Tipo de Transa‡„o a ser efetuada:
+	1 - Pesquisa e Posiciona em um Banco de Dados
+    2 - Simplesmente Mostra os Campos
+    3 - Inclui registros no Bancos de Dados
+    4 - Altera o registro corrente
+    5 - Remove o registro corrente do Banco de Dados
+5. Nivel de acesso
+6. Habilita Menu Funcional
+
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@return  aRotina, Array, Contém as opcoes da rotina.
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina :=	{ { STR0002,	"AxPesqui"    , 0 , 1},; //"Pesquisar"
+						{ STR0003,	"MDT800CAD"   , 0 , 2},; //"Visualizar"
+						{ STR0004,	"MDT800CAD"   , 0 , 3},; //"Incluir"
+						{ STR0005,	"MDT800CAD"   , 0 , 4},; //"Alterar"
+						{ STR0006,	"MDT800CAD"   , 0 , 5, 3} } //"Excluir"
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT800CAD
+Tela de Programacao de Epi
+
+@param cAlias, Caractere, Alias da tabela utilizada
+@param nRecno, Numérico, Numerico Recno posicionado da tabela
+@param nOpcx, Numérico, Inclusão, Indica o tipo de operação.
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  nRet, Numérico, Sempre Zero
+/*/
+//-------------------------------------------------------------------
+Function MDT800CAD(cAlias,nRecno,nOpcx)
+
+	Local nRet     := 0
+	Local aScrRes  := GetScreenRes()
+	Local aArea    := GetArea()
+	Local oFont10  := TFont():New("Arial",,-12,.T.,.T.)
+	Local oFont12  := TFont():New("Arial",,-14,.T.,.T.)
+	Local lAltProg := If( nOpcx == 3 .Or. nOpcx == 4 , .T. , .F. )
+	Local aNgCadBt := {}
+
+	//Variaveis de tamanho de tela
+	Local lEnchBar := .T. // Indica se a janela de diálogo possuirá enchoicebar
+	Local lPadrao  := .F. // Indica se a janela deve respeitar as medidas padrões do Protheus (.T.) ou usar o máximo disponível (.F.)
+	Local nMinY    := 430 // Altura mínima da janela
+	Local aSize    := MsAdvSize( lEnchBar , lPadrao , nMinY )
+
+	// Variaveis para controle de posicionamento.
+	Local nColCons := 123 //'Gerar Consulta'
+	Local nColLoc  := 170 //'Classificar por'
+	Local nColForn := 230 //'Alterar Fornecedor'
+	Local nColBusc := 350 //'Buscar Funcionario'
+
+	Local oPanelPai
+	Local aNao
+	Local aChoice
+
+	Private aVetFor  := {}
+	Private oChecked := LoadBitmap(GetResources(),"LBTIK")
+	Private oUnCheck := LoadBitmap(GetResources(),"LBNO")
+	Private oStPink  := LoadBitmap(GetResources(),"BR_PINK")
+	Private oStVerde := LoadBitmap(GetResources(),"BR_VERDE")
+	Private oStVerme := LoadBitmap(GetResources(),"BR_VERMELHO")
+	Private oStAmare := LoadBitmap(GetResources(),"BR_AMARELO")
+	Private oStAzul  := LoadBitmap(GetResources(),"BR_AZUL")
+	Private oStLaran := LoadBitmap(GetResources(),"BR_LARANJA")
+	Private oStBranc := LoadBitmap(GetResources(),"BR_BRANCO")
+
+	Private oEpiProg, aEpiProg := {}, bEpiProg
+	Private oResumo, aResumo, bResumo
+	Private aClassBox := {"1="+STR0007,"2="+STR0008} //"Funcionario"###"Epi"
+
+	Private cBUSFUN 		 := Space(TAMSX3("TLX_FUNINI")[1])
+	Private lTemPreR := .F. //Indica se algum Epi ja foi gerado pre-requisicao
+
+	Aadd(aNgCadBt,{"ng_ico_legenda"		,{|| Mdt080Leg() }, STR0009	}) //"Legenda"
+	Aadd(aNgCadBt,{"relatorio"			,{|| fImprimSA() }, STR0010	}) //"Relatório"
+	If lAltProg .And. lMdtGerSA .And. cUsaInt1 == "S"
+		Aadd(aNgCadBt,{"ng_ico_retorno01"	,{|| opcaoZZ:=1,If(fPrGerSA(),oDlg1:End(),opcaoZZ:=0) }, STR0011}) //"Gerar S.A."
+	Endif
+
+	aResumo  := {}
+	RegtoMemory("TLX",(nOpcx == 3))
+	If nOpcx <> 3
+		dbSelectArea("TLY")
+		dbSetOrder(1)
+		dbSeek(xFilial("TLY")+TLX->TLX_PROGRA)
+		While !Eof() .And. xFilial("TLY")+TLX->TLX_PROGRA == TLY->TLY_FILIAL+TLY->TLY_PROGRA
+
+			dbSelectArea("SRA")
+			dbSetOrder(1)
+			dbSeek(xFilial("SRA",TLY->TLY_FILMAT)+TLY->TLY_MAT)
+
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			dbSeek(xFilial("SB1")+TLY->TLY_CODEPI)
+
+			cSitFunc := " "
+			If SRA->RA_RESCRAI $ "30/31"
+				cSitFunc := "T"
+			ElseIf SRA->RA_SITFOLH $ "D/A/F/I"
+				cSitFunc := SRA->RA_SITFOLH
+			Endif
+			lMarcado := If( Empty(TLY->TLY_OK) , .F. , .T. )
+			If !lGera_SA
+				aAdd( aEpiProg , { lMarcado , cSitFunc , TLY->TLY_MAT , SRA->RA_NOME , TLY->TLY_QUANTI , TLY->TLY_CODEPI  , SB1->B1_DESC,;
+									TLY->TLY_DATASA , SRA->RA_CC, TLY->TLY_NUMSA, TLY->TLY_ITEMSA } )
+			Else
+				If Empty(TLY->TLY_FORNEC)
+					fRetFornec( TLY->TLY_CODEPI )
+					aAdd( aEpiProg , { lMarcado , cSitFunc , TLY->TLY_MAT , SRA->RA_NOME , TLY->TLY_QUANTI , TLY->TLY_CODEPI  , SB1->B1_DESC,;
+										TLY->TLY_DATASA , SRA->RA_CC, TLY->TLY_NUMSA, TLY->TLY_ITEMSA, TN3->TN3_FORNEC, TN3->TN3_LOJA;
+										, TN3->TN3_NUMCAP } )
+				Else
+					aAdd( aEpiProg , { lMarcado , cSitFunc , TLY->TLY_MAT , SRA->RA_NOME , TLY->TLY_QUANTI , TLY->TLY_CODEPI  , SB1->B1_DESC,;
+										TLY->TLY_DATASA , SRA->RA_CC, TLY->TLY_NUMSA, TLY->TLY_ITEMSA, TLY->TLY_FORNEC, TLY->TLY_LOJA;
+										, TLY->TLY_NUMCAP } )
+				Endif
+			Endif
+
+			nPosVet := aScan( aResumo , {|x| x[5] == TLY->TLY_CODEPI} )
+			If nPosVet == 0
+				dbSelectArea("SB2")
+				dbSetOrder(1)
+				dbSeek(xFilial("SB2")+SB1->B1_COD+SB1->B1_LOCPAD)
+				nQtdFis := SaldoSB2(.F.,.T.,dDataBase+3650,.F.)
+				aAdd( aResumo , { SB1->B1_DESC , TLY->TLY_QUANTI , If(lMarcado,TLY->TLY_QUANTI,0) , nQtdFis , TLY->TLY_CODEPI } )
+			Else
+				aResumo[nPosVet,2] += TLY->TLY_QUANTI
+				If lMarcado
+					aResumo[nPosVet,3] += TLY->TLY_QUANTI
+				Endif
+			Endif
+
+			If lMarcado
+				dbSelectArea("SCP")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SCP")+TLY->TLY_NUMSA+TLY->TLY_ITEMSA) .And. SCP->CP_PRODUTO == TLY->TLY_CODEPI
+					If SCP->CP_PREREQU == "S"
+						lTemPreR := .T.
+					Endif
+				Endif
+			Endif
+
+			dbSelectArea("TLY")
+			dbSkip()
+		End
+		fClaBrwEpi(TLX->TLX_INDCLA,.F.)
+	Endif
+
+	If Len(aEpiProg) == 0
+		If !lGera_SA
+			aAdd( aEpiProg , { .F. , "Z" , Space(6) , Space(30) , 0 , Space(15) , Space(30) , StoD(""), Space(9), Space(6), Space(2) } )
+		Else
+			aAdd( aEpiProg , { .F. , "Z" , Space(6) , Space(30) , 0 , Space(15) , Space(30) , StoD(""), Space(9), Space(6), Space(2),;
+								Space(6), Space(2), Space(12) } )
+		Endif
+	Endif
+	aSORT(aResumo,,,{|x,y| x[1] < y[1] })
+	If Len(aResumo) == 0
+		aAdd( aResumo , { Space(60) , 0 , 0 , 0 , Space(15) } )
+	Endif
+
+	opcaoZZ  := 0
+	//-62   -25
+	DEFINE MSDIALOG oDlg1 TITLE OemToAnsi(cCadastro) from 5,0 To (aScrRes[2]-95),(aScrRes[1]-15) of oMainwnd COLOR CLR_BLACK,CLR_WHITE Pixel
+	oDlg1:lMaximized := .T.
+	If nOpcx <> 2
+		oDlg1:lEscClose := .F.
+	Endif
+
+		oPanelPai := TPanel():New( 0 , 0 , , oDlg1 , , .T. , .F. , , , 0 , 55 , .T. , .F. )
+		oPanelPai:Align := CONTROL_ALIGN_ALLCLIENT
+		aNao := { "TLX_DTGERA" , "TLX_INDCLA" , "TLX_TIPOSA" }
+		aChoice := NGCAMPNSX3( "TLX" , aNao )
+
+		oEnchoice:= MsMGet():New( "TLX" , TLX->( Recno() ) , nOpcx , , , , aChoice , { 12 , 0 , aSize[ 6 ] / 10 , aSize[ 5 ] / 2 } , , , , , , oPanelPai )
+			oEnchoice:oBox:Align := CONTROL_ALIGN_TOP
+			If !lAltProg .Or. lTemPreR
+				oEnchoice:Disable()
+			EndIf
+		//Dados da Programacao
+		oPanelBtn:=TPanel():New(00,00,,oPanelPai,,,,,RGB(255,255,255),12,12,.F.,.F.)
+		oPanelBtn:Align := CONTROL_ALIGN_TOP
+		oPanelBtn:nHeight := 80
+
+		nColCons := 010
+		nColLoc  := 060
+		nColForn := 130
+		nColBusc := 130
+
+		@ 15,nColCons BUTTON oGerCons PROMPT STR0014 OF oPanelBtn SIZE 40,12 PIXEL ACTION Processa({|lEnd| fBuscaEpi()}) //"Gerar Consulta"
+
+		If !lAltProg .Or. lTemPreR
+			oGerCons:Disable()
+		Endif
+
+		@ 05,nColLoc SAY STR0015 OF oPanelBtn Pixel Font oFont10 //"Classificar por:"
+		@ 15,nColLoc COMBOBOX oCbx1 VAR M->TLX_INDCLA ITEMS aClassBox SIZE 60,20 Of oPanelBtn WHEN lAltProg Pixel Valid fClaBrwEpi(M->TLX_INDCLA,.T.)
+
+		If lGera_SA
+			@ 15,nColForn BUTTON oGerAltF PROMPT STR0053 OF oPanelBtn SIZE 55,12 PIXEL ACTION AltFornec() //"Alterar Fornecedor"
+			If !lAltProg
+				oGerAltF:Disable()
+			Endif
+			nColBusc := nColBusc+60
+		Endif
+
+		@ 05,nColBusc SAY STR0068 OF oPanelBtn Pixel Font oFont10 //"Funcionários?"
+		@ 15,nColBusc MsGet cBUSFUN Picture "@!" Size 50,08 Of oPanelBtn F3 "SRA";
+			Valid If( Empty( cBUSFUN ) , .T. , ExCpoMDT( "SRA" , cBUSFUN ) ) Pixel When (lAltProg .And. !lTemPreR) HasButton
+		@ 15,nColBusc+60 BUTTON oBtnGet PROMPT STR0071 OF oPanelBtn SIZE 40,12 PIXEL ACTION Processa({|lEnd| fGetFunc()})
+
+		//Epis necessarios
+		aTit800 := {"","",STR0016,STR0017,STR0018,STR0019,STR0020,STR0021,STR0022}  //"Matrícula"###"Nome"###"Quantidade"###"Código"###"Descrição"###"Num. S.A."###"Item S.A."
+		aCol800 := {10,10,40,100,40,40,100,40,30}
+		bEpiProg := { || { If(aEpiProg[oEpiProg:nAt,1],oChecked,oUnCheck),;
+						fCorStatus(aEpiProg[oEpiProg:nAt,2],aEpiProg[oEpiProg:nAt,3]),;
+						aEpiProg[oEpiProg:nAt,3],;
+						aEpiProg[oEpiProg:nAt,4],;
+						TransForm(aEpiProg[oEpiProg:nAt,5],"@E 999,999.99"),;
+						aEpiProg[oEpiProg:nAt,6],;
+						aEpiProg[oEpiProg:nAt,7],;
+						aEpiProg[oEpiProg:nAt,10],;
+						aEpiProg[oEpiProg:nAt,11] } }
+		If lGera_SA
+			aAdd(aTit800, STR0054) //"Fornecedor"
+			aAdd(aTit800, STR0055) //"Loja"
+			aAdd(aTit800, STR0056) //"Número C.A."
+			aAdd(aCol800, 40)
+			aAdd(aCol800, 20)
+			aAdd(aCol800, 40)
+			bEpiProg := { || { If(aEpiProg[oEpiProg:nAt,1],oChecked,oUnCheck),;
+							fCorStatus(aEpiProg[oEpiProg:nAt,2],aEpiProg[oEpiProg:nAt,3]),;
+							aEpiProg[oEpiProg:nAt,3],;
+							aEpiProg[oEpiProg:nAt,4],;
+							TransForm(aEpiProg[oEpiProg:nAt,5],"@E 999,999.99"),;
+							aEpiProg[oEpiProg:nAt,6],;
+							aEpiProg[oEpiProg:nAt,7],;
+							aEpiProg[oEpiProg:nAt,10],;
+							aEpiProg[oEpiProg:nAt,11],;
+							aEpiProg[oEpiProg:nAt,12],;
+							aEpiProg[oEpiProg:nAt,13],;
+							aEpiProg[oEpiProg:nAt,14] } }
+		Endif
+		oEpiProg := TWBrowse():New( 017 , 4, 175, 140,,aTit800,aCol800,oPanelPai,,,,,{||},,,,,,,.F.,,.T.,,.F.,,, )
+		oEpiProg:Align := CONTROL_ALIGN_ALLCLIENT
+		oEpiProg:SetArray(aEpiProg)
+		oEpiProg:bLine:= bEpiProg
+		If lAltProg
+			oEpiProg:bLDblClick   := {|| fMarkEpi() , oEpiProg:DrawSelect() }
+			oEpiProg:bHeaderClick := {|x,a| fMarkAll(x,a) }
+		Endif
+		oEpiProg:nAt := 1
+
+		//Resumo de Epis
+		oPanelRes:=TPanel():New(00,00,,oPanelPai,,,,,RGB(214,214,214),12,12,.F.,.F.)
+		oPanelRes:Align := CONTROL_ALIGN_BOTTOM
+		If aScrRes[2] <= 600
+			oPanelRes:nHeight := 100
+		ElseIf aScrRes[2] <= 768
+			oPanelRes:nHeight := 120
+		Else
+			oPanelRes:nHeight := 150
+		Endif
+
+		oResumo := TWBrowse():New( 2 , 2, 175, 140,,{STR0008,STR0023,STR0024,STR0025},{100,100,100,100},; //"EPI"###"TOTAL"###"ENTREGUE"###"SALDO EM ESTOQUE"
+									oPanelRes,,,,,{||},,,,,,,.F.,,.T.,,.F.,,, )
+		oResumo:Align := CONTROL_ALIGN_ALLCLIENT
+		oResumo:SetArray(aResumo)
+		bResumo := { || { aResumo[oResumo:nAt,1], TransForm(aResumo[oResumo:nAt,2],"@E 999,999,999,999.99"),;
+							TransForm(aResumo[oResumo:nAt,3],"@E 999,999,999,999.99"),;
+						TransForm(aResumo[oResumo:nAt,4],"@E 999,999,999,999.99"), aResumo[oResumo:nAt,5] } }
+		oResumo:bLine:= bResumo
+		oResumo:nAt := 1
+
+		//Panel com Titulo RESUMO
+		oPanelTit:=TPanel():New(00,00,,oPanelPai,,,,,RGB(0,50,100),12,12,.F.,.F.)
+		oPanelTit:Align := CONTROL_ALIGN_BOTTOM
+		oPanelTit:nHeight := 25
+
+		@ 03,005 SAY STR0026 OF oPanelTit Pixel Font oFont12 Color CLR_WHITE //"RESUMO DA PROGRAMAÇÃO"
+
+	ACTIVATE MSDIALOG oDlg1 ON INIT EnchoiceBar(oDlg1,{||opcaoZZ:=1,If(!fValidOK( nOpcx , M->TLX_DTINI , M->TLX_DTFIM, aEpiProg ),opcaoZZ := 0,oDlg1:End())},{||oDlg1:End()},,aNgCadBt)// CENTERED
+
+	If opcaoZZ == 1
+		If nOpcx <> 2
+			Begin Transaction
+				fGravaPrg(nOpcx)
+			End Transaction
+		Endif
+	Else
+		RollBackSX8() //Desfaz numero reservado
+	Endif
+
+Return nRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValidOK
+Valida confirmacao do cadastro
+
+@Param nOpcx - Opção selecionada.
+@Param dDataIn - Data inicial da pesquisa.
+@Param dDataFim - Data final da pesquisa.
+@Param aEpi - Array que contém os registro da programação.
+
+@author Denis Hyroshi de Souza
+@since 03/08/2009
+@version P11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Static Function fValidOK( nOpcx , dDataIn , dDataFim, aEpi )
+
+	Local lRet := .T.
+
+	If nOpcx == 5
+		If lTemPreR
+			MsgInfo(STR0027) //"Não será possível excluir esta programação, pois já foi gerada pré-requisição."
+			lRet:= .F.
+		Endif
+	ElseIf nOpcx == 3 .Or. nOpcx == 4 //Caso seja inclusão ou alteração.
+		If Empty(dDataIn) .Or. Empty(dDataFim)//Caso a data esteja vazia
+				ShowHelpDlg( STR0075 ,	{ STR0076 } , 1 , ; //"Atenção"###"Os parâmetros de data não foram preenchidos."
+											{ STR0077 } , 1 ) //"Favor preencher os campos da data."
+				lRet := .F.
+		ElseIf Len(aEpi) > 0 .And. lRet
+			If Empty(aEpi[1,3])
+				ShowHelpDlg( STR0075 ,	{ STR0078 } , 1 , ; //"Atenção"###"Não existe nenhum funcionário para a programação de entrega de epis."
+											{ STR0079 } , 1 ) //"Favor alterar os parâmetros, para que seja encontrado ao menos um funcionário."
+				lRet := .F.
+			EndIf
+		Endif
+	Endif
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fMarkAll
+Marcar / Desmarcar todos
+
+@param _Objeto, Objeto, Objeto para fazer as marcações
+@param _nColHead, Numérico, Coluna do cabeçalho
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  .T., Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fMarkAll(_Objeto,_nColHead)
+
+	Local nX, nOld := oEpiProg:nAt
+	If _nColHead == 1
+		For nX := 1 To Len(aEpiProg)
+			oEpiProg:nAt := nX
+			fMarkEpi(.T.)
+		Next nX
+	Endif
+	oEpiProg:nAt := nOld
+	oEpiProg:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fMarkEpi
+Marcar / Desmarcar Epi
+
+@sample fMarkEpi( .T. )
+
+@param lMsgLin, Lógico, Se exibe mensagem de Localização da linha
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  .T., Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fMarkEpi(lMsgLin)
+
+	Default lMsgLin := .F.
+
+	If Empty(aEpiProg[oEpiProg:nAt,3])
+		Return .T.
+	Endif
+	aEpiProg[oEpiProg:nAt,1] := !aEpiProg[oEpiProg:nAt,1]
+	If !aEpiProg[oEpiProg:nAt,1]
+		If !Empty(aEpiProg[oEpiProg:nAt,10])
+			dbSelectArea("SCP")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SCP")+aEpiProg[oEpiProg:nAt,10]+aEpiProg[oEpiProg:nAt,11]) .And. SCP->CP_PRODUTO == aEpiProg[oEpiProg:nAt,6]
+				If SCP->CP_PREREQU == "S"
+					MsgInfo(STR0028+Chr(13)+; //"Não será possível desmarcar este Epi, pois já foi gerada pré-requisição."
+							STR0029+aEpiProg[oEpiProg:nAt,10]+Chr(13)+; //"Número S.A.: "
+							STR0030+aEpiProg[oEpiProg:nAt,11],If(lMsgLin,STR0031+Alltrim(Str(oEpiProg:nAt)),STR0032)) //"Item: "###"Atenção - Linha: "###"Atenção"
+					aEpiProg[oEpiProg:nAt,1] := .T.
+					Return .F.
+				Endif
+			Endif
+			aEpiProg[oEpiProg:nAt,10] := Space(6)
+			aEpiProg[oEpiProg:nAt,11] := Space(2)
+		Endif
+	Endif
+	nPosVet := aScan( aResumo , {|x| x[5] == aEpiProg[oEpiProg:nAt,6]} )
+	If nPosVet > 0
+		If aEpiProg[oEpiProg:nAt,1]
+			aResumo[nPosVet,3] += aEpiProg[oEpiProg:nAt,5]
+		Else
+			aResumo[nPosVet,3] -= aEpiProg[oEpiProg:nAt,5]
+		Endif
+		oResumo:Refresh()
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGravaPrg
+Grava programacao
+
+@sample fGravaPrg( 1 )
+
+@param nOpcx, Numérico, Inclusão, Indica o tipo de operação.
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fGravaPrg(nOpcx)
+
+	Local nFld
+	Local cField
+	Local nX,cItem,lAchou,nPosVet
+	Local aOldTLY := {}
+	Local aOldSA  := {}
+	Local cCodEpi := ""
+
+	If nOpcx != 3
+		dbSelectArea("TLY")
+		dbSetOrder(1)
+		dbSeek(xFilial("TLY")+M->TLX_PROGRA)
+		While !Eof() .And. xFilial("TLY")+M->TLX_PROGRA == TLY->TLY_FILIAL+TLY->TLY_PROGRA
+			aADD( aOldTLY, { TLY->(Recno()) , .F. } )
+			If !Empty(TLY->TLY_NUMSA) .And. !Empty(TLY->TLY_ITEMSA)
+				aADD( aOldSA, { TLY->TLY_NUMSA , TLY->TLY_ITEMSA , TLY->TLY_QUANTI , TLY->TLY_CODEPI , .F. } )
+			Endif
+			dbSkip()
+		End
+	Endif
+
+	If nOpcx == 3 .Or. nOpcx == 4
+		dbSelectArea("TLX")
+		RecLock( "TLX" , (nOpcx == 3) )
+		For nFld := 1 To Fcount()
+			cField := "M->" + FieldName(nFld)
+			If "_FILIAL" $ Upper(cField) // Caso campo seja _FILIAL
+				FieldPut(nFld, xFilial("TLX")) // Define como conteudo o termo xFilial()
+			ElseIf "_DTGERA" $ Upper(cField)
+				If nOpcx == 3
+					FieldPut(nFld, dDataBase)
+				EndIf
+			Else
+				FieldPut(nFld, &cField.)
+			EndIf
+		Next nFld
+		TLX->(MsUnLock())
+
+		If nOpcx == 3
+			ConfirmSX8()
+		Endif
+
+		For nX := 1 To Len(aEpiProg)
+			If Empty(aEpiProg[nX,3]) .Or. Empty(aEpiProg[nX,6])
+				Loop
+			Endif
+
+			If !aEpiProg[nX,1]
+				aEpiProg[nX,10] := Space(6)
+				aEpiProg[nX,11] := Space(2)
+			Endif
+
+			If !Empty(aEpiProg[nX,10]) .And. !Empty(aEpiProg[nX,11])
+				nPosVet := aScan( aOldSA , {|x| x[1] == aEpiProg[nX,10] .And. x[2] == aEpiProg[nX,11] .And. x[3] == aEpiProg[nX,5] .And. !x[5] } )
+				If nPosVet > 0
+					aOldSA[nPosVet,5] := .T.
+				Endif
+			Endif
+
+			cItem := StrZero(nX,6)
+			dbSelectArea("TLY")
+			dbSetOrder(1)
+			lAchou := dbSeek(xFilial("TLY")+M->TLX_PROGRA+cItem)
+			If lAchou
+				nPosVet := aScan( aOldTLY , {|x| x[1] == TLY->(Recno()) .And. !x[2] } )
+				If nPosVet > 0
+					aOldTLY[nPosVet,2] := .T.
+				Endif
+			Endif
+			cCodEpi := cValToChar( aEpiProg[nX,6] )
+			If Empty( cCodEpi )
+				cCodEpi := cValToChar( aEpiProg[nX,6][1] )
+			EndIf
+			RecLock("TLY",!lAchou)
+			TLY->TLY_FILIAL := xFilial("TLY")
+			TLY->TLY_PROGRA := M->TLX_PROGRA
+			TLY->TLY_ITEM   := cItem
+			TLY->TLY_FILMAT := cFilAnt
+			TLY->TLY_MAT    := aEpiProg[nX,3]
+			TLY->TLY_CODEPI := cCodEpi
+			TLY->TLY_QUANTI := aEpiProg[nX,5]
+			TLY->TLY_OK     := If(aEpiProg[nX,1],"XX","  ")
+			TLY->TLY_DATASA := aEpiProg[nX,8]
+			TLY->TLY_NUMSA  := aEpiProg[nX,10]
+			TLY->TLY_ITEMSA := aEpiProg[nX,11]
+			If lGera_SA
+				TLY->TLY_FORNEC := aEpiProg[nX,12]
+				TLY->TLY_LOJA   := aEpiProg[nX,13]
+				TLY->TLY_NUMCAP := aEpiProg[nX,14]
+			Endif
+			TLY->(MsUnLock())
+		Next nX
+	Endif
+
+	If nOpcx == 5 .Or. nOpcx == 4
+
+		If nOpcx == 5
+			For nX := 1 To Len(aEpiProg)
+				dbSelectArea("SCP")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SCP")+aEpiProg[nX,10]+aEpiProg[nX,11]) .And. SCP->CP_PRODUTO == aEpiProg[nX,6]
+					If lGera_SA
+						lCont := .T.
+						If nIndTNF > 0
+							dbSelectArea("TNF")
+							dbSetOrder(nIndTNF)
+							dbSeek( xFilial("TNF") + aEpiProg[nX,10]+aEpiProg[nX,11] )
+							While !Eof() .And. xFilial("TNF") + aEpiProg[nX,10]+aEpiProg[nX,11] == TNF->(TNF_FILIAL+TNF_NUMSA+TNF_ITEMSA) .And. lCont
+								If TNF->TNF_CODEPI == aEpiProg[nX,6]
+									RecLock("TNF",.F.)
+									dbDelete()
+									TNF->(MsUnLock())
+									lCont := .F.
+									Exit
+								Endif
+								dbSelectArea("TNF")
+								dbSkip()
+							End
+						Else
+							dbSelectArea("TNF")
+							dbSetOrder(2)
+							dbSeek( xFilial("TNF") + aEpiProg[nX,6] )
+							While !Eof() .And. xFilial("TNF") + aEpiProg[nX,6] == TNF->(TNF_FILIAL+TNF_CODEPI) .And. lCont
+								If TNF->TNF_NUMSA + TNF->TNF_ITEMSA == aEpiProg[nX,10]+aEpiProg[nX,11]
+									RecLock("TNF",.F.)
+									dbDelete()
+									TNF->(MsUnLock())
+									lCont := .F.
+									Exit
+								Endif
+								dbSelectArea("TNF")
+								dbSkip()
+							End
+						Endif
+					Endif
+					RecLock("SCP",.F.)
+					dbDelete()
+					SCP->(MsUnLock())
+				Endif
+			Next nX
+		Endif
+
+		For nX := 1 To Len(aOldSA)
+			If !aOldSA[nX,5]
+				dbSelectArea("SCP")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SCP")+aOldSA[nX,1]+aOldSA[nX,2]) .And. SCP->CP_PRODUTO == aOldSA[nX,4]
+					If lGera_SA
+						lCont := .T.
+						If nIndTNF > 0
+							dbSelectArea("TNF")
+							dbSetOrder(nIndTNF)
+							dbSeek( xFilial("TNF") + aOldSA[nX,1]+aOldSA[nX,2] )
+							While !Eof() .And. xFilial("TNF") + aOldSA[nX,1]+aOldSA[nX,2] == TNF->(TNF_FILIAL+TNF_NUMSA+TNF_ITEMSA) .And. lCont
+								If TNF->TNF_CODEPI == aOldSA[nX,4]
+									RecLock("TNF",.F.)
+									dbDelete()
+									TNF->(MsUnLock())
+									lCont := .F.
+									Exit
+								Endif
+								dbSelectArea("TNF")
+								dbSkip()
+							End
+						Else
+							dbSelectArea("TNF")
+							dbSetOrder(2)
+							dbSeek( xFilial("TNF") + aOldSA[nX,4] )
+							While !Eof() .And. xFilial("TNF") + aOldSA[nX,4] == TNF->(TNF_FILIAL+TNF_CODEPI) .And. lCont
+								If TNF->TNF_NUMSA + TNF->TNF_ITEMSA == aOldSA[nX,1]+aOldSA[nX,2]
+									RecLock("TNF",.F.)
+									dbDelete()
+									TNF->(MsUnLock())
+									lCont := .F.
+									Exit
+								Endif
+								dbSelectArea("TNF")
+								dbSkip()
+							End
+						Endif
+					Endif
+					RecLock("SCP",.F.)
+					dbDelete()
+					SCP->(MsUnLock())
+				Endif
+			Endif
+		Next nX
+
+		For nX := 1 To Len(aOldTLY)
+			If !aOldTLY[nX,2]
+				dbSelectArea("TLY")
+				dbGoTo(aOldTLY[nX,1])
+				If !Eof() .And. !Bof()
+					RecLock("TLY",.F.)
+					dbDelete()
+					TLY->(MsUnLock())
+				Endif
+			Endif
+		Next nX
+
+		dbSelectArea("TLX")
+		If nOpcx == 5
+			RecLock("TLX", .F. )
+			dbDelete()
+			TLX->(MsUnLock())
+		Endif
+	Endif
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaEpi
+Grava programacao
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fBuscaEpi()
+
+	Local aEpiFun    	:= {}
+	Local aEpiCus    	:= {}
+	Local aEpiTar	 	:= {}
+	Local aOutrosSRA 	:= {}
+	Local nX, nYY, nZ
+	Local lTemQuery  	:= .F.
+	Local aTNFQuery  	:= {}
+	Local aRiscos	 	:= {}
+	Local lGera1Epi 	:= .F. //Se nao tem nenhum EPI
+	Local lGera2Epi 	:= .F. //Se foi transferido
+	Local lGera3Epi 	:= .F. //Se falta algum EPI
+	Local lRet := .T.
+	Local lExistBlock1	:= ExistBlock("MDTA8001")
+	Local xRet
+
+	Private aRiscFunc	:= {}
+	Private aProgSv    	:= fLoadProg( M->TLX_DTINI , M->TLX_DTFIM , M->TLX_PROGRA )
+	Private aEpiRis  	:= {}
+	Private dDtNecess 	:= StoD("")
+
+
+	//Zera o array utilizado na exibição dos EPIs
+	aEpiProg := {}
+
+	If M->TLX_DTFIM < M->TLX_DTINI
+		MsgInfo(STR0033,STR0034) //"A data final nao pode ser menor que a data inicial."###"Data Invalida"
+		lRet := .F.
+	EndIf
+	If M->TLX_FUNFIM < M->TLX_FUNINI
+		MsgInfo(STR0069,STR0070) //"O funcionário final não pode ser menor que o Funcionário inicial."###"Funcionário Invalido"
+		lRet := .F.
+	EndIf
+
+	If lRet
+		//Se for Top, executa query para armazenar a ultima entrega de cada epi
+		#IFDEF TOP
+			lTemQuery  := .T.
+			cAliasTNF := GetNextAlias()
+			cTabTNF := RetSqlName("TNF")
+			cTabTN3 := RetSqlName("TN3")
+
+			cQuery := "SELECT TNF.TNF_MAT, TNF.TNF_CODEPI, MAX(TNF.R_E_C_N_O_) AS TNFREC "
+			cQuery += "FROM " + cTabTNF + " TNF "
+			cQuery += 	"INNER JOIN "+cTabTN3+" TN3 ON "
+			cQuery += 		"TN3.TN3_FORNEC = TNF.TNF_FORNEC AND "
+			cQuery += 		"TN3.TN3_LOJA = TNF.TNF_LOJA AND "
+			cQuery += 		"TN3.TN3_CODEPI = TNF.TNF_CODEPI AND "
+			cQuery += 		"TN3.TN3_NUMCAP = TNF.TNF_NUMCAP AND "
+			cQuery += 		"TN3.D_E_L_E_T_ != '*' AND "
+			cQuery += 		"TN3.TN3_FILIAL = '"+xFilial("TN3")+"' "
+			cQuery += "WHERE ( TNF.TNF_INDDEV != '1' OR "+;
+							"(TNF.TNF_DTDEVO >= '"+DtoS(M->TLX_DTINI-1)+"' AND TNF.TNF_DTDEVO <= '"+DtoS(M->TLX_DTFIM)+"')) AND "
+			cQuery += 	"TNF.D_E_L_E_T_ != '*' AND "
+			cQuery += 	"TNF.TNF_FILIAL = '"+xFilial("TNF")+"' "
+			cQuery += "GROUP BY TNF.TNF_MAT, TNF.TNF_CODEPI"
+			cQuery := ChangeQuery(cQuery)
+			MPSysOpenQuery( cQuery , cAliasTNF )
+
+			dbSelectArea("TNF")
+			dbSetOrder(1)
+
+			dbSelectArea(cAliasTNF)
+			dbGotop()
+			While !Eof()
+				dbSelectArea("TNF")
+				dbGoTo((cAliasTNF)->TNFREC)
+				If !Eof() .And. !Bof()
+					dbSelectArea("TN3")
+					dbSetOrder(1)
+					If dbSeek( xFilial("TN3") + TNF->( TNF_FORNEC + TNF_LOJA + TNF_CODEPI + TNF_NUMCAP ) )
+						If TNF->TNF_INDDEV != "1"
+							If TN3->TN3_DURABI > 0
+								dDTFIM := TNF->TNF_DTENTR + TN3->TN3_DURABI
+								If dDTFIM <= M->TLX_DTFIM //Se a data do fim do uso do EPI estiver for anterior ao fim da programação
+									aAdd( aTNFQuery , { (cAliasTNF)->TNF_MAT , TNF->TNF_CODEPI , dDTFIM , TNF->TNF_QTDENT } )
+								Endif
+							Endif
+						Else
+							dDTFIM := If( TNF->TNF_DTDEVO < M->TLX_DTINI , M->TLX_DTINI , TNF->TNF_DTDEVO )
+							aAdd( aTNFQuery , { (cAliasTNF)->TNF_MAT , TNF->TNF_CODEPI , dDTFIM , TNF->TNF_QTDENT } )
+						Endif
+					Endif
+				Endif
+				dbSelectArea(cAliasTNF)
+				dbSkip()
+			End
+			dbSelectArea(cAliasTNF)
+			(cAliasTNF)->(dbCloseArea())
+			aSORT(aTNFQuery,,,{|x,y| x[1] < y[1] })
+		#ENDIF
+
+		//Funcionarios Admitidos ou Transferidos para novo C.Custo ou Funcao
+		dbSelectArea("SRA")
+		ProcRegua( RecCount() )
+		dbSetOrder(1)
+		dbSeek(xFilial("SRA"))
+		While !Eof() .And. SRA->RA_FILIAL == xFilial("SRA")
+			If SRA->RA_MAT >= M->TLX_FUNINI .And. SRA->RA_MAT <= M->TLX_FUNFIM
+
+				If SRA->RA_SITFOLH == "D" .Or. !Empty(SRA->RA_DEMISSA)
+					dbSelectArea("SRA")
+					dbSkip()
+					Loop
+				Endif
+				If lExistBlock1
+					xRet := ExecBlock("MDTA8001",.F.,.F.)
+					If ValType( xRet ) == "L" .And. !xRet
+						dbSelectArea("SRA")
+						dbSkip()
+						Loop
+					EndIf
+				EndIf
+				If Empty(SRA->RA_SITFOLH) .And. SRA->RA_ADMISSA <= M->TLX_DTFIM
+					lTemEpi_ := .F.
+					dbSelectArea("TNF")
+					dbSetOrder(3)
+					dbSeek(xFilial("TNF")+SRA->RA_MAT)
+					While !Eof() .And. xFilial("TNF")+SRA->RA_MAT == TNF->(TNF_FILIAL+TNF_MAT)
+						If TNF->TNF_INDDEV != "1"
+							lTemEpi_ := .T.
+							Exit
+						Endif
+						dbSkip()
+					End
+					If lTemEpi_
+						lGera3Epi := .T.
+					Else
+						lGera1Epi := .T. //Se foi admitido no periodo da programacao e nao recebeu Epi
+					Endif
+					dDtNecess := SRA->RA_ADMISSA
+				Endif
+
+				If !lGera1Epi .And. !lGera3Epi
+					dDtTransf := fDtTransf()
+					If !Empty(dDtTransf)
+						lGera2Epi := .T. //Se foi tranferido no periodo da programacao
+						dDtNecess := dDtTransf
+					Endif
+				Endif
+
+				If lGera1Epi .Or. lGera2Epi .Or. lGera3Epi
+					IncProc() //Incrementa barra
+
+					//------------- Adiciona os EPIs por função -------------
+					If !Empty(SRA->RA_CODFUNC)
+
+						If aScan( aEpiFun , {|x| x[1] == SRA->RA_CODFUNC} ) == 0 //Se não houver a relação de EPIs daquela função no array
+
+							aTemp := {}
+							dbSelectArea("TNB")
+							dbSetOrder(1)
+							dbSeek(xFilial("TNB")+SRA->RA_CODFUNC)
+							While !Eof() .And. xFilial("TNB")+SRA->RA_CODFUNC == TNB->TNB_FILIAL+TNB->TNB_CODFUN
+								aAdd(aTemp , TNB->TNB_CODEPI)
+								dbSelectArea("TNB")
+								dbSkip()
+							End
+							aAdd( aEpiFun , { SRA->RA_CODFUNC , aTemp } )
+
+						Endif
+
+						fAddProg( {SRA->RA_CODFUNC}, aEpiFun, lGera2Epi, lGera3Epi ) //Adiciona os EPIs a programação
+
+					Endif
+
+					//------------- Adiciona EPIs por Centro de Custo -------------
+					If !Empty(SRA->RA_CC)
+
+						If aScan( aEpiCus , {|x| x[1] == SRA->RA_CC} ) == 0 //Se não houver a relação de EPIs daquele CC no array
+							aTemp := {}
+							dbSelectArea("TOH")
+							dbSetOrder(1)
+							dbSeek(xFilial("TOH")+SRA->RA_CC)
+							While !Eof() .And. xFilial("TOH")+SRA->RA_CC == TOH->TOH_FILIAL+TOH->TOH_CC
+								aAdd( aTemp , TOH->TOH_CODEPI )
+								dbSelectArea("TOH")
+								dbSkip()
+							End
+							aAdd( aEpiCus , { SRA->RA_CC , aTemp } )
+						Endif
+
+						fAddProg( {SRA->RA_CC}, aEpiCus, lGera2Epi, lGera3Epi) //Adiciona os EPIs a programação
+
+					Endif
+
+					//------------- Adiciona EPIs por Tarefa -------------
+					dbSelectArea("TN6")
+					dbSetOrder(2)
+					If dbSeek(xFilial("TN6") + SRA->RA_MAT) //Se tiver alguma tarefa associada ao funcionário
+						aTarFunc := {}
+						While TN6->( !EoF() ) .And. TN6->TN6_FILIAL == xFilial("TN6") .And. TN6->TN6_MAT == SRA->RA_MAT
+
+							If (Empty(TN6->TN6_DTTERM) .Or. TN6->TN6_DTTERM >= M->TLX_DTINI) .And. TN6->TN6_DTINIC <= M->TLX_DTFIM
+								If aScan( aEpiTar , {|x| x[1] == TN6->TN6_CODTAR} ) == 0 //Se não houver a relação de EPIs daquela tarefa no array
+									aTemp := {}
+									dbSelectArea("TIK")
+									dbSetOrder(1)
+									dbSeek(xFilial("TIK") + TN6->TN6_CODTAR)
+									While !Eof() .And. SRA->RA_MAT == TN6->TN6_MAT .And. TN6->TN6_CODTAR == TIK->TIK_TAREFA
+											aAdd( aTemp , TIK->TIK_EPI )
+											TIK->(dbSkip())
+									EndDo
+									aAdd( aEpiTar , { TN6->TN6_CODTAR , aTemp } )
+								Endif
+								aAdd( aTarFunc , TN6->TN6_CODTAR ) //Adiciona a tarefa ao array de tarefas do fucnionário corrente
+							Endif
+
+							TN6->( dbSkip() )
+						EndDo
+
+						fAddProg( aTarFunc, aEpiTar, lGera2Epi, lGera3Epi ) //Adiciona os EPIs a programação
+
+					EndIf
+
+					//------------- Adiciona os EPIs por Risco -------------
+					aRiscFunc := {}
+
+					//Alimenta o array de Riscos e de EPI X Risco conforme os riscos que o funcionário está exposto
+					MDTRETRIS(,,,{ | | fBuscaTNXEpi() },,,,.F.)
+
+					If Len( aRiscFunc ) > 0
+						fAddProg( aRiscFunc, aEpiRis, lGera2Epi, lGera3Epi ) //Adiciona os EPIs a programação
+					EndIf
+
+				Else
+					aAdd( aOutrosSRA , SRA->RA_MAT )
+				Endif
+			EndIf
+			dbSelectArea("SRA")
+			dbSkip()
+		End
+
+		//Funcionarios com Epi vencido ou a vencer
+		For nX := 1 To Len(aOutrosSRA)
+			IncProc() //Incrementa barra
+
+			If !lTemQuery
+
+				aTemp := {}
+				dbSelectArea("TNF")
+				dbSetOrder(3)
+				dbSeek(xFilial("TNF")+aOutrosSRA[nX])
+				While !Eof() .And. xFilial("TNF")+aOutrosSRA[nX] == TNF->(TNF_FILIAL+TNF_MAT)
+					dbSelectArea("TN3")
+					dbSetOrder(1)
+					If dbSeek( xFilial("TN3") + TNF->( TNF_FORNEC + TNF_LOJA + TNF_CODEPI + TNF_NUMCAP ) )
+						If TNF->TNF_INDDEV != "1"
+							If TN3->TN3_DURABI > 0
+								dDTFIM := TNF->TNF_DTENTR + TN3->TN3_DURABI
+								nPosTmp := aScan( aTemp , {|x| x[1] == TNF->TNF_CODEPI } )
+								If nPosTmp == 0
+									aAdd( aTemp , { TNF->TNF_CODEPI , dDTFIM } )
+								Else
+									If dDTFIM > aTemp[nPosTmp,2]
+										aTemp[nPosTmp,2] := dDTFIM
+									Endif
+								Endif
+							Endif
+						Else
+							If TNF->TNF_DTDEVO >= M->TLX_DTINI-1 .And. TNF->TNF_DTDEVO <= M->TLX_DTFIM
+								dDTFIM := If( TNF->TNF_DTDEVO < M->TLX_DTINI , M->TLX_DTINI , TNF->TNF_DTDEVO )
+								nPosTmp := aScan( aTemp , {|x| x[1] == TNF->TNF_CODEPI } )
+								If nPosTmp == 0
+									aAdd( aTemp , { TNF->TNF_CODEPI , dDTFIM } )
+								Else
+									If dDTFIM > aTemp[nPosTmp,2]
+										aTemp[nPosTmp,2] := dDTFIM
+									Endif
+								Endif
+							Endif
+						Endif
+					Endif
+					dbSelectArea("TNF")
+					dbSkip()
+				End
+
+				For nYY := 1 To Len(aTemp)
+					If aTemp[nYY,2] <= M->TLX_DTFIM
+						dbSelectArea("SB1")
+						dbSetOrder(1)
+						dbSeek(xFilial("SB1")+aTemp[nYY,1])
+						dbSelectArea("SRA")
+						dbSetOrder(1)
+						dbSeek(xFilial("SRA")+aOutrosSRA[nX])
+						cSitFunc := " "
+						If SRA->RA_RESCRAI $ "30/31"
+							cSitFunc := "T"
+						ElseIf SRA->RA_SITFOLH $ "D/A/F/I"
+							cSitFunc := SRA->RA_SITFOLH
+						Endif
+						If !fJaTemSA(M->TLX_DTINI, M->TLX_DTFIM, aProgSv, SRA->RA_MAT, aTemp[nYY,1])
+							If !lGera_SA
+								aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , 1 , aTemp[nYY,1] , SB1->B1_DESC,;
+												aTemp[nYY,2], SRA->RA_CC, Space(6), Space(2)  } )
+							Else
+								fRetFornec( SB1->B1_COD )
+								aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , 1 , aTemp[nYY,1] , SB1->B1_DESC,;
+												aTemp[nYY,2], SRA->RA_CC, Space(6), Space(2), TN3->TN3_FORNEC, TN3->TN3_LOJA, TN3->TN3_NUMCAP} )
+							Endif
+						Endif
+					Endif
+				Next nYY
+
+			Else
+
+				nPosTmp := aScan( aTNFQuery , {|x| x[1] == aOutrosSRA[nX] } )
+				If nPosTmp > 0
+					For nYY := nPosTmp To Len(aTNFQuery)
+						If aTNFQuery[nYY,1] <> aOutrosSRA[nX]
+							Exit
+						Endif
+						dbSelectArea("SB1")
+						dbSetOrder(1)
+						dbSeek(xFilial("SB1")+aTNFQuery[nYY,2])
+						dbSelectArea("SRA")
+						dbSetOrder(1)
+						dbSeek(xFilial("SRA")+aOutrosSRA[nX])
+						cSitFunc := " "
+						If SRA->RA_RESCRAI $ "30/31"
+							cSitFunc := "T"
+						ElseIf SRA->RA_SITFOLH $ "D/A/F/I"
+							cSitFunc := SRA->RA_SITFOLH
+						Endif
+						If !fJaTemSA(M->TLX_DTINI, M->TLX_DTFIM, aProgSv, SRA->RA_MAT, aTNFQuery[nYY,2])
+							If !lGera_SA
+								aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , aTNFQuery[nYY,4] , aTNFQuery[nYY,2] , SB1->B1_DESC,;
+												aTNFQuery[nYY,3], SRA->RA_CC, Space(6), Space(2) } )
+							Else
+								fRetFornec( SB1->B1_COD )
+								aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , aTNFQuery[nYY,4] , aTNFQuery[nYY,2] , SB1->B1_DESC,;
+												aTNFQuery[nYY,3], SRA->RA_CC, Space(6), Space(2), TN3->TN3_FORNEC, TN3->TN3_LOJA, TN3->TN3_NUMCAP } )
+							Endif
+						Endif
+					Next nYY
+				Endif
+			Endif
+
+		Next nX
+
+	EndIf
+
+	fClaBrwEpi(M->TLX_INDCLA,.F.)
+	If Len(aEpiProg) == 0
+		If !lGera_SA
+			aAdd( aEpiProg , { .F. , "Z" , Space(6) , Space(30) , 0 , Space(15) , Space(30), StoD(""), Space(9), Space(6), Space(2) } )
+		Else
+			aAdd( aEpiProg , { .F. , "Z" , Space(6) , Space(30) , 0 , Space(15) , Space(30), StoD(""), Space(9), Space(6), Space(2);
+								, Space(6), Space(2), Space(12) } )
+		Endif
+	Endif
+	oEpiProg:SetArray(aEpiProg)
+	oEpiProg:bLine:= bEpiProg
+	oEpiProg:GoTop()
+	oEpiProg:Refresh()
+
+	aResumo := {}
+	For nX := 1 to Len(aEpiProg)
+		nPosVet := aScan( aResumo , {|x| x[5] == aEpiProg[nX][6]} )
+		If nPosVet == 0
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			dbSeek(xFilial("SB1")+aEpiProg[nX][6])
+			dbSelectArea("SB2")
+			dbSetOrder(1)
+			dbSeek(xFilial("SB2")+SB1->B1_COD+SB1->B1_LOCPAD)
+			nQtdFis := SaldoSB2(.F.,.T.,dDataBase+3650,.F.)
+			aAdd( aResumo , { SB1->B1_DESC , aEpiProg[nX][5] , 0 , nQtdFis , aEpiProg[nX][6] } )
+		Else
+			aResumo[nPosVet,2] += aEpiProg[nX][5]
+		Endif
+	Next nX
+	aSORT(aResumo,,,{|x,y| x[1] < y[1] })
+	If Len(aResumo) == 0
+		aAdd( aResumo , { Space(60) , 0 , 0 , 0 , Space(15) } )
+	Endif
+	oResumo:SetArray(aResumo)
+	oResumo:bLine:= bResumo
+	oResumo:GoTop()
+	oResumo:Refresh()
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaTNXEpi
+Função passada como bloco de código para a função MDTRETRIS, e
+alimenta o array de EPIs relacionados aos riscos que o funcionário
+está exposto
+
+@author  Julia Kondlatsch
+@since   07/03/2018
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fBuscaTNXEpi()
+
+	Local aTemp:= {}
+
+	dbSelectArea("TNX") //Epi x Riscos
+	dbSetOrder(2)
+	If dbSeek( xFilial("TNX") + TN0->TN0_NUMRIS ) //Pega o Numero do risco posicionado pela fução MDTRETRIS
+		//Percorre os EPIs relacionados ao risco
+		If aScan( aEpiRis , {|x| x[1] == TN0->TN0_NUMRIS} ) == 0
+			While !Eof() .And. xFilial("TNX") == SRA->RA_FILIAL .And. TNX->TNX_NUMRIS == TN0->TN0_NUMRIS
+				aAdd(  aTemp , TNX_EPI )
+				TNX->(dbSkip())
+			EndDo
+			aAdd( aEpiRis , { TN0->TN0_NUMRIS, aTemp }  ) //Adiciona ao array de riscos
+		EndIf
+		aAdd( aRiscFunc , TN0->TN0_NUMRIS )
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fAddProg
+Adiciona os EPIs que estão no array passado por parâmetro com as
+informaçãoes necessárias, no array de Programação de Entrega.
+
+@sample fAddProg( {SRA->RA_CODFUNC}, { { 0001 , { EPI01, EPI02 } }, ;
+{ 0002 , { EPI03, EPI04 } } )
+
+@param aEpis, Array, Contém os códigos dos EPIs a serem adicionados
+na programação agrupados pelas origens da necessidade do EPI.
+
+@param aOrigens, Array, Contém o as origens da necessidade dos EPIs,
+como risco, função, tarefa etc...Contém somente o que contempla o
+funcionário posicionado no momento
+
+@param lTransf, Lógico, se o funcionário foi tranferido no periodo da
+programacao
+
+@param lTemEpi, Lógico, se o funcionário possui algum EPi entregue
+
+@author  Julia Kondlatsch
+@since   07/03/2018
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fAddProg( aOrigens, aEpis, lTransf, lTemEpi )
+
+	Local nx, ny
+	Local cSitFunc
+	Local nPosVet := 0
+	Local lEpiEntr //Se este EPI corrente está entregue para o funcionário
+
+	For ny := 1 to Len(aOrigens) //Percorre as origens
+
+		nPosVet := aScan( aEpis , {|x| x[1] == aOrigens[ny]} ) //Posição no vetor de epis relacionados a origem
+
+		For nX := 1 to Len(aEpis[nPosVet,2]) //Percorre os EPIs relacionados as origens
+
+			If lTemEpi
+				lEpiEntr := .F.
+				dbSelectArea("TNF") //EPIs entregues ao funcionário
+				dbSetOrder(3)
+				dbSeek( xFilial("TNF") + SRA->RA_MAT + aEpis[nPosVet,2,nX] )
+				While !Eof() .And. xFilial("TNF") + SRA->RA_MAT + aEpis[nPosVet,2,nX] == TNF->(TNF_FILIAL + TNF_MAT + TNF_CODEPI )
+					//Verifica se até o início da programação ultrapassará os dias de utilização.
+					dbSelectArea("TN3") //Fornecedor EPI
+					dbSetOrder(1)
+					If dbSeek( xFilial("TN3") + TNF->( TNF_FORNEC + TNF_LOJA + TNF_CODEPI + TNF_NUMCAP ) )
+						If TNF->TNF_INDDEV != "1"
+							If TN3->TN3_DURABI > 0
+								dDTFIM := TNF->TNF_DTENTR + TN3->TN3_DURABI
+								If dDTFIM > M->TLX_DTFIM
+									lEpiEntr := .T.
+									Exit
+								Endif
+							Endif
+						Else
+							If TNF->TNF_DTDEVO > M->TLX_DTFIM
+								lEpiEntr := .T.
+								Exit
+							Endif
+						Endif
+					Endif
+					TNF->(dbSkip())
+				End
+				If lEpiEntr
+					Loop
+				Endif
+			Endif
+			If aScan( aEpiProg , {|x| x[3] == SRA->RA_MAT .And. x[6] == aEpis[nPosVet,2,nX] } ) > 0 //Se já não tem aquele EPI programado para aquela matrícula nesta programação
+				Loop
+			Endif
+			If lTransf .And. fTemEpiEn( aEpis[nPosVet,2,nX] ) //Verifica se o funcionário já está com o EPI
+				Loop
+			Endif
+
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			dbSeek( xFilial("SB1") + aEpis[nPosVet,2,nX] ) //Poosiciona no registro do EPI na tabela de produto
+			cSitFunc := " "
+			If SRA->RA_RESCRAI $ "30/31"
+				cSitFunc := "T"
+			ElseIf SRA->RA_SITFOLH $ "D/A/F/I"
+				cSitFunc := SRA->RA_SITFOLH
+			Endif
+			//Se não tiver solicitação de EPI para aquela data e aquela matrícula
+			If !fJaTemSA( M->TLX_DTINI, M->TLX_DTFIM, aProgSv, SRA->RA_MAT, aEpis[nPosVet,2,nX] )
+				If !lGera_SA //Se não gera solicitação de armazém
+					aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , 1 , aEpis[nPosVet,2,nX] , SB1->B1_DESC,;
+									dDtNecess, SRA->RA_CC, Space(6), Space(2) } )
+				Else
+					fRetFornec( SB1->B1_COD )
+					aAdd( aEpiProg , { .F. , cSitFunc , SRA->RA_MAT , SRA->RA_NOME , 1 , aEpis[nPosVet,2,nX] , SB1->B1_DESC,;
+									dDtNecess, SRA->RA_CC, Space(6), Space(2), TN3->TN3_FORNEC, TN3->TN3_LOJA, TN3->TN3_NUMCAP } )
+				Endif
+			Endif
+
+		Next nX
+
+	Next nY
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fJaTemSA
+Verifica se ja foi gerada SA de um EPI específico para este funcionario
+
+@param _dtIni, Data, Data de início da programação
+@param _dtFim, Data, Data de fim da proramação
+@param _aProgSv, Array, COntém as programações feitas no memso período
+@param _cMat, Caractere, Matrícula do funcionário
+@param _cEpi, Caractere, Código do EPI
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  lRet, Lógico, Verdadeiro se já houver SA do EPI
+/*/
+//-------------------------------------------------------------------
+Static Function fJaTemSA(_dtIni, _dtFim, _aProgSv, _cMat, _cEpi)
+
+	Local aAreaXXX := GetArea()
+	Local aAreaTLY := TLY->(GetArea())
+	Local lRet     := .F.
+	Local nX
+
+	For nX := 1 To Len(_aProgSv)
+		dbSelectArea("TLY")
+		dbSetOrder(2)
+		If dbSeek(xFilial("TLY")+_aProgSv[nX]+_cMat+_cEpi)
+			//If TLY->TLY_DATASA >= _dtIni .And. TLY->TLY_DATASA <= _dtFim
+				lRet := .T.
+			//Endif
+		Endif
+	Next nX
+
+	RestArea(aAreaTLY)
+	RestArea(aAreaXXX)
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fLoadProg
+Carrega as programacoes que foram feitas no mesmo periodo
+
+@param dTLX_DTINI, Data, Início da programação atual
+@param dTLX_DTFIM, Data, Fim da programação atual
+@param cCodProgra, Caractere, Código da programação atual
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  aRet, Array, Contém os códigos das programações de mesmo
+periodo.
+/*/
+//-------------------------------------------------------------------
+Static Function fLoadProg( dTLX_DTINI , dTLX_DTFIM , cCodProgra )
+
+	Local aRet := {}
+	Local cAlias := Alias()
+	Local aArea  := TLX->(GetArea())
+
+	dbSelectArea("TLX")
+	dbSetOrder(1)
+	dbSeek(xFilial("TLX"))
+	While !Eof() .And. xFilial("TLX") == TLX->TLX_FILIAL
+		If TLX->TLX_DTINI <= dTLX_DTFIM .And. TLX->TLX_DTFIM >= dTLX_DTINI .And. cCodProgra <> TLX->TLX_PROGRA
+			aAdd(aRet, TLX->TLX_PROGRA)
+		Endif
+		dbSkip()
+	End
+
+	RestArea(aArea)
+	dbSelectArea(cAlias)
+
+Return aRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fDtTransf
+Retorna data de mudanca de função ou setor
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  dData, Data, Data de mudança de função ou setor
+/*/
+//-------------------------------------------------------------------
+Static Function fDtTransf()
+
+	Local dData := StoD("")
+	Local lRet  := .F.
+
+	dbSelectArea("SRE")
+	dbSetOrder(1)
+	dbSeek(cEmpAnt+SRA->RA_FILIAL+SRA->RA_MAT)
+	While !Eof() .And. cEmpAnt+SRA->RA_FILIAL+SRA->RA_MAT == SRE->(RE_EMPP+RE_FILIALP+RE_MATP)
+		If SRE->RE_DATA >= M->TLX_DTINI .And. SRE->RE_DATA <= M->TLX_DTFIM
+			dData := SRE->RE_DATA
+			lRet  := .T.
+			Exit
+		Endif
+		dbSelectArea("SRE")
+		dbSkip()
+	End
+
+	If !lRet
+		dbSelectArea("SR7")
+		dbSetOrder(1)
+		dbSeek(SRA->RA_FILIAL+SRA->RA_MAT)
+		While !Eof() .And. SRA->RA_FILIAL+SRA->RA_MAT == SR7->(R7_FILIAL+R7_MAT)
+			If SR7->R7_DATA >= M->TLX_DTINI .And. SR7->R7_DATA <= M->TLX_DTFIM
+				dData := SR7->R7_DATA
+				lRet  := .T.
+				Exit
+			Endif
+			dbSelectArea("SR7")
+			dbSkip()
+		End
+	Endif
+
+Return dData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTemEpiEn
+Verifica se o funcionario esta com o Epi
+
+@sample fTemEpiEn( "001" )
+
+@param cCodEpi, Caractere, Código do EPI
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  lTemEpi, Lógico, Verdadeiro se o EPIs estiver entregue ao
+funcionário
+/*/
+//-------------------------------------------------------------------
+Static Function fTemEpiEn(cCodEpi)
+
+	Local lTemEpi := .F.
+
+	dbSelectArea("TNF")
+	dbSetOrder(3)
+	dbSeek(xFilial("TNF")+SRA->RA_MAT+cCodEpi)
+	While !Eof() .And. xFilial("TNF")+SRA->RA_MAT+cCodEpi == TNF->(TNF_FILIAL+TNF_MAT+TNF_CODEPI)
+		If TNF->TNF_INDDEV == "2"
+			lTemEpi := .T.
+		Endif
+		dbSelectArea("TNF")
+		dbSkip()
+	End
+
+Return lTemEpi
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fClaBrwEpi
+Ordena a tela de Epi
+
+@sample fClaBrwEpi( "2" , .T. )
+
+@param cTLX_INDCLA, Caractere, Tipo de classificação
+
+@param lRefr, Lógico, Indica se a função deve dar refresh na tela
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  .T., Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fClaBrwEpi(cTLX_INDCLA,lRefr)
+
+	If cTLX_INDCLA == "2"
+		aSORT(aEpiProg,,,{|x,y| x[6]+x[3] < y[6]+y[3] })
+	Else
+		aSORT(aEpiProg,,,{|x,y| x[3]+x[6] < y[3]+y[6] })
+	Endif
+	If lRefr
+		oEpiProg:SetArray(aEpiProg)
+		oEpiProg:bLine:= bEpiProg
+		oEpiProg:GoTop()
+		oEpiProg:Refresh()
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fCorStatus
+Retorna semaforo correspondente a situacao do funcionario
+
+@sample fCorStatus( "T", "000045" )
+
+@param cSituaca, Caractere, Situação do Fucionário
+@param cMatFun, Caractere, Matrícula do funcionário
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Obejto, Cor de acordo com a legenda
+/*/
+//-------------------------------------------------------------------
+Static Function fCorStatus(cSituaca,cMatFun)
+
+	If Empty(cMatFun)
+		Return oStBranc
+	ElseIf cSituaca == "T"
+		Return oStPink
+	ElseIf cSituaca == "D"
+		Return oStVerme
+	ElseIf cSituaca == "A"
+		Return oStAmare
+	ElseIf cSituaca == "F"
+		Return oStAzul
+	ElseIf cSituaca == "I"
+		Return oStLaran
+	Else
+		Return oStVerde
+	Endif
+
+Return oStVerde
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Mdt080Leg
+Legenda da situação do funcionário
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function Mdt080Leg()
+
+	Local aLegenda := {;
+						{"BR_VERDE"		,OemToAnsi(STR0035)	}	,; //"Situação Normal"
+						{"BR_PINK"      ,OemToAnsi(STR0036) }  ,; //"Transferido"
+						{"BR_VERMELHO"	,OemToAnsi(STR0037)	}	,; //"Demitido"
+						{"BR_AMARELO"	,OemToAnsi(STR0038)	}	,; //"Afastado"
+						{"BR_AZUL"		,OemToAnsi(STR0039)	}} //"Férias"
+
+	If GetMv( "MV_GSPUBL",, "1" ) == "2"
+		AADD( aLegenda, { "BR_LARANJA",OemToAnsi(STR0040)	} ) //"Inativo"
+	EndIf
+
+	BrwLegenda(	OemToAnsi(STR0009),OemToAnsi(STR0009),aLegenda) //"Legenda"###"Legenda"
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fPrGerSA
+Executa funcao de geração de solicitação ao armazém
+
+@author  Denis Hyroshi de Souza
+@since   17/04/2003
+@return  .T., Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fPrGerSA()
+
+	Local nX
+	Local lTemEpi := .F.
+	Local lTemSA  := .F.
+
+	For nX := 1 to Len(aEpiProg)
+		If !aEpiProg[nX][1] .Or. Empty(aEpiProg[nX][6]) .Or. aEpiProg[nX][5] <= 0
+			Loop
+		Endif
+		lTemEpi := .T.
+		If Empty(aEpiProg[nX][10])
+			lTemSA  := .T.
+		EndIf
+	Next nX
+
+	If !lTemEpi
+		MsgInfo(STR0041) //"Nenhum Epi foi selecionado para gerar solicitação ao armazém."
+		Return .F.
+	ElseIf !lTemSA
+		MsgInfo(STR0042) //"Já foi gerada solicitação ao armazém para os Epi's selecionados."
+		Return .F.
+	Endif
+
+	If !MsgYesNo(STR0043) //"Confirma a Geração de Solicitação ao Armazém?"
+		Return .F.
+	Endif
+
+	Processa({|lEND| fGerarSA()},STR0044) //"Gerando Solicitação ao Armazém..."
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGerarSA
+Gerar Solicitacao ao Armazém
+
+@author  Denis Hyroshi de Souza
+@since   17/04/2003
+@return  .T., Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fGerarSA()
+
+	Local nX,nXX,nYY
+	Local OldAlias := Alias()
+	Local aDados   := {}
+	Local aDadosSA := {}
+	Local cNum800  := " "
+	Local nItem800 := 0
+	Local cEPIPai  := ''
+	Local cCodEpi  := ''
+
+	For nX := 1 to Len(aEpiProg)
+
+		If !aEpiProg[nX][1] .Or. Empty(aEpiProg[nX][6]) .Or. aEpiProg[nX][5] <= 0
+			Loop
+		EndIf
+		If !Empty(aEpiProg[nX][10])
+			nPosTmp := aScan( aDadosSA , {|x| x[1] == aEpiProg[nX][3] } )
+			If nPosTmp == 0
+				aAdd( aDadosSA , { aEpiProg[nX][3], Val(aEpiProg[nX][10]), Val(aEpiProg[nX][11]) } )
+			Else
+				If Val(aEpiProg[nX][10]) == aDadosSA[nPosTmp,2]
+					If Val(aEpiProg[nX][11]) > aDadosSA[nPosTmp,3]
+						aDadosSA[nPosTmp,3] := Val(aEpiProg[nX][11])
+					EndIf
+				ElseIf Val(aEpiProg[nX][10]) > aDadosSA[nPosTmp,2]
+					aDadosSA[nPosTmp,2] := Val(aEpiProg[nX][10])
+					aDadosSA[nPosTmp,3] := Val(aEpiProg[nX][11])
+				EndIf
+			EndIf
+			Loop
+		EndIf
+
+		If Posicione( 'TN3', 1, xFilial( 'TN3' ) + aEpiProg[nX][12] + aEpiProg[nX][13] + aEpiProg[nX][6], 'TN3_GENERI') == '2'
+
+			cEPIPai := aEpiProg[nX][6]
+			//"Selecione o EPI filho a ser entregue para o(a) funcionário(a): "
+			//"Selecione o EPI filho relacionado ao EPI" ", que será entregue à "
+			aEpiProg[nX][6] := NG695EPIF(aEpiProg[nX][12], aEpiProg[nX][13], cEPIPai,;
+							 STR0080 +  Alltrim(aEpiProg[nX][7]) + CRLF + STR0081 + aEpiProg[nX][4] ) //"Selecione o EPI filho relacionado ao EPI pai " # "Ele será entregue à "
+
+			If Empty(aEpiProg[nX][6])
+				Loop
+			Else
+				aEpiProg[nX][14] := Posicione( 'TL0', 1, xFilial('TL0') + cEPIPai + aEpiProg[nX][12] + aEpiProg[nX][13] + ;
+												aEpiProg[nX][6][1], 'TL0_NUMCAP')
+			EndIf
+
+		EndIf
+
+		nPosTmp := aScan( aDados , {|x| x[1] == aEpiProg[nX][3] } )
+		If nPosTmp == 0
+			aAdd( aDados , { aEpiProg[nX][3], {} } )
+			nPosTmp := Len(aDados)
+		EndIf
+		aAdd( aDados[nPosTmp,2] , aClone(aEpiProg[nX]) )
+
+	Next nX
+
+	aSORT(aDados,,,{|x,y| x[1] < y[1] })
+
+	For nX := 1 to Len(aDados)
+		If Len(aDados[nX,2]) == 0
+			Loop
+		EndIf
+
+		cNumSA  := " "
+		nItemSA := 0
+		nPosTmp := aScan( aDadosSA , {|x| x[1] == aDados[nX][1] } )
+		If nPosTmp > 0
+			If aDadosSA[nPosTmp,2] > 0 .And. aDadosSA[nPosTmp,3] > 0
+				cNumSA  := StrZero(aDadosSA[nPosTmp,2],6)
+				nItemSA := aDadosSA[nPosTmp,3]
+			EndIf
+		EndIf
+
+		For nYY := 1 to Len(aDados[nX,2])
+			cCodEpi := cValToChar( aDados[nX,2][nYY][6] )
+			If Empty( cCodEpi )
+				cCodEpi := cValToChar( aDados[nX,2][nYY][6][nX] )
+			EndIf
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			dbSeek(xFilial("SB1")+cCodEpi)
+
+			nItemSA++
+			dbSelectArea("SCP")
+			If nItemSA > 99
+				nItemSA := 1
+				cNumSA  := " "
+			EndIf
+			If !Empty(cNumSA)
+				dbSelectArea("SCP")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SCP")+cNumSA+StrZero(nItemSA,2))
+					RecLock("SCP",.F.)
+				Else
+					RecLock("SCP",.T.)
+				EndIf
+			Else
+				RecLock("SCP",.T.)
+			EndIf
+			SCP->CP_FILIAL  := xFilial("SCP")
+			If Empty(cNumSA)
+				cNumSA := GetSxeNum("SCP","CP_NUM")
+				ConfirmSX8()
+			EndIf
+			SCP->CP_NUM     := cNumSA
+			SCP->CP_ITEM    := StrZero(nItemSA,2)
+			SCP->CP_PRODUTO := cCodEpi
+			SCP->CP_UM      := SB1->B1_UM
+			SCP->CP_QUANT   := aDados[nX,2][nYY][5]
+			SCP->CP_DATPRF  := M->TLX_DTGERA
+			SCP->CP_LOCAL   := SB1->B1_LOCPAD
+			SCP->CP_CC      := aDados[nX,2][nYY][9]
+			SCP->CP_EMISSAO := dDataBase
+			SCP->CP_DESCRI  := SB1->B1_DESC
+			SCP->CP_SOLICIT := cUserName
+			SCP->CP_OBS     := STR0066 + ": " + cFilAnt + "-" + aDados[nX,2][nYY,3] //"Funcionario"
+			SCP->(MsUnLock())
+
+			aRet := fDtHrTNF( 0 , dDataBase , Substr(Time(),1,5) ,;
+								xFilial("TNF")+aDados[nX,2][nYY][12]+aDados[nX,2][nYY][13]+ cCodEpi +aDados[nX,2][nYY][14]+aDados[nX,2][nYY,3] )
+			dbSelectArea("TNF")
+			RecLock("TNF",.T.)
+			TNF->TNF_FILIAL := xFilial("TNF")
+			TNF->TNF_CODEPI := cCodEpi
+			TNF->TNF_FORNEC := aDados[nX,2][nYY][12]
+			TNF->TNF_LOJA   := aDados[nX,2][nYY][13]
+			TNF->TNF_NUMCAP := aDados[nX,2][nYY][14]
+			TNF->TNF_MAT    := aDados[nX,2][nYY,3]
+			TNF->TNF_DTENTR := aRet[1]
+			TNF->TNF_HRENTR := aRet[2]
+			TNF->TNF_QTDENT := aDados[nX,2][nYY][5]
+			TNF->TNF_LOCAL  := SB1->B1_LOCPAD
+			TNF->TNF_INDDEV := "3"
+			TNF->TNF_NUMSA  := SCP->CP_NUM
+			TNF->TNF_ITEMSA := SCP->CP_ITEM
+			TNF->TNF_CODFUN := SRA->RA_CODFUNC
+			TNF->(MsUnLock())
+
+			nPosTmp := aScan( aEpiProg , {|x| x[3] == TNF->TNF_MAT } )
+			If nPosTmp > 0
+				aEpiProg[nPosTmp,10] := SCP->CP_NUM
+				aEpiProg[nPosTmp,11] := SCP->CP_ITEM
+			EndIf
+
+		Next nYY
+	Next nX
+
+	dbSelectArea(OldAlias)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fImprimSA
+Imprimir Solicitacoes de Armazem
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fImprimSA()
+
+	Local wnrel   := "MDTA800"
+	Local limite  := 132
+	Local cDesc1  := STR0046 //"Relatorio de programação de entrega de EPI."
+	Local cDesc2  := " "
+	Local cDesc3  := " "
+	Local cString := " "
+
+	If aScan( aEpiProg , {|x| !Empty(x[3]) .And. !Empty(x[6]) } ) == 0
+		MsgInfo(STR0047) //"Não existem dados para serem impressos."
+		Return .F.
+	Endif
+
+	Private nomeprog := "MDTA800"
+	Private tamanho  := "P"
+	Private aReturn  := { STR0048, 1,STR0049, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private titulo   := cCadastro
+	Private ntipo    := 0
+	Private nLastKey := 0
+	Private cPerg    := "MDTA800"
+	Private cabec1, cabec2
+
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+
+	If nLastKey == 27
+		Set Filter to
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+
+	If nLastKey == 27
+		Set Filter to
+		Return
+	Endif
+
+	RptStatus({|lEnd| RImp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} RImp
+Chamada do Relatório
+
+@param lEnd, Lógico, Controle de Encerramento do Relatório
+@param wnRel, Caractere, Código do Relatório
+@param titulo, Caractere, Título do Relatório
+@param tamanho, Caractere, Tamanho do Relatório
+
+@author  Denis Hyroshi de Souza
+@since   03/08/2009
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function RImp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local aDados   := aClone(aEpiProg)
+	Local cCodEpi  := Space(15)
+	Local nX
+
+	Private li     := 80
+	Private m_pag  := 1
+
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	cabec1 := STR0050 //"EPI                            Nome do EPI"
+	cabec2 := STR0051 //"                Quantidade     Matrícula   Nome do Funcionário"
+	/*
+	_________________________________________________________________________________
+			1         2         3         4         5         6         7         8
+	12345678901234567890123456789012345678901234567890123456789012345678901234567890
+	_________________________________________________________________________________
+	EPI             Nome do EPI
+					Quantidade     Matrícula   Nome do Funcionário
+	_________________________________________________________________________________
+	*/
+
+	aSORT(aDados,,,{|x,y| x[6]+x[3] < y[6]+y[3] })
+	nTotEpi := 0
+	nTotalG := 0
+	For nX := 1 to Len(aDados)
+		If cCodEpi <> aDados[nX][6]
+			cCodEpi := aDados[nX][6]
+			Somalinha()
+			@ Li,000 PSAY aDados[nX][6] //Epi
+			@ Li,031 PSAY aDados[nX][7] //Descricao
+			Somalinha()
+			nTotEpi := 0
+		Endif
+		Somalinha()
+		@ Li,017 PSAY Transform(aDados[nX][5],"@E 99,999.99")
+		@ Li,031 PSAY aDados[nX][3]
+		@ Li,043 PSAY aDados[nX][4]
+		nTotEpi += aDados[nX][5]
+
+		If nX == Len(aDados)
+			nTotalG += nTotEpi
+			Somalinha()
+			@ Li,000 PSAY STR0023 //"TOTAL"
+			@ Li,017 PSAY Transform(nTotEpi,"@E 99,999.99")
+			Somalinha()
+			Somalinha()
+			@ Li,000 PSAY STR0052 //"TOTAL GERAL"
+			@ Li,017 PSAY Transform(nTotalG,"@E 99,999.99")
+		Else
+			If aDados[nX][6] <> aDados[nX+1][6]
+				nTotalG += nTotEpi
+				Somalinha()
+				@ Li,000 PSAY STR0023 //"TOTAL"
+				@ Li,017 PSAY Transform(nTotEpi,"@E 99,999.99")
+				Somalinha()
+			Endif
+		Endif
+	Next nX
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+
+	//Devolve a condicao original do arquivo principal
+	Set device to Screen
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Somalinha
+Incrementa Linha e Controla Salto de Pagina
+
+@author  Inacio Luiz Kolling
+@since   03/06/19997
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function Somalinha()
+
+	Li++
+	If Li > 58
+		Cabec(titulo,cabec1,cabec2,nomeprog,tamanho,nTipo,,.F.)
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fRetFornec
+Localiza Fornecedor do Epi
+
+@sample fRetFornec( "00015" )
+
+@param cB1_COD, Caractere, Código do EPI
+
+@author  Denis Hyroshi de Souza
+@since   17/04/2003
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fRetFornec( cB1_COD )
+
+	Local nPos := aScan( aVetFor , {|x| x[1] == cB1_COD } )
+
+	If nPos > 0
+		dbSelectArea("TN3")
+		dbSetOrder(1)
+		dbGoTo(aVetFor[nPos,2])
+		If Eof() .Or. Bof()
+			nPos := 0
+		Endif
+	Endif
+
+	If nPos == 0
+		dbSelectArea("TN3")
+		dbSetOrder(2)
+		dbSeek(xFilial("TN3")+cB1_COD)
+		While !Eof() .And. xFilial("TN3")+cB1_COD == TN3->(TN3_FILIAL+TN3_CODEPI)
+			If TN3->TN3_DTVENC >= dDatabase
+				nPos := 1
+				aAdd( aVetFor , { cB1_COD , TN3->(Recno()) } )
+				Exit
+			Endif
+			dbSkip()
+		End
+
+		If nPos == 0
+			dbSelectArea("TN3")
+			dbSetOrder(2)
+			If dbSeek(xFilial("TN3")+cB1_COD)
+				aAdd( aVetFor , { cB1_COD , TN3->(Recno()) } )
+			Endif
+		Endif
+	Endif
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AltFornec
+Altera o fornecedor do Epi
+
+@author  Denis Hyroshi de Souza
+@since   03/03/2008
+@return  .T., Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function AltFornec()
+	Local oDlg2New
+	Local oCheck,_nAt
+	Local lUmaVez  := .F.
+	Local oPanelForn
+
+	If Len(aEpiProg) == 0
+		Help(" ",1,"NGATENCAO",,STR0060,3,1) //"Arquivo vazio!"
+		Return .F.
+	Endif
+
+	If !Empty(aEpiProg[oEpiProg:nAt,10])
+		dbSelectArea("SCP")
+		dbSetOrder(1)
+		If dbSeek(xFilial("SCP")+aEpiProg[oEpiProg:nAt,10]+aEpiProg[oEpiProg:nAt,11]) .And. SCP->CP_PRODUTO == aEpiProg[oEpiProg:nAt,6]
+			If SCP->CP_PREREQU == "S"
+				MsgInfo(STR0061+Chr(13)+; //"Não será possível alterar este Epi, pois já foi gerada pré-requisição."
+						STR0029+aEpiProg[oEpiProg:nAt,10]+Chr(13)+; //"Número S.A.: "
+						STR0030+aEpiProg[oEpiProg:nAt,11],STR0032) //"Item: "###"Atenção"
+				Return .F.
+			Endif
+		Endif
+	Endif
+
+	cEpi800 := aEpiProg[oEpiProg:nAt,6]
+	cEpiStr := Alltrim(cEpi800) + " - " + Alltrim(aEpiProg[oEpiProg:nAt,7])
+	cFor800 := aEpiProg[oEpiProg:nAt,12]
+	cLoj800 := aEpiProg[oEpiProg:nAt,13]
+	cNCA800 := aEpiProg[oEpiProg:nAt,14]
+
+	nOpc2Cad := 0
+	Define MsDialog oDlg2New Title OemToAnsi(STR0062) From 0,0 To 190,508 PIXEL OF oMainWnd //"Alterar o Fornecedor"
+
+	oDlg2New:LESCCLOSE := .F.
+
+	oPanelForn			:= TPanel():New(,,,oDlg2New,,,,,RGB(255,255,255),,, .F., .F. )
+	oPanelForn:Align	:= CONTROL_ALIGN_ALLCLIENT
+
+	@ 010,005 Say Oemtoansi(STR0063) Of oPanelForn Pixel //"Funcionário"
+	@ 010,045 MsGet aEpiProg[oEpiProg:nAt,4] Size 205,7 Of oPanelForn Pixel When .F.
+
+	@ 022,005 Say Oemtoansi(STR0064) Of oPanelForn Pixel //"Produto"
+	@ 022,045 MsGet cEpiStr Size 205,7 Of oPanelForn Pixel When .F.
+
+	@ 040,005  Say Oemtoansi(STR0054) Color CLR_HBLUE Of oPanelForn Pixel //"Fornecedor"
+	@ 040,045  MsGet cFor800 Valid ExistCpo("TN3",cFor800+cLoj800+cEpi800+cNCA800) hasButton F3 "TN3800" Picture '@!' Size 78,7 Of oPanelForn Pixel
+	@ 040,130  MsGet cLoj800 Size 25,7 Of oPanelForn Pixel When .F.
+	@ 040,160  MsGet cNCA800 Size 60,7 Of oPanelForn Pixel When .F.
+
+	@ 060,005 CheckBox oCheck Var lUmaVez Prompt STR0065; //"Aplicar este Fornecedor em todos os registros com este mesmo Produto?"
+			Size 200,7 OF oPanelForn PIXEL
+
+	Activate MsDialog oDlg2New On Init EnchoiceBar(oDlg2New,{|| ( oDlg2New:End() , nOpc2Cad := 1 ) },{|| oDlg2New:End() }) Centered
+
+	If nOpc2Cad == 1
+		If lUmaVez
+			For _nAt := 1 to Len(aEpiProg)
+				If aEpiProg[_nAt,6] == cEpi800
+					If !Empty(aEpiProg[_nAt,10])
+						dbSelectArea("SCP")
+						dbSetOrder(1)
+						If dbSeek(xFilial("SCP")+aEpiProg[_nAt,10]+aEpiProg[_nAt,11]) .And. SCP->CP_PRODUTO == aEpiProg[_nAt,6]
+							If SCP->CP_PREREQU == "S"
+								Loop
+							Endif
+						Endif
+					Endif
+					aEpiProg[_nAt,12] := cFor800
+					aEpiProg[_nAt,13] := cLoj800
+					aEpiProg[_nAt,14] := cNCA800
+				Endif
+			Next _nAt
+		Else
+			aEpiProg[oEpiProg:nAt,12] := cFor800
+			aEpiProg[oEpiProg:nAt,13] := cLoj800
+			aEpiProg[oEpiProg:nAt,14] := cNCA800
+		Endif
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGetFunc
+Função que busca um determinado funcionario
+
+@author  Bruno Lobo de Souza
+@since   01/04/2014
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fGetFunc()
+
+	Local nPosFunc := aScan( aEpiProg , {|x| x[3] == cBUSFUN } )
+	Local lAchou := .T.
+
+	If !Empty( cBUSFUN )
+		If nPosFunc < 1
+			lAchou := .F.
+			MsgAlert(STR0072,STR0032)
+		EndIf
+	Else
+		lAchou := .F.
+		MsgAlert(STR0073,STR0032)
+	EndIf
+
+	If lAchou
+		oEpiProg:nAt := nPosFunc
+		oEpiProg:Refresh()
+	EndIf
+
+Return Nil

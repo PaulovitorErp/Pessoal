@@ -1,0 +1,618 @@
+#INCLUDE "MNTA770.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA770
+Cadastro de Infracao de Transito
+
+@author NG Informática Ltda.
+@since 01/01/2015
+/*/
+//------------------------------------------------------------------------------
+Function MNTA770()
+	
+	Local oBrowse
+	
+	Private aRotina	  := {}
+	Private cCadastro := ''
+	
+	If MNTAmIIn( 95 )
+
+		aRotina	  := MenuDef()
+		cCadastro := NGSX2NOME("TSH") // "Cadastro de Infracao de Transito"
+
+		oBrowse := FWMBrowse():New()
+		oBrowse:SetAlias( "TSH" )
+		oBrowse:SetDescription( cCadastro )
+		oBrowse:Activate()
+
+	EndIf
+	
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Interface da rotina
+
+@author NG Informática Ltda.
+@since 01/01/2015
+/*/
+//------------------------------------------------------------------------------
+Static Function MenuDef()
+
+	// Inicializa MenuDef com todas as opções
+	Local aRotina := {}
+	
+	ADD OPTION aRotina Title STR0002 Action 'VIEWDEF.MNTA770' OPERATION 2 ACCESS 0 // "Visualizar"
+	ADD OPTION aRotina Title STR0003 Action 'VIEWDEF.MNTA770' OPERATION 3 ACCESS 0 // "Incluir"
+	ADD OPTION aRotina Title STR0004 Action 'VIEWDEF.MNTA770' OPERATION 4 ACCESS 0 // "Alterar"
+	ADD OPTION aRotina Title STR0005 Action 'VIEWDEF.MNTA770' OPERATION 5 ACCESS 0 // "Excluir"
+	ADD OPTION aRotina Title STR0013 Action 'VIEWDEF.MNTA770' OPERATION 8 ACCESS 0 // "Imprimir"
+	ADD OPTION aRotina Title STR0012 Action 'VIEWDEF.MNTA770' OPERATION 9 ACCESS 0 // "Copiar"
+	
+	If cPaisLoc == 'BRA'
+		ADD OPTION aRotina Title STR0011 Action 'Processa( { || MNT770CAR() }, "' + STR0006 + '", "' + STR0007 + '" )' OPERATION 4 ACCESS 0
+	EndIf
+
+Return aRotina
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Regras de Modelagem da gravacao
+
+@author NG Informática Ltda.
+@since 01/01/2015
+/*/
+//------------------------------------------------------------------------------
+Static Function ModelDef()
+
+	Local oModel
+	Local oStructTRU := FWFormStruct(1,"TSH")
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New("MNTA770")
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields("MNTA770_TSH", Nil, oStructTRU)
+
+	oModel:SetDescription( NGSX2NOME("TSH") )
+
+Return oModel
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Regras de Interface com o Usuario
+
+@author NG Informática Ltda.
+@since 01/01/2015
+/*/
+//------------------------------------------------------------------------------
+Static Function ViewDef()
+
+	Local oModel := FWLoadModel("MNTA770")
+	Local oView  := FWFormView():New()
+
+	// Objeto do model a se associar a view.
+	oView:SetModel(oModel)
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( "MNTA770_TSH" , FWFormStruct(2,"TSH") )	
+
+	// Criar um "box" horizontal para receber algum elemento da view
+	oView:CreateHorizontalBox( "MASTER" , 100 )
+
+	// Associa um View a um box
+	oView:SetOwnerView( "MNTA770_TSH" , "MASTER" )
+	
+	// Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT770CAR
+Função responsável pelo processamento da carga de dados na tabela TSH
+
+@type   Function
+
+@author Eduardo Mussi
+@since  04/12/2023
+/*/
+//-------------------------------------------------------------------
+Function MNT770CAR()
+
+	Local aInfra  := {}
+	Local cFilTSH := FwxFilial( 'TSH' )
+	Local nInfra  := 0
+	Local nTamInf := 0
+
+	If MsgYesNo( STR0009, STR0008 ) // 'Deseja realmente importar todas as infrações do CTB?' // Atenção
+		
+		aInfra  := fInfracoes()
+		nTamInf := Len( aInfra )
+		
+		ProcRegua( nTamInf )
+		
+		dbSelectArea( 'TSH' )
+		dbSetOrder( 1 )
+		For nInfra := 1 To nTamInf
+			
+			IncProc( STR0010 + cValToChar( nInfra ) + '/'  + cValToChar( nTamInf ) ) // 'Importando infrações '
+
+			If !MsSeek( cFilTSH + aInfra[ nInfra, 1 ] )
+				RecLock( 'TSH', .T. )
+				TSH->TSH_FILIAL := cFilTSH
+				TSH->TSH_CODINF := aInfra[ nInfra, 1 ]
+				TSH->TSH_ARTIGO := aInfra[ nInfra, 2 ]
+				TSH->TSH_DESART := aInfra[ nInfra, 3 ]
+				TSH->TSH_VALOR  := aInfra[ nInfra, 4 ]
+				TSH->TSH_PONTOS := aInfra[ nInfra, 5 ]
+				TSH->TSH_RESPON := aInfra[ nInfra, 6 ]
+				TSH->TSH_FLGTPM := '1'
+				TSH->( MsUnLock() )
+			EndIf
+			
+		Next nInfra
+
+		FwFreeArray( aInfra )
+	
+	EndIf
+	
+Return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fInfracoes
+Cria array com as infrações do CTB para dar carga na tabela TSH
+
+@type   Function
+
+@author Eduardo Mussi
+@since  04/12/2023
+
+@return Array, retorna array com infrações a serem inseridas na TSH
+				aInfra[ x, 1 ] = Código da infração
+				aInfra[ x, 2 ] = Artigo do CTB
+				aInfra[ x, 3 ] = Descrição do artigo
+				aInfra[ x, 4 ] = Valor da Infração
+				aInfra[ x, 5 ] = Quantidade de pontos
+				aInfra[ x, 6 ] = Responsável pela infração
+/*/
+//-------------------------------------------------------------------
+Static Function fInfracoes()
+
+	Local aInfra := {}
+
+	aAdd( aInfra, { '54870', '181 * XI ', 'Estacionar ao lado de outro veículo em fila dupla ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55173', '181 * XIV ', 'Estacionar nos túneis ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55330', '181 * XVI ', 'Estacionar aclive/declive não freado e sem calço segurança, PBT superior a 3500kg ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55172', '181 * XIV ', 'Estacionar nas pontes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '56142', '182 * V ', 'Parar na pista de rolamento das rodovias ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54527', '181 * VIII ', 'Estacionar ao lado ou sobre gramado ou jardim público ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '76090', '253-A, § 1º ', 'Organizar a conduta prevista no caput do art.253-A ', 17608.2 ,'7', '4' } )
+	aAdd( aInfra, { '54524', '181 * VIII ', 'Estacionar nas ilhas ou refúgios ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54523', '181 * VIII ', 'Estacionar sobre ciclovia ou ciclofaixa ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54010', '181, III ', 'Estacionar afastado da guia da calçada (meio-fio) a mais de 1m ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54525', '181 * VIII ', 'Estacionar ao lado ou sobre canteiro central/divisores de pista de rolamento ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '56141', '182 * V ', 'Parar na pista de rolamento das estradas ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '53550', '179 * I ', 'Fazer ou deixar que se faça reparo em veículo, em rodovia e via de trânsito rápido ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54526', '181 * VIII ', 'Estacionar ao lado ou sobre marcas de canalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54522', '181 * VIII ', 'Estacionar sobre faixa destinada a pedestre ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54950', '181 * XII ', 'Estacionar na área de cruzamento de vias ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55680', '181 * XIX ', 'Estacionar local/horário de estacionamento e parada proibidos pela sinalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55171', '181 * XIV ', 'Estacionar nos viadutos ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55414', '181 * XVII ', 'Estacionar em desacordo com a regulamentação - vaga de carga/descarga ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54440', '181 * VII ', 'Estacionar nos acostamentos ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '55411', '181 * XVII ', 'Estacionar em desacordo com a regulamentação especificada pela sinalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55412', '181 * XVII ', 'Estacionar em desacordo com a regulamentação - estacionamento rotativo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55413', '181 * XVII ', 'Estacionar em desacordo com a regulamentação - ponto ou vaga de táxi ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '52070', '169', 'Dirigir sem atenção ou sem os cuidados indispensáveis à segurança ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '53630', '179, II ', 'Fazer ou deixar que se faça reparo em veículos nas vias (quando não rodovia/transito rápido) ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '53980', '181 * II ', 'Estacionar afastado da guia da calçada (meio-fio) de 50cm a 1m ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '55417', '181 * XVII ', 'Estacionar em desacordo com a regulamentação - vaga de curta duração ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55840', '182 * II ', 'Parar afastado da guia da calçada (meio-fio) de 50cm a 1m ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56060', '182 * IV ', 'Parar  em desacordo com as posições estabelecidas no CTB ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56221', '182 * VI ', 'Parar no passeio ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56222', '182 * VI ', 'Parar  sobre faixa destinada a pedestres ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56223', '182 * VI ', 'Parar nas ilhas ou refúgios ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56224', '182 * VI ', 'Parar nos canteiros centrais/divisores de pista de rolamento ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56225', '182 * VI ', 'Parar nas marcas de canalização ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '56810', '184 * I ', 'Transitar na faixa/pista da direita regul circulação exclusiva determ veículo ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '59830', '205', 'Ultrapassar veículo em movimento que integre cortejo/desfile/formação militar ', 83.06 ,'3', '1' } )
+	aAdd( aInfra, { '64400', '224', 'Fazer uso do facho de luz alta dos faróis em vias providas de iluminação pública ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '64830', '227 * I ', 'Usar buzina que não a de toque breve como advertência a pedestre ou condutores ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '64910', '227 * II ', 'Usar buzina prolongada e sucessivamente a qualquer pretexto ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '65050', '227 * III ', 'Usar buzina entre as vinte e duas e as seis horas ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '65130', '227 * IV ', 'Usar buzina em locais e horários proibidos pela sinalização ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '65210', '227 * V ', 'Usar buzina em desacordo com os padrões e frequências estabelecidas pelo Contran ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '69120', '232', 'Conduzir veículo sem os documentos de porte obrigatório referidos no CTB ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '70051', '241', 'Deixar de atualizar o cadastro de registro do veículo ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '70052', '241', 'Deixar de atualizar o cadastro de habilitação do condutor ', 88.38 ,'3', '1' } )
+	aAdd( aInfra, { '73901', '254 * II ', 'É proibido ao pedestre cruzar pista de rolamento de viaduto exceto onde permitido ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '73902', '254 * II ', 'É proibido ao pedestre cruzar pista de rolamento de ponte exceto onde permitido ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '73903', '254 * II ', 'É proibido ao pedestre cruzar pista de rolamento de túneis exceto onde permitido ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74040', '254 * III ', 'É proibido ao pedestre atravessar via área cruzamento exceto onde permitido pela sinalização ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74120', '254 * IV ', 'É proibido pedestre utilizar via em agrupamento que perturbe trânsito/prática esporte/desfile ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74201', '254 * V ', 'É proibido ao pedestre andar fora da faixa própria ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74202', '254 * V ', 'É proibido ao pedestre andar fora da passarela ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74203', '254 * V ', 'É proibido ao pedestre andar fora da passagem aérea ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74204', '254 * V ', 'É proibido ao pedestre andar fora da passagem subterrânea ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '74390', '254 * VI ', 'É proibido ao pedestre desobedecer a sinalização de trânsito específica ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '52231', '171', 'Usar veículo para arremessar sobre os pedestres água ou detritos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '52232', '171', 'Usar veículo para arremessar sobre os veículos água ou detritos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '51851', '167', 'Deixar o condutor de usar o cinto segurança ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '52312', '172', 'Abandonar na via objetos ou substâncias ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '51852', '167', 'Deixar o passageiro de usar o cinto segurança ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '53470', '178', 'Deixar o condutor envolvido em acidente sem vítima, de remover o veículo do local ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '53710', '180', 'Ter seu veículo imobilizado na via por falta de combustível ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '53800', '181 * I ', 'Estacionar nas esquinas e a menos de 5m do alinhamento da via transversal ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '54100', '181 * IV ', 'Estacionar em desacordo com as posições estabelecidas no CTB ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '54360', '181, VI ', 'Estacionar junto/sobre hidrante de incêndio, registro de água/tampa de poço visita galerias subterrâneas ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '54600', '181 * IX ', 'Estacionar em guia de calçada rebaixada destinada à entrada/saída de veículos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '54790', '181 * X ', 'Estacionar impedindo a movimentação de outro veículo ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '53390', '177', 'Deixar o condutor de prestar socorro à vítima de acidente de trânsito quando solicitado pela autoridade e seus agentes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '54521', '181 * VIII ', 'Estacionar no passeio ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55500', '181 * XVIII ', 'Estacionar em local/horário proibido especificamente pela sinalização ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '55760', '182 * I ', 'Parar nas esquinas e a menos 5m do bordo do alinhamento da via transversal ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '55920', '182 * III ', 'Parar afastado da guia da calçada (meio-fio) a mais de 1m ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56300', '182 * VII ', 'Parar na área de cruzamento de vias ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56491', '182 * VIII ', 'Parar nos viadutos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56492', '182 * VIII ', 'Parar nas pontes ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56493', '182 * VIII ', 'Parar nos túneis ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56570', '182 * IX ', 'Parar na contramão de direção ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56650', '182 * X ', 'Parar em local/horário proibidos especificamente pela sinalização ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56731', '183', 'Parar  sobre faixa de pedestres na mudança de sinal luminoso ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '56732', '183', 'Parar sobre faixa de pedestres na mudança de sinal luminoso (fiscalização eletrônica) ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57030', '185 * I ', 'Deixar de conservar o veículo na faixa a ele destinada pela sinalização de regulamentação ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57110', '185 * II ', 'Deixar de conservar nas faixas da direita o veículo lento e de maior porte ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57461', '187 * I ', 'Transitar em local/horário não permitido pela regulamentação estabelecida pela autoridade ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57462', '187 * I ', 'Transitar em local/horário não permitido pela regulamentação - rodízio ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57463', '187 * I ', 'Transitar em local/horário não permitido pela regulamentação - caminhão ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '57620', '188', 'Transitar ao lado de outro veículo, interrompendo ou perturbando o trânsito ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '58511', '197', 'Deixar de deslocar com antecedência veículo para faixa mais à esquerda quando for manobrar ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '58512', '197', 'Deixar de deslocar com antecedência veículo para faixa mais à direita quando for manobrar ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '58600', '198', 'Deixar de dar passagem pela esquerda quando solicitado ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '58780', '199', 'Ultrapassar pela direita, salvo quando veículo da frente der sinal para entrar esquerda ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '58940', '201', 'Deixar de guardar a distância lateral de 1,50m ao passar/ultrapassar bicicleta ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '61900', '216', 'Entrar/sair área lindeira sem precaução com a segurança de pedestres e veículos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '62030', '217', 'Entrar/sair de fila de veículos estacionados sem dar preferência a pedestres/veículos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '62540', '219', 'Transitar em velocidade inferior à metade da máxima da via, salvo faixa direita ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '64080', '221', 'Portar no veículo placas de identificação em desacordo com especificação/modelo Contran ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '64240', '222', 'Deixar de manter ligado em emergência o sistema iluminação vermelha intermitente ainda que parado ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '64750', '226', 'Deixar de retirar qualquer objeto utilizado para sinalização temporária da via ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '65480', '229', 'Usar no veículo alarme/aparelho produz som perturbe sossego público desacordo norma Contran ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '67500', '230 * XXI ', 'Conduzir o veículo de carga com falta inscrição da tara e demais previstas no CTB ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '68580', '231 * VII ', 'Transitar com o veículo com lotação excedente ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '68661', '231 * VIII ', 'Transitar efetuando transporte remunerado de pessoas quando não licenciado para esse fim ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '68662', '231 * VIII ', 'Transitar efetuando transporte remunerado de bens quando não licenciado para esse fim ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '68742', '231 * IX ', 'Transitar com o veículo desengrenado em declive ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69550', '236', 'Rebocar outro veículo com cabo flexível ou corda ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '70562', '244 * III c/c §1º ', 'Conduzir ciclo fazendo malabarismo ou equilibrando-se em uma roda ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '70992', '244 * VII c/c §1º ', 'Conduzir ciclo sem segurar o guidom com ambas as mãos ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71022', '244 * VIII c/c §1º ', 'Conduzir ciclo transportando carga incompatível ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71100', '244 * §1º * a ', 'Conduzir ciclo transportando passageiro fora da garupa/assento a ele destinado ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71291', '244 * §1º * b ', 'Conduzir ciclo via de trânsito rápido ou rodovia salvo se houver acostamento/faixa própria ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71292', '244 * §2º ', 'Conduzir ciclomotor em via de trânsito rápido ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71293', '244 * §2º ', 'Conduzir ciclomotor em rodovia salvo se houver acostamento ou faixa própria ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '71370', '244 * §1º * c ', 'Conduzir ciclo transportando criança sem condição de cuidar própria segurança ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72001', '247', 'Deixar de conduzir pelo bordo pista em fila única veículo tração/propulsão humana ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72002', '247', 'Deixar de conduzir pelo bordo da pista em fila única veículo de tração animal ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72261', '249', 'Deixar de manter acesas à noite as luzes posição qdo o veículo estiver parado ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72340', '250 * I * a ', 'Em movimento, deixar de manter acesa a luz baixa durante à noite ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72500', '250 * I * c ', 'Em movimento, deixar de manter acesa luz baixa veículo transporte coletivo faixa/pista exclusiva ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72690', '250 * I * d ', 'Em movimento de dia, deixar de manter acesa luz baixa de motocicletas/motonetas/ciclomotores ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72850', '250 * III ', 'Em movimento, deixar de manter  a placa traseira iluminada à noite ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72930', '251 * I ', 'Utilizar o pisca-alerta, exceto em imobilizações ou situações de emergência ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73070', '251 * II ', 'Utilizar luz alta e baixa intermitente, exceto quando permitido pelo CTB ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73150', '252 * I ', 'Dirigir o veículo com o braço do lado de fora ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73231', '252 * II ', 'Dirigir o veículo transportando pessoas à sua esquerda ou entre os braços e pernas ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73233', '252 * II ', 'Dirigir o veículo transportando volume à sua esquerda ou entre os braços e pernas ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73310', '252 * III ', 'Dirigir o veículo com incapacidade física ou mental temporária ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73400', '252 * IV ', 'Dirigir o veículo usando calçado que não se firme nos pés/comprometa utilização pedais ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73580', '252 * V ', 'Dirigir o veículo com apenas uma das mãos, exceto quando permitido pelo CTB ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73661', '252 * VI ', 'Dirigir o veículo utilizando-se de fones nos ouvidos conectados a aparelhagem sonora ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73662', '252 * VI ', 'Dirigir veículo utilizando-se de telefone celular ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '74471', '255', 'Conduzir bicicleta em passeios onde não seja permitida a circulação desta ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '74472', '255', 'Conduzir bicicleta de forma agressiva ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '74550', '218 * I ', 'Transitar em velocidade superior à máxima permitida em até 20% ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '52311', '172', 'Atirar do veículo objetos ou substâncias ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '51691', '165', 'Dirigir sob a influência de álcool ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '52400', '173', 'Disputar corrida ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '52581', '174', 'Promover na via competição esportiva sem permissão ', 2934.7 ,'7', '4' } )
+	aAdd( aInfra, { '52582', '174', 'Promover na via eventos organizados sem permissão ', 2934.7 ,'7', '4' } )
+	aAdd( aInfra, { '52583', '174', 'Promover na via exibição e demonstração de perícia em manobra de veículo sem permissão ', 2934.7 ,'7', '4' } )
+	aAdd( aInfra, { '52661', '174', 'Participar na via como condutor em competição sem permissão ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '52662', '174', 'Participar na via como condutor em eventos organizados sem permissão ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '52663', '174', 'Participar como condutor de exibição/demonstração de perícia em manobra de veículo sem permissão ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '52741', '175', 'Utilizar-se de veículo para demonstrar ou exibir manobra perigosa, mediante arrancada brusca ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '57970', '191', 'Forçar passagem entre veículos que, transitando em sentidos opostos, estejam na iminência de passar um pelo outro ao realizar operação de ultrapassagem ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '75790', '165-A ', 'Recusar-se a ser submetido a teste, exame clínico, perícia ou outro procedimento que permita certificar influência de álcool ou outra substância psicoativa, na forma estabelecida pelo art. 277 ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '56143', '182 * V ', 'Parar na pista de rolamento das vias de trânsito rápido ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '50100', '162 * I ', 'Dirigir veículo sem possuir CNH/PPD/ACC ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '56144', '182 * V ', 'Parar na pista de rolamento das demais vias dotadas de acostamento ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '50371', '162 * III ', 'Dirigir veículo com CNH de categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '56900', '184 * II ', 'Transitar na faixa/pista da esquerda regulamentada circulação exclusiva determinado veículo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '57200', '186 * I ', 'Transitar pela contramão de direção em via com duplo sentido de circulação ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '57890', '190', 'Seguir veículo em serviço de urgência devidamente identificado por alarme sonoro/iluminação vermelha ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '58000', '192', 'Deixar de guardar distância de segurança lateral/frontal entre seu veículo e demais e ao bordo pista ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '50372', '162 * III ', 'Dirigir veículo com PPD de categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '50610', '163 c/c 162 * I ', 'Entregar veículo a pessoa sem CNH/PPD/ACC ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58270', '194', 'Transitar em marcha ré, salvo na distância necessária a pequenas manobras ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '50881', '163 c/c 162 * III ', 'Entregar veículo a pessoa com CNH de categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '58350', '195', 'Desobedecer às ordens emanadas da autorid compet de trânsito ou de seus agentes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '50882', '163 c/c 162 * III ', 'Entregar veículo a pessoa com PPD de categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '58431', '196', 'Deixar de indicar com antecedência, mediante gesto de braço/luz indicadora, início da marcha ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '51180', '164 c/c 162 * I ', 'Permitir posse/condução do veículo a pessoa sem CNH/PPD/ACC ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '51341', '164 c/c 162 * III ', 'Permitir posse/condução veículo a pessoa com CNH categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '51342', '164 c/c 162 * III ', 'Permitir posse/condução veículo a pessoa com PPD categoria diferente da do veículo ', 586.94 ,'7', '1' } )
+	aAdd( aInfra, { '58191', '193', 'Transitar com o veículo em calçadas, passeios ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58192', '193', 'Transitar com o veículo em ciclovias, ciclofaixas ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58432', '196', 'Deixar de indicar com antecedência, mediante gesto de braço/luz indicadora, manobra de parar ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '58193', '193', 'Transitar com o veículo em ajardinamentos, gramados, jardins públicos ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58194', '193', 'Transitar com o veículo em canteiros centrais/divisores de pista de rolamento ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58433', '196', 'Deixar de indicar com antecedência, mediante gesto de braço/luz indicadora, mudança de direção ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '58195', '193', 'Transitar com o veículo em ilhas, refúgios ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58434', '196', 'Deixar de indicar com antecedência, mediante gesto de braço/luz indicadora, mudança de faixa ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '59750', '204', 'Deixar de parar no acostamento à direita, para cruzar pista ou entrar à esquerda ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60411', '207', 'Executar operação de conversão à direita em local proibido pela sinalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60412', '207', 'Executar operação de conversão à esquerda em local proibido pela sinalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60681', '209', 'Transpor bloqueio viário com ou sem sinalização ou dispositivos auxiliares ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60682', '209', 'Deixar de adentrar às áreas destinadas à pesagem de veículos ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60841', '211', 'Ultrapassar veículos motorizados em fila, parados em razão de sinal luminoso ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '58196', '193', 'Transitar com o veículo em marcas de canalização ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '58197', '193', 'Transitar com o veículo em acostamentos ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '74710', '218 * III ', 'Transitar em velocidade superior à máxima permitida em mais de 50% ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '50291', '162 * II ', 'Dirigir veículo com CNH/PPD/ACC cassada ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '50292', '162 * II ', 'Dirigir veículo com CNH/PPD/ACC com suspensão do direito de dirigir ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '50701', '163 c/c 162 * II ', 'Entregar veículo a pessoa com CNH/PPD/ACC cassada ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '50702', '163 c/c 162 * II ', 'Entregar veículo a pessoa com CNH/PPD/ACC com susp. do direito de dirigir ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '51261', '164 c/c 162 * II ', 'Permitir posse/condução do veículo a pessoa com CNH/PPD/ACC cassada ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '52820', '176 * I ', 'Deixar o condutor envolvido em acidente, de prestar ou providenciar socorro a vítima ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '52900', '176 * II ', 'Deixar o condutor envolvido em acidente, de adotar providências para evitar perigo para o trânsito ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '50450', '162 * V ', 'Dirigir veículo com validade de CNH/PPD vencida há mais de 30 dias ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '53040', '176 * III ', 'Deixar o condutor envolvido em acidentes com vítima de preservar o local, de forma a facilitar os trabalhos da Polícia e da Perícia. ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '53120', '176 * IV ', 'Deixar o condutor envolvido em acidente, de remover o veículo do local quando determinado por policial ou agente da autoridade de trânsito ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '53200', '176 * V ', 'Deixar o condutor envolvido em acidente, de identificar-se ao policial e de lhe prestar informações necessárias à confecção do boletim de ocorrência ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59080', '202 * I ', 'Ultrapassar pelo acostamento ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59161', '202 * II ', 'Ultrapassar  em interseções ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59162', '202 * II ', 'Ultrapassar  em passagem de nível ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59241', '203 * I ', 'Ultrapassar pela contramão nas curvas sem visibilidade suficiente ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '50531', '162 * VI ', 'Dirigir veículo sem usar lentes corretoras de visão ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '59242', '203 * I ', 'Ultrapassar pela contramão nos aclives ou declives, sem visibilidade suficiente ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59320', '203 * II ', 'Ultrapassar pela contramão nas faixas de pedestre ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59401', '203 * III ', 'Ultrapassar pela contramão nas pontes ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '50532', '162 * VI ', 'Dirigir veículo sem usar aparelho auxiliar de audição ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '59402', '203 * III ', 'Ultrapassar pela contramão nos viadutos ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59403', '203 * III ', 'Ultrapassar pela contramão nos túneis ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59591', '203 * IV ', 'Ultrapassar pela contramão veículo parado em fila junto sinal luminoso ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59593', '203 * IV ', 'Ultrapassar pela contramão veículo parado em fila junto a cruzamento ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '59594', '203 * IV ', 'Ultrapassar pela contramão veículo parado em fila junto a qualquer outro impedimento à livre circulação ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '50533', '162 * VI ', 'Dirigir veículo sem usar aparelho auxiliar de prótese física ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '59670', '203 * V ', 'Ultrapassar pela contramão linha de divisão de fluxos opostos, contínua amarela ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '50534', '162 * VI ', 'Dirigir veículo sem adaptações impostas na concessão/renovação licença conduzir ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '50960', '163 c/c 162 * V ', 'Entregar veículo a pessoa com CNH/PPD vencida há mais de 30 dias ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51001', '163 c/c 162 * VI ', 'Entregar o veículo a pessoa sem usar lentes corretoras de visão ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51002', '163 c/c 162 * VI ', 'Entregar o veículo a pessoa sem usar aparelho auxiliar de audição ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51003', '163 c/c 162 * VI ', 'Entregar o veículo a pessoa sem aparelho de prótese física ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51004', '163 c/c 162 * VI ', 'Entregar veículo a pessoa sem adaptações do veículo impostas por ocasião da concessão ou da renovação da licença para conduzir ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51420', '164 c/c 162 * V ', 'Permitir posse/condução do veículo a pessoa com CNH/PPD vencida há mais de 30 dias ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51501', '164 c/c 162 * VI ', 'Permitir posse/condução do veículo a pessoa sem usar lentes corretoras de visão ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51502', '164 c/c 162 * VI ', 'Permitir posse/condução do veículo a pessoa sem usar aparelho auxiliar de audição ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51503', '164 c/c 162 * VI ', 'Permitir posse/condução do veículo a pessoa sem usar aparelho de prótese física ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51504', '164 c/c 162 * VI ', 'Permitir posse de condutor em veículo sem adaptações impostas concessão/renovação licença condutor ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51770', '166', 'Confiar/entregar veículo pessoa com estado físico/psíquico sem condições dirigir em segurança ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '51930', '168', 'Transportar criança sem observância das normas de segurança estabelecidas para CTB ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '52151', '170', 'Dirigir ameaçando os pedestres que estejam atravessando a via pública ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60842', '211', 'Ultrapassar veículos motorizados em fila, parados em razão de cancela ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60843', '211', 'Ultrapassar veículos motorizados em fila parados em razão de bloqueio viário parcial ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '60844', '211', 'Ultrapassar veículos motorizados em fila, parados em razão de qualquer obstáculo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61140', '213 * II ', 'Deixar de parar sempre que a marcha for interceptada por agrupamento de veículos ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61570', '214 * IV ', 'Deixar de dar preferência a pedestre/veículo não motorizado quando iniciada travessia sem sinalização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61650', '214 * V ', 'Deixar de dar preferência a pedestre/veículo não motorizado atravessando a via transversal ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61731', '215 * I * a ', 'Deixar de dar preferência em interseção não sinalizada, a veículo circulando por rodovia ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61732', '215 * I * a ', 'Deixar de dar preferência em interseção não sinalizada, a veículo circulando por rotatória ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61733', '215 * I * b ', 'Deixar de dar preferencia em interseção não sinalizada, a veículo que vier da direita ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '61810', '215 * II ', 'Deixar de dar preferência nas interseções com sinalização de Dê a Preferência ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '62700', '220 * II ', 'Deixar de reduzir a velocidade onde o trânsito esteja sendo controlado pelo agente ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '62891', '220 * III ', 'Deixar de reduzir a velocidade do veículo ao aproximar-se da guia da calçada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '62892', '220 * III ', 'Deixar de reduzir a velocidade do veículo ao aproximar-se do acostamento ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '62970', '220 * IV ', 'Deixar de reduzir velocidade do veículo ao aproximar-se interseção não sinalizada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '55090', '181 * XIII ', 'Estacionar no ponto de embarque/desembarque de passageiros transporte coletivo ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '55250', '181 * XV ', 'Estacionar na contramão de direção ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '64160', '221, parágrafo único ', 'Confeccionar/distribuir/colocar veículo próprio/terceiro placa identificação desacordo Contran ', 130.16 ,'4', '4' } )
+	aAdd( aInfra, { '63000', '220 * V ', 'Deixar reduzir velocidade nas vias rurais cuja faixa domínio não esteja cercada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68313', '231 * V ', 'Transitar com o veículo com excesso de peso - PBT/PBTC e Por Eixo ', 130.16 ,'4', '6' } )
+	aAdd( aInfra, { '68312', '231 * V ', 'Transitar com o veículo com excesso de peso - Por Eixo ', 130.16 ,'4', '6' } )
+	aAdd( aInfra, { '68311', '231 * V ', 'Transitar com o veículo com excesso de peso PBT/PBTC ', 130.16 ,'4', '4' } )
+	aAdd( aInfra, { '63190', '220 * VI ', 'Deixar de reduzir a velocidade nos trechos em curva de pequeno raio ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68741', '231 * IX ', 'Transitar com o veículo desligado em declive ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '68820', '231 * X ', 'Transitar com o veículo excedendo a CMT em até 600 kg ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72262', '249', 'Deixar de manter acesas à noite as luzes de posição veic fazendo carga/descarga ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '73232', '252 * II ', 'Dirigir o veículo transportando animais à sua esquerda ou entre os braços e pernas ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '52152', '170', 'Dirigir ameaçando os demais veículos ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '54281', '181 * V ', 'Estacionar na pista de rolamento das estradas ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '54282', '181 * V ', 'Estacionar na pista de rolamento das rodovias ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '54283', '181 * V ', 'Estacionar na pista de rolamento das vias de trânsito rápido ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '54284', '181 * V ', 'Estacionar na pista de rolamento das vias dotadas de acostamento ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57380', '186 * II ', 'Transitar pela contramão de direção em via com sinalização de regulamentação sentido único ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57701', '189', 'Deixar de dar passagem a veículo precedido de batedores devidamente identificados ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57702', '189', 'Deixar de dar passagem a veículo de socorro de incêndio e salvamento quando em serviço de urgência e devidamente identificados ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57703', '189', 'Deixar de dar passagem a veículo de polícia em serviço de urgência devidamente identificada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57704', '189', 'Deixar de dar passagem a veículo de operação e fiscalização de trânsito devidamente identificada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '57705', '189', 'Deixar de dar passagem a ambulância em serviço de urgência devidamente identificada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '58860', '200', 'Ultrapassar pela direita veículo de transporte coletivo ou de escolares, parado para embarque ou desembarque de passageiros, salvo quando houver refúgio de segurança para o pedestre ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '59910', '206 * I ', 'Executar operação de retorno em locais proibidos pela sinalização ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60091', '206 * II ', 'Executar operação de retorno nas curvas ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60092', '206 * II ', 'Executar operação de retorno nos aclives ou declives ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60093', '206 * II ', 'Executar operação de retorno nas pontes ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60094', '206 * II ', 'Executar operação de retorno nos viadutos ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60095', '206 * II ', 'Executar operação de retorno nos túneis ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60171', '206 * III ', 'Executar operação de retorno passando por cima de calçada, passeio ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60172', '206 * III ', 'Executar operação de retorno passando por cima de ilha, refúgio ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60173', '206 * III ', 'Executar operação de retorno passando por cima de ajardinamento ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60174', '206 * III ', 'Executar operação de retorno passando por cima de canteiro de divisor de pista ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60175', '206 * III ', 'Executar operação de retorno passando por cima de faixa de pedestres ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60176', '206 * III ', 'Executar operação de retorno passando por cima de faixa de veíc não motorizados ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60250', '206 * IV ', 'Executar retorno nas interseções, entrando na contramão da via transversal ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60330', '206 * V ', 'Executar retorno com prejuízo da circulação/segurança ainda que em local permitido ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60501', '208', 'Avançar o sinal vermelho do semáforo, exceto onde houver sinalização que permite livre conversão à direita ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60502', '208', 'Avançar o sinal de parada obrigatória ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60503', '208', 'Avançar o sinal vermelho do semáforo ? fiscalização eletrônica ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60760', '210', 'Transpor bloqueio viário policial ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '60920', '212', 'Deixar de parar o veículo antes de transpor linha férrea ', 195.23 ,'7', '1' } )
+	aAdd( aInfra, { '61060', '213 * I ', 'Deixar de parar sempre que a marcha for interceptada por agrupamento de pessoas ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '61220', '214 * I ', 'Deixar de dar preferência a pedestre e a veículo não motorizado na faixa a ele destinada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '61300', '214 * II ', 'Deixar de dar preferência a pedestre e a veículo não motorizado que não haja concluído a travessia ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '61490', '214 * III ', 'Deixar de dar preferência a pedestre portador de deficiência física, criança, idoso e gestante ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '62620', '220 * I ', 'Deixar de reduzir a velocidade quando se aproximar de passeatas, aglomerações, desfiles, etc ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '63941', '220 * XIV ', 'Deixar de reduzir a velocidade nas proximidades de escolas ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '63942', '220 * XIV ', 'Deixar de reduzir a velocidade nas proximidades de hospitais ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '63943', '220 * XIV ', 'Deixar de reduzir velocidade na proximidade de estação de embarque e desembarque de passageiros ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '63944', '220 * XIV ', 'Deixar de reduzir velocidade onde haja intensa movimentação de pedestres ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65561', '230 * I ', 'Conduzir o veículo com o lacre de identificação violado/falsificado ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65562', '230 * I ', 'Conduzir o veículo com a inscrição do chassi violada/falsificada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65563', '230 * I ', 'Conduzir o veículo com o selo violado/falsificado ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65564', '230 * I ', 'Conduzir o veículo com a placa violada/falsificada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65565', '230 * I ', 'Conduzir o veículo com qualquer outro elemento de identificação violado/falsificado ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65640', '230 * II ', 'Conduzir o veículo transportando passageiros em compartimento de carga ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65720', '230 * III ', 'Conduzir o veículo com dispositivo antirradar ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65800', '230 * IV ', 'Conduzir o veículo sem qualquer uma das placas de identificação ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65991', '230 * V ', 'Conduzir o veículo que não esteja registrado ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '65992', '230 * V ', 'Conduzir o veículo registrado que não esteja devidamente licenciado ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '66020', '230 * VI ', 'Conduzir o veículo com qualquer uma das placas sem legibilidade e visibilidade ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '67770', '231 * I ', 'Transitar com o veículo danificando a via, suas instalações e equipamentos ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '67851', '231 * II * a ', 'Transitar com veículo derramando a carga que esteja transportando ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '67852', '231 * II * a ', 'Transitar com veículo lançando a carga que esteja transportando ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '67853', '231 * II * a ', 'Transitar com veículo arrastando a carga que esteja transportando ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '67930', '231 * II * b ', 'Transitar com veículo derramando/lançando combustível/lubrificante que esteja utilizando ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '68070', '231 * II * c ', 'Transitar com veículo derramando/lançando/arrastando objeto que possa acarretar risco acidente ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '69040', '231 * X ', 'Transitar com o veículo excedendo a CMT acima de 1.000 kg ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '69391', '234', 'Falsificar ou adulterar documento de habilitação ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '69392', '234', 'Falsificar ou adulterar documento de identificação do veículo ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '69710', '238', 'Recusar-se a entregar CNH/CRV/CRLV/ outros documentos ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '69800', '239', 'Retirar do local veículo legalmente retido para regularização, sem permissão ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '63270', '220 * VII ', 'Deixar de reduzir velocidade ao aproximar local sinalizado com advertência de obras/trabalhadores ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63350', '220 * VIII ', 'Deixar de reduzir a velocidade sob chuva/neblina/cerração/ventos fortes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63430', '220 * IX ', 'Deixar de reduzir a velocidade quando houver má visibilidade ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63510', '220 * X ', 'Deixar de reduzir velocidade quando pavimento se apresentar escorregadio/defeituoso/avariado ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63600', '220 * XI ', 'Deixar de reduzir a velocidade à aproximação de animais na pista ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63780', '220 * XII ', 'Deixar de reduzir a velocidade de forma compatível com a segurança, em declive ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '63860', '220 * XIII ', 'Deixar de reduzir velocidade de forma compatível com segurança ao ultrapassar ciclista ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '64321', '223', 'Transitar com farol desregulado perturbando visão outro condutor ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '70131', '242', 'Fazer falsa declaração de domicílio para fins de registro/licenciamento ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70132', '242', 'Fazer falsa declaração de domicílio para fins de habilitação ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70301', '244 * I ', 'Conduzir motocicleta, motoneta ou ciclomotor sem capacete de segurança ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70303', '244 * I ', 'Conduzir motocicleta, motoneta ou ciclomotor sem vestuário de acordo com as normas aprovadas pelo Contran ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70481', '244 * II ', 'Conduzir motocicleta, motoneta e ciclomotor transportando passageiro sem capacete ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70483', '244 * II ', 'Conduzir motocicleta/motoneta/ciclomotor transportando passageiro fora do assento ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70561', '244 * III ', 'Conduzir motocicleta/motoneta/ciclomotor fazendo malabarismo/equilibrando-se em uma roda ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '64322', '223', 'Transitar com o facho de luz alta perturbando visão outro condutor ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '70721', '244 * V ', 'Conduzir motocicleta/motoneta/ciclomotor transportando criança menor de 10 anos de idade ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '70722', '244 * V ', 'Conduzir motocicleta/motoneta/ciclomotor transportando criança sem condição de cuidar própria segurança ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '73740', '253', 'Bloquear a via com veículo ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '64591', '225*I ', 'Deixar de sinalizar via para tornar visível local quando tiver remover veículo da pista ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '64592', '225*I ', 'Deixar de sinalizar a via para tornar visível o local quando permanecer acostamento ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '64670', '225*II ', 'Deixar de sinalizar a via para tornar visível o local quando a carga for derramada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '65300', '228', 'Usar no veículo equipamento com som em volume ou frequência que não sejam autorizados pelo CONTRAN ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66101', '230*VII ', 'Conduzir o veículo com a cor alterada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66102', '230*VII ', 'Conduzir o veículo com característica alterada ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66290', '230 * VIII ', 'Conduzir veículo sem ter sido submetido à inspeção de segurança veicular, quando obrigatória ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66371', '230*IX ', 'Conduzir o veículo sem equipamento obrigatório ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '73820', '254 * I ', 'É proibido ao pedestre permanecer/andar pista, exceto para cruzá-las onde permitido ', 44.19 ,'3', '1' } )
+	aAdd( aInfra, { '66372', '230 * IX ', 'Conduzir o veículo com equipamento obrigatório ineficiente/inoperante ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66450', '230 * X ', 'Conduzir o veículo com equipamento obrigatório em desacordo com o estabelecido pelo Contran ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66531', '230 * XI ', 'Conduzir o veículo com descarga livre ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66532', '230 * XI ', 'Conduzir o veículo com silenciador de motor defeituoso/deficiente/inoperante ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66610', '230 * XII ', 'Conduzir o veículo com equipamento ou acessório proibido ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66700', '230 * XIII ', 'Conduzir o veículo com equipamento do sistema de iluminação e de sinalização alterados ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '75950', '252*II ', 'Dirigir veículo realizando cobrança de tarifa com veículo em movimento ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '66880', '230 * XIV ', 'Conduzir veículo com registrador instantâneo inalterável de velocidade/tempo viciado/defeituoso ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66961', '230 * XV ', 'Conduzir com inscrições/adesivos/legendas/símbolos afixados no para-brisa e extensão traseira ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '66962', '230 * XV ', 'Conduzir com inscrições/adesivos/legendas/símbolos pintados no para-brisa e extensão traseira ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67000', '230 * XVI ', 'Conduzir veíc com vidro total/parcialmente coberto por película, painéis/pintura ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67180', '230 * XVII ', 'Conduzir o veículo com cortinas ou persianas fechadas ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67261', '230 * XVIII ', 'Conduzir o veículo em mau estado de conservação, comprometendo a segurança ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67262', '230 * XVIII ', 'Conduzir o veículo reprovado na avaliação de inspeção de segurança ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67263', '230 * XVIII ', 'Conduzir o veículo reprovado na avaliação de emissão de poluentes e ruído ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67340', '230 * XIX ', 'Conduzir o veículo sem acionar o limpador de pára-brisa sob chuva ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '67420', '230 * XX ', 'Conduzir o veículo sem portar a autorização para condução de escolares ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '68150', '231 * III ', 'Transitar com veículo produzindo fumaça, gases ou partículas em desacordo com o Contran ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68231', '231 * IV ', 'Transitar com veículo e/ou carga com dimensões superiores limite legal sem autorização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68232', '231 * IV ', 'Transitar com veículo e/ou carga com dimensões superiores estabelecidas pela sinalização sem autorização ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68401', '231 * VI ', 'Transitar em desacordo com autorização expedida para veículo com dimensões excedentes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68402', '231 * VI ', 'Transitar com autorização vencida, expedida para veículo com dimensões excedentes ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '68900', '231 * X ', 'Transitar com o veículo excedendo a CMT entre 601 e 1.000 kg ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '69471', '235', 'Conduzir pessoas nas partes externas do veículo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '69472', '235', 'Conduzir animais nas partes externas do veículo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '69473', '235', 'Conduzir carga nas partes externas do veículo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '70800', '244 * VI ', 'Conduzir motocicleta, motoneta e ciclomotor rebocando outro veículo ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '70991', '244 * VII ', 'Conduzir motocicleta/motoneta/ciclomotor sem segurar o guidom com ambas as mãos ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '71021', '244 * VIII ', 'Conduzir motocicleta, motoneta e ciclomotor transportando carga incompatível ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '71023', '244 * VIII ', 'Conduzir motocicleta/motoneta/ciclomotor transportando carga em desacordo com § 2º do Art 139-A CTB ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '72180', '248', 'Transportar em veículo destinado ao transporte de passageiros carga excedente em desacordo com o art. 109 ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '74630', '218 * II ', 'Transitar em velocidade superior à máxima permitida em mais de 20% até 50% ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '75521', '244 * IX ', 'Conduzir motocicleta/motoneta/ciclomotor efetuando transporte remunerado mercadoria desacordo com art 139-A CTB ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '75522', '244 * IX ', 'Conduzir motocicleta/motoneta/ciclomotor efetuando transporte remunerado em desacordo normas atividade profissional mototaxistas ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '75600', '230, XXIII ', 'Conduzir veículo de transporte de passageiro ou carga em desacordo com as condições do art 67-A CTB ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69630', '237', 'Transitar com veículo em desacordo com as especificações/falta de inscrição/simbologia necessárias à sua identificação ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '69980', '240', 'Deixar responsável de promover baixa registro de veículo irrecuperável/desmontado ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '70210', '243', 'Deixar seguradora de comunicar ocorrência perda total veículo e devolver placas/documentos ', 195.23 ,'5', '5' } )
+	aAdd( aInfra, { '71450', '245', 'Utilizar a via para depósito de mercadorias, materiais ou equipamentos ', 195.23 ,'5', '4' } )
+	aAdd( aInfra, { '51262', '164 c/c 162 * II ', 'Permitir posse/condução do veículo a pessoa com CNH/PPD/ACC com suspensão do direito de dirigir ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '51692', '165', 'Dirigir sob influência de qualquer outra substância que determine dependência ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '58198', '193', 'Transitar com o veículo em passarelas ', 880.41 ,'7', '1' } )
+	aAdd( aInfra, { '59592', '203 * IV ', 'Ultrapassar pela contramão veículo parado em fila junto a cancela/porteira ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '71531', '246', 'Deixar de sinalizar obstáculo à circulação/segurança calçada/pista sem agravamento ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '71532', '246', 'Obstaculizar a via indevidamente sem agravamento ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '71611', '246', 'Deixar de sinalizar obstáculo circulação/segurança calçada/pista-agravamento 2X ', 880.41 ,'7', '4' } )
+	aAdd( aInfra, { '71612', '246', 'Obstaculizar a via indevidamente-agravamento 2X ', 880.41 ,'7', '4' } )
+	aAdd( aInfra, { '71701', '246', 'Deixar de sinalizar obstáculo circulação/segurança calçada/pista-agravamento 3X ', 880.41 ,'7', '4' } )
+	aAdd( aInfra, { '71702', '246', 'Obstaculizar a via indevidamente-agravamento 3X ', 880.41 ,'7', '4' } )
+	aAdd( aInfra, { '71881', '246', 'Deixar de sinalizar obstáculo circulação/segurança calçada/pista-agravamento 4X ', 1467.35 ,'7', '4' } )
+	aAdd( aInfra, { '71882', '246', 'Obstaculizar a via indevidamente-agravamento 4X ', 1467.35 ,'7', '4' } )
+	aAdd( aInfra, { '71961', '246', 'Deixar de sinalizar obstáculo circulação/segurança calçada/pista-agravamento 5X ', 1467.35 ,'7', '4' } )
+	aAdd( aInfra, { '71962', '246', 'Obstaculizar a via indevidamente-agravamento 5X ', 1467.35 ,'7', '4' } )
+	aAdd( aInfra, { '75441', '330 * § 5º ', 'Falta de escrituração livro registro entrada/saída e de uso placa de experiência ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '75443', '330 * § 5º ', 'Fraude escrituração livro registro entrada/saída e de uso placa de experiência ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '75444', '330 * § 5º ', 'Recusa da exibição do livro registro entrada/saída e de uso placa de experiência ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '75442', '330 * § 5º ', 'Atraso escrituração livro registro entrada/saída e de uso placa de experiência ', 293.47 ,'7', '4' } )
+	aAdd( aInfra, { '75870', '184, III  ', 'Transitar na faixa ou via exclusiva regulamentada para transporte público coletivo de passageiros ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '52742', '175', 'Utilizar-se de veículo para demonstrar ou exibir manobra perigosa, mediante derrapagem ou frenagem com deslizamento ou arrastamento de pneus ', 2934.7 ,'7', '1' } )
+	aAdd( aInfra, { '67690', '230, XXII ', 'Conduzir veículo com defeito no sistema de iluminação, sinalização ou lâmpadas queimadas ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69201', '233 c/c 123, I ', 'Deixar de efetuar registro do veículo em 30 dias, quando for transferida a propriedade ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69202', '233 c/c 123, II ', 'Deixar de efetuar registro do veículo em 30 dias, quando mudar o município de domicílio/residência ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69203', '233 c/c 123, III ', 'Deixar de efetuar registro do veículo em 30 dias, quando for alterada qualquer característica do veículo ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '69204', '233 c/c 123, IV ', 'Deixar de efetuar registro de veículo em 30 dias, quando houver mudança de categoria ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '76171', '253-A ', 'Usar qualquer veículo para, deliberadamente, interromper a circulação na via sem autorização do órgão ', 5869.4 ,'7', '1' } )
+	aAdd( aInfra, { '76172', '253-A ', 'Usar qualquer veículo para, deliberadamente, restringir a circulação na via sem autorização do órgão ', 5869.4 ,'7', '1' } )
+	aAdd( aInfra, { '76173', '253-A ', 'Usar qualquer veículo para, deliberadamente, perturbar a circulação na via sem autorização do orgão ', 5869.4 ,'7', '1' } )
+	aAdd( aInfra, { '72421', '250, I, b ', 'Em movimento de dia, deixar de manter acesa luz baixa em túneis ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '72422', '250, I, b ', 'Em movimento de dia, deixar de manter acesa luz baixa sob chuva, neblina ou cerração ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '76251', '181, XX ', 'Estacionar nas vagas reservadas às pessoas com deficiência, sem credencial ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '76252', '181, XX ', 'Estacionar o veículo nas vagas reservadas a idosos, sem credencial que comprove tal condição. ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '76331', '252, § único ', 'Dirigir veículo segurando telefone celular ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '76332', '252, § único ', 'Dirigir veículo manuseando telefone celular ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '77491', '162, VII ', 'Dirigir veículo sem possuir cursos especializados obrigatórios ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '77492', '162, VII ', 'Dirigir veículo sem possuir cursos específicos obrigatórios ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '77571', '250, IV ', 'Em movimento, deixar veículo de transporte público coletivo passageiros de manter a porta fechada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '77572', '250, IV ', 'Em movimento, deixar o veículo de escolares de manter a porta fechada ', 293.47 ,'7', '1' } )
+	aAdd( aInfra, { '76410', '165-B ', 'Conduzir veículo para o qual seja exigida habilitação nas categorias C, D ou E sem realizar o exame toxicológico previsto no § 2º do art. 148-A deste Código, após 30 (trinta) dias do vencimento do prazo estabelecido. ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '76500', '165-B, § único ', 'Exercer atividade remunerada na condução de veículo e não comprovar a realização de exame toxicológico periódico exigido pelo § 2º do art. 148-A do CTB, por ocasião da renovação do documento de habilitação nas categorias C, D ou E. ', 1467.35 ,'7', '1' } )
+	aAdd( aInfra, { '76700', '182, XI ', 'Parar o veículo sobre ciclovia ou ciclofaixa ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '77301', '209-A ', 'Evadir-se da cobrança pelo uso de rodovias e vias urbanas para não efetuar seu pagamento ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '77302', '209-A ', 'Deixar de efetuar pagamento, pelo uso de rodovias e vias urbanas, na forma estabelecida ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '76841', '244, X ', 'Conduzir motocicleta, motoneta ou ciclomotor com a utilização de capacete de segurança sem viseira ou óculos de proteção ou com viseira ou óculos de proteção em desacordo com a regulamentação do Contran. ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '76842', '244, X ', 'Conduzir motocicleta, motoneta ou ciclomotor com a utilização de capacete de segurança sem viseira ou óculos de proteção ou com viseira ou óculos de proteção em desacordo com a regulamentação do Contran. ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '77141', '244, XI ', 'Conduzir motocicleta, motoneta ou ciclomotor transportando passageiro com o capacete de segurança utilizado na forma prevista no inciso X do caput deste artigo. ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '77142', '244, XI ', 'Conduzir motocicleta, motoneta ou ciclomotor transportando passageiro com o capacete de segurança utilizado na forma prevista no inciso X do caput deste artigo. ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '77220', '250, I, e ', 'Quando o veículo estiver em movimento deixar de manter acesa a luz baixa durante a noite. ', 130.16 ,'4', '1' } )
+	aAdd( aInfra, { '60685', '209 c/c 17, § 5º da Lei 13.103/2015 ', 'Circular, o veículo de transporte de carga, com eixos indevidamente suspensos. ', 195.23 ,'5', '1' } )
+	aAdd( aInfra, { '77731', '163 c/c 162, VII ', 'Entregar veículo a pessoa sem possuir cursos especializados obrigatórios ', 29347.0 ,'7', '1' } )
+	aAdd( aInfra, { '77732', '163 c/c 162, VII ', 'Entregar veículo a pessoa sem possuir cursos específicos obrigatórios. ', 29347.0 ,'7', '1' } )
+	aAdd( aInfra, { '77811', '164 c/c 162, VII ', 'Permitir posse e condução do veículo por pessoa sem possuir cursos especializados obrigatórios ', 29347.0 ,'7', '1' } )
+	aAdd( aInfra, { '77812', '164 c/c 162, VII  ', 'Permitir posse e condução do veículo por pessoa sem possuir cursos específicos obrigatórios ', 29347.0 ,'7', '1' } )
+	aAdd( aInfra, { '77650', '278, § único c/c 210', 'Fugir o condutor à ação policial', 29347.0 ,'7', '1' } )
+
+Return aInfra

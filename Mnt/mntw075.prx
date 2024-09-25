@@ -1,0 +1,215 @@
+#INCLUDE "MNTW075.ch"
+#INCLUDE "RWMAKE.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TOPCONN.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW075
+Workflow que avisa o Vencimento da Taxa
+
+@type function
+
+@source MNTW075.prx
+
+@author Marcos Wagner Junior
+@since 13/08/2008
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas com as tabelas compartilhadas.
+	@author Rodrigo Luan Backes
+	@since 15/08/2016
+	S.S.: 028323
+
+@sample MNTW075()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW075()
+
+	Private cARQ1		:= ""
+	Private aVETINR  	:= {}
+	Private cDirJPG 	:= "\workflow\RW075"
+	Private cEmailFIL 	:= ""
+	Private cSRAemail 	:= ""
+
+	dbSelectArea("TSK")
+	dbSetOrder(1)
+	dbSeek(xFilial("TSK")+xFilial("TS2"))
+
+	cEmailFIL := NgEmailWF("5","MNTW075")
+
+	If Empty(cEmailFIL)
+		Return
+	EndIf
+
+	MNTW075F()
+
+Return  .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW075F
+Envio do Workflow
+
+@type function
+
+@source MNTW075.prx
+
+@author Marcos Wagner Junior
+@since 13/08/2008
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas com as tabelas compartilhadas.
+	@author Rodrigo Luan Backes
+	@since 15/08/2016
+	S.S.: 028323
+
+@sample MNTW075F()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW075F()
+
+	Local aArea			:= GetArea()
+	Local cSmtp			:= GetNewPar("MV_RELSERV", "") 	//Servidor SMTP
+	Local cConta		:= GetNewPar("MV_RELAUSR","") 	// Usuário para autenticação no servidor de e-mail
+	Local cCntEmail		:= GetNewPar("MV_RELACNT","")	// Conta de e-mail do usuário no servidor de e-mail
+	Local lAutentica	:= GetNewPar("MV_RELAUTH",.F.)	// Autenticação (Sim/Não)
+	Local nSmtpPort		:= GetNewPar("MV_PORSMTP",0)	// Porta Servidor SMTP
+	Local cArquivo		:= "MNTW075.htm"
+	Local cDir			:= AllTrim(GetMV("MV_WFDIR"))
+	Local cAssunto   	:= DtoC(MsDate())+" - "+STR0009 //"Documentos Vencidos/A Vencer"
+	Local i 			:= 0
+	Local aRegistros 	:= {}
+	Local nPos			:= 0
+	Local cEMAIL_All	:= ""
+	Local lEmailRet		:= .T.
+
+	If (nPos := At(":",cSmtp)) <> 0
+		nSmtpPort		:= Val( SubStr( cSmtp, nPos+1, Len( cSmtp ) ) )
+		cSmtp			:= SubStr( cSmtp, 1, nPos-1 )
+	EndIf
+
+	//Coloca a barra no final do parametro do diretorio
+	If Substr(cDir,Len(cDir),1) != "\"
+		cDir += "\"
+	EndIf
+
+	//Verifica se existe o arquivo de workflow
+	If !File(cDir+cArquivo)
+		MsgInfo(">>> "+STR0008+" "+cDir+cArquivo) //"Nao foi encontrado o arquivo"
+		Return .F.
+	EndIf
+
+	dbSelectArea("TS2")
+	dbSetOrder(01)
+	dbGoTop()
+	While !EoF()
+		dbSelectArea("TS0")
+		dbSetOrder(01)
+		dbSeek(xFilial("TS0")+TS2->TS2_DOCTO)
+		nDiasAvis := TS0->TS0_AVIVEN
+		If Empty(TS2->TS2_DTPGTO)
+			If (Empty(TS2->TS2_NOTFIS)) .AND. ((dDATABASE + nDiasAvis) >= TS2->TS2_DTVENC) .AND.;
+									(SubStr(TS2->TS2_NOTFIS,1,8) != DTOS(dDATABASE)) .AND. TS2->TS2_FILIAL == xFilial("TS2")
+				AADD(aRegistros,{	TS2->TS2_PLACA,;
+									TS2->TS2_CODBEM,;
+									NGSEEK("ST9",TS2->TS2_CODBEM,1,'T9_NOME'),;
+									TS2->TS2_DOCTO,;
+									TS0->TS0_NOMDOC,;
+									TS2->TS2_DTVENC,;
+									TS2->TS2_PARCEL,;
+									Transform(TS2->TS2_VALOR,"@E 999,999.99")})
+			EndIf
+		EndIf
+		dbSelectArea("TS2")
+		dbSkip()
+	End
+
+	If Len(aRegistros) = 0
+		Return .T.
+	EndIf
+
+	//Inicia o processo
+	cMailMsg := '<html>'
+	cMailMsg += '<head>'
+	cMailMsg += '<meta http-equiv="Content-Language" content="pt-br">'
+	cMailMsg += '<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'
+	cMailMsg += '<meta name="GENERATOR" content="Microsoft FrontPage 4.0">'
+	cMailMsg += '<meta name="ProgId" content="FrontPage.Editor.Document">'
+	cMailMsg += '<title>Aviso sobre Solicitação de Serviços</title>'
+	cMailMsg += '</head>'
+	cMailMsg += '<body bgcolor="#FFFFFF">'
+	cMailMsg += '<table border=0 WIDTH=100% cellpadding="1">'
+	cMailMsg += '<tr>'
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0011+'</font></b></td>' //"Proxima Manutencao"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0012+'</font></b></td>'   //"Bem"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0013+'</font></b></td>'   //"Nome do Bem"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0014+'</font></b></td>'   //"Centro Custo"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0013+'</font></b></td>'   //"Nome do C.C"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0015+'</font></b></td>'   //"Servico"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0016+'</font></b></td>'   //"Nome do Servico"
+	cMailMsg += '   <td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">'+STR0017+'</font></b></td>' //"Sequencia"
+	cMailMsg += '</tr>'
+
+	ProcRegua(Len(aRegistros))
+
+	For i := 1 To Len(aRegistros)
+		IncProc()
+		cMailMsg += '<tr>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,1]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,2]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,3]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,4]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,5]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+DTOC(aRegistros[i,6])+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,7]+'</font></td>'
+		cMailMsg += '   <td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+aRegistros[i,8]+'</font></td>'
+		cMailMsg += '</tr>'
+	Next
+
+	cMailMsg += '</table>'
+	cMailMsg += '<br><hr>'
+	cMailMsg += '</body>'
+	cMailMsg += '</html>'
+
+	If !Empty(cEmailFIL)
+		cEMAIL_All 		:= cEmailFIL
+	ElseIf !Empty(cCntEmail)
+		cEMAIL_All 		:= cCntEmail
+	Else
+		ShowHelpDlg(STR0018, {STR0026 + STR0022 + "."}, 2, {STR0024}, 1)//"Destinatário do E-mail não informado."##" Favor, verificar parâmetro MV_RELACNT"##"ou se o funcionário possui E-mail cadastrado no sistema."##"Envio de E-mail cancelado!"
+	EndIf
+
+	// Validação SMTP, se não informado, cancela envio de WF
+	If Empty(cSmtp)
+		MsgInfo(STR0027 + STR0024) //"Servidor SMTP não informado! Favor, verificar parâmetro MV_RELSERV."##" Envio do e-mail cancelado!"
+		Return .F.
+	EndIf
+
+	If lAutentica .And. Empty(cConta)
+		MsgInfo(STR0020 + STR0021 + STR0024) //"Verifique os parâmetros de configuração: MV_RELAUSR e MV_RELAUTH."##" Envio do e-mail cancelado!"
+		Return .F.
+	EndIf
+
+	lEmailRet := NGSendMail( , cEMAIL_All + Chr(59) , , , OemToAnsi( cAssunto ) , , cMailMsg )
+
+Return lEmailRet //lRetu
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SchedDef
+Execução de Parâmetros na Definição do Schedule
+
+@return aParam, Array, Conteudo com as definições de parâmetros para WF
+
+@sample SchedDef()
+
+@author Cauê Girardi Petri
+@since 16/09/2022
+/*/
+//---------------------------------------------------------------------
+Static Function SchedDef()
+Return {"P", "PARAMDEF", "", {}, "Param"}

@@ -1,0 +1,451 @@
+#INCLUDE "mntr790.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR790
+Utilização da equipe de manutenção.
+@type function
+
+@author Inacio Luiz Kolling
+@since 02/07/1997
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTR790()
+	//-----------------------------------------------
+	//| Guarda conteudo e declara variaveis padroes |
+	//-----------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local cString    := "ST1"
+	Local cDesc1     := STR0001 //"Relatorio de utilizacao da equipe de manutencao. A equipe de manutencao"
+	Local cDesc2     := STR0002 //"e identificada pelo Centro de Custo a quem pertence. As ocorrencias"
+	Local cDesc3     := STR0003 //"desejadas poderao ser selecionadas atraves da opcao de parametro"
+	Local wnrel      := "MNTR790"
+
+	Private aReturn  := { STR0004, 1,STR0005, 2, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cPerg    := "MNT790"
+	Private Titulo   := STR0006 //"Utilizacao da Equipe de Manutencao"
+	Private Tamanho  := "G"
+	//----------------------------------------------------------------
+	//| Variaveis utilizadas para qarametros!                        |
+	//| mv_par01     // De centro da aplicacao                       |
+	//| mv_par02     // Ate centro da aplicacao                      |
+	//| mv_par03     // De Data Aplicacao                            |
+	//| mv_par04     // Ate Data Aplicacao                           |
+	//| mv_par05     // Ocorrencias                                  |
+	//----------------------------------------------------------------
+
+	pergunte(cPerg,.F.)
+
+	//----------------------------------------------------------------
+	//| Envia controle para a funcao SETPRINT                        |
+	//----------------------------------------------------------------
+	wnrel:=SetPrint(cString,wnrel,cPerg,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		DbselectArea("STI")
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+
+	If nLastKey = 27
+		Set Filter To
+		DbselectArea("STI")
+		Return
+	Endif
+
+	RptStatus({|lEnd| R790Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+	DbselectArea("STI")
+
+	//----------------------------------------------
+	//|Retorna conteudo de variaveis padroes       |
+	//----------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R790Imp
+Chamada do Relatório.
+@type function
+
+@author Inacio Luiz Kolling
+@since 26/06/1997
+
+@param lEnd   , Lógico  , Define se o processo será encerrado.
+@param wnRel  , Caracter, Nome da rotina.
+@patam titulo , Caracter, Titulo do relatório.
+@param tamanho, Caracter, Tamanho da impressão.
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function R790Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt     := ''
+	Local cCodCalen    := ''
+	Local cCodFun      := ''
+	Local nHours       := 0
+	Local nCntImpr     := 0
+	Local nHoursOS     := 0
+	Local nHoursTot    := 0
+	Local lUseFlut     := SuperGetMv( 'MV_NGFLUT', .F., 'N' ) == 'S'
+	Local oTempTable
+
+	Private li         := 80
+	Private m_pag      := 1
+	Private Cabec1     := STR0011 //"O.S.   Plano  Tipo          Bem/Localização  Nome             Serviço Nome            Seq. Quant. Unid. .....Inicio..... .......Fim...... Final."
+	Private Cabec2     := IIf( MV_PAR05 == 1, STR0014, '' ) //       Ocorrencia Descricao
+	Private nomeprog   := "MNTR790"
+	Private novocentro := .F.
+	Private quebracab  := .F.
+	Private cTRB	   := GetNextAlias()
+
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	************************************************************************************************************************************************
+	*<empresa>                                                                                                        				Folha..: xxxxx   *
+	*SIGA /<nome .04                                 		<     titulo do relatorio    >                                   		DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                				Emissao: dd/mm/aa*
+	************************************************************************************************************************************************
+	O.S.   Plano  Tipo          Bem/Localização  Nome             Serviço Nome            Seq. Quant. Unid. .....Inicio..... .......Fim...... Final.
+	Ocorrencia Descricao
+	************************************************************************************************************************************************
+	1         2         3         4         5         6         7         8         9         0         1         2     	3         4
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123
+
+	C.Custo de Aplicacao..: xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Funcionario...........: xxxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	xxxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxxxxxxx19xxxx xxxxxx xxxxxxxxxxx19xxxxxx 999 999.999,99 xxx 99/99/9999 99:99 99/99/9999 99:99 xxx
+	Pai==> xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	*/
+
+	aDBF := {}
+		aAdd(aDBF,{"CUSTO"  ,"C",Len(st1->t1_ccusto),0})
+		aAdd(aDBF,{"CODFUNC","C",06, 0 })
+		aAdd(aDBF,{"TURNO"  ,"C",03, 0 })
+		aAdd(aDBF,{"ORDEM"  ,"C",06, 0 })
+		aAdd(aDBF,{"PLANO"  ,"C",06, 0 })
+		aAdd(aDBF,{"CODBEM" ,"C",16, 0 })
+		aAdd(aDBF,{"SERVICO","C",06, 0 })
+		aAdd(aDBF,{"SEQRELA","C",03, 0 })
+		aAdd(aDBF,{"QUANT"  ,"N",09, 2 })
+		aAdd(aDBF,{"UNIDADE","C",03, 0 })
+		aAdd(aDBF,{"DTINICI","D",08, 0 })
+		aAdd(aDBF,{"HOINICI","C",05, 0 })
+		aAdd(aDBF,{"DTFIM"  ,"D",08, 0 })
+		aAdd(aDBF,{"HOFIM"  ,"C",05, 0 })
+		aAdd(aDBF,{"TAREFA" ,"C",06, 0 })
+		aAdd(aDBF,{"REPFIM" ,"C",03, 0 })
+		aAdd( aDbf, { 'TIPOHOR', 'C', 01, 0 } )
+
+	//Instancia classe FWTemporaryTable
+	oTempTable  := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" ,  {"CUSTO","CODFUNC","ORDEM","PLANO"}  )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	PROCESSA({|lEND| MNTR790ST1()},STR0017) //"Processando Arquivo..."
+
+	nTot_do_Func := 0
+	nTot_FGeral  := 0
+
+	DbselectArea(cTRB)
+	Dbgotop()
+	SetRegua(LastRec())
+	While !Eof()
+
+		ccusto := (cTRB)->CUSTO
+		novocentro := .t.
+
+		While !Eof() .And. (cTRB)->CUSTO == ccusto
+
+			nTot_do_Func := 0
+			nHoursOS     := 0
+			cCodFun      := (cTRB)->CODFUNC
+			cCodCalen    := ''
+			novofuncio   := .T.
+
+			While !Eof() .And. (cTRB)->CUSTO == ccusto .And. (cTRB)->CODFUNC == cCodFun
+
+				cOrdem := (cTRB)->ORDEM
+				cPlano := (cTRB)->PLANO
+				nHours := 0
+				lDiff  := .T.
+
+				While !Eof() .And. (cTRB)->CUSTO == ccusto .And. (cTRB)->CODFUNC == cCodFun  .And.;
+				cOrdem == (cTRB)->ORDEM .And. cPlano == (cTRB)->PLANO
+
+					INCREGUA()
+					cChave := (cTRB)->CODBEM
+					DbselectArea("STC")
+					DbSetOrder(03)
+					While .T.
+						DbSeek(xFilial('STC')+cChave)
+						If found()
+							cChave := STC->TC_CODBEM
+							Dbskip()
+							Loop
+						Endif
+						Exit
+					End
+
+					nHours    := IIf( (cTRB)->TIPOHOR == 'S', NGCONVERHORA( (cTRB)->QUANT, 'S', 'D' ), (cTRB)->QUANT )
+
+					nHoursOS  += nHours
+					nHoursTot += nHours
+
+					Ngsomali(58)
+					cabec22()
+					cabec33()
+					If lDiff
+						nTot_do_Func++
+						@li,000 Psay (cTRB)->ORDEM
+						@li,007 Psay (cTRB)->PLANO
+					Endif
+					lDiff := .f.
+					@li,014 Psay NGRETSX3BOX('TJ_TIPOOS',NGSEEK('STJ',(cTRB)->ORDEM,1,'TJ_TIPOOS'))
+					@li,028 Psay (cTRB)->CODBEM
+					If NGSEEK('STJ',(cTRB)->ORDEM,1,'TJ_TIPOOS') == "B"
+						@li,045 Psay substr(NGSEEK('ST9',(cTRB)->CODBEM,1,'T9_NOME'),1,16)
+					Else
+						@li,045 Psay substr(NGSEEK('TAF',(cTRB)->CODBEM,8,'TAF_NOMNIV'),1,16)
+					EndIf
+					@li,062 Psay (cTRB)->SERVICO
+					@li,070 Psay substr(NGSEEK('ST4',(cTRB)->SERVICO,1,'T4_NOME'),1,15)
+					@li,086 Psay (cTRB)->SEQRELA Picture '@!'
+
+					@LI,091 PSAY NtoH( nHours )
+
+					@li,098 Psay 'H'
+					@li,104 Psay (cTRB)->DTINICI Picture '99/99/9999'
+					@li,115 Psay (cTRB)->HOINICI Picture '99:99'
+					@li,121 Psay (cTRB)->DTFIM   Picture '99/99/9999'
+					@li,132 Psay (cTRB)->HOFIM   Picture '99:99'
+					@li,138 Psay (cTRB)->REPFIM
+					If (cTRB)->CODBEM != cChave
+						Ngsomali(58)
+						@Li,007 PSay STR0010 //"Pai==>"
+						@Li,014 Psay cChave
+						@li,031 Psay NGSEEK('ST9',cChave,1,'T9_NOME')
+					Endif
+
+					// IMPRIME AS OCORRENCIAS
+					If MV_PAR05 == 1
+
+						DbselectArea("STN")
+						Dbsetorder(1) //TN_FILIAL+TN_ORDEM+TN_PLANO+TN_TAREFA+TN_SEQRELA+TN_CODOCOR+TN_CAUSA+TN_SOLUCAO
+						If Dbseek(xFilial('STN')+(cTRB)->ORDEM+(cTRB)->PLANO+(cTRB)->TAREFA)
+							While !Eof() .And. xFilial('STN') == stn->tn_filial .And. ;
+							stn->tn_ordem == (cTRB)->ORDEM .And.  stn->tn_plano == (cTRB)->PLANO .And. ;
+							stn->tn_tarefa == (cTRB)->TAREFA
+
+								Ngsomali(58)
+								@ Li,007 Psay STN->TN_CODOCOR
+								@ li,018 Psay NGSEEK('ST8',STN->TN_CODOCOR,1,'T8_NOME')
+
+								DbselectArea("STN")
+								Dbskip()
+							End
+						Endif
+
+					Endif
+
+					DbselectArea(cTRB)
+					Dbskip()
+				End
+			End
+
+			If nTot_do_Func > 0
+
+				nTot_FGeral += nTot_do_Func
+				Ngsomali(58)
+				@ li,02 Psay STR0015 //"Total de O.S.:"
+				@ li,17 Psay nTot_do_Func
+				@Li,91 Psay NtoH( nHoursOS )
+				@Li,98 Psay "H"
+
+			EndIf
+
+		End
+
+	End
+
+	If nTot_FGeral > 0
+
+		Ngsomali(58)
+		Ngsomali(58)
+		@li,02 Psay STR0016 //"Total Geral.:"
+		@li,17 Psay nTot_FGeral
+		@Li,91 Psay NtoH( nHoursTot )
+		@Li,98 Psay "H"
+
+	EndIf
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+
+	//----------------------------------------------------------------
+	//| Devolve a condicao original do arquivo principam             |
+	//----------------------------------------------------------------
+	RetIndex("STJ")
+
+	oTempTable:Delete()//Deleta Tabela temporaria
+
+	Set Filter To
+	Set device to Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+
+Return NIL
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Cabec22
+Cabecalho de quebra
+@author Inacio Luiz Kolling
+@since 17/06/97
+@version undefined
+@type function
+/*/
+//------------------------------------------------------------------------------
+Static Function Cabec22()
+	If novocentro
+		Ngsomali(58)
+		@li,000 Psay STR0012 //"C.Custo de Aplicacao..:"
+		@li,024 Psay Alltrim((cTRB)->CUSTO)+" "+ NGSEEK('SI3',(cTRB)->CUSTO,1,'I3_DESC')
+		Ngsomali(58)
+		novocentro := .F.
+	Endif
+Return .T.
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Cabec33
+Cabecalho de quebra
+@author Inacio Luiz Kolling
+@since 17/06/97
+@version undefined
+@type function
+/*/
+//------------------------------------------------------------------------------
+Static Function Cabec33()
+	If novofuncio
+		Ngsomali(58)
+		@li,000 Psay STR0013 //"Funcionario.:"
+		@li,014 Psay (cTRB)->CODFUNC
+		@ li,023 Psay NGSEEK('ST1',(cTRB)->CODFUNC,1,'T1_NOME')
+		novofuncio := .F.
+		Ngsomali(58)
+		nTot_do_Func := 0
+	Endif
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR790ST1
+Processa arquivo de funcionários.
+@type function
+
+@author Denis Hyroshi de Souza
+@since 11/02/2003
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function MNTR790ST1()
+
+	cCONDSTL := 'Val(stl->tl_seqrela) > 0 .And. (STL->TL_DTINICI >= mv_par03 .And. STL->TL_DTINICI <= mv_par04)'
+	cCONDSTT := 'Val(stt->tt_seqrela) > 0 .And. (STT->TT_DTINICI >= mv_par03 .And. STT->TT_DTINICI <= mv_par04)'
+	DbselectArea("ST1")
+	Dbsetorder(03)
+	Dbseek(xFilial('ST1')+MV_PAR01,.T.)
+	SetRegua(LastRec())
+	While !Eof() .And. xFilial('ST1') == st1->t1_filial .And. st1->t1_ccusto <= mv_par02
+		INCREGUA()
+		DbselectArea("STL")
+		Dbsetorder(8)
+		sCODFUNC := ST1->T1_CODFUNC+REPLICATE(' ',LEN(STL->TL_CODIGO)-LEN(ST1->T1_CODFUNC))
+		Dbseek(xFILIAL("STL")+"M"+sCODFUNC)
+		While !Eof() .And. xFILIAL("STL") == STL->TL_FILIAL .And.;
+		STL->TL_TIPOREG == "M" .And. STL->TL_CODIGO == sCODFUNC
+
+			If &(cCONDSTL)
+				DbselectArea("STJ")
+				Dbsetorder(1)
+				If Dbseek(xFILIAL("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+					DbselectArea(cTRB)
+					(cTRB)->(DbAppend())
+					(cTRB)->CUSTO   := ST1->T1_CCUSTO
+					(cTRB)->CODFUNC := ST1->T1_CODFUNC
+					(cTRB)->TURNO   := ST1->T1_TURNO
+					(cTRB)->ORDEM   := STJ->TJ_ORDEM
+					(cTRB)->PLANO   := STJ->TJ_PLANO
+					(cTRB)->CODBEM  := STJ->TJ_CODBEM
+					(cTRB)->SERVICO := STJ->TJ_SERVICO
+					(cTRB)->QUANT   := STL->TL_QUANTID
+					(cTRB)->UNIDADE := STL->TL_UNIDADE
+					(cTRB)->DTINICI := STL->TL_DTINICI
+					(cTRB)->HOINICI := STL->TL_HOINICI
+					(cTRB)->DTFIM   := STL->TL_DTFIM
+					(cTRB)->HOFIM   := STL->TL_HOFIM
+					(cTRB)->TAREFA  := STL->TL_TAREFA
+					(cTRB)->TIPOHOR := STL->TL_TIPOHOR
+					(cTRB)->REPFIM  := If(STL->TL_REPFIM = 'N' .Or.;
+					Empty(STL->TL_REPFIM),'Nao','Sim')
+					(cTRB)->SEQRELA := STJ->TJ_SEQRELA
+				Endif
+			Endif
+			DbselectArea("STL")
+			Dbskip()
+		End
+
+		DbselectArea("STT")
+		Dbsetorder(3)
+		sCODFUNC := ST1->T1_CODFUNC+REPLICATE(' ',LEN(STT->TT_CODIGO)-LEN(ST1->T1_CODFUNC))
+		Dbseek(xFILIAL("STT")+"M"+sCODFUNC)
+		While !Eof() .And. xFILIAL("STT") == STT->TT_FILIAL .And.;
+		STT->TT_TIPOREG == "M" .And. STT->TT_CODIGO == sCODFUNC
+
+			If &(cCONDSTT)
+				DbselectArea("STS")
+				Dbsetorder(1)
+				If Dbseek(xFILIAL("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+					If sts->ts_tipoos = "B"
+						DbselectArea(cTRB)
+						(cTRB)->(DbAppend())
+						(cTRB)->CUSTO   := ST1->T1_CCUSTO
+						(cTRB)->CODFUNC := ST1->T1_CODFUNC
+						(cTRB)->TURNO   := ST1->T1_TURNO
+						(cTRB)->ORDEM   := STS->TS_ORDEM
+						(cTRB)->PLANO   := STS->TS_PLANO
+						(cTRB)->CODBEM  := STS->TS_CODBEM
+						(cTRB)->SERVICO := STS->TS_SERVICO
+						(cTRB)->QUANT   := STT->TT_QUANTID
+						(cTRB)->UNIDADE := STT->TT_UNIDADE
+						(cTRB)->DTINICI := STT->TT_DTINICI
+						(cTRB)->HOINICI := STT->TT_HOINICI
+						(cTRB)->DTFIM   := STT->TT_DTFIM
+						(cTRB)->HOFIM   := STT->TT_HOFIM
+						(cTRB)->TAREFA  := STT->TT_TAREFA
+						(cTRB)->TIPOHOR := STT->TT_TIPOHOR
+						(cTRB)->REPFIM  := If(STT->TT_REPFIM = 'N' .Or.;
+						Empty(STT->TT_REPFIM),'Nao','Sim')
+						(cTRB)->SEQRELA := STS->TS_SEQRELA
+					EndIf
+				Endif
+			Endif
+			DbselectArea("STT")
+			Dbskip()
+		End
+		DbselectArea("ST1")
+		Dbskip()
+	End
+Return .T.

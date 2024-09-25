@@ -1,0 +1,357 @@
+#INCLUDE "MNTA860.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA860
+Integracao de Custo com o Ativo Fixo
+
+@author  Thiago Olis Machado
+@since   27.08.01
+@version P11/P12
+/*/
+//-------------------------------------------------------------------
+Function MNTA860()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	// Tabela Temporaria
+	Local oTempTable
+
+	Private oDlg
+	Private oMark
+	Private aRotina   := MenuDef()
+	Private cTRBX	  := GetNextAlias()
+	Private	cCadastro := OemToAnsi(STR0003) //"Atualiza Valores ATF"
+
+	cInt := GetMv("MV_NGMNTAT")
+	If cInt <> "2"
+		If cInt <> "3"
+			HELP(" ",1,"NGMNATIVOF") //"O modulo de manutencao nao esta preparado para receber integracoes com"
+			RETURN .F.	            //"o Ativo Fixo favor verificar o parametro 'MV_NGMNTAT'"
+		EndIf
+	EndIf
+
+	aDBF := {}
+	AADD(aDBF,{ "TJ_OK"       , "C" ,02, 0 })
+	AADD(aDBF,{ "TJ_ORDEM"    , "C" ,06, 0 })
+	AADD(aDBF,{ "TJ_PLANO"    , "C" ,06, 0 })
+	AADD(aDBF,{ "TJ_BEM"      , "C" ,16, 0 })
+	AADD(aDBF,{ "TJ_NOMEBEM"  , "C" ,20, 0 })
+	AADD(aDBF,{ "TJ_SERVICO"  , "C" ,06, 0 })
+	AADD(aDBF,{ "TJ_NOMSERV"  , "C" ,20, 0 })
+	AADD(aDBF,{ "TJ_VALOR"    , "N" ,09, 2 })
+	AADD(aDBF,{ "TJ_ATIVO"    , "C" ,01, 0 })
+
+	aTRBX := {}
+
+	AADD(aTRBX,{"TJ_OK"     ,NIL," "      	 ,})
+	AADD(aTRBX,{"TJ_ORDEM"  ,NIL,STR0006     ,}) //"Ordem"
+	AADD(aTRBX,{"TJ_PLANO"  ,NIL,STR0007     ,}) //"Plano"
+	AADD(aTRBX,{"TJ_BEM"    ,NIL,STR0008	 ,}) //"Bem"
+	AADD(aTRBX,{"TJ_NOMEBEM",NIL,STR0009  	 ,}) //"Nome do Bem"
+	AADD(aTRBX,{"TJ_SERVICO",NIL,STR0010     ,}) //"Servico"
+	AADD(aTRBX,{"TJ_NOMSERV",NIL,STR0011 	 ,}) //"Nome Servico"
+	AADD(aTRBX,{"TJ_VALOR"  ,NIL,STR0012     ,}) //"Valor"
+
+	//Instancia classe FWTemporaryTable
+	oTempTable  := FWTemporaryTable():New( cTRBX, aDBF )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"TJ_ORDEM"}  )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	// Carrega dados do browse
+	MNTA86001(1)
+
+	lInverte := .F.
+	lQuery   := .T.
+	cMARCA   := GetMark()
+
+	MARKBROW( (cTRBX), "TJ_OK", , aTRBX, lInverte, cMarca, "NG860INVER()" )
+
+	oTempTable:Delete()//Deleta arquivo temporario
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .t.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA86001
+Carrega dados para serem apresentados no browse
+
+@author  Thiago Olis Machado
+@since   23.08.01
+@version P11/P12
+@param   nOpc, Numérico, 1 - Soma o campo TJ_CUSTFER ao TJ_VALOR
+                         2 - Não soma.
+/*/
+//-------------------------------------------------------------------
+Function MNTA86001( nOpc )
+
+	Local cAliasQry := GetNextAlias()
+
+	Default nOpc := 1
+
+	lInverte := .F.
+	lQuery   := .T.
+	cMARCA   := GetMark()
+
+	// Busca ordens de serviço que possuem serviço com geração de ativo fixo.
+	BeginSql Alias cAliasQry
+		SELECT TJ_ORDEM,
+			   TJ_PLANO,
+			   TJ_CODBEM,
+			   TJ_SERVICO,
+			   TJ_CUSTMDO,
+			   TJ_CUSTMAT,
+			   TJ_CUSTMAA,
+			   TJ_CUSTMAS,
+			   TJ_CUSTTER,
+			   TJ_CUSTFER,
+			   T9_NOME,
+			   T4_NOME
+			FROM %table:STJ% STJ
+				INNER JOIN %table:ST9% ST9 ON STJ.TJ_CODBEM  = ST9.T9_CODBEM
+				INNER JOIN %table:ST4% ST4 ON STJ.TJ_SERVICO = ST4.T4_SERVICO
+					WHERE   ST9.T9_FILIAL  = %exp:xFilial( 'ST9' )%
+						AND STJ.TJ_FILIAL  = %exp:xFilial( 'STJ' )%
+						AND ST4.T4_FILIAL  = %exp:xFilial( 'ST4' )%
+						AND ST4.T4_GERAATF = 'S'
+						AND STJ.TJ_TERMINO = 'S'
+						AND STJ.TJ_VALATF <> 'S'
+						AND ST9.T9_SITBEM  = 'A'
+						AND ST9.%NotDel%
+						AND STJ.%NotDel%
+						AND ST4.%NotDel%
+	EndSql
+
+	// Popula tabela temporaria com os registros encontrados na query.
+	dbSelectArea( cAliasQry )
+	dbGoTop()
+	While (cAliasQry)->( !EoF() )
+
+		dbSelectArea(cTRBX)
+		(cTRBX)->( dbAppend() )
+		(cTRBX)->TJ_OK        := IIf( Empty( (cTRBX)->TJ_OK ), "  ", cMARCA )
+		(cTRBX)->TJ_ORDEM     := (cAliasQry)->TJ_ORDEM
+		(cTRBX)->TJ_PLANO     := (cAliasQry)->TJ_PLANO
+		(cTRBX)->TJ_BEM       := (cAliasQry)->TJ_CODBEM
+		(cTRBX)->TJ_NOMEBEM   := Left( (cAliasQry)->T9_NOME, 20 )
+		(cTRBX)->TJ_SERVICO   := (cAliasQry)->TJ_SERVICO
+		(cTRBX)->TJ_NOMSERV   := Left( (cAliasQry)->T4_NOME, 20 )
+		(cTRBX)->TJ_VALOR     := (cAliasQry)->TJ_CUSTMDO + (cAliasQry)->TJ_CUSTMAT + (cAliasQry)->TJ_CUSTMAA + (cAliasQry)->TJ_CUSTMAS + (cAliasQry)->TJ_CUSTTER
+		If nOpc == 1
+			(cTRBX)->TJ_VALOR += (cAliasQry)->TJ_CUSTFER
+		EndIf
+
+		dbSelectArea( cAliasQry )
+		(cAliasQry)->( dbSkip() )
+	EndDo
+
+	dbSelectArea(cTRBX)
+	dbGoTop()
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG860ATU
+Atualiza custo no ATF
+
+@author  Thiago Olis Machado
+@since   27.08.01
+@version P11/P12
+/*/
+//-------------------------------------------------------------------
+Function NG860ATU()
+
+	Local lAmpliou := .T.
+
+	Local cBaseA := "" //Código do Bem no cadastro do ATF
+	Local cItemA := "" //Código do Item cadastro do ATF
+	Local nValorA := 0 //Valor da movimentação
+	Local cDescrA := "" //Descrição do Serviço realizado
+
+	Private lMsErroAuto := .F.
+
+	DbSelectArea(cTRBX)
+	DbGoTop()
+
+	While !Eof()
+
+		If Empty((cTRBX)->TJ_OK)
+			DbSelectArea(cTRBX)
+			DbSkip()
+			Loop
+		EndIf
+
+		DbSelectArea("ST9")
+		DbSetOrder(1)
+		If DbSeek(xFilial("ST9")+(cTRBX)->TJ_BEM)
+
+			cBaseA := SubStr(ST9->T9_CODIMOB,1,10)
+			cItemA := SubStr(ST9->T9_CODIMOB,11,14)
+			nValorA := (cTRBX)->TJ_VALOR
+			cDescrA := (cTRBX)->TJ_NOMSERV
+
+			//É necessário posicionar na tabela SN1 para chamar o execauto AF150Amp
+			DbSelectArea("SN1")
+			DbSetOrder(1)
+			If DbSeek(xFilial("SN1") + ST9->T9_CODIMOB)
+				//ExecAuto para Inclusão da aplicação Patrimonial (ATF)
+				MSExecAuto({|s, t, u, v, w, x, y, z| AF150Amp(s, t, u, v, w, x, y, z)},,,3,cBaseA,cItemA,nValorA,cDescrA,.T.)
+				If lMsErroAuto
+					lAmpliou := .F.
+					MostraErro()
+				Else
+					lAmpliou := .T.
+				EndIf
+
+				If SN4->(!Deleted())
+					If SN4->N4_CBASE+SN4->N4_ITEM <> ST9->T9_CODIMOB .Or.;
+					SN4->N4_DATA <> dDataBase .Or.;
+					SN4->N4_VLROC1 <> (cTRBX)->TJ_VALOR
+						lAmpliou := .F.
+					EndIf
+				EndIf
+
+				If lAmpliou .And. AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+					dbSelectArea("STJ")
+					dbSetOrder(01)
+					dbSeek(xFilial("STJ")+(cTRBX)->TJ_ORDEM+(cTRBX)->TJ_PLANO)
+					//chama a integracao por mensagem unica
+					lAmpliou := NGMUAmpPat(SN4->(RecNo()),SN1->(RecNo()),STJ->(RecNo()))
+
+					If !lAmpliou
+						//ExecAuto para Exclusão da aplicação Patrimonial (ATF)
+						MSExecAuto({|s, t, u, v, w, x, y, z| AF150Amp(s, t, u, v, w, x, y, z)},,,5,cBaseA,cItemA,nValorA,cDescrA,.T.)
+					EndIf
+				EndIf
+
+			EndIf
+
+			dbSelectArea("SN3")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SN3")+SubStr(ST9->T9_CODIMOB,1,10)+SubStr(ST9->T9_CODIMOB,11,14)+"01")
+				If lAmpliou .And. SN3->N3_AMPLIA1 > 0
+					RecLock((cTRBX),.F.)
+					(cTRBX)->TJ_ATIVO := 'S'
+					MsUnlock(cTRBX)
+				EndIf
+			EndIf
+			DbSelectArea(cTRBX)
+			DbSkip()
+		EndIf
+
+	EndDo
+
+	DbSelectArea(cTRBX)
+	DbGoTop()
+	Do While !Eof()
+
+		DbSelectArea("STJ")
+		DbSetOrder(1)
+		DbSeek(xFilial("STJ")+(cTRBX)->TJ_ORDEM)
+
+		If !Empty((cTRBX)->TJ_OK)
+			If (cTRBX)->TJ_ATIVO == 'S'
+				RecLock("STJ",.f.)
+				STJ->TJ_VALATF := 'S'
+				MsUnlock("STJ")
+			EndIf
+		EndIf
+
+		DbSelectArea(cTRBX)
+		DbSkip()
+	Enddo
+
+	DbSelectArea(cTRBX)
+	Zap
+
+	// Atualiza dados do browse
+	MNTA86001(2)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG860VIS
+Posiciona no arquivo correspondente
+
+@author  Thaigo Olis Machado
+@since   27/08/01
+@version P11/12
+/*/
+//-------------------------------------------------------------------
+Function NG860VIS()
+
+	dbSelectArea("STJ")
+	dbsetorder(1)
+	dbseek(xFilial("STJ")+(cTRBX)->TJ_ORDEM+(cTRBX)->TJ_PLANO)
+	NGCAD01('STJ', RECNO(),1)
+	dbSelectArea(cTRBX)
+
+Return .t.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG860INVER
+Inverte Marcações - Windows
+
+@author  Thaigo Olis Machado
+@since   27/08/01
+@version P11/12
+/*/
+//-------------------------------------------------------------------
+Function NG860INVER()
+	Local nREG := (cTRBX)->(RECNO())
+
+	DbSelectArea(cTRBX)
+	DbGoTop()
+	Do While !Eof()
+		(cTRBX)->TJ_OK := IIF(TJ_OK == "  ",cMARCA,"  ")
+		DbSkip()
+	Enddo
+
+	(cTRBX)->(DbGoTo(nREG))
+	lREFRESH := .T.
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Programa  ³MenuDef   ³ Autor ³ Ricardo Dal Ponte     ³ Data ³29/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Utilizacao de menu Funcional                               ³±±
+±±³          ³                                                            ³±±
+±±³          ³                                                            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³		1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³   DATA   ³ Programador   ³Manutencao efetuada                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³          ³               ³                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+
+Static Function MenuDef()
+
+	Local aRotina := { { STR0001 ,"NG860VIS"   , 0 , 2},;  //"Visualizar"
+	{	STR0002  ,"NG860ATU"   , 0 , 4 } }   //"Atualizar"
+Return(aRotina)

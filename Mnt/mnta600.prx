@@ -1,0 +1,2917 @@
+#INCLUDE "MNTA600.ch"
+#include "Protheus.ch"
+#Include "Topconn.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA600
+Analise tecnica dos Pneus
+
+@author Evaldo Cevinscki Jr.
+@since 16/10/2006
+@sample MNT
+@param xRotAuto - Quando em Rotina automática contém array com campos obrigatórios
+@param nOpcAuto - Opções da rotina automática (A prícipio funcionando apenas para 3 - Inclusão)
+@return True
+/*/
+//---------------------------------------------------------------------
+Function MNTA600(xRotAuto, nOpcAuto)
+
+	//Guarda conteudo e declara variaveis padroes
+	Local aNGBEGINPRM := {} 
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		Private aRotina    := MenuDef()
+		Private aPerg      := {}
+		Private bNGGrava   := {|| }
+		Private cCadastro  := OemtoAnsi(STR0006)   //"Análise Técnica dos Pneus"
+		Private cFilTQYPAR := ""
+		Private cRetorno   := ""
+		Private cCampo     := ""
+		Private cSTATUS    := ""
+		Private cFilBem    := " "
+		Private cCodST9Est := " "
+		Private cCodST9Alm := " "
+		Private cCodST9CC  := ""
+		Private cCodLoc    := ""  // Código da localização do produto
+		Private cOldCodLoc := ""
+		Private cOldAlmx   := " " // Váriável que contem o almoxarifado do bem, anterior a A. Tecnica.
+		Private cOldCodEst := ""  // Váriável que contem o produto de estoque do bem, anterior a A. Tecnica.
+		Private cCodTMx    := ""
+		Private cOrdemMov  := ""
+		Private cDestinEst := ""
+		Private l600Auto   := ValType(xRotAuto) <> "U"
+		Private lFROTA     := GetNewPar('MV_NGMNTFR','N') == 'S'
+		Private cStaEu     := GetMV('MV_NGSTAEU')
+		Private lUsaIntEs  := AllTrim(GetNewPar("MV_NGMNTES","N")) == "S" .And.;
+							AllTrim(GetNewPar("MV_NGPNEST","N")) == "S"  //Controle de Estoque
+		Private lTR4_ORDEM := TR4->( FieldPos("TR4_ORDEM") ) > 0
+
+		// Variáveis utilizada quando execução do fonte é feita através de MsExecAuto
+		Default nOpcAuto := 3
+
+		aNGBEGINPRM := NGBEGINPRM()
+
+		If SuperGetMv("MV_NG1ANAT",.F.,"-1") == "-1" //Senao achar o parametro carrega com o conteudo atual
+			cDestinEst := "3467"
+		Else
+			cDestinEst := SuperGetMv("MV_NG1ANAT",.F.,"-1")
+		EndIf
+
+		If AllTrim(GetMV('MV_NGSTAGR')) $ cStaEu
+			cDestinEst += '1'
+		EndIf
+
+		If AllTrim(GetMV('MV_NGSTAGC')) $ cStaEu
+			cDestinEst += '2'
+		EndIf
+
+		If AllTrim(GetMV('MV_NGSTAAT')) $ cStaEu
+			cDestinEst += '5'
+		EndIf
+		bNGGrava := {|| MNT600GRA(Recno())}
+
+		If MNTA600PAR()
+			If l600Auto // Caso a a chamada seja para Rotina Automatica
+				Private aRotAuto := xRotAuto
+				MBrowseAuto(nOpcAuto,aRotAuto,"TR4")
+			Else
+				dbSelectArea("TR4")
+				dbSetOrder(1)
+				dbGoTop()
+				mBrowse(6,1,22,75,"TR4")
+			EndIf
+		EndIf
+
+		//Retorna conteudo de variaveis padroes
+		NGRETURNPRM(aNGBEGINPRM)
+	
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600KM
+Pega o Km da vida corresponde do pneu
+
+@author	Evaldo Cevinscki Jr.
+@since	16/10/2006
+
+@sample MNTA600 - Essa funcao eh chamada pelo gatilho - SX7
+@version MP12
+/*/
+//---------------------------------------------------------------------
+Function MNT600KM()
+
+	Local lAuto     := Type( 'l600Auto' ) == 'L' .And. l600Auto
+	Local aArea  	:= GetArea()
+	Local cTmpRet	:= "" // Retorno temporario, usado no ponto de entrada
+	Local cTmpCmp	:= "" // Campo temporario, usado no ponto de entrada
+	Local cFilBem	:= IIf(Type("cFilBem") <> "C", "", cFilBem)
+	Local cBanda    := ""
+	Local cAliasTQV := GetNextAlias()
+	//Adiciona conteúdo à variável para fazer as buscar via execauto ou não
+	Local cCodBem   := ''
+	Local dDataAnl  := ''
+	Local cHrAnl    := ''
+
+	If Empty(cFilBem)
+		cFilBem := xFilial("ST9")
+	EndIf
+
+	If !lAuto
+		cCodBem  := TR4->TR4_CODBEM
+		dDataAnl := TR4->TR4_DTANAL
+		cHrAnl   := TR4->TR4_HRANAL
+	Else
+		cCodBem  := M->TR4_CODBEM
+		dDataAnl := M->TR4_DTANAL
+		cHrAnl   := M->TR4_HRANAL
+		
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	If dbSeek(xFilial("ST9") + cCodBem)
+		While !Eof() .And. ST9->T9_FILIAL == xFilial("ST9") .And. ST9->T9_CODBEM == cCodBem
+			If ST9->T9_SITBEM == "A"
+				cFilBem := ST9->T9_FILIAL
+				Exit
+			EndIf
+			dbSkip()
+		End
+	EndIf
+
+	//Verifica se é a ultima O.S. de Reforma
+	cAliasTQV := GetNextAlias()
+	BeginSQL Alias cAliasTQV
+
+	SELECT TQV_BANDA
+		FROM %table:TQV% TQV
+			WHERE TQV.TQV_FILIAL = %exp:cFilBem%
+				AND TQV.TQV_CODBEM = %exp:cCodBem%
+				AND TQV.TQV_DTMEDI || TQV.TQV_HRMEDI <= %exp:DtoS(dDataAnl) + cHrAnl%
+				AND %NotDel%
+			ORDER BY TQV.TQV_DTMEDI || TQV.TQV_HRMEDI DESC
+	EndSQL
+
+	If (cAliasTQV)->( !EoF() )
+		cBanda := Alltrim((cAliasTQV)->TQV_BANDA)
+
+		(cAliasTQV)->( dbCloseArea() )
+
+		dbSelectArea("TQS")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQS",cFilBem) + M->TR4_CODBEM)
+		If cBanda == '1'
+			cRetorno := TQS->TQS_KMOR
+			cCampo := 'TQS->TQS_KMOR'
+		ElseIf cBanda == '2'
+			cRetorno := TQS->TQS_KMR1
+			cCampo   := 'TQS->TQS_KMR1'
+		ElseIf cBanda == '3'
+			cRetorno := TQS->TQS_KMR2
+			cCampo   := 'TQS->TQS_KMR2'
+		ElseIf cBanda == '4'
+			cRetorno := TQS->TQS_KMR3
+			cCampo   := 'TQS->TQS_KMR3'
+		ElseIf cBanda == '5'
+			cRetorno := TQS->TQS_KMR4
+			cCampo   := 'TQS->TQS_KMR4'
+		ElseIf ExistBlock("MNTA6003") 	 // Verifica se existe o ponto de entrada
+			cTmpRet := ExecBlock("MNTA6003",.F.,.F.,{.T.,cBanda}) // Preenche a variavel temporaria com o retorno do ponto de entrada
+			If ValType( cTmpRet ) == "N" // Verifica se e caracter
+				cRetorno := cTmpRet 	 // Preenche o retorno
+			EndIf
+
+			cTmpCmp := ExecBlock("MNTA6003",.F.,.F.,{.F.,cBanda}) // Preenche a variavel temporaria com o retorno do ponto de entrada
+			If ValType( cTmpCmp ) == "C" // Verifica se e caracter
+				cCampo := cTmpCmp 		 // Preenche o campo
+			EndIf
+		EndIf
+	EndIf
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600GRA
+Gravação do registro de análise técnica.
+
+@author	Evaldo Cevinscki Jr.
+@since	16/10/2006
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function MNT600GRA(nRecno)
+
+	Local nHora, nHora2
+	Local aArea      := GetArea()
+	Local xRet       := {}
+	Local vDADOS     := {}
+	Local aHora	     := {}
+	Local cMod       := " "
+	Local cEstoq     := ""
+	Local cLocAT     := ""
+	Local lPerExc    := .T.
+	Local cAliSD3Fil := ""
+	Local cFilMov    := xFilial("SD3")
+    Local lRetGrav   := .T. //Retorno da função
+	Local cAliasQry  := GetNextAlias() 
+	Local lAuto      := Type( 'l600Auto' ) == 'L' .And. l600Auto
+
+	Private lOldT9Stat := ""
+	Private cOldLocEst := ""
+
+	//converte hora para decimal
+	aHora  := strTokArr(M->TR4_HRANAL,":")
+	nHora  := val(aHora[1])+(val(aHora[2])/60)
+
+	aHora  := {}
+	nHora2 := 0
+
+	//Verifica se existe uma O.S. em lote aberta para o Pneu
+	If Inclui .Or. Altera
+		If !MNT600VLOS(.T.)
+			lRetGrav := .F.
+		EndIf
+	EndIf
+
+	If lRetGrav .And. (Inclui .Or. !(Inclui .Or. Altera)) //Se inclui ou exclui
+		dbSelectArea("TR4")
+		dbSetOrder(01)
+		If dbSeek(xFilial("TR4")+M->TR4_CODBEM)
+			While !EoF() .And. lRetGrav .And. AllTrim(TR4->TR4_CODBEM) == AllTrim(M->TR4_CODBEM)
+				aHora  := strTokArr(TR4->TR4_HRANAL,":")
+				nHora2 := val(aHora[1])+(val(aHora[2])/60)
+				If (TR4->TR4_DTANAL > M->TR4_DTANAL) .Or. (TR4->TR4_DTANAL == M->TR4_DTANAL .And. nHora2 > nHora)
+					If !Inclui
+						If Inclui
+							//"Não é possível incluir uma análise técnica com data anterior à uma já cadastrada."
+							Help(' ',1,STR0009,,STR0047,2,0,,,,,,)
+						Else
+							//"Não é possível excluir uma análise técnica com data anterior à uma já cadastrada."
+							Help(' ',1,STR0009,,STR0048,2,0,,,,,,)
+						EndIf
+						lRetGrav := .F.
+					EndIf
+				ElseIf Inclui .And. TR4->TR4_DTANAL == M->TR4_DTANAL .And. nHora2 == nHora
+					//"Atenção"###"Não é possível incluir uma análise técnica com data anterior à uma já cadastrada."
+					Help(' ',1,STR0009,,STR0047,2,0,,,,,,)
+					lRetGrav := .F.
+				ElseIf !Inclui .And. !dbSeek(xFilial("TR4")+M->TR4_CODBEM+DTOS(M->TR4_DTANAL)+M->TR4_HRANAL)
+					//"Atenção"####"Não foi encontrado o registro para ser excluído."##"Verifique os dados informados."
+					Help(' ',1,STR0009,,STR0144,2,0,,,,,,{STR0145})
+					lRetGrav := .F.
+				EndIf
+				TR4->(dbSkip())
+				aHora  := {}
+				nHora2 := 0
+			EndDo
+		EndIf
+		If lRetGrav .And. !Inclui //Verifica na exclusão da A.Tecnica se houve alguma reporte de status posterior
+			dbSelectArea("TQZ")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TQZ")+M->TR4_CODBEM+DTOS(M->TR4_DTANAL)+M->TR4_HRANAL)
+				cEstoq := TQZ->TQZ_PRODUT
+				cLocAT := TQZ->TQZ_ALMOX
+				While TQZ->TQZ_CODBEM == M->TR4_CODBEM
+					If !Empty(TQZ->TQZ_PRODUT) .And. (TQZ->TQZ_PRODUT <> cEstoq .Or. TQZ->TQZ_ALMOX <> cLocAT)
+						lPerExc := .F.
+					EndIf
+					TQZ->(dbSkip())
+				End
+				If M->TR4_DTANAL <= GetMV("MV_ULMES")
+					//"ATENÇÃO"###"A data da analise não pode ser menor ou igual a data do ultimo fechamento do estoque "
+					Help(' ',1,STR0009 ,,STR0049+DtoC(GetMV("MV_ULMES"))+" .",2,0,,,,,,)
+					lRetGrav := .F.
+				EndIf
+				If !lPerExc
+					//"O pneu já possui movimentações de estoque posteriores à análise."//"Exclusão não permitida"
+					Help(' ',1,STR0009 ,,STR0061,2,0,,,,,, {STR0062})
+					lRetGrav := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+	aArea := GetArea()
+
+	If lRetGrav .And. (Inclui .Or. Altera)
+
+		dbSelectArea( "ST9" )
+		dbSetOrder( 16 )
+		If dbSeek( M->TR4_CODBEM )
+			cFilBem := ST9->T9_FILIAL
+			cMod    := ST9->T9_TIPMOD
+			cSTATUS := ST9->T9_STATUS
+		EndIf
+
+		If !lAuto .And. M->TR4_DESTIN $ '1/2/5/6' .And. Empty(M->TR4_MOTIVO)
+			Help(' ',1,STR0009 ,,STR0013,2,0,,,,,,) //"Atenção"###"Campo Motivo Obrigatório para Destino Diferente de Estoque Usado."
+			lRetGrav := .F.
+		EndIf
+
+		If lRetGrav
+			If (Inclui .And. Empty(cCodST9Est)) .Or. (Altera .And. M->TR4_DESTIN != TR4->TR4_DESTIN .And. Empty(cCodST9Est))
+				dbSelectArea("ST9")
+				dbSetOrder(01)
+				
+				If dbSeek(xFilial("ST9")+M->TR4_CODBEM) .And. AllTrim(M->TR4_DESTIN) $ AllTrim(SuperGetMV('MV_NG1ANAT')) // Validação necessária para impedir 
+				                                                                                       // que a tela de baixa seja executada 
+																									   // quando o destino não requer baixa pelo parâmetro
+					lRetGrav := MNT600DEST(.F.)
+				
+				EndIf
+			
+			EndIf
+
+			vDADOS := {M->TR4_CODBEM,M->TR4_DTANAL,M->TR4_HRANAL,M->TR4_BANDA,M->TR4_DESTIN,cMod,"",""}
+			If M->TR4_DESTIN $ cDestinEst
+				vDados[7] := cCodST9Est
+				vDados[8] := cCodST9Alm
+			EndIf
+		EndIf
+
+		If lRetGrav .And. Inclui .And. !fValExcAna(M->TR4_CODBEM, M->TR4_DTANAL, M->TR4_HRANAL)
+			lRetGrav := .F.
+		EndIf
+
+		Begin Transaction
+
+			If lRetGrav .And. !MNT600ST(vDADOS) //ATUALIZA STATUS,SULCO TQS
+				dbSelectArea("TR4")
+				dbSetOrder(1)
+				dbGoTo(nRecno)
+				DisarmTransaction()
+				lRetGrav := .F.
+			EndIf
+
+            If lRetGrav .And. !MNT600HST(vDADOS)  //GRAVA TABELA DE HISTORICO DE STATUS
+				dbSelectArea("TR4")
+				dbSetOrder(1)
+				dbGoTo(nRecno)
+				DisarmTransaction()
+				lRetGrav := .F.
+			EndIf
+
+			If lRetGrav .And. !MNT600HSUL(vDADOS)  //GRAVA TABELA DE HISTORICO DE SULCO
+				dbSelectArea("TR4")
+				dbSetOrder(1)
+				dbGoTo(nRecno)
+				DisarmTransaction()
+				lRetGrav := .F.
+			EndIf
+
+			If lRetGrav .And. NGCADICBASE('TR4_NUMSEQ','A','TR4',.F.)
+
+				If !Empty(cCodST9Est) .And. M->TR4_DESTIN $ cDestinEst //Se o destino informado for um destino que movimenta estoque (gera SD3)
+					
+					xRet := NGMOVEST( 'DE0', cCodTMx, , lAuto )
+					
+					If ( ValType( xRet ) == 'A' .And. !xRet[1] ) .Or.;
+						( ValType( xRet ) == 'L' .And. !xRet )
+						
+						dbSelectArea("TR4")
+						dbSetOrder(1)
+						dbGoTo(nRecno)
+						DisarmTransaction()
+						lRetGrav    := .F.
+						
+						/*--------------------------------------------------+
+						| Caso a chamada seja por meio do ExecAuto MNTA600. |
+						+--------------------------------------------------*/
+						If lAuto
+							lMsErroAuto := .T.
+							AutoGRLog( xRet[2] )
+						EndIf
+
+					EndIf
+
+				EndIf
+
+                If lRetGrav .And. (Inclui .Or. (lAuto .And. !Altera))
+                    dbSelectArea("ST9")
+                    dbSetOrder(16) //T9_CODBEM+T9_SITBEM
+                    If dbSeek(M->TR4_CODBEM)
+                        RecLock("ST9",.F.)
+                        ST9->T9_CODESTO := IIf(lAuto,CODESTO,cCodST9Est)
+                        ST9->T9_LOCPAD  := IIf(lAuto,ALMOXA,cCodST9Alm)
+                        ST9->(MsUnlock())
+                    EndIf
+
+					If cOldAlmx <> "AT"
+						cCodST9Est := cOldCodEst
+						cCodST9Alm := cOldAlmx
+						cCodST9CC := NGSEEK('ST9',M->TR4_CODBEM,1,'T9_CCUSTO')
+						If !Empty(cCodST9Est) .And. AllTrim(GetNewPar("MV_NGPNEST","N")) == "S" //Se o parâmetro de Controle de Estoque estiver habilitado
+							
+							xRet := NGMOVEST( 'RE0', , cOldCodLoc, lAuto )
+
+							If ( ValType( xRet ) == 'A' .And. !xRet[1] ) .Or.;
+								( ValType( xRet ) == 'L' .And. !xRet )
+								
+								dbSelectArea("ST9")
+								dbSetOrder(16)
+								If dbSeek(M->TR4_CODBEM)
+									RecLock("ST9",.F.)
+									ST9->T9_CODESTO := cOldCodEst
+									ST9->T9_LOCPAD  := cCodST9Alm
+									ST9->(MsUnlock())
+									dbSelectArea("TR4")
+									dbSetOrder(1)
+									dbGoTo(nRecno)
+									DisarmTransaction()
+									lRetGrav := .F.
+
+									/*--------------------------------------------------+
+									| Caso a chamada seja por meio do ExecAuto MNTA600. |
+									+--------------------------------------------------*/
+									If lAuto
+										lMsErroAuto := .T.
+										AutoGRLog( xRet[2] )
+									EndIf
+
+								EndIf
+								cCodST9Est := " "
+								cCodST9Alm := " "
+								cCodST9CC  := " "
+								cOldCodEst := " "
+								cOldAlmx   := " "
+
+							ElseIf !Empty(cOldAlmx)
+								BeginSQL Alias cAliasQry
+									SELECT (TQZ.R_E_C_N_O_) FROM %table:TQZ% TQZ
+										WHERE
+											TQZ.TQZ_FILIAL = %xFilial:TQZ% AND
+											TQZ.TQZ_CODBEM = %exp:M->TR4_CODBEM% AND
+											TQZ.TQZ_ALMOX  <> '' AND
+											TQZ.TQZ_DTSTAT || TQZ.TQZ_HRSTAT < %exp:DtoS(M->TR4_DTANAL) + M->TR4_HRANAL% AND
+											TQZ.%notDel%
+										ORDER BY TQZ.TQZ_DTSTAT || TQZ.TQZ_HRSTAT DESC
+								EndSQL
+
+								dbSelectArea(cAliasQry)
+								dbGoTop()
+								dbSelectArea("TQZ")
+								dbGoto((cAliasQry)->R_E_C_N_O_)
+								If !EoF() .And. cOldAlmx <> TQZ->TQZ_ALMOX
+									RecLock("TQZ",.F.)
+									TQZ->TQZ_ALMOX := cOldAlmx
+									MsUnlock()
+								EndIf
+
+								(cAliasQry)->(dbCloseArea())
+
+							EndIf
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		End Transaction
+
+	Else
+
+		Begin Transaction
+			cCodST9Es2 := ""
+			If lRetGrav .And. NGCADICBASE('TR4_NUMSEQ','A','TR4',.F.)
+				Inclui := .T.
+
+				If !Empty(TR4->TR4_NUMSEQ)
+
+					//Busca qual filia houve a requisição
+					cAliSD3Fil := GetNextAlias()
+					cQuery := "SELECT D3_FILIAL, D3_COD, D3_LOCAL  "
+					cQuery += "  FROM " + RetSqlName("SD3")
+					cQuery += " WHERE D3_NUMSEQ  = '" + TR4->TR4_NUMSEQ + "' "
+					cQuery += "   AND D_E_L_E_T_ <> '*' "
+					cQuery := ChangeQuery(cQuery)
+					dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliSD3Fil, .F., .T.)
+
+					While !EoF()
+						cFilMov    := (cAliSD3Fil)->D3_FILIAL
+						cCodST9Est := (cAliSD3Fil)->D3_COD
+						cCodST9Alm := (cAliSD3Fil)->D3_LOCAL
+						cCodST9CC  := NGSEEK('ST9',M->TR4_CODBEM,1,'T9_CCUSTO')
+						NGMOVEST("DE0")
+
+						Exit
+					End
+
+					(cAliSD3Fil)->(dbCloseArea())
+
+				EndIf
+
+				If !Empty(TR4->TR4_NUMSE2)
+
+					//Busca qual filia houve a requisição
+					cAliSD3Fil := GetNextAlias()
+					cQuery := "SELECT D3_FILIAL, D3_COD, D3_LOCAL  "
+					cQuery += "  FROM " + RetSqlName("SD3")
+					cQuery += " WHERE D3_NUMSEQ  = '" + TR4->TR4_NUMSE2 + "' "
+					cQuery += "   AND D_E_L_E_T_ = '' "
+					cQuery := ChangeQuery(cQuery)
+					dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliSD3Fil, .F., .T.)
+
+					While !EoF()
+						cFilMov    := (cAliSD3Fil)->D3_FILIAL
+						cCodST9Est := (cAliSD3Fil)->D3_COD
+						cCodST9Alm := (cAliSD3Fil)->D3_LOCAL
+						cCodST9CC  := NGSEEK('ST9',M->TR4_CODBEM,1,'T9_CCUSTO')
+						NGMOVEST("RE0")
+						Exit
+					End
+
+					(cAliSD3Fil)->(dbCloseArea())
+				EndIf
+
+				dbSelectArea("TQZ")
+				dbSetOrder(01)
+				dbSeek(xFilial("TQZ")+TR4->TR4_CODBEM+DTOS(TR4->TR4_DTANAL)+TR4->TR4_HRANAL)
+
+				dbSelectArea("TQV")
+				dbSetOrder(01)
+				dbSeek(xFilial("TQV")+TR4->TR4_CODBEM+DTOS(TR4->TR4_DTANAL)+TR4->TR4_HRANAL)
+
+				dbSelectArea("ST9")
+				dbSetOrder(16)
+				If dbSeek(TR4->TR4_CODBEM)
+					If ExistBlock("MNTA6002")
+						ExecBlock("MNTA6002",.F.,.F.)
+					Else
+						RecLock("ST9",.F.)
+						ST9->T9_STATUS  := TQZ->TQZ_STATUS
+						ST9->T9_CODESTO := IIF(!Empty(cCodST9Est),cCodST9Est,"")
+						ST9->T9_LOCPAD  := cCodST9Alm
+						ST9->(MsUnlock())
+					EndIf
+				EndIf
+
+				dbSelectArea("TQS")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TQS")+TR4->TR4_CODBEM)
+					RecLock("TQS",.F.)
+					TQS->TQS_SULCAT  := TQV->TQV_SULCO
+					TQS->(MsUnlock())
+				EndIf
+
+				Inclui := .F.
+			EndIf
+		End Transaction
+
+	EndIf
+
+    If lRetGrav
+        //Ponto de Entrada para gravação de campos específicos
+        If ExistBlock("MNTA6006")
+            ExecBlock("MNTA6006",.F.,.F.)
+        EndIf
+
+        cCodST9Est := " "
+        cCodST9Alm := " "
+        cCodST9CC  := " "
+        cOldCodEst := " "
+        cOldAlmx   := " "
+    EndIf
+
+    RestArea( aArea )
+
+Return lRetGrav
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT600ST  ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³18/10/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Atualiza Status TQS e ST9                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT600ST(vDADOS)
+
+	If Inclui
+		If M->TR4_DESTIN == '1'
+			cSTATUS := GetMv("MV_NGSTAGR")
+		ElseIf M->TR4_DESTIN == '2'
+			cSTATUS := GetMv("MV_NGSTAGC")
+		ElseIf M->TR4_DESTIN == '3'
+			cSTATUS := AllTrim(GetMv("MV_NGSTAEU"))
+			If Len(cSTATUS) > 2
+				cSTATUS := MNT600EU(cSTATUS)
+			EndIf
+		ElseIf M->TR4_DESTIN == '4'
+			cSTATUS := GetMv("MV_NGSTAER")
+		ElseIf M->TR4_DESTIN == '5'
+			cSTATUS := GetMv("MV_NGSTAAT")
+		ElseIf M->TR4_DESTIN == '6'
+			cSTATUS := GetMv("MV_NGSTARS")
+		ElseIf M->TR4_DESTIN == '7'
+			cSTATUS := GetMv("MV_NGSTAEN")
+		EndIf
+	EndIf
+
+	nSulco := STR(M->TR4_SULCO)
+
+	If cSTATUS == GetMv("MV_NGSTARS")
+		cSITBEM := 'I'
+	Else
+		cSITBEM := " "
+	EndIf
+
+	If Altera
+		dbSelectArea("TR4")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TR4",cFilBem)+vDADOS[1]+Dtos(vDADOS[2])+vDADOS[3])
+			If TR4->TR4_DESTIN <> vDADOS[5]
+				If vDADOS[5] <> '6'
+					cSITBEM := 'A'
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	dbSelectArea("TQS")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQS",cFilBem)+M->TR4_CODBEM)
+		RecLock("TQS",.F.)
+		TQS->TQS_SULCAT := M->TR4_SULCO
+		TQS->TQS_DTMEAT := M->TR4_DTANAL
+		TQS->TQS_HRMEAT := M->TR4_HRANAL
+		TQS->(MsUnLock())
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	If dbSeek(xFilial("ST9",cFilBem)+M->TR4_CODBEM)
+		RecLock("ST9",.F.)
+		lOldT9Stat := ST9->T9_STATUS
+		ST9->T9_STATUS := cStatus
+		If !Empty(cSITBEM)
+			ST9->T9_SITBEM  := cSITBEM
+			If cSITBEM == "I"
+				ST9->T9_DTBAIXA := M->TR4_DTANAL
+				ST9->T9_SITMAN  := "I"
+			EndIf
+		EndIf
+		ST9->(MsUnLock())
+	EndIf
+
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT600HST ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³02/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³GRAVA TABELA DE HISTORICO DE STATUS                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600HST(vDADOS)
+
+	Local cChv := vDADOS[1]+DTOS(vDADOS[2])+vDADOS[3]
+	Local lContEst := NGCADICBASE("TQZ_PRODUT","D","TQZ",.F.)
+	Local lAltera := .F.
+	Local nRecTQZ := 0
+	Local lAuto   := Type( 'l600Auto' ) == 'L' .And. l600Auto
+
+	dbSelectArea("TQZ")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQZ",cFilBem)+cChv)
+		lAltera := .T.
+		nRecTQZ := Recno()
+	EndIf
+
+	If !dbSeek(xFilial("TQZ",cFilBem)+cChv) .And. !lAltera //.And. cSTATUS <> lOldT9Staty
+		RecLock("TQZ", .T.)
+		TQZ->TQZ_FILIAL := cFilBem
+		TQZ->TQZ_CODBEM := M->TR4_CODBEM
+		TQZ->TQZ_DTSTAT := M->TR4_DTANAL
+		TQZ->TQZ_HRSTAT := M->TR4_HRANAL
+		TQZ->TQZ_STATUS := cSTATUS
+		If lContEst
+			TQZ->TQZ_PRODUT := cCodST9Est
+			TQZ->TQZ_ALMOX  := cCodST9Alm
+		EndIf
+		TQZ->(MsUnlock())
+	ElseIf Altera .And. cSTATUS <> lOldT9Stat
+		RecLock("TQZ", .F.)
+		TQZ->TQZ_FILIAL := cFilBem
+		TQZ->TQZ_CODBEM := M->TR4_CODBEM
+		TQZ->TQZ_DTSTAT := M->TR4_DTANAL
+		TQZ->TQZ_HRSTAT := M->TR4_HRANAL
+		TQZ->TQZ_STATUS := cSTATUS
+		If lContEst
+			TQZ->TQZ_PRODUT := IIf(lAuto,CODESTO,cCodST9Est)
+			TQZ->TQZ_ALMOX  := IIf(lAuto,ALMOXA,cCodST9Alm)
+		EndIf
+		TQZ->(MsUnlock())
+	ElseIf lContEst
+		If (AllTrim(cOldCodEst) <> AllTrim(vDADOS[7]) .Or.  AllTrim(cOldAlmx) <> AllTrim(vDADOS[8]))
+			If lAltera
+				dbGoTo(nRecTQZ)
+				RecLock("TQZ", .F.)
+			Else
+				RecLock("TQZ", .T.)
+			EndIf
+			TQZ->TQZ_FILIAL := cFilBem
+			TQZ->TQZ_CODBEM := M->TR4_CODBEM
+			TQZ->TQZ_DTSTAT := M->TR4_DTANAL
+			TQZ->TQZ_HRSTAT := M->TR4_HRANAL
+			TQZ->TQZ_STATUS := cSTATUS
+			TQZ->TQZ_PRODUT := cCodST9Est
+			TQZ->TQZ_ALMOX  := cCodST9Alm
+			TQZ->(MsUnlock())
+		EndIf
+	EndIf
+
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT600HSUL³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³02/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³GRAVA TABELA DE HISTORICO DE SULCO                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600HSUL(vDADOS)
+
+	dbSelectArea("TQV")
+	dbSetOrder(1)
+	If !dbSeek(xFilial("TQV",cFilBem)+vDADOS[1]+DTOS(vDADOS[2])+vDADOS[3]+vDADOS[4])
+		RecLock("TQV",.T.)
+		TQV->TQV_FILIAL := xFilial("TQV",cFilBem)
+		TQV->TQV_CODBEM := M->TR4_CODBEM
+		TQV->TQV_DTMEDI := M->TR4_DTANAL
+		TQV->TQV_HRMEDI := M->TR4_HRANAL
+		TQV->TQV_BANDA  := M->TR4_BANDA
+		dbSelectArea("TQS")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQS",cFilBem)+M->TR4_CODBEM)
+			If TQS->TQS_BANDAA <> "1"
+				TQV->TQV_DESENH := TQS->TQS_DESENH
+			EndIf
+		EndIf
+		TQV->TQV_SULCO  := M->TR4_SULCO
+		TQV->(MsUnlock())
+	Else
+		If Altera
+			RecLock("TQV", .F.)
+			TQV->TQV_FILIAL := cFilBem
+			TQV->TQV_CODBEM := M->TR4_CODBEM
+			TQV->TQV_DTMEDI := M->TR4_DTANAL
+			TQV->TQV_HRMEDI := M->TR4_HRANAL
+			TQV->TQV_BANDA  := M->TR4_BANDA
+			TQV->TQV_SULCO  := M->TR4_SULCO
+			TQV->(MsUnlock())
+		EndIf
+	EndIf
+
+Return .T.
+
+//----------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT600SULC
+VALIDA SULCO NAO PODE SER MAIOR QUE ULTIMO DO HISTORICO.
+@type function
+
+@author Evaldo Cevinscki Jr.
+@since 02/11/2006
+
+@sample MNT600SULC()
+
+@param cCodBem , Caracter , Código do pneu.
+@param nSulco  , Númerico , Valor informado do sulco.
+@param cFilPar , Caracter , Filial informada.
+@param cStatPne, Caracter , Status do atual pneu.
+
+@return Lógico , Verifica se o sulco é valido.
+/*/
+//----------------------------------------------------------------------------------------------------------
+Function MNT600SULC(cCodBem, nSulco, cFilPar, cStatPne, cDataInc, cHorInc)
+
+	Local aOldArea   := GetArea()
+	Local lRet       := .T.
+	Local lAuto      := IIf(Type("l600Auto") == "L",l600Auto,.F.)
+	Local cAliasSul := ""
+
+	Default cCodBem  := M->TR4_CODBEM
+	Default nSulco   := M->TR4_SULCO
+	Default cFilPar  := NGSEEK("ST9", M->TR4_CODBEM, 1, "T9_FILIAL")
+	Default cStatPne := AllTrim(NGSeek("ST9", cCodBem, 1, "T9_STATUS"))
+	Default cDataInc := M->TR4_DTANAL
+	Default cHorInc  := M->TR4_HRANAL
+
+	If !lAuto
+
+		If nSulco >= 0
+
+			dbSelectArea("TQS")
+			dbSetOrder(01)
+			dbSeek(xFilial("TQS") + cCodBem)
+
+			dbSelectArea("ST9")
+			dbSetOrder(01)
+			dbSeek(xFilial("ST9") + cCodBem)
+
+			If AllTrim(TQS->TQS_BANDAA) == '1'
+				dbSelectArea("TQX")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TQX") + TQS->TQS_MEDIDA + ST9->T9_TIPMOD)
+					If nSulco > TQX->TQX_SULCOO
+						MsgStop(STR0033,STR0009) //"Sulco informado é maior que o sulco da MedidaxModelo do pneu!"###"ATENÇÃO"
+						lRet := .F.
+					EndIf
+				EndIf
+			Else
+				dbSelectArea("TQU")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TQU") + TQS->TQS_DESENH + ST9->T9_FABRICA)
+					If nSulco > TQU->TQU_SULCO
+						MsgStop(STR0034,STR0009) //"Sulco informado é maior que o sulco do Desenho do pneu!"###"ATENÇÃO"
+						lRet := .F.
+					EndIf
+				EndIf
+			EndIf
+
+			If lRet
+				cAliasSul := GetNextAlias()
+				BeginSQL Alias cAliasSul
+
+				SELECT TQV_SULCO
+					FROM %table:TQV% TQV
+						WHERE TQV.TQV_FILIAL = %exp:xFilial("TQV")%
+							AND TQV.TQV_CODBEM = %exp:cCodBem%
+							AND TQV.TQV_DTMEDI || TQV.TQV_HRMEDI <= %exp:DtoS(cDataInc)+cHorInc%
+							AND %NotDel%
+							ORDER BY TQV.TQV_DTMEDI || TQV.TQV_HRMEDI DESC
+
+				EndSQL
+
+				If (cAliasSul)->( !EoF() )
+					If nSulco > (cAliasSul)->TQV_SULCO
+						If !MsgYesNo(STR0007,STR0008) //"Sulco informado é maior do que o anterior, deseja confirmar informação?"###"ATENCÃO"
+							lRet := .F.
+						EndIf
+					EndIf
+				EndIf
+				(cAliasSul)->( dbCloseArea() )
+
+			EndIf
+		Else
+			MsgStop(STR0109,STR0009) //"Sulco do pneu não pode ser negativo"###"ATENÇÃO"
+			lRet := .F.
+		EndIf
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT600DTAN³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³02/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³VALIDA DATA DA ANALISE PELO FORNECEDOR,NAO PODE SER MAIOR   ³±±
+±±³          ³QUE A DATA CORRENTE NEM MAIOR QUE DATA DA ANALISE           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600DTAN(dAnlForn,dAnalise)
+
+    Local lRet := .T.
+
+	Default dAnlForn := M->TR4_DTANFN
+	Default dAnalise := M->T9_DTBAIXA
+
+    If (!Empty(dAnalise) .And. !Empty(dAnlForn) .And. (dAnlForn > dDataBase .Or. dAnlForn < dAnalise)) .Or. (!Empty(dAnlForn) .And. (dAnlForn > dDataBase))
+        HELP(" ",1,STR0009,,STR0010 + STR0011 + STR0012,3,1)
+        //Alterado help para o que o texto fique sem pular linha pois no P12 a quebra é corretamente calculada.
+        //"ATENÇÃO"
+        //"Data de análise pelo fornecedor, não pode ser maior que "
+        //"a data corrente, nem menor que a data de inclusão do registro de análise técnica!"
+        lRet := .F.
+    EndIf
+
+Return lRet
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT600ACE ³ Autor ³Evaldo Cevinscki Jr.   ³ Data ³ 02/11/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Validacao dos campos percentual e valor de credito          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNA600                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600ACE()
+
+	If M->TR4_ACEITE == "2"
+		M->TR4_VLCRED := 0.00
+		M->TR4_PERCRE := 0.00
+	EndIf
+
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT600EXC ³ Autor ³Evaldo Cevinscki Jr.   ³ Data ³ 02/11/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Funcao de exclusao de registros                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNA600                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600EXC()
+
+	Local nUlt := 0
+	Local cBANDA := " "
+	Local aArea   := GetArea()
+	Local cOldEst := ""
+	Local cOldAlm := ""
+	Local lAuto   := Type( 'l600Auto' ) == 'L' .And. l600Auto
+
+	Private aChoice := {}
+
+	//Condição específica para execauto e antes de excluir os relacionamentos
+	If lAuto
+		nRET := MNT600AUTO(5)
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(16)
+ 	If dbSeek(TR4->TR4_CODBEM)
+		cFilBem	:= ST9->T9_FILIAL
+	EndIf
+
+	dbSelectArea("TQS")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQS",cFilBem)+TR4->TR4_CODBEM)
+		cBANDA	:= TQS->TQS_BANDAA
+	EndIf
+
+	vVDadoE := {TR4->TR4_CODBEM,TR4->TR4_DTANAL,TR4->TR4_HRANAL,cBANDA}
+
+	If lTR4_ORDEM
+	    aNao := { "TR4_PRDORI", "TR4_LOCORI", "TR4_ENDORI", "TR4_PRDDES", "TR4_LOCDES", "TR4_TM", "TR4_ORDEM", "TR4_ENDDES" }
+		aChoice  := NGCAMPNSX3( "TR4",aNao )
+	EndIf
+
+	If fValExcAna(TR4->TR4_CODBEM,TR4->TR4_DTANAL,TR4->TR4_HRANAL)
+		If !lAuto
+			nRET := NGCAD01("TR4",Recno(),5)
+		EndIf
+	Else
+		nRET := 0
+	EndIf
+
+	If nRET == 1 .Or. (lAuto .And. nRET == 2)
+		dbSelectArea("TQZ") //HISTORICO STATUS
+		dbSetOrder(1)
+		dbSeek(xFilial("TQZ",cFilBem)+vVDadoE[1]+DTOS(vVDadoE[2])+vVDadoE[3])
+		While !EoF() .And. TQZ->TQZ_FILIAL == cFilBem .And. TQZ->TQZ_CODBEM == vVDadoE[1] ;
+				.And. TQZ->TQZ_DTSTAT >= vVDadoE[2]
+			++nUlt
+			nRECNO := REcno()
+			dbSelectArea("TQZ")
+			dbSkip()
+		End
+		If nUlt == 1
+			dbSelectArea("TQZ")
+			dbGoTo(nRecno)
+			dbSkip(-1)
+			If !EoF() .And. !BoF() .And. TQZ->TQZ_CODBEM == vVDadoE[1]
+				cSTAT := TQZ->TQZ_STATUS
+				cOldEst := If(!Empty(TQZ->TQZ_PRODUT),TQZ->TQZ_PRODUT,Space(TAMSX3("T9_CODESTO")[1]))
+				cOldAlm := If(!Empty(TQZ->TQZ_ALMOX),TQZ->TQZ_ALMOX,Space(TAMSX3("T9_LOCPAD")[1]))
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+				If dbSeek(xFilial("ST9",cFilBem)+vVDadoE[1])
+					RecLock("ST9",.F.)
+					ST9->T9_STATUS := cSTAT
+					ST9->T9_CODESTO := cOldEst
+					ST9->T9_LOCPAD  := cOldAlm
+					If ST9->T9_SITBEM == "I"
+						ST9->T9_SITBEM  := "A"
+						ST9->T9_SITMAN  := "A"
+						//If TR4->TR4_DESTIN == '6'
+						ST9->T9_DTBAIXA := CTOD('  /  /  ')
+						//ST9->T9_MTBAIXA := " "
+						//EndIf
+					EndIf
+					ST9->(MsUnlock())
+				EndIf
+			EndIf
+		EndIf
+		dbSelectArea("TQZ")
+		dbSetOrder(2)
+		If dbSeek(xFilial("TQZ",cFilBem)+vVDadoE[1]+DTOS(vVDadoE[2])+vVDadoE[3])// .And. (lDelTQZ .Or. nUlt > 1)
+			RecLock("TQZ",.F.)
+			dbDelete()
+			TQZ->(MsUnlock())
+		EndIf
+		//HISTORICO DE SULCO
+		nUlt := 0
+		dbSelectArea("TQV")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQV",cFilBem)+vVDadoE[1]+DTOS(vVDadoE[2])+vVDadoE[3]+vVDadoE[4])
+		While !EoF() .And. TQV->TQV_FILIAL == cFilBem .And. TQV->TQV_CODBEM == vVDadoE[1] ;
+				.And. TQV->TQV_BANDA >= vVDadoE[4] .And. TQV->TQV_DTMEDI >= vVDadoE[2]
+			++nUlt
+			nRecno := Recno()
+			dbSelectArea("TQV")
+			dbSkip()
+		End
+		If nUlt == 1
+			dbSelectArea("TQV")
+			dbGoTo(nRecno)
+			dbSkip(-1)
+			If !EoF() .And. !BoF() .And. TQV->TQV_CODBEM == vVDadoE[1]
+				nSulco := TQV->TQV_SULCO
+				dbSelectArea("TQS")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TQS",cFilBem)+vVDadoE[1])
+					RecLock("TQS",.F.)
+					TQS->TQS_SULCAT := nSULCO
+					TQS->TQS_DTMEAT := TQV->TQV_DTMEDI
+					TQS->TQS_HRMEAT := TQV->TQV_HRMEDI
+					TQS->(MsUnlock())
+				EndIf
+			EndIf
+		EndIf
+		dbSelectArea("TQV")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQV",cFilBem)+vVDadoE[1]+DTOS(vVDadoE[2])+vVDadoE[3]+vVDadoE[4])
+			RecLock("TQV",.F.)
+			dbDelete()
+			TQV->(MsUnlock())
+		EndIf
+	EndIf
+	RestArea(aArea)
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT600DISP³ Autor ³Evaldo Cevinscki Jr.   ³ Data ³ 02/11/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Funcao de exclusao de registros                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNA600                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT600DISP(cKEY,cINI)
+
+	Local aArea := GetArea()
+	Local cRet  := ''
+
+	If Type("_NaoUtiliza") <> "C" //Verifica se foi definida a varival para inibir a ativacao da funcao
+		cCampo := ""
+		If cINI == 'cCampo' .And. !Inclui
+			MNT600KM()
+			cINI := cCAMPO
+		EndIf
+		dbSetOrder(1)
+		If !dbSeek(xFilial()+ckey) .Or. Empty(cKey) .Or. Inclui
+			cRet := &cINI.
+			If ValType(cRet) == 'N'
+				cRet := Space(Len(Str(cRet)))
+			Else
+				cRet := Space( Len(cRET) )
+			EndIf
+		Else
+			cRet := &cINI.
+		EndIf
+
+		If ValType(cRet) == 'N'
+			cRET := ALLTRIM(Str(cRet))
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return cRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT600EXIST³Autor ³Evaldo Cevinscki Jr.   ³ Data ³ 16/11/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Funcao de validacao para existe CPO e Chave                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT600EXIST(cTIPO)
+
+	Local aArea  := GetArea()
+	Local cHora  := ""
+	Local dData  := CTOD("")
+	Local lRet   := .T.
+	Local lAuto  := Type( 'l600Auto' ) == 'L' .And. l600Auto
+
+	If cTIPO =="CPO"
+		dbSelectArea("ST9")
+		dbSetOrder(01)
+		If !dbSeek(xFilial("ST9")+M->TR4_CODBEM)
+			Help(" ",1,STR0009,,STR0014,3,1) //"ATENÇÃO"###"Código inválido!"
+			lRet := .F.
+		Else
+			If ST9->T9_SITBEM != 'A'
+				Help(" ",1,STR0009,,STR0015,3,1) //"ATENÇÃO"###"O pneu não está ativo!"
+				lRet := .F.
+			EndIf
+			If lRet .And. ST9->T9_CATBEM != '3'
+				Help(" ",1,STR0009,,STR0016,3,1) //"ATENÇÃO"###"Código informado não é Pneu!"
+				lRet := .F.
+			EndIf
+			If lRet .And. ST9->T9_STATUS == GETMV("MV_NGSTAPL") .Or. ST9->T9_STATUS == GETMV("MV_NGSTATR")
+				Help(" ",1,STR0009,,STR0017+STR0040,3,1) //"ATENÇÃO"###"Status Pneu deverá ser diferente de Aplicado"###"/Em Trânsito."
+				lRet := .F.
+			EndIf
+			If lRet .And. GetNewPar("MV_ESTNEG",'N') == 'N' .And. lUsaIntEs
+				If !MNT600PROD(ST9->T9_CODESTO,,.T.)
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+		M->TR4_SULCO := 0
+	ElseIf cTIPO = "CHAVE"
+		If !NGVALHORA(M->TR4_HRANAL)
+			lRet := .F.
+		EndIf
+		dbSelectArea("TR4")
+		dbSetOrder(1)
+		If lRet
+			If !(Altera .And. lAuto) .And. dbSeek(xFilial("TR4")+M->TR4_CODBEM+Dtos(M->TR4_DTANAL)+M->TR4_HRANAL)
+				//"Já existe analise técnica para este pneu na mesma data e hora informada."
+				Help(' ',1,STR0009 ,,STR0018,;
+				2,0,,,,,, {STR0131 + DtoC(M->TR4_DTANAL) + STR0053 + M->TR4_HRANAL + "."})
+				//"Informe uma data e hora superior a " ##  " as "
+				lRet := .F.
+			Else
+				If !(Altera .And. lAuto)
+					dbSelectArea("TQZ")
+					dbSetOrder(1)
+					dbSeek(xFilial("TQZ")+M->TR4_CODBEM)
+					While TQZ->(!EoF()) .And. TQZ->TQZ_CODBEM == M->TR4_CODBEM
+						cHora := TQZ->TQZ_HRSTAT
+						dData := TQZ->TQZ_DTSTAT
+						dbSelectArea("TQZ")
+						TQZ->(dbSkip())
+					End
+					If lRet .And. M->TR4_DTANAL == dData
+						If M->TR4_HRANAL <= cHora
+							Help(' ',1,STR0009 ,,STR0052 +  DtoC(dData) + STR0053 + cHora + STR0054,2,0,,,,,, {STR0055})
+							lRet := .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet
+			cHora := SubStr(Time(),1,5)
+			dData := dDataBase
+
+			If (M->TR4_HRANAL > cHora .And. dData == M->TR4_DTANAL)
+				Help(" ",1,STR0009,,STR0023,3,1) //"ATENÇÃO"###"Hora da análise técnica não pode ser superior à hora da data atual."
+				lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf cTIPO == 'DATA'
+		dbSelectArea("TQZ")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQZ")+M->TR4_CODBEM)
+		While TQZ->(!EoF()) .And. TQZ->TQZ_CODBEM == M->TR4_CODBEM
+			dData := TQZ->TQZ_DTSTAT
+			cHora := TQZ->TQZ_HRSTAT
+			dbSelectArea("TQZ")
+			TQZ->(dbSkip())
+		End
+		If M->TR4_DTANAL < dData
+			Help(' ',1,STR0009 ,,STR0052 +  DtoC(dData) + STR0053 + cHora + STR0054,2,0,,,,,, {STR0055})
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If lRet .And. !lAuto .And. !M600DTA(M->TR4_DTANAL)
+		RestArea(aArea)
+		lRet := .F.
+	EndIf
+
+	If lRet
+		If cTIPO == "CPO"
+			cCodST9Est := " "
+			cCodST9Alm := " "
+			cCodST9CC  := " "
+		EndIf
+
+		//Verifica se existe uma O.S. em lote para o Pneu
+		MNT600VLOS(.F.)
+	EndIf
+
+	RestArea(aArea)
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MenuDef  ³ Autor ³ Rafael Diogo Richter  ³ Data ³02/02/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Utilizacao de Menu Funcional.                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMNT                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³		1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                          ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MenuDef()
+
+	Local aRotina := {{STR0001,"AxPesqui" ,0,1},;  //"Pesquisar"
+					  {STR0002,"MNT600INC",0,2},;  //"Visualizar"
+					  {STR0003,"MNT600INC",0,3},; //"Incluir"
+					  {STR0004,"MNT600INC",0,4},; //"Alterar"
+					  {STR0005,"MNT600EXC",0,5}}  //"Excluir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600INC
+
+@return Booleano
+/*/
+//---------------------------------------------------------------------
+Function MNT600INC(cAlias,nRecno,nOpcx)
+
+	Private aChoice := {}
+
+	If Type( 'l600Auto' ) == 'L' .And. l600Auto
+		MNT600AUTO(nOpcx)
+		Return
+	Else
+		If lTR4_ORDEM
+			aNao := { "TR4_PRDORI", "TR4_LOCORI", "TR4_ENDORI", "TR4_PRDDES", "TR4_LOCDES", "TR4_TM", "TR4_ORDEM","TR4_ENDDES" }
+			aChoice  := NGCAMPNSX3( "TR4",aNao )
+		EndIf
+		NGCAD01(cAlias,nRecno,nOpcx)
+		Return
+	EndIf
+
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³ M600DTA  ³Autor  ³Thiago Olis Machado    ³ Data ³ 01/06/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida data de analise com a data do pneu na estrutura.     ³±±
+±±³          ³Nao podera ser feito analise tecnica com o pneu aplicado.   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA600                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function M600DTA(dDtMov)
+
+	If Empty(M->TR4_HRANAL)
+		Return .T.
+	EndIf
+
+	dbSelectArea("STZ")
+	dbSetOrder(2)
+	dbSeek(xFilial("STZ")+M->TR4_CODBEM)
+
+	While !EoF() .And. STZ->TZ_FILIAL == xFilial("STZ") .And.;
+			STZ->TZ_CODBEM == M->TR4_CODBEM
+
+		If Empty(STZ->TZ_DATASAI) .And. Empty(STZ->TZ_HORASAI)
+			If dDtMov == STZ->TZ_DATAMOV
+				If M->TR4_HRANAL >= STZ->TZ_HORAENT
+					Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+					STR0021,3,1) //"Técnica nesse período."
+					Return .F.
+				EndIf
+			Else
+				If ( dDtMov >= STZ->TZ_DATAMOV )
+					Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+					STR0021,3,1) //"Técnica nesse período."
+					Return .F.
+				EndIf
+			EndIf
+		Else
+			If ( dDtMov == STZ->TZ_DATAMOV ) .And. ( dDtMov == STZ->TZ_DATASAI )
+				If M->TR4_HRANAL >= STZ->TZ_HORAENT .And. M->TR4_HRANAL <= STZ->TZ_HORASAI
+					Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+					STR0021,3,1) //"Técnica nesse período."
+					Return .F.
+				EndIf
+			ElseIf ( dDtMov == STZ->TZ_DATAMOV ) .And. ( dDtMov <= STZ->TZ_DATASAI )
+				If M->TR4_HRANAL >= STZ->TZ_HORAENT
+					Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+					STR0021,3,1) //"Técnica nesse período."
+					Return .F.
+				EndIf
+			Else
+				If ( dDtMov >= STZ->TZ_DATAMOV ) .And. ( dDtMov <= STZ->TZ_DATASAI )
+					If dDtMov == STZ->TZ_DATASAI
+						If M->TR4_HRANAL <= STZ->TZ_HORASAI
+							Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+							STR0021,3,1) //"Técnica nesse período."
+							Return .F.
+						EndIf
+					Else
+						Help("",1,2,STR0009,STR0019+Chr(13)+Chr(10)+STR0020+Chr(13)+Chr(10)+; //"Atenção"###"Esse pneu ainda estava na estrutura nessa"###" data. Não sendo possível fazer Análise "
+						STR0021,3,1) //"Técnica nesse período."
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		dbSelectArea("STZ")
+		dbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600DEST
+Funcao de validacao do campo TR4_DESTIN
+@author Marcos Wagner Junior
+@since 31/07/2008
+
+@return lRet , Lógico, sem inconsistência com o Destino.
+/*/
+//---------------------------------------------------------------------
+Function MNT600DEST(lFim)
+
+    Local oDlgP
+    Local oPnlPai
+    Local oPnlTopo
+	Local oPnlScr
+	Local aOldArea     := GetArea()
+	Local aMNTA6004    := {} // Variável usada no PE MNTA6004
+	Local nOpca        := 0
+	Local cConsultaSB1 := "SB1"
+	Local lRet         := .T.
+	Local lNNR	       := NGCADICBASE("NNR_CODIGO","A","NNR",.F.) .And. AllTrim(NGSEEKDIC("SX3", "B1_LOCPAD", 2, "SX3->X3_F3")) == "NNR"
+
+    //Variaveis utilizadas na montagem da tela
+    Local oFontB
+    Local oFontN
+    Local oGroup1
+    Local oGroup2
+    Local cOldCProd := ""
+    Local cOldProd  := ""
+    Local cOldAlmox := ""
+    Local cOldLocal := ""
+    Local lAltDes   := (M->TR4_DESTIN $ cDestinEst) .And. (Inclui .Or. (Altera .And. M->TR4_DESTIN != TR4->TR4_DESTIN))
+    Local nTamL     := IIf(lAltDes, 340, 235)
+    Local cTxtTitle := "<p>" + STR0113 + "<b> " + AllTrim(M->TR4_CODBEM) + "</b> " + STR0114 + " <b>" + NGRETSX3BOX("TR4_DESTIN",M->TR4_DESTIN) + "</b>" + STR0115 + "</p>"
+	Local lAuto     := Type( 'l600Auto' ) == 'L' .And. l600Auto 
+
+    Private cCodAlmo  := ""
+    Private cCodProd  := ""
+    Private cLocaLi   := ""
+    Private cNomCodP  := ""
+
+	Default lFim := .F.
+
+	//Função de F5 para mostrar saldo por localização
+	SetKey(VK_F5, {|| F4MNTLOCAL()})
+
+	If Type("_NaoUtiliza") <> "C" .And. !lAuto //Verifica se foi definida a varival para inibir a ativacao da funcao
+		cCodAlmo := Space(TAMSX3('B1_LOCPAD')[1])
+		cCodProd := Space(TAMSX3('B1_COD')[1])
+		cLocaLi  := Space(TAMSX3('TL_LOCALIZ')[1])
+		cNomCodP := Space(30)
+
+        If lUsaIntEs
+
+			If M->TR4_DTANAL <= GetMV("MV_ULMES")
+				MsgInfo(STR0049+DtoC(GetMV("MV_ULMES"))+" .")//"A data da analise não pode ser menor ou igual a data do ultimo fechamento do estoque "
+				lRet := .F.
+			EndIf
+
+			If lRet
+				If lFim .And. (Empty(cCodST9Est) .Or. Empty(cCodST9Alm))
+					MsgStop(STR0022,STR0009) //"Será necessário informar o novo código do produto para o 'Destino' selecionado!"###"ATENÇÃO"
+				EndIf
+
+				//Consulta no dicionário se existe a consulta padrão NGSB1
+				dbSelectArea("SXB")
+				dbSetOrder(01)
+				If dbSeek("NGSB1")
+					cConsultaSB1 := "NGSB1"
+				EndIf
+
+				dbSelectArea("ST9") //Busca Antigo Codigo de estoque e almoxarifado do bem
+				dbSetOrder(01)
+				If dbSeek(xFilial("ST9")+M->TR4_CODBEM)
+					cOldCProd := ST9->T9_CODESTO
+					cOldAlmox := ST9->T9_LOCPAD
+				EndIf
+				If !Empty(cOldCProd)
+					dbSelectArea("SB1") //Busca Nome do Produto e Localização
+					dbSetOrder(1)
+					If dbSeek(xFilial("SB1")+Trim(cOldCProd))
+						cOldProd  := SubStr(SB1->B1_DESC,1,30)
+						cOldLocal := Space(TAMSX3('TL_LOCALIZ')[1])
+					EndIf
+				EndIf
+
+				dbSelectArea("ST9")
+				dbSetOrder(01)
+				If dbSeek(xFilial("ST9")+M->TR4_CODBEM)
+
+					// Se o ponto de entrada não existir, monta e exibe a tela.
+					If !ExistBlock( 'MNTA6004' )
+
+						If lAltDes .And. Empty(cOldCProd)
+							If !MSGYESNO(STR0035+Chr(13)+STR0036+Chr(13); //"Não será efetuado o lançamento de insumo para custeio"###"do componente ( Pneu ), pois, o campo de relacionamento"
+								+' ( T9_CODESTO - '+STR0147+' ) ';
+									+STR0037+' '+AllTrim(NGSX2NOME('ST9'))+ChR(13); //"no cadastro de"
+								+STR0038+Chr(13)+Chr(13)+STR0039) //"não está preenchido."###"Confirmar ?"
+								lRet := .F.
+							EndIf
+						EndIf
+
+						If lRet .And. ( lAltDes .Or. !Empty(cOldCProd) )
+
+							If lTR4_ORDEM //Verifica se o campo TR4_ORDEM
+
+								M->TR4_PRDORI := cOldCProd
+								M->TR4_LOCORI := cOldAlmox
+
+								nTamL := IIf(lAltDes, 390, 235)
+
+								//Buscar as informações do dicionário para colocar na tela montada na mão
+								cPrdOriTit := Posicione("SX3",2, "TR4_PRDORI", "X3_TITULO")
+
+								cLocAtuTit := Posicione("SX3",2, "TR4_LOCORI", "X3_TITULO")
+								cLocAtuF3  := Posicione("SX3",2, "TR4_LOCORI", "X3_F3")
+								cLocAtuVld := Posicione("SX3",2, "TR4_LOCORI", "X3_VALID")
+								cLocAtVldU := Posicione("SX3",2, "TR4_LOCORI", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cLocAtVldU)
+									cLocAtuVld += " .And. " + clocAtVldU
+								EndIf
+								//Adiciona When
+								cLocAtuWhen := Posicione("SX3",2, "TR4_LOCORI", "X3_WHEN")
+								If Empty(cLocAtuWhen)
+									cEndAtuWhen := ".T."
+								EndIf
+
+
+								cEndAtuTit := Posicione("SX3",2, "TR4_ENDORI", "X3_TITULO")
+								cEndAtuF3  := Posicione("SX3",2, "TR4_ENDORI", "X3_F3")
+								cENdAtuVld := Posicione("SX3",2, "TR4_ENDORI", "X3_VALID")
+								cEndAtVldU := Posicione("SX3",2, "TR4_ENDORI", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cEndAtVldU)
+									cENdAtuVld += " .And. " + cEndAtVldU
+								EndIf
+								//Adiciona When
+								cEndAtuWhen := Posicione("SX3",2, "TR4_ENDORI", "X3_WHEN")
+								If Empty(cEndAtuWhen)
+									cEndAtuWhen := ".F."
+								EndIf
+
+								//Adiciona relação de usuário
+								cEndOriRl  := Posicione("SX3",2, "TR4_ENDORI", "X3_RELACAO")
+								If !Empty(cEndOriRl)
+									M->TR4_ENDORI := &(cEndOriRl)
+								Else
+									M->TR4_ENDORI := Space(TAMSX3('TR4_ENDORI')[1])
+								EndIf
+
+								//TM
+								cTMTit     := Posicione("SX3",2, "TR4_TM", "X3_TITULO")
+								CTMF3      := Posicione("SX3",2, "TR4_TM", "X3_F3")
+								cTMVld     := Posicione("SX3",2, "TR4_TM", "X3_VALID") //MntValTm(M->TR4_TM)
+								cTMVldU    := Posicione("SX3",2, "TR4_TM", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cTMVldU)
+									cTMVld += " .And. " + cTMVldU
+								EndIf
+								cTMtRl  := Posicione("SX3",2, "TR4_TM", "X3_RELACAO")
+								//Adiciona relação de usuário
+								If !Empty(cTMtRl)
+									M->TR4_TM := &(cTMtRl)
+								Else
+									M->TR4_TM := Space(TAMSX3('TR4_TM')[1])
+								EndIf
+								//Adiciona When
+								cTMWhen := Posicione("SX3",2, "TR4_TM", "X3_WHEN")
+								If Empty(cTMWhen)
+									cTMWhen := ".T."
+								EndIf
+
+								//Ordem de Serviço
+								cOrdemTit  := Posicione("SX3",2, "TR4_ORDEM", "X3_TITULO")
+								cOrdemF3   := Posicione("SX3",2, "TR4_ORDEM", "X3_F3")
+								cOrdemVld  := Posicione("SX3",2, "TR4_ORDEM", "X3_VALID")
+								cOrdemVlU  := Posicione("SX3",2, "TR4_ORDEM", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cOrdemVlU)
+									cOrdemVld += " .And. " + cOrdemVlU
+								EndIf
+								cOrdemtRl  := Posicione("SX3",2, "TR4_ORDEM", "X3_RELACAO")
+								//Adiciona relação de usuário
+								If !Empty(cOrdemtRl)
+									M->TR4_ORDEM := &(cOrdemtRl)
+								Else
+									M->TR4_ORDEM := Space(TAMSX3('TR4_ORDEM')[1])
+								EndIf
+								//Adiciona When
+								cOrdemWhen := Posicione("SX3",2, "TR4_ORDEM", "X3_WHEN")
+								If Empty(cOrdemWhen)
+									cOrdemWhen := ".F."
+								EndIf
+
+								//Produto destino
+								cPrdDesTit := Posicione("SX3",2, "TR4_PRDDES", "X3_TITULO")
+								cPrdDestF3 := Posicione("SX3",2, "TR4_PRDDES", "X3_F3") //cConsultaSB1
+								cPrdDestVl := Posicione("SX3",2, "TR4_PRDDES", "X3_VALID") //MNT600PROD(cCodProd)
+								cPrdDestVU := Posicione("SX3",2, "TR4_PRDDES", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cPrdDestVU)
+									cPrdDestVl += " .And. " + cPrdDestVU
+								EndIf
+								cPrdDestRl  := Posicione("SX3",2, "TR4_PRDDES", "X3_RELACAO")
+								//Adiciona relação de usuário
+								If !Empty(cPrdDestRl)
+									M->TR4_PRDDES := &(cPrdDestRl)
+								Else
+									M->TR4_PRDDES := Space(TAMSX3('TR4_PRDDES')[1])
+								EndIf
+								//Adiciona When
+								cPrdDesWhen := Posicione("SX3",2, "TR4_PRDDES", "X3_WHEN")
+								If Empty(cPrdDesWhen)
+									cPrdDesWhen := ".T."
+								EndIf
+
+								//Local destino
+								cLocDesTit := Posicione("SX3",2, "TR4_LOCDES", "X3_TITULO")
+								cLocDestF3 := Posicione("SX3",2, "TR4_LOCDES", "X3_F3") //NNR
+								cLocDestVl := Posicione("SX3",2, "TR4_LOCDES", "X3_VALID") //If(!Empty(cCodAlmo), ExistCpo("NNR",cCodAlmo), .T.)
+								cLocDestVU := Posicione("SX3",2, "TR4_LOCDES", "X3_VLDUSER")
+								//Adiciona valida de usuário
+								If !Empty(cLocDestVU)
+									cLocDestVl += " .And. " + cLocDestVU
+								EndIf
+								cLocDestRl  := Posicione("SX3",2, "TR4_LOCDES", "X3_RELACAO")
+								//Adiciona relação de usuário
+								If !Empty(cLocDestRl)
+									M->TR4_LOCDES := &(cLocDestRl)
+								Else
+									M->TR4_LOCDES := Space(TAMSX3('TR4_LOCDES')[1])
+								EndIf
+								//Adiciona When
+								cLocDesWhen := Posicione("SX3",2, "TR4_LOCDES", "X3_WHEN")
+								If Empty(cLocDesWhen)
+									cLocDesWhen := ".T."
+								EndIf
+
+							EndIf
+
+							Define Font oFontB Name 'Arial' Size 07,17 Bold
+							Define Font oFontN Name 'Arial' Size 07,17
+
+							Define MsDialog oDlgP Title STR0024 From 000,000 To nTamL,670 Pixel //"Informe o novo código de produto"
+
+								oPnlScr := TPanel():New(00,00,,oDlgP,,,,,,380,30,.F.,.F.)
+								oPnlScr:Align := CONTROL_ALIGN_ALLCLIENT
+
+								oPnlTopo := TPanel():New(00,00,,oPnlScr,,,,,,400,30,.F.,.F.)
+								oPnlTopo:Align := CONTROL_ALIGN_TOP
+
+								TSay():New(07, 08, {||cTxtTitle}, oPnlTopo, , oFontN, , , , .T., , , 300, 100, , , , , , .T.)
+
+								oPnlPai := TPanel():New(15,00,,oPnlScr,,,,,,400,50,.F.,.F.)
+								oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+								oGroup1:= TGroup():New(02,08,50,330,STR0116,oPnlPai,,,.T.)
+
+								If lTR4_ORDEM //Verifica se o campo TR4_ORDEM
+
+									@ 15,013 Say cPrdOriTit Font oFontN Size 47,07 Of oGroup1 Pixel //"Produto" MNT600PROD(cOldCProd)
+									@ 14,055 MsGet M->TR4_PRDORI Size 110,10 OF oGroup1 Pixel Picture "@!" F3 cConsultaSB1 Valid MNT600PROD(M->TR4_PRDORI) HASBUTTON When .F.
+									@ 14,175 MsGet cOldProd Size 140,08 OF oGroup1 Pixel Picture '@!' When .F.
+
+									@ 35,013 Say cLocAtuTit Font oFontN Size 47,07 Of oGroup1 Pixel //"Almoxarifado"
+
+									@ 34,055 MsGet M->TR4_LOCORI OF oGroup1 Pixel F3 cLocAtuF3 Picture "@!" Valid &(cLocAtuVld) HASBUTTON When &(cLocAtuWhen)
+
+									@ 35,175 Say cEndAtuTit Font oFontN Size 47,07 Of oGroup1 Pixel //"Localização: "
+									@ 34,220 MsGet M->TR4_ENDORI Size 55,08 OF oGroup1 Pixel Picture "@!" F3 cEndAtuF3 Valid &(cENdAtuVld) When &(cEndAtuWhen) HASBUTTON
+
+									If lAltDes
+										oGroup2 := TGroup():New(55,08,123,330,STR0117,oPnlPai,,,.T.)
+
+										@ 68,013 Say cTMTit Font oFontN Size 47,07 Of oGroup2 Pixel
+										@ 67,055 MsGet M->TR4_TM Size 30,10 OF oGroup2 Pixel Picture "@!" F3 CTMF3 Valid &(cTMVld) When &(cTMWhen) HASBUTTON
+
+										@ 68,175 Say cOrdemTit Font oFontN Size 47,07 Of oGroup2 Pixel
+										@ 67,220 MsGet M->TR4_ORDEM Size 50,10 OF oGroup2 Pixel Picture "@!" F3 cOrdemF3 Valid &(cOrdemVld) When &(cOrdemWhen) HASBUTTON
+
+										@ 87,013 Say cPrdDesTit Font oFontN Size 47,07 Of oGroup2 Pixel //"Produto"
+										@ 86,055 MsGet M->TR4_PRDDES Size 110,10 OF oGroup2 Pixel Picture "@!" F3 cPrdDestF3  Valid &(cPrdDestVl) When &(cPrdDesWhen) HASBUTTON
+										@ 86,175 MsGet cNomCodP Size 140,08 OF oGroup2 Pixel Picture '@!' When .F.
+
+										@ 107,013 Say cLocDesTit Font oFontN Size 47,07 Of oGroup2 Pixel //"Almoxarifado"
+										@ 106,055 MsGet M->TR4_LOCDES OF oGroup2 Pixel F3 cLocDestF3 Picture "@!" Valid &(cLocDestVl) When &(cLocDesWhen) HASBUTTON
+
+									EndIf
+								Else
+
+									@ 15,013 Say OemToAnsi(STR0027) Font oFontN Size 47,07 Of oGroup1 Pixel //"Produto" MNT600PROD(cOldCProd)
+									@ 14,055 MsGet cOldCProd Size 110,10 OF oGroup1 Pixel Picture "@!" F3 cConsultaSB1 Valid MNT600PROD(cOldProd) HASBUTTON When .F.
+									@ 14,175 MsGet cOldProd Size 140,08 OF oGroup1 Pixel Picture '@!' When .F.
+
+									@ 35,013 Say OemToAnsi(STR0028) Font oFontN Size 47,07 Of oGroup1 Pixel //"Almoxarifado"
+
+									If lNNR
+										@ 34,055 MsGet cOldAlmox OF oGroup1 Pixel F3 "NNR" Picture "@!" Valid /*NaoVazio() .And. */ExistCpo("NNR",cOldAlmox) HASBUTTON When !Empty(cOldCProd)
+									Else
+										@ 34,055 MsGet cOldAlmox OF oGroup1 Pixel Picture "@!" Valid NaoVazio() When !Empty(cOldCProd)
+									EndIf
+
+									@ 35,175 Say OemToAnsi(STR0112) Font oFontN Size 47,07 Of oGroup1 Pixel //"Localização: "
+									@ 34,220 MsGet cOldLocal Size 55,08 OF oGroup1 Pixel Picture "@!" F3 "SBE" Valid fValLocali(cOldLocal,cOldAlmox,cOldCProd) When fWhenLoc(0,cOldCProd) HASBUTTON
+
+									If lAltDes
+										oGroup2 := TGroup():New(55,08,103,330,STR0117,oPnlPai,,,.T.)
+
+										@ 67,013 Say OemToAnsi(STR0027) Font oFontN Size 47,07 Of oGroup2 Pixel //"Produto" MNT600PROD(cCodProd)
+										@ 66,055 MsGet cCodProd Size 110,10 OF oGroup2 Pixel Picture "@!" F3 cConsultaSB1 Valid MNT600PROD(cCodProd) HASBUTTON
+										@ 66,175 MsGet cNomCodP Size 140,08 OF oGroup2 Pixel Picture '@!' When .F.
+
+										@ 087,013 Say OemToAnsi(STR0028) Font oFontN Size 47,07 Of oGroup2 Pixel //"Almoxarifado"
+
+										If lNNR
+											@ 086,055 MsGet cCodAlmo OF oGroup2 Pixel F3 "NNR" Picture "@!" Valid ExistCpo("NNR",cCodAlmo) HASBUTTON
+										Else
+											@ 086,055 MsGet cCodAlmo OF oGroup2 Pixel Picture "@!" Valid NaoVazio()
+										EndIf
+
+									EndIf
+
+								EndIf
+
+							If lFim
+								oBrnOk := tButton():New(35,318,"Ok",oPnlPai,{|| If(!Empty(cCodProd).And. !Empty(cCodAlmo),(lRet := .T.,nOpca := 1,oDlgP:End()),(lRet := .F.))},20,11,,,,.T.)
+								oDlgP:lEscClose := .F.
+								Activate MsDialog oDlgP Valid lRet Centered
+							Else
+								Activate MsDialog oDlgP On Init EnchoiceBar(oDlgP,{|| (nOpca:=1, IIf(!fValidCamp(lAltDes),nOpca := 0,oDlgP:End()))},{||oDlgP:End()}) Center
+							EndIf
+
+							If nOpca == 1
+								Begin Transaction
+
+									// Armazena o Codigo do produto e almoxarifado para requisição
+									If lTR4_ORDEM
+										cOldAlmx := M->TR4_LOCORI
+									Else
+										cOldAlmx   := cOldAlmox
+									EndIf
+									cOldCodEst := cOldCProd
+
+									If !Empty(cOldCProd) .And. !Empty(cOldAlmox) 
+										dbSelectArea("SB2")
+										dbSetOrder(01)
+										If !dbSeek(xFilial('SB2')+cOldCProd+cOldAlmox)
+											CriaSB2(cOldCProd,cOldAlmox)
+											SB2->(MsUnlock()) //Função de criação da SB2 não libera o registro
+										EndIf
+									EndIf
+
+									If lAltDes // Variavel de controle de gravação da devolução.
+										If lTR4_ORDEM
+											cOldCodLoc := M->TR4_ENDORI
+											cCodST9Est := M->TR4_PRDDES
+											cCodST9Alm := M->TR4_LOCDES
+											cCodTMx    := M->TR4_TM
+											cOrdemMov  := M->TR4_ORDEM
+										Else
+											cCodST9Est := cCodProd
+											cCodST9Alm := cCodAlmo
+											cCodLoc    := cLocaLi
+											cOldCodLoc := cOldLocal
+										EndIf
+										cCodST9CC  := ST9->T9_CCUSTO
+									EndIf
+								End Transaction
+							Else
+								lRet := .F. // Indica se o usuario cancelou a operação voltando para a tela do cadastro
+							EndIf
+						EndIf
+
+					// Executa o PE MNTA6004, se o mesmo existir.
+					Else
+
+						aMNTA6004  := ExecBlock( 'MNTA6004', .F., .F., { M->TR4_CODBEM } )
+						cCodST9Est := aMNTA6004[1] // Cód. do Produto.
+						cCodST9Alm := aMNTA6004[2] // Cód. do Almoxarifado.
+						cCodST9CC  := ST9->T9_CCUSTO
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		Else
+			If ExistBlock("MNTA6001")
+				ExecBlock("MNTA6001",.F.,.F.,{lFim})
+			Else
+				cCodST9Est := Space(Len(ST9->T9_CODESTO))
+				If !Empty(ST9->T9_CODESTO)
+					cOldCodEst := ST9->T9_CODESTO
+					dbSelectArea("TQS")
+					dbSetOrder(01)
+					dbSeek(xFilial("TQS")+ST9->T9_CODBEM)
+					dbSelectArea("TQZ")
+					dbSetOrder(01)
+					dbSeek(xFilial("TQZ")+ST9->T9_CODBEM+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS)
+					cOldAlmx := TQZ->TQZ_ALMOX
+				EndIf
+			EndIf
+		EndIf
+
+	ElseIf lAuto //Condição para funcionamento via execauto
+
+		Begin Transaction
+
+		cCodST9Est := Space(Len(ST9->T9_CODESTO))
+		If !Empty(ST9->T9_CODESTO)
+			cOldCodEst := ST9->T9_CODESTO
+			dbSelectArea("TQS")
+			dbSetOrder(01)
+			dbSeek(xFilial("TQS")+ST9->T9_CODBEM)
+			dbSelectArea("TQZ")
+			dbSetOrder(01)
+			dbSeek(xFilial("TQZ")+ST9->T9_CODBEM+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS)
+			cOldAlmx := TQZ->TQZ_ALMOX
+		EndIf
+
+		If M->TR4_DTANAL <= GetMV("MV_ULMES")
+			//"ATENÇÃO"###"A data da analise não pode ser menor ou igual a data do ultimo fechamento do estoque "
+			Help(' ',1,STR0009 ,,STR0049+DtoC(GetMV("MV_ULMES"))+" .",2,0,,,,,,)
+			lRet := .F.
+		EndIf
+
+		If lRet .And. lFim .And. (Empty(cCodST9Est) .Or. Empty(cCodST9Alm))
+			//"ATENÇÃO"###"Será necessário informar o novo código do produto para o 'Destino' selecionado!"
+			Help(' ',1,STR0009 ,,STR0022,2,0,,,,,,)
+			lRet := .F.
+		EndIf
+
+		dbSelectArea("ST9") //Busca Antigo Código de estoque e almoxarifado do bem
+		dbSetOrder(01)
+		If lRet
+			If dbSeek(xFilial("ST9")+M->TR4_CODBEM)
+				cOldCProd := ST9->T9_CODESTO
+				cOldAlmox := ST9->T9_LOCPAD
+			EndIf
+			If !Empty(cOldCProd)
+				dbSelectArea("SB1") //Busca Nome do Produto e Localização
+				dbSetOrder(1)
+				If dbSeek(xFilial("SB1")+Trim(cOldCProd))
+					cOldProd  := SubStr(SB1->B1_DESC,1,30)
+					cOldLocal := Space(TAMSX3('TL_LOCALIZ')[1])
+				EndIf
+			EndIf
+
+			// Armazena o Codigo do produto e almoxarifado para requisição
+			cOldAlmx   := cOldAlmox
+			cOldCodEst := cOldCProd
+
+			If lAltDes .And. !Altera // Variavel de controle de gravação da devolução.
+				cCodST9Est := CODESTO
+				cCodST9Alm := ALMOXA
+				cCodLoc    := cLocaLi
+				cOldCodLoc := cOldLocal
+				cCodST9CC  := ST9->T9_CCUSTO
+				cCodTMx    := M->TR4_TM
+				cOrdemMov  := M->TR4_ORDEM
+			EndIf
+		EndIf
+
+		End Transaction
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT600PROD³ Autor ³ Marcos Wagner Junior  ³ Data ³ 31/07/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Validacao do campo Produto                                 ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT600PROD(cCodProd,cVComp,lValBem)
+
+	Local aOldArea := GetArea()
+	Local cProdAnt, cLocPa, cAtuAlmox
+	Local cParEst := (SuperGetMV("MV_NGSTAEU",.F.)+"/"+SuperGetMV("MV_NGSTAER",.F.)+"/"+SuperGetMV("MV_NGSTARS",.F.)+"/"+SuperGetMV("MV_NGSTAEN",.F.)+"/"+SuperGetMV("MV_NGSTEST",.F.))
+	Local lRet := .T.
+
+	Default lValBem := .F.
+
+	If Empty(cCodProd) .And. !lValBem
+		Help(" ",1,"NGMNCODINS") //"Codigo do Insumo nao informado!"
+		lRet := .F.
+	EndIf
+
+	If lRet .And. !lValBem .And. !ExistCpo("SB1",cCodProd)
+		lRet := .F.
+	EndIf
+
+	If lRet
+		dbSelectArea("SB1")
+		dbSetOrder(1)
+		dbSeek(xFilial("SB1")+Trim(cCodProd))
+		cNomCodP := SubStr(SB1->B1_DESC,1,30)
+
+		dbSelectArea("ST9")
+		dbSetOrder(01)
+		If !Empty(cVComp)
+			dbSeek(xFilial("ST9")+cVComp)
+		Else
+			dbSeek(xFilial("ST9")+M->TR4_CODBEM)
+		EndIf
+		cProdAnt := ST9->T9_CODESTO
+		cAtuAlmox := ST9->T9_LOCPAD
+		If !Empty(cProdAnt)
+			dbSelectArea("SB1")
+			dbSetOrder(1)
+			dbSeek(xFilial("SB1")+Trim(cProdAnt))
+			cLocPa := SB1->B1_LOCPAD
+			//Busca Almoxarifado atual do pneu
+			dbSelectArea("TQS")
+			dbSetOrder(01)
+			If !Empty(cVComp)
+				dbSeek(xFilial("TQS")+cVComp)
+			Else
+				dbSeek(xFilial("TQS")+M->TR4_CODBEM)
+			EndIf
+			dbSelectArea("TQZ")
+			dbSetOrder(01)
+			If !Empty(cVComp)
+				dbSeek(xFilial("TQZ")+cVComp+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS)
+				cAtuAlmox := If(!Empty(TQZ->TQZ_ALMOX),TQZ->TQZ_ALMOX,cLocPa)
+			Else
+				dbSeek(xFilial("TQZ")+M->TR4_CODBEM+DTOS(TQS->TQS_DTMEAT)+TQS->TQS_HRMEAT+ST9->T9_STATUS)
+				If (ST9->T9_STATUS $ cParEst)
+					cAtuAlmox := If(!Empty(TQZ->TQZ_ALMOX),TQZ->TQZ_ALMOX,cAtuAlmox)
+				Else
+					TQZ->(dbSkip(-1))
+					If AllTrim(TQZ->TQZ_CODBEM) == AllTrim(M->TR4_CODBEM) .And. (TQZ->TQZ_STATUS $ cParEst)
+						cAtuAlmox := If(!Empty(TQZ->TQZ_ALMOX),TQZ->TQZ_ALMOX,cAtuAlmox)
+					Else
+						cAtuAlmox := "AT"
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+		If Empty(cAtuAlmox) .And. IsInCallStack("MNTA600") .And. ST9->T9_STATUS $ cParEst
+			If Empty(cProdAnt)
+				cProdAnt := ""//aRetEsto[1]
+				cAtuAlmox := ""//aRetEsto[2]
+			EndIf
+		EndIf
+	EndIf
+
+	If lRet
+		If !IsInCallStack("MNTA232") .And. !IsInCallStack("MNTA231") .And. !IsInCallStack("MNTA080")//Se estiver sendo chamado pelo MNTA232,MNTA231 ou MNTA080(Inativação), significa que o pneu esta sendo
+			//retirado de uma estrutura e nao do estoque, entao nao e necessario fazer validacao de estoque negativo
+
+			If !Empty(cProdAnt) .And. cAtuAlmox <> "AT" //.And. ( Trim(cCodProd) != Trim(NGSEEK('ST9',M->TR4_CODBEM,1,'T9_CODESTO')) )
+				If AllTrim(GetMV("MV_ESTNEG")) == 'N'
+					If !NGSALSB2(PADR(cProdAnt,TAMSX3("T9_CODESTO")[1]),cAtuAlmox,1,.F.)
+						//"O produto relacionado ao bem está com saldo zero em estoque. De acordo com o parâmetro MV_ESTNEG não é possível fazer movimentações que gerem saldo negativo."
+						Help(' ',1,STR0009 ,,STR0051,2,0,,,,,,)
+						lRet := .F.
+					EndIf
+				EndIf
+			EndIf
+			cOldAlmx := cAtuAlmox
+			cOldCodEst := cProdAnt
+		EndIf
+
+		//Verifica se usa endereçamento de produto
+		If (AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. NGSEEK('SB1',cCodProd,1,"B1_LOCALIZ") == "S")
+			lChkLoc := .T.
+		EndIf
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTA600PAR³ Autor ³ Marcos Wagner Junior  ³ Data ³ 31/07/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Verifica se todos os parametros estao preenchidos          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA600                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTA600PAR()
+
+	Local lRetS := .T. , nFv := 0
+	Local vVetP := {"GR","GC","EU","ER","AT","RS","EN"}
+
+	For nFv := 1 To Len(vVetP)
+		If GetNewPar('MV_NGSTA'+vVetP[nFv]+Space(5-Len(AllTrim(vVetP[nFv])))) != Nil
+			If Empty(GetNewPar('MV_NGSTA'+vVetP[nFv]+Space(5-Len(AllTrim(vVetP[nFv])))))
+
+				cDesX6 := Posicione("SX6",1,"MV_NGSTA" + vVetP[nFv]+Space(5-Len(AllTrim(vVetP[nFv]))) ,"X6Descric()")
+
+				//"O parâmetro "###" que indica "###" não foi informado!"###"ATENÇÃO"
+				Help(' ',1,STR0009 ,,STR0029+'MV_NGSTA'+vVetP[nFv]+STR0030+cDesX6+STR0031,2,0,,,,,, )
+				lRetS := .F.
+				Exit
+			EndIf
+		Else
+			//"O parâmetro "###" não existe!"###"ATENÇÃO"
+			Help(' ',1,STR0009 ,,STR0029+'MV_NGSTA'+vVetP[nFv]+STR0032,2,0,,,,,, )
+			lRetS := .F.
+			Exit
+		EndIf
+	Next nFv
+
+Return lRetS
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGMOVEST
+Gera Movimento de Requisicao e/ou Devolucao nos Arquivos de
+Movimentacao Interna (SD3) utilizando a função MntMovEst.
+
+@param cCod, Caractere, codigo da movimentacao (Requisicao ou Devolucao)
+@param cCodTM, Caracter, código do tipo de movimento ( D3_TM )
+
+@author Wexlei Silveira
+@since 16/10/2018
+
+Obs.: Nao utilizar esta funcao em outras rotinas. Ao inves disso,
+utilize diretamente a funcao MntMovEst.
+/*/
+//-------------------------------------------------------------------
+Function NGMOVEST( cCod, cCodTM, cCodLocMov, lRetArr )
+
+	Local aExp1      := {}
+	Local aOk        := { .T., ''}
+	Local cLoteCtl   := CriaVar( 'D3_LOTECTL' )
+	Local cNumLote   := CriaVar( 'D3_NUMLOTE' )
+	Local cLocaliz   := CriaVar( 'D3_LOCALIZ' )
+	Local cNumSeri   := CriaVar( 'D3_NUMSERI' )
+	Local cnumSeqD   := CriaVar( 'D3_NUMSEQ' )
+	Local nTamSB1    := TamSX3("B1_COD")[1]
+	Local nTamNNR    := TamSX3("NNR_CODIGO")[1]
+	Local nTanSBF    := TamSX3("BF_LOCALIZ")[1]
+	Local nQtdOco    := 0
+	Local nOpc       := 3
+	Local nCusto     := 0
+	Local cB1Aprop   := ""
+	Local cB1Medid   := ""
+	Local cProduto   := If(!Empty(cCodST9Est),PADR(AllTrim(cCodST9Est),nTamSB1),PADR(AllTrim(cOldCodEst),nTamSB1))
+	Local cDocEst    := ""
+	Local cAlmoxa    := If(!Empty(cCodST9Alm),PADR(AllTrim(cCodST9Alm),nTamNNR),AllTrim(cOldAlmx))
+	Local cLocalSbf  := If(!Empty(cCodLocMov),PADR(Alltrim(cCodLocMov),nTanSBF),"" )
+	Local cEstSD3    := Space(Len(SD3->D3_ESTORNO))
+	Local lOk        := .T.
+	Local lMNT6007   := ExistBlock('MNTA6007')
+	Local lNGMOVSD3  := ExistBlock('NGMOVSD3')
+	Local cAliFilSD3 := ""
+	Local cFilMov    := xFilial("SD3")
+	Local aAreaSD3   := SD3->(GetArea())
+	Local dEmissao   := If( IsInCallStack("MNTA600"), M->TR4_DTANAL , dDATABASE )
+	Local cCodPneu   := IIf( FwIsInCallStack( 'MNTA600' ), M->TR4_CODBEM , M->TR3_CODBEM )
+	Local xRetMov
+
+	Default cCodTM     := ''
+	Default cCodLocMov := ""
+	Default lRetArr    := .F.
+
+	lIncluiOld := Inclui
+	Inclui := .T.
+
+	SB1->(dbSetOrder(1))
+	If SB1->(dbSeek(xFilial('SB1')+cProduto))
+		cB1Aprop := SB1->B1_APROPRI
+		cB1Medid := SB1->B1_UM
+	EndIf
+
+	dbSelectArea("SBF")
+	If Empty(cLocalSbf)
+		dbSetOrder(2)
+		dbSeek(xFilial("SBF")+cProduto+cAlmoxa)
+	Else
+		dbSetOrder(1)
+		dbSeek( xFilial("SBF") + cAlmoxa + cLocalSbf  + cProduto )
+	EndIf
+
+	cLoteCtl := If(Empty('BF_LOTECTL'), "", SBF->BF_LOTECTL)
+	cNumLote := If(Empty('BF_NUMLOTE'), "", SBF->BF_NUMLOTE)
+	cLocaliz := If(Empty('BF_LOCALIZ'), "", SBF->BF_LOCALIZ)
+	cNumSeri := If(Empty('BF_NUMSERI'), "", SBF->BF_NUMSERI)
+
+	dbSelectArea("SB2")
+	dbSetOrder(01)
+	If !dbSeek(xFilial('SB2')+cProduto+cAlmoxa)
+		CriaSB2(cProduto,cAlmoxa)
+		// A FUNCAO ACIMA NAO LIBERA O REGISTRO
+		SB2->(MsUnlock())
+	EndIf
+
+	If IsInCallStack("MNT600EXC")
+
+		//Busca qual filia houve a requisição
+		If cCod == 'RE0'
+			cCampoNumE2 := TR4->TR4_NUMSE2
+		Else
+			cCampoNumE2 := TR4->TR4_NUMSEQ
+		EndIf
+
+		cAliFilSD3 := GetNextAlias()
+		cQuery := "SELECT D3_FILIAL, D3_DOC, D3_NUMSEQ "
+		cQuery += " FROM " + RetSqlName("SD3")
+		cQuery += " WHERE "
+		cQuery += " D3_NUMSEQ = '"+cCampoNumE2+"' "
+		cQuery += " AND D_E_L_E_T_ <> '*' "
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliFilSD3, .F., .T.)
+
+		While !EoF()
+			cFilMov := 	(cAliFilSD3)->D3_FILIAL
+			cDocEst :=  (cAliFilSD3)->D3_DOC
+			cnumSeqD := (cAliFilSD3)->D3_NUMSEQ
+			Exit
+		End
+
+		(cAliFilSD3)->(dbCloseArea())
+
+		RestArea(aAreaSD3)
+
+		nOpc := 5
+		cEstSD3 := "S"
+	Else
+		nOpc := 3  //baixa
+		cDocEst := NextNumero("SD3",2,"D3_DOC",.T.)
+	EndIf
+
+	If cEstSD3 <> "S" .And. lTR4_ORDEM .And. !Empty(cOrdemMov) .And. cCod <> "RE0" .And. Posicione( 'SF5', 1, xFilial( 'SF5' ) + cCodTM, 'F5_VAL' ) == 'S'
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		If dbSeek( xFilial("STJ") + cOrdemMov )
+			nCusto := STJ->TJ_CUSTMDO +  STJ->TJ_CUSTMAT + STJ->TJ_CUSTMAA + STJ->TJ_CUSTMAS + STJ->TJ_CUSTTER + STJ->TJ_CUSTFER
+		EndIf
+	EndIf
+
+	// Verifica se está com o fonte MNTUTIL e NGUTIL atualizado.
+	// Observação: Remover na versão 12.1.25
+	If FindFunction("MNTMOVTM") .And. FindFunction("NGREGRAEST")
+
+		If lMNT6007 .And. !lNGMOVSD3 // Verifica se é utilizado o Ponto de Entrada MNT6007 indicando que deverá utilizar o NGMOVSD3.
+			HELP(" ",1,STR0009,,STR0146,3,1)  //"ATENÇÃO"###"O ponto de entrada 'MNT6007' foi descontinuado, por favor utilize o ponto de entrada 'NGMOVSD3'."
+		EndIf
+
+		xRetMov := MntMovEst( IIf( Empty( cCodTM ), cCod, cCodTM ), cAlmoxa, cProduto, 1, dEmissao, cDocEst, cFilMov, IIf( Type( 'cCodST9CC' ) != 'U', cCodST9CC, '' ),;
+			( cEstSD3 == 'S' ), cnumSeqD, , cCodPneu, , , , ,cCodLocMov, lRetArr, nCusto )
+
+		
+		aOk := IIf( lRetArr, xRetMov, { !Empty( xRetMov ), '' } )
+
+	Else
+
+		aExp1 := {{"D3_TM"     , If(cCod=='RE0', '999', cCodTM ) 				 		  ,'.T.'},;
+				{"D3_COD"    , cProduto							  					      ,Nil},;
+				{"D3_UM"     , cB1Medid      					  					 	  ,Nil},;
+				{"D3_QUANT"  , 1             					  						  ,Nil},;
+				{"D3_CF"     , cCod  								     				  ,Nil},;
+				{"D3_CONTA"  , SB1->B1_CONTA					    					  ,Nil},;
+				{"D3_LOCAL"  , If(Empty(cAlmoxa), SB1->B1_LOCPAD, cAlmoxa) 			      ,Nil},;
+				{"D3_EMISSAO", dEmissao  								   		 		  ,Nil},;
+				{"D3_SEGUM"  , SB1->B1_SEGUM					  						  ,Nil},;
+				{"D3_QTSEGUM", ConvUm(SB1->B1_COD,nQtdOco,0,2)						      ,Nil},;
+				{"D3_GRUPO"  , SB1->B1_GRUPO									    	  ,Nil},;
+				{"D3_TIPO"   , SB1->B1_TIPO					  						      ,Nil},;
+				{"D3_NUMSERI", cNumSeri				  								      ,Nil},;
+				{"D3_CHAVE"  , SubStr(SD3->D3_CF,2,1)+If(SD3->D3_CF $ 'RE4|DE4','9','0')  ,Nil},;
+				{"D3_USUARIO", SubStr(cUsuario,7,15)					  				  ,Nil},;
+				{"D3_LOCALIZ", cLocaliz                             					  ,Nil},;
+				{"D3_CC" 	   , If(Type("cCodST9CC")<>"U",cCodST9CC,"") 		 		  ,Nil},;
+				{"D3_NUMSEQ" , cnumSeqD                                                   ,Nil},;
+				{"D3_DOC"    , cDocEst				  								      ,Nil},;
+				{"D3_ESTORNO", cEstSD3                             					      ,Nil}}
+
+
+		If lMNT6007
+			// Permite o usuário manipular os dados que serão enviados por parametro no execauto MNTA240.
+			aExp1 := ExecBlock( 'MNTA6007', .F., .F., aExp1 )
+		EndIf
+
+		If nCusto > 0
+			aAdd(aExp1,{"D3_CUSTO1",nCusto,Nil})
+		EndIf
+
+		aAdd(aExp1,{"INDEX",2,Nil}) //A coluna INDEX deve SEMPRE ser adicionada por ultimo no array
+
+		lMsErroAuto := .F.
+
+		cFilOld := cFilAnt
+		cFilAnt := cFilMov
+
+		MSExecAuto({|x,y| MATA240(x,y)},aExp1,nOpc)
+
+		cFilAnt := cFilOld
+
+		If lMsErroAuto
+			Mostraerro()
+			lOK := .F.
+			cCodST9Est := ""
+		EndIf
+
+	EndIf
+
+	If aOk[1] .And. ExistBlock("MNTA6005") //Ponto de Entrada para modificar campo gravado na SD3
+		ExecBlock("MNTA6005",.F.,.F.,{SD3->D3_FILIAL,SD3->D3_DOC,SD3->D3_NUMSEQ})
+	EndIf
+
+	If aOk[1] .And. NGCADICBASE('TR4_NUMSEQ','A','TR4',.F.)
+		If cCod=='RE0'
+			M->TR4_NUMSEQ := SD3->D3_NUMSEQ
+		Else
+			M->TR4_NUMSE2 := SD3->D3_NUMSEQ
+			If lTR4_ORDEM
+				M->TR4_ORDEM  := cOrdemMov
+			EndIf
+		EndIf
+	EndIf
+
+	Inclui := lIncluiOld
+
+Return IIf( lRetArr, aOk, aOk[1] )
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³MNT600EU    | Autor ³Evaldo Cevinscki Jr. ³ Data ³12/08/2010³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Tela para ser informado o Status de Estoque Usado quando   ³±±
+±±³          ³ no parametro MV_NGSTAEU tem mais de uma opcao              ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Status escolhido	                                         ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNT600EU(cSTA)
+
+	Local nOpca := 0
+	Local oPnlPai
+	Private cNomSta := Space(20)
+	Private cStaPn := cSta
+	cFilTQYPAR := "MNTA600TQY()"
+	cStatus := Space(Len(TQY->TQY_STATUS))
+
+	Define Font oFontB Name "Arial" Size 07,17 Bold
+	Define Font oFontN Name "Arial" Size 07,17
+	Define msDialog oDlgG Title STR0041 From 000,000 To 140,500 Pixel  //"Estoque Usado"
+
+		//TPanel para alinhamento da tela.
+		oPnlPai := TPanel():New(0, 0, Nil, oDlgG, Nil, .T., .F., Nil, Nil, 0, 60, .T., .F. )
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@ 17,008 Say OemToAnsi(STR0042) Font oFontB Size 400,10 Of oPnlPai Pixel  //"Para Destino Pneu = 'Estoque Usado' existe mais de uma opção de Status"
+
+		@ 30,008 Say Oemtoansi(STR0044) Size 47,07 Of oPnlPai Pixel Font oFontN COLOR CLR_BLUE  //"Status"
+		@ 29,040 MsGet cStatus Size 38,08 Of oPnlPai Pixel Picture '@!' F3 "TQYPAR" Valid MNT600CKS(cSTA,cStatus) HASBUTTON
+		@ 29,090 MsGet oNomSta Var cNomSta Of oPnlPai Pixel Picture '@!' When .T. Size 90,08
+
+		oDlgG:LESCCLOSE := .F.
+	Activate MsDialog oDlgG On Init EnchoiceBar(oDlgG,{|| (nOpca:=1,oDlgG:End())},{||oDlgG:End()}) Center
+
+	If nOpca == 0
+		Help(' ',1,STR0009 ,,STR0045,2,0,,,,,,) //"É obrigatório ser informado um Status válido!"
+		MNT600EU(cSTA)
+	EndIf
+
+Return cStatus
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³MNT600CKS   | Autor ³Evaldo Cevinscki Jr. ³ Data ³12/08/2010³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Checa se Status informado esta contido nas opcoes do       ³±±
+±±³          ³ parametro MV_NGSTAEU.                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNT600CKS(cSTPAR,cSTINF)
+
+	If cSTINF $ cSTPAR
+		lRet := .T.
+		cNomSta := NGSEEK('TQY',cSTINF,1,'TQY->TQY_DESTAT')
+	Else
+		MsgInfo(STR0046+cSTPAR) //"Deverá ser informado um desses Status: "
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MNTA600TQY ³Autor ³Vitor Emanuel Batista  ³ Data ³19/08/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Funcao para filtrar consulta SXB TQYPAR                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³Consulta SXB - TQYPAR                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA600TQY()
+
+	If (AllTrim(TQY->TQY_STATUS) $ cStaPn .And.(Empty(TQY->TQY_CATBEM) .Or. TQY->TQY_CATBEM = '3'))
+		Return .T.
+	EndIf
+
+Return .F.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600LOCA
+Função que monta tela para informar o local do produto de estoque manualmente.
+
+@author Cezar Augusto Padilha
+@since 05/03/2013
+@version MP10
+/*/
+//---------------------------------------------------------------------
+Function MNT600LOCA(cProd, cAlmx)
+
+	Local lWhCP  := .F.
+	Local lRet := .T.
+	//Variavel para controle de Localização/Endereçamento
+	Private lChkLoc := .F.
+
+	SetKey(VK_F5, {|| F4MNTLOCAL()})
+
+	Default cProd := Space(TAMSX3("B1_COD")[1])
+	Default cAlmx := Space(TAMSX3('B1_LOCPAD')[1])
+
+	If (AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. NGSEEK('SB1',cProd,1,"B1_LOCALIZ") == "S")
+		lChkLoc := .T.
+	EndIf
+
+	If !Empty(cProd)
+		lWhCP := .F.
+	EndIf
+
+	Private cLoc600   := cAlmx
+	Private cLocaLi600 := Space(TAMSX3('TL_LOCALIZ')[1])
+	Private cProd600 := cProd
+
+	//Alert(STR0060) //"Será necessário informar o almoxarifado atual do pneu, pois não consta a informação do histórico do bem."
+	Define Font oFontB Name "Arial" Size 07,17 Bold
+	Define Font oFontN Name "Arial" Size 07,17
+
+	Define msDialog oDlgP Title STR0057 From 000,000 To 180,660 Pixel //"Informe o almoxarifado do pneu"
+
+		oPnlTopo := TPanel():New(00,00,,oDlgP,,,,,,400,30,.F.,.F.)
+		oPnlTopo:Align := CONTROL_ALIGN_TOP
+
+		@ 07,008 Say OemToAnsi(STR0056) Font oFontN Size 300,10 Of oPnlTopo Pixel //"O pneu informado não possuí histórico de almoxarifado, informe o local para o produto:"
+
+		oPnlPai := TPanel():New(15,00,,oDlgP,,,,,,400,50,.F.,.F.)
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@ 04,008 Say OemToAnsi(STR0027+": ") Font oFontN Size 47,07 Of oPnlPai Pixel //"Produto"
+		@ 03,050 MsGet cProd600 Size 110,10 OF oPnlPai Pixel Picture "@!" When lWhCP
+		@ 03,175 MsGet If(!Empty(cProd600),NGSEEK('SB1',cProd600,1,'SB1->B1_DESC'),'') Size 140,08 OF oPnlPai Pixel Picture '@!' When .F.
+
+		@ 21,008 Say OemToAnsi(STR0028+": ") Font oFontN Size 47,07 Of oPnlPai Pixel //"Almoxarifado"
+		@ 20,050 MsGet cLoc600 Size 25,08 OF oPnlPai Pixel Picture "@!" Valid MNT600VLOC(cProd600,cLoc600) F3 'NNR' HASBUTTON
+
+		@ 38,008 Say OemToAnsi("Localização: ") Font oFontN Size 47,07 Of oPnlPai Pixel //
+		@ 37,050 MsGet cLocaLi600 Size 55,08 OF oPnlPai Pixel Picture "@!" F3 "SBE" Valid fValLocali(cLocaLi600,cLoc600,cProd600) WHen lChkLoc HASBUTTON
+
+		oBrnOk := tButton():New(75,305,"Ok",oDlgP,{|| If( fValProdLoc(cProd600,cLoc600,cLocaLi600),(lRet := .T.,oDlgP:End()),(lRet := .F.))},20,11,,,,.T.)
+		oDlgP:lEscClose := .F.
+
+	Activate MsDialog oDlgP valid lRet CENTERED
+
+Return {cProd600,cLoc600,cLocaLi600}
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600VLOC
+Função que valida se o local informado tem saldo.
+
+@author Cezar Augusto Padilha
+@since 05/03/2013
+@version MP10
+/*/
+//---------------------------------------------------------------------
+Static Function MNT600VLOC(cPrdt,cAlmx)
+
+	If Empty(cPrdt)
+		Return .F.
+	ElseIf !ExistCpo('NNR', cAlmx)
+		Return .F.
+	ElseIf ExistCpo('SB1',cPrdt)
+		dbSelectArea("SB2")
+		dbSetOrder(1)
+		dbSeek(xFilial("SB2")+cPrdt+cAlmx)
+		If Empty(SB2->B2_QATU) .And. Alltrim(GetMv("MV_ESTNEG")) == "N"
+			Help(' ',1,STR0009 ,,STR0058,; //"O Almoxarifado informado não possuí saldo suficiente."
+			2,0,,,,,, {STR0059}) //"Informe um almoxarifado com saldo positivo."
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValLocali
+Função que valida o endereçamento
+
+@author Tainã Alberto Cardoso
+@since 15/07/2014
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function fValLocali(cLocaliz,cLoc,cProd)
+
+	//Verifica se existe o local informado
+	If !Empty(cLocaliz)
+		If !ExistCpo('SBE',cLoc+cLocaliz)
+			Return .F.
+		EndIf
+	EndIf
+
+	//Verificar se existe saldo no local informado
+	If !Empty(cLocaliz) .And. !Empty(cLoc) .And. !Empty(cProd) .And.;
+			QtdComp(SaldoSBF(cLoc,cLocaliz,cProd,"","","",.F.)) < QtdComp(1)
+		Help(" ",1,"SALDOLOCLZ")
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600VLOS
+Função que valida se o Pneu esta em um lote
+
+@author Tainã Alberto Cardoso
+@since 18/12/2014
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Static Function MNT600VLOS(lReturn)
+
+	Local cAliasQry  := ""
+	Local lOsPneu := .F.
+
+	If !Empty(M->TR4_DTANAL) .And. !Empty(M->TR4_HRANAL) .And. !Empty(M->TR4_CODBEM)
+
+		//Verifica se o pneu esta em um lote
+		cAliasQry := GetNextAlias()
+		cQuery := "SELECT TR7_DTLOTE, TR7_HRLOTE FROM " +RetSqlName("TR8")+ " TR8 "
+		cQuery += " JOIN " +RetSqlName("TR7")+ " TR7 ON TR8.TR8_LOTE = TR7.TR7_LOTE "
+		cQuery += " AND TR7.TR7_FILIAL = TR8.TR8_FILIAL "
+		cQuery += " WHERE TR8.TR8_CODBEM = '" + M->TR4_CODBEM + "' AND TR8.D_E_L_E_T_ <> '*' "
+		cQuery += " AND TR7.TR7_DTRECI = '' AND TR7.D_E_L_E_T_ <> '*' "
+		cQuery += " AND TR7.TR7_FILIAL = '" +xFilial("TR7")+ "' "
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea(.T.,"TOPCONN", TCGenQry(,,cQuery), cAliasQry, .F., .T.)
+
+		dbSelectArea(cAliasQry)
+		dbGoTop()
+		While !EoF()
+
+			If (cAliasQry)->TR7_DTLOTE + (cAliasQry)->TR7_HRLOTE <= DtoS(M->TR4_DTANAL) + M->TR4_HRANAL
+				lOsPneu := .T.
+				Exit
+			EndIf
+
+			dbSelectArea(cAliasQry)
+			dbSkip()
+
+		End
+
+		If lOsPneu
+			Help(' ',1,STR0009 ,,STR0063,2,0,,,,,,) //"Existe uma O.S. em lote em aberto para o Pneu."
+			If lReturn
+				Return .F.
+			EndIf
+		EndIf
+
+		(cAliasQry)->(dbCloseArea())
+
+		//Verifica se o pneu esta em um lote
+		cAliasQry := GetNextAlias()
+		cQuery := "SELECT * FROM " +RetSqlName("TR7") +" TR7 "
+		cQuery += " JOIN " +RetSqlName("TR8")+ " TR8 ON TR7.TR7_LOTE = TR8.TR8_LOTE "
+		cQuery += " AND TR7.TR7_FILIAL = TR8.TR8_FILIAL "
+		cQuery += " WHERE TR8.TR8_CODBEM = '" + M->TR4_CODBEM + "' AND TR8.D_E_L_E_T_ <> '*' "
+		cQuery += " AND TR7_DTLOTE || TR7_HRLOTE  <= '" + DtoS(M->TR4_DTANAL) + M->TR4_HRANAL + "' "
+		cQuery += " AND TR7_DTRECI || TR7_HRRECI  >= '" + DtoS(M->TR4_DTANAL) + M->TR4_HRANAL + "' "
+		cQuery += " AND TR7.D_E_L_E_T_ <> '*'
+		cQuery += " AND TR8.TR8_FILIAL = '" +xFilial("TR8")+ "' "
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea(.T.,"TOPCONN", TCGenQry(,,cQuery), cAliasQry, .F., .T.)
+
+		dbSelectArea(cAliasQry)
+		dbGoTop()
+		While !EoF()
+
+			Help(' ',1,STR0009 ,,STR0064,2,0,,,,,,) //"Existe uma O.S. em lote para essa data/hora."
+			If lReturn
+				Return .F.
+			EndIf
+			Exit
+
+		End
+		(cAliasQry)->(dbCloseArea())
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA600PRO
+Função que valida o motivo do destino do Pneu.
+
+@author Diego de Oliveira
+@since 15/04/2016
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function MNTA600PRO(cMotivo)
+
+	Local lRet := .T.
+
+	Default cMotivo := M->TR4_MOTIVO
+
+	//Verifica se existe ocorrência.
+	If !Empty(cMotivo)
+		If ExistCpo('ST8',cMotivo)
+			dbSelectArea("ST8")
+			dbSetOrder(1)
+			If !dbSeek(xFilial('ST8')+cMotivo+"P")
+				ShowHelpDlg(STR0009,;    //"ATENÇÃO"
+				           {STR0106},1,; //"Verifique se a ocorrência é do tipo 'Problema'."
+				           {STR0107},1)  //"Informe uma ocorrência do tipo 'Problema'."
+				lRet := .F.
+			Else
+				lRet := .T.
+			EndIf
+		Else
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT600AUTO
+
+@param nOpc Numero da operacao.
+
+@author
+@since
+@version
+@return nRetTR4, Numérico, nRetTR4 <> 0 - registro inserido/alterado/excluído.
+/*/
+//---------------------------------------------------------------------
+Static Function MNT600AUTO(nOpc)
+
+	Local nRetTR4	:= 0
+
+	//----------------------------------------------------------------
+	// Carrega memória dos campos da tabela TR4 pelo dicionário
+	//----------------------------------------------------------------
+	RegToMemory( 'TR4', nOpc == 3, ,nOpc == 3 )
+
+	//-----------------------------------------------------------
+	// Carrega campos de acordo com array do execauto
+	// Realiza validações e gravação
+	//-----------------------------------------------------------
+	If nOpc == 3
+		If EnchAuto("TR4",aRotAuto,{|| MNT600GRA(TR4->(Recno()))},nOpc)
+			nRetTR4 := AxIncluiAuto("TR4",,,nOpc) // Persiste registro na tabela TR4
+		EndIf
+	ElseIf nOpc == 4
+		If EnchAuto("TR4",aRotAuto,{|| MNT600GRA(TR4->(Recno()))},nOpc)
+			nRetTR4 := AxAltera("TR4",TR4->(Recno()), nOpc,,,,,,,,,, aRotAuto,.T. )
+		EndIf
+	ElseIf nOpc == 5
+		If EnchAuto("TR4",aRotAuto,,nOpc)
+			If MNT600GRA(TR4->(Recno()))
+				nRetTR4 := AxDeleta("TR4",,5,,,,,aRotAuto)
+			EndIf
+		EndIf
+	EndIf
+
+Return nRetTR4
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValProdLoc
+Função que valida se os campos de Produto, almoxarifado e localização
+estão preechidos
+
+@author Tainã Alberto Cardoso
+@since 24/07/2017
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Static Function fValProdLoc(cProd600,cLoc600,cLocaLi600)
+
+	Local lRet := .T.
+
+	Default cProd600 := '', cLoc600 := '', cLocaLi600 := ''
+
+	If Empty(cLoc600)
+		Help(' ',1,STR0009 ,,STR0110,2,0,,,,,, ) //"Informe o campo almoxarifado."
+		lRet :=  .F.
+	ElseIf lChkLoc .And. Empty(cLocaLi600)
+		Help(' ',1,STR0009 ,,STR0111,2,0,,,,,, ) //"Informe o campo Localização."
+		 lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fWhenLoc
+Valida a edição do campo Localização.
+
+@author Tainã Alberto Cardoso
+@since 25/07/2017
+@version MP12
+/*/
+//---------------------------------------------------------------------
+Function fWhenLoc(nITpProd,cOldProd)
+
+	Local lRet := .F.
+	Local cCodProd := ""
+
+	Default nITpProd := 0
+	Default cOldProd := ""
+
+	If nITpProd == 1
+		cCodProd := M->TR4_PRDORI
+	ElseIf nITpProd == 2
+		cCodProd := M->TR4_PRDDES
+	Else
+		cCodProd := cOldProd
+	EndIf
+
+	If (AllTrim(GetMV("MV_LOCALIZ")) == 'S' .And. NGSEEK('SB1',cCodProd,1,"B1_LOCALIZ") == "S")
+		lRet := .T.
+	Else
+		cLocaLi  := Space(TAMSX3('TL_LOCALIZ')[1])
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValidCamp
+Valida se os campos da tela estão preenchidos do Destino do Estoque
+@author Douglas Constancio
+@since 12/09/2017
+@version MP12
+/*/
+//---------------------------------------------------------------------
+Static Function fValidCamp(lAltDes)
+
+    Local lRet := .T.
+
+	If lTR4_ORDEM
+		If lAltDes
+			If Empty(M->TR4_PRDDES) .Or. Empty(M->TR4_LOCDES)
+				MsgInfo(STR0022,STR0009) //"Será necessário informar o novo código do produto para o 'Destino' selecionado!"###"ATENÇÃO"
+				lRet := .F.
+			ElseIf !Empty(M->TR4_TM) .And. Empty(M->TR4_ORDEM)
+				MsgInfo(STR0118,STR0009) //"Será necessário infomar o código da O.S. ao informar o tipo de movimentação" ###"ATENÇÃO"
+				lRet := .F.
+			ElseIf Empty(M->TR4_TM) .And. !Empty(M->TR4_ORDEM)
+				MsgInfo(STR0119,STR0009) //"Será necessário infomar o tipo de movimento ao informar o código da O.S." ###"ATENÇÃO"
+				lRet := .F.
+			EndIf
+		EndIf
+
+		//Valida Endereçamento
+		If AllTrim(SuperGetMv("MV_LOCALIZ",.F.,"N")) == 'S'
+			If NGSEEK('SB1',M->TR4_PRDORI,1,"B1_LOCALIZ") == "S" .And. Empty(M->TR4_ENDORI)
+				MsgInfo(STR0143,STR0009) //"Será necessário infomar o endereçamento para o produto origem." ###"ATENÇÃO"
+				lRet := .F.
+			EndIf
+		EndIf
+	ElseIf lAltDes
+		If Empty(cCodProd) .Or. Empty(cCodAlmo)
+        	MsgInfo(STR0022,STR0009) //"Será necessário informar o novo código do produto para o 'Destino' selecionado!"###"ATENÇÃO"
+        	lRet := .F.
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MntValTm
+Valida se tipo de movimento informado, mesma validações realizadas
+no campo D3_TM
+OBS: Função chamada no campo TR4_TM
+
+@author Tainã Alberto Cardoso
+@since 26/10/2018
+@version MP12
+@param	 cCodTm,  Caracter, Código do movimento ( SD3 )
+
+/*/
+//---------------------------------------------------------------------
+Function MntValTm(cCodTm)
+
+	Local lRet       := .T.
+	Local cSerRef    := AllTrim(SuperGetMv("MV_NGSEREF",.F.," "))
+	Local cSerCon    := AllTrim(SuperGetMv("MV_NGSECON",.F.," "))
+	Local cServQuery := ''
+	Local cTipAnali  := ''
+	Local cAliasOsRe := ''
+	Local nX         := 0
+	Local aParam     := {}
+
+	Private cFunc    := '' // Variavel usadas na função MaAvalPerm
+
+	Default cCodTm   := ""
+
+	If !Empty(cCodTm)
+		dbSelectArea('SF5')
+		dbSetOrder(1)
+		If dbSeek( xFilial("SF5") + cCodTm ) .And. MaAvalPerm(2,{cCodTm})
+			If SF5->F5_TIPO <> "D"
+						lRet := .F.
+				ShowHelpDlg(STR0008, {STR0120}, 1, {STR0121}, 1) //"ATENCAO" ## "Tipo de movimento não permitido." ## "Informe uma movimento do tipo Devolução."
+					EndIf
+		Else
+			lRet := .F.
+		EndIf
+
+		//-----------------------------------------------------
+		// Trecho abaixo carrega o campo ordem automaticamente
+		//-----------------------------------------------------
+		If lRet .And. ( !l600Auto .Or. Empty( M->TR4_ORDEM ) )
+
+			If M->TR4_DESTIN == "4"
+				cServQuery := cSerRef
+
+				If Empty(cServQuery)
+        		
+					Help( NIL, 1, STR0008, NIL, STR0148 + M->TR4_DESTIN + STR0149, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0151 + 'MV_NGSEREF'} ) // "Atenção"###"Para preencher o campo TP Movimento, com o Destino de Pneu "###"é necessário que haja informação sobre o serviço de Reforma de Pneus."###"Por favor, informe o parâmetro "
+					lRet := .F.
+
+				EndIf
+			
+			ElseIf M->TR4_DESTIN == "3"
+				cServQuery := cSerCon
+
+				If Empty(cServQuery)
+        		
+					Help( NIL, 1, STR0008, NIL, STR0148 + M->TR4_DESTIN + STR0150, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0151 + 'MV_NGSECON'} ) // "Atenção"###"Para preencher o campo TP Movimento, com o Destino de Pneu "###"é necessário que haja informação sobre o serviço de Conserto de Pneus."###"Por favor, informe o parâmetro "
+					lRet := .F.
+
+				EndIf
+
+			EndIf
+
+			If lRet
+
+				//----------------------------------------------
+				// tratativa para considerar mais de um serviço
+				//----------------------------------------------
+				cServQuery := StrTran( cServQuery, "'", " " )
+				aParam := StrTokArr( cServQuery, ';' )
+				cServQuery := ''
+
+				For nX := 1 to Len( aParam )
+					If nX > 1
+						cServQuery += ","
+					EndIf
+					cServQuery += ValtoSql( aParam[nX] )
+				Next nX
+
+				cServQuery := "%STJ.TJ_SERVICO IN (" + cServQuery  + ")%"
+
+				//-----------------------------------------
+				//Verifica se é a ultima O.S. de Reforma
+				//-----------------------------------------
+				cAliasOsRe := GetNextAlias()
+				
+				BeginSQL Alias cAliasOsRe
+
+					SELECT 
+						STJ.TJ_ORDEM
+					FROM 
+						%table:STJ% STJ
+					WHERE 
+						STJ.TJ_FILIAL  = %xFilial:STJ%       AND
+						STJ.TJ_CODBEM  = %exp:M->TR4_CODBEM% AND
+						%exp:cServQuery%   AND
+						STJ.TJ_DTMRFIM || STJ.TJ_HOMRFIM <= %exp:DToS( M->TR4_DTANAL ) + M->TR4_HRANAL% AND
+						STJ.TJ_SITUACA = 'L' AND
+						STJ.TJ_TERMINO = 'S' AND
+						STJ.%NotDel% AND
+						NOT EXISTS ( SELECT
+										1
+									FROM
+										%table:TR4% TR4
+									WHERE
+										TR4.TR4_FILIAL = %xFilial:TR4% AND
+										TR4.TR4_ORDEM  = STJ.TJ_ORDEM  AND
+										TR4.TR4_CODBEM = STJ.TJ_CODBEM AND
+										TR4.%NotDel% )
+									
+				EndSQL
+
+				If ( lRet := (cAliasOsRe)->( !EoF() ) )
+
+					M->TR4_ORDEM := (cAliasOsRe)->TJ_ORDEM
+					
+				Else
+
+					cTipAnali := NGRETSX3BOX( "TR4_DESTIN" , M->TR4_DESTIN )
+					ShowHelpDlg(STR0008, {STR0122 + cTipAnali + STR0123 + cServQuery + "." }, 1, ; //"ATENCAO" ## "Somente poderá informar no campo TP Movimento quando o destino do pneu for " ## " e existir uma ordem de serviço relacionado a "
+					{STR0128 + Chr(13) + Chr(10) + STR0129}, 1) //"1 - Não informar o TP Movimento." ## "2 - Alterar o destino do pneu (TR4_DESTIN)."
+
+				EndIF
+
+				(cAliasOsRe)->( dbCloseArea() )
+
+			EndIf
+
+		EndIf
+
+	Else
+
+		M->TR4_ORDEM := Space(TAMSX3('TR4_ORDEM')[1])
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValExcAna
+Valida se tipo de é possivel excluir a análise técnica
+
+@author Tainã Alberto Cardoso
+@since 07/11/2018
+@version MP12
+@param	 cCodBem,     Caracter, Código do Pneu
+@param	 dDataAnali,  Data    , Data da análise
+@param	 cHoraAnali,  Caracter, Hora da análise
+@param   cDestinom    Caracter, Destino da análise
+
+/*/
+//---------------------------------------------------------------------
+Static Function fValExcAna(cCodBem, dDataAnali,cHoraAnali)
+
+	Local lRet := .T.
+	Local cAliasOsRe := GetNextAlias()
+	Local cSerRef := AllTrim(SuperGetMv("MV_NGSEREF",.F.," "))
+	Local cSerMsg := ""
+
+	Default cCodBem    := ""
+	Default dDataAnali := cToD("  /  /    ")
+	Default cHoraAnali := ""
+
+	If !Empty(cCodBem) .And. !Empty(dDataAnali) .And. !Empty(cHoraAnali)
+		BeginSQL Alias cAliasOsRe
+
+		SELECT TR7_LOTE, TR7_DTLOTE, TR7_HRLOTE, TR7_SERVIC
+			FROM %table:TR7% TR7
+			JOIN %table:TR8% TR8 ON TR7.TR7_FILIAL = TR8.TR8_FILIAL AND TR7.TR7_LOTE = TR8.TR8_LOTE
+				WHERE TR7.TR7_FILIAL = %exp:TR7->TR7_FILIAL%
+					AND TR8.TR8_CODBEM = %exp:cCodBem%
+					AND TR7.TR7_DTLOTE || TR7.TR7_HRLOTE >= %exp:DtoS(dDataAnali) + cHoraAnali%
+					AND TR7.%NotDel% AND TR8.%NotDel%
+
+		EndSQL
+
+		If (cAliasOsRe)->( !EoF() )
+			If cSerRef == Alltrim((cAliasOsRe)->TR7_SERVIC)
+				cSerMsg := STR0139 //" Reforma "
+			Else
+				cSerMsg := STR0140 //" Conserto "
+			EndIf
+			lRet := .F.
+			If INCLUI
+				Help(' ',1,STR0008 ,,; //"ATENCAO" ##"Este pneu possui 'Reforma/Conserto' registrado na O.S. em Lote " ## " no dia " ## ", desta forma não é possível a inclusão."
+				STR0132 + cSerMsg + STR0141 +(cAliasOsRe)->TR7_LOTE + STR0133 + DtoC(StoD((cAliasOsRe)->TR7_DTLOTE)) + STR0053 + (cAliasOsRe)->TR7_HRLOTE + STR0137;
+				,2,0,,,,,, {STR0138 + Chr(13) + Chr(10) + STR0136 + (cAliasOsRe)->TR7_LOTE + "." }) //"1 - Selecionar outro registro." ## "2 - Acesse a rotina O.S. em Lote (MNTA720) e exclua o Lote"
+			Else
+				Help(' ',1,STR0008 ,,; //"ATENCAO" ## "Este pneu possui 'Reforma/Conserto' registrado na O.S. em Lote " ## " no dia " ## ", desta forma não é possível a exclusão."
+				STR0132 + cSerMsg + STR0141 + (cAliasOsRe)->TR7_LOTE + STR0133 + DtoC(StoD((cAliasOsRe)->TR7_DTLOTE)) + STR0053 + (cAliasOsRe)->TR7_HRLOTE + STR0134;
+				,2,0,,,,,, {STR0135 + Chr(13) + Chr(10) + STR0136 + (cAliasOsRe)->TR7_LOTE + "." })  //"1 - Selecionar outro registro." ## "2 - Acesse a rotina O.S. em Lote (MNTA720) e exclua o Lote"
+			EndIf
+		EndIf
+
+		(cAliasOsRe)->( dbCloseArea() )
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT600ANA
+Filtro da consulta padrão NGT utilizado no campo TR4_CODBEM.
+
+@author  Eduardo Mussi
+@since   18/11/2019
+@version P12
+@return  caracter, Condição SQL a ser executada pela consulta padrão.
+/*/
+//-------------------------------------------------------------------
+Function MNT600ANA()
+
+	Local cCondSQL := "@"
+
+	cCondSQL += "T9_STATUS <> " + ValToSQL( GetMv( "MV_NGSTAPL" ) )
+	cCondSQL += " AND T9_STATUS <> " + ValToSQL( GetMv( "MV_NGSTATR" ) )
+	cCondSQL += " AND T9_SITBEM = 'A' AND T9_CATBEM = '3'"
+	cCondSQL += " AND D_E_L_E_T_ <> '*' "
+
+return cCondSQL

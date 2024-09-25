@@ -1,0 +1,819 @@
+#INCLUDE "MNTR260.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR260
+Relatório de Despesas com Manutenções
+@type function
+
+@author Deivys Joenck
+@since 25/09/2001
+
+@sample MNTR260()
+
+@param
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTR260()
+
+	Local aNGBEGINPRM := NGBEGINPRM() //³Guarda conteudo e declara variaveis padroes
+	Local WNREL       := "MNTR260"
+	Local cDESC1      := STR0001 //"Relatorio de Despesas com Manutencoes. Este relatorio"
+	Local cDESC2      := STR0002 //"Este programa seleciona por default OS finalizadas e as"
+	Local cDESC3      := STR0003 //"em aberto conforme parametro selecionado."
+	Local cSTRING     := "ST9"
+
+	Private NOMEPROG  := "MNTR260"
+	Private TAMANHO   := 'G'
+	Private aRETURN   := {STR0004,1,STR0005,1,2,1,"",1}    //"Zebrado"###"Administracao"
+	Private TITULO    := STR0006 //"Relatorio de Despesas com Manutencoes."
+	Private nTIPO     := 0
+	Private nLASTKEY  := 0
+	Private vVETHORAS := {}
+	Private CABEC1, CABEC2
+	Private nSizeFil  := If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(ST9->ST9_FILIAL))
+	Private cPERG := "MNT26R"
+
+	/*-----------------------------------------------------------+
+	| MV_PAR01 - De  Filial                                      |
+	| MV_PAR02 - Ate  Filial                                     |
+	| MV_PAR03 - De  Centro de Custo                             |
+	| MV_PAR04 - Ate Centro de Custo                             |
+	| MV_PAR05 - De  Centro de Trabalho                          |
+	| MV_PAR06 - Ate Centro de Trabalho                          |
+	| MV_PAR07 - De  Familia                                     |
+	| MV_PAR08 - Ate Familia                                     |
+	| MV_PAR09 - De  Data                                        |
+	| MV_PAR10 - Ate Data                                        |
+	| MV_PAR11 - Tipo de Relatorio                               |
+	| MV_PAR12 - Considerar Estrutura                            |
+	| MV_PAR13 - Tipo de Custo (1= Medio, 2 = Standard           |
+	| MV_PAR14 - Considera OS (liberada/pendente/aberta/finaliz.)|
+	| MV_PAR15 - Considera Data (Da O.S\Do Insumo)               |
+	| MV_PAR16 - Imprimir Localizacao ?  Sim/Nao                 |
+	+-----------------------------------------------------------*/
+	Pergunte(cPERG,.F.)
+
+	WNREL := SetPrint( cSTRING, WNREL, cPERG, TITULO, cDESC1, cDESC2, cDESC3, .F., '', .F., TAMANHO )
+
+	If nLASTKEY == 27
+		Set Filter To
+		DbSelectArea("ST9")
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	EndIf
+
+	SetDefault( aRETURN, cSTRING, , , TAMANHO, 2 )
+	MNTR260IMP( WNREL )
+
+	NGRETURNPRM( aNGBEGINPRM ) // Retorna conteudo de variaveis padroes
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR260IMP
+Chamada do Relatório
+@type function
+
+@author Deivys Joenck
+@since 25/09/01
+
+@sample MNTR260IMP( 'MNTR260' )
+
+@param WNREL, Caracter, Nome do relatório.
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTR260IMP( WNREL )
+
+	Local oTmpTbl     := Nil
+	Local nCONTFA     := 0
+	Local nCONTCE     := 0
+	Local nCONTCU     := 0
+	Local nTOTFAMPROD := 0
+	Local nTOTTER     := 0
+	Local nTOTMAO     := 0
+	Local nTOTPROD    := 0
+	Local nTOTCTER    := 0
+	Local nTOTCPROD   := 0
+	Local nTOTCMAO    := 0
+	Local nTOTALCC    := 0
+	Local nTOTCUSTER  := 0
+	Local nTOTCUSMAO  := 0
+	Local nTOTCUSPROD := 0
+	Local nTOTCENTER  := 0
+	Local nTOTCENMAO  := 0
+	Local nTOTCENPROD := 0
+	Local nTOTFAMTER  := 0
+	Local nTOTFAMMAO  := 0
+	Local nCont       := 0
+
+	Private cTRB      := GetNextAlias()
+	Private li        := 80
+	Private m_pag     := 1
+
+	//Verifica se deve comprimir ou nao
+	nTIPO  := IIF(aRETURN[4]==1,15,18)
+
+	//Monta os Cabecalhos
+	If MV_PAR11 == 1
+		CABEC1 := STR0008 //"C.Custo   Descricao                  Terceiros    Mao de Obra       Produtos            TOTAL"
+		CABEC2 := " "
+		/*
+		1         2         3         4         5         6         7         8         9         10
+		012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234
+		********************************************************************************************************
+		C.Custo              Descricao                  Terceiros    Mao de Obra       Produtos            TOTAL
+		********************************************************************************************************
+		xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		xxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		-------------  -------------  -------------   --------------
+		TOTAL GERAL        999.999.999,99 999.999.999,99 999.999.999,99 9.999.999.999,99
+		*/
+	EndIf
+
+	If MV_PAR11 == 2
+		CABEC1 := STR0012 //"            Bem              Descricao                           Terceiros    Mao de Obra       Produtos            TOTAL"
+		CABEC2 := " "
+		/*/
+		1         2         3         4         5         6         7         8         9         10        11        12        13
+		01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+		***********************************************************************************************************************************
+		Bem              Descricao                           Terceiros    Mao de Obra       Produtos            TOTAL
+		***********************************************************************************************************************************
+		Centro de Custo.....: xxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+		Centro de Trabalho..: xxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+		Familia.............: xxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+		xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx      99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		Localização: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+		xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  99.999.999,99  99.999.999,99  99.999.999,99   999.999.999,99
+		-------------  -------------  -------------   --------------
+		TOTAL DA FAMILIA...........:999.999.999,99 999.999.999,99 999.999.999,99 9.999.999.999,99
+
+		TOTAL DO CENTRO DE TRABALHO:999.999.999,99 999.999.999,99 999.999.999,99 9.999.999.999,99
+
+		TOTAL DO CENTRO DE CUSTO...:999.999.999,99 999.999.999,99 999.999.999,99 9.999.999.999,99
+
+		TOTAL DO GERAL.............:999.999.999,99 999.999.999,99 999.999.999,99 9.999.999.999,99
+		*/
+	EndIf
+
+	aDBF := {{ 'CCUSTO' , 'C', Len( STJ->TJ_CCUSTO ), 0 },;
+	         { 'CENTRAB', 'C', 06, 0 },;
+	         { 'FAMILIA', 'C', 06, 0 },;
+	         { 'CODBEM' , 'C', 16, 0 },;
+	         { 'NOME'   , 'C', 40, 0 },;
+	         { 'TERCEI' , 'N', 12, 2 },;
+	         { 'MAODEO' , 'N', 12, 2 },;
+	         { 'PRODUTO', 'N', 18, 2 } }
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl  := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices
+	oTmpTbl:AddIndex( "Ind01" , {"CCUSTO","CENTRAB","FAMILIA","CODBEM"} )
+	//Cria a tabela temporaria
+	oTmpTbl:Create()
+
+	// Insere registros na tabela temporaria com o conteudo a ser impresso.
+	Processa({ || fInsertTbl() }, STR0037 )
+
+	//IMPRESSAO DO RELATORIO
+	DbSelectArea(cTRB)
+	DbGotop()
+	If Reccount() > 0
+
+		If MV_PAR11 == 1 //(RESUMIDO)
+			nCONT := 0
+			Store 0.00 To nTOTTER,nTOTMAO,nTOTPROD
+
+			NGSOMALI(58)
+
+			While !Eof()
+				Store 0.00 To nTOTCTER,nTOTCPROD,nTOTCMAO,nTOTALCC
+				cCENCUS := (cTRB)->CCUSTO
+
+				NGSOMALI(58)
+				@ LI,000 Psay Alltrim(cCENCUS)
+				@ Li,021 Psay Posicione( 'CTT', 1, xFilial( 'CTT' ) + cCENCUS, 'Substr( CTT_DESC01, 1, 20 )' ) Picture '@!'
+
+				DbSelectArea(cTRB)
+				While !Eof() .And. (cTRB)->CCUSTO == cCENCUS
+
+					nTOTCTER  += (cTRB)->TERCEI
+					nTOTCPROD += (cTRB)->PRODUTO
+					nTOTCMAO  += (cTRB)->MAODEO
+
+					DbSelectArea(cTRB)
+					DbSkip()
+				End
+				@ Li,058 Psay nTOTCTER  Picture '@E 999,999,999,999,999.99'
+				@ Li,082 Psay nTOTCMAO  Picture '@E 999,999,999,999,999.99'
+				@ Li,106 Psay nTOTCPROD Picture '@E 999,999,999,999,999.99'
+				@ Li,130 Psay nTOTcTER+nTOTCMAO+nTOTCPROD Picture '@E 999,999,999,999,999.99'
+				nTOTTER  += nTOTCTER
+				nTOTPROD += nTOTCPROD
+				nTOTMAO  += nTOTCMAO
+				nCONT    += 1
+
+			End
+
+			If nCONT > 0
+				NGSOMALI(58)
+				@ LI,058 Psay '----------------------'
+				@ LI,082 Psay '----------------------'
+				@ LI,106 Psay '----------------------'
+				@ LI,130 Psay '----------------------'
+				NGSOMALI(58)
+				@ LI,021 Psay STR0011 //"TOTAL GERAL"
+				@ LI,058 Psay nTOTTER  Picture '@E 999,999,999,999,999.99'
+				@ LI,082 Psay nTOTMAO  Picture '@E 999,999,999,999,999.99'
+				@ LI,106 Psay nTOTPROD Picture '@E 999,999,999,999,999.99'
+				@ LI,130 Psay nTOTPROD+nTOTMAO+nTOTTER Picture '@E 999,999,999,999,999.99'
+			EndIf
+
+        ElseIf MV_PAR11 == 2 //(DETALHADO)
+
+			DbSelectArea(cTRB)
+			DbGotop()
+			Store 0    To nCONTFA,nCONTCE,nCONTCU
+			Store 0.00 To nTOTTER,nTOTMAO,nTOTPROD
+
+			While !Eof()
+
+				cCENCUS := (cTRB)->CCUSTO
+				Store 0.00 To nTOTCUSTER,nTOTCUSMAO,nTOTCUSPROD
+
+				NGSOMALI(58)
+				NGSOMALI(58)
+				@ LI,000 Psay STR0007 //"Centro de Custo.....:"
+				@ Li,026 Psay Trim( cCENCUS ) + Space( 3 ) + Posicione( 'CTT', 1, xFilial( 'CTT' ) + cCENCUS,;
+				    'Substr( CTT_DESC01, 1, 20 )' ) Picture '@!'
+
+				DbSelectArea(cTRB)
+				While !Eof() .And. (cTRB)->CCUSTO = cCENCUS
+
+					cTRAB := (cTRB)->CENTRAB
+					Store 0.00 To nTOTCENTER,nTOTCENMAO,nTOTCENPROD
+
+					NGSOMALI(58)
+					@LI,000 Psay STR0015 //"Centro de Trabalho..: "
+					@LI,026 Psay Alltrim(cTRAB)+"   "+NGSEEK("SHB",cTRAB,1,"HB_NOME")
+
+					DbSelectArea(cTRB)
+					While !Eof() .And. (cTRB)->CCUSTO == cCENCUS .And.;
+					(cTRB)->CENTRAB == cTRAB
+
+						cCODFAMI := (cTRB)->FAMILIA
+						Store 0.00 To nTOTFAMTER,nTOTFAMMAO,nTOTFAMPROD
+
+						NGSOMALI(58)
+						@ Li,000 Psay STR0016 // "Família..........:"
+						@ LI,026 Psay Alltrim((cTRB)->FAMILIA)+"   "+NGSEEK("ST6",(cTRB)->FAMILIA,1,"T6_NOME")
+
+						NGSOMALI(58)
+
+						cCODBEM   := (cTRB)->CODBEM
+						lPRIMEIRO := .T.
+
+						DbSelectArea(cTRB)
+						While !Eof() .And. (cTRB)->CCUSTO   == cCENCUS .And.;
+						(cTRB)->CENTRAB == cTRAB .And. (cTRB)->FAMILIA == cCODFAMI
+
+							If (cTRB)->CODBEM <> cCODBEM
+								lPRIMEIRO := .T.
+							EndIf
+
+							If lPRIMEIRO
+								@ LI,009 Psay (cTRB)->CODBEM
+								@ LI,026 Psay Substr((cTRB)->NOME,1,30)
+								lPRIMEIRO := .F.
+							EndIf
+
+							@ Li,058 Psay (cTRB)->TERCEI                        Picture '@E 999,999,999,999,999.99'
+							@ Li,082 Psay (cTRB)->MAODEO                        Picture '@E 999,999,999,999,999.99'
+							@ Li,106 Psay (cTRB)->PRODUTO                        Picture '@E 999,999,999,999,999.99'
+							@ LI,130 Psay (cTRB)->PRODUTO + (cTRB)->TERCEI + (cTRB)->MAODEO Picture '@E 999,999,999,999,999.99'
+							nTOTFAMTER  += (cTRB)->TERCEI
+							nTOTFAMMAO  += (cTRB)->MAODEO
+							nTOTFAMPROD += (cTRB)->PRODUTO
+							nCONTFA     += 1
+
+							NGSOMALI(58)
+
+							If MV_PAR16 == 1
+								cCODBEM := (cTRB)->CODBEM
+
+								DbSelectArea("TAF")
+								DbSetOrder(6)
+								If DbSeek(XFILIAL("TAF")+"X"+"1"+(cTRB)->CODBEM)
+
+									nMaxCarac := 78
+									aLocal := {}
+
+									If FindFunction("NGLocComp")
+										cLocal := NGLocComp((cTRB)->CODBEM,"1")
+									EndIf
+
+									@ LI,026 Psay STR0026
+
+									If Len(cLocal) > nMaxCarac
+										aLocal := MNTR830EL(cLocal)
+										For nCont := 1 to Len(aLocal)
+											@ LI,039 Psay aLocal[nCont]
+											If Len(aLocal) != nCont
+												NGSOMALI(58)
+											Endif
+										Next nCont++
+									Else
+										@ Li,039 Psay cLocal
+									EndIf
+									NGSOMALI(58);NGSOMALI(58)
+
+								EndIf
+							Endif
+
+							DbSelectArea(cTRB)
+							DbSkip()
+						End
+
+						If nCONTFA > 0
+
+							@ LI,058 Psay '----------------------'
+							@ LI,082 Psay '----------------------'
+							@ LI,106 Psay '----------------------'
+							@ LI,130 Psay '----------------------'
+
+							NGSOMALI(58)
+
+							@ LI,026 Psay STR0013 //TOTAL DA FAMILIA
+							@ LI,058 Psay nTOTFAMTER                        Picture '@E 999,999,999,999,999.99'
+							@ LI,082 Psay nTOTFAMMAO                        Picture '@E 999,999,999,999,999.99'
+							@ LI,106 Psay nTOTFAMPROD                       Picture '@E 999,999,999,999,999.99'
+							@ LI,130 Psay nTOTFAMPROD+nTOTFAMMAO+nTOTFAMTER Picture '@E 999,999,999,999,999.99'
+						EndIf
+						nTOTCENTER  += nTOTFAMTER
+						nTOTCENMAO  += nTOTFAMMAO
+						nTOTCENPROD += nTOTFAMPROD
+						nCONTCE     += 1
+					End
+					If nCONTCE > 0
+						NGSOMALI(58)
+						@ LI,026 Psay STR0014 //TOTAL DO CENTRO DE TRABALHO
+						@ LI,058 Psay nTOTCENTER                        Picture '@E 999,999,999,999,999.99'
+						@ LI,082 Psay nTOTCENMAO                        Picture '@E 999,999,999,999,999.99'
+						@ LI,106 Psay nTOTCENPROD                       Picture '@E 999,999,999,999,999.99'
+						@ LI,130 Psay nTOTCENPROD+nTOTCENMAO+nTOTCENTER Picture '@E 999,999,999,999,999.99'
+					EndIf
+					nTOTCUSTER  += nTOTCENTER
+					nTOTCUSMAO  += nTOTCENMAO
+					nTOTCUSPROD += nTOTCENPROD
+					nCONTCU     += 1
+				End
+				If nCONTCU > 0
+					NGSOMALI(58)
+					@ LI,026 Psay STR0010 //"TOTAL DO C.CUSTO"
+					@ LI,058 Psay nTOTCUSTER                        Picture '@E 999,999,999,999,999.99'
+					@ LI,082 Psay nTOTCUSMAO                        Picture '@E 999,999,999,999,999.99'
+					@ LI,106 Psay nTOTCUSPROD                       Picture '@E 999,999,999,999,999.99'
+					@ LI,130 Psay nTOTCUSPROD+nTOTCUSMAO+nTOTCUSTER Picture '@E 999,999,999,999,999.99'
+				EndIf
+				nTOTTER  += nTOTCUSTER
+				nTOTPROD += nTOTCUSPROD
+				nTOTMAO  += nTOTCUSMAO
+			End
+			If nCONTCU > 0
+				NGSOMALI(58)
+				NGSOMALI(58)
+				@ LI,026 Psay STR0011 //"TOTAL GERAL"
+				@ LI,058 Psay nTOTTER                  Picture '@E 999,999,999,999,999.99'
+				@ LI,082 Psay nTOTMAO                  Picture '@E 999,999,999,999,999.99'
+				@ LI,106 Psay nTOTPROD                 Picture '@E 999,999,999,999,999.99'
+				@ LI,130 Psay nTOTPROD+nTOTMAO+nTOTTER Picture '@E 999,999,999,999,999.99'
+			EndIf
+
+		EndIf
+
+	Else
+
+		MsgInfo(STR0033,STR0034) //"Não existe dados para montar a tela de relatório de custos de manutenções dos bens."###"ATENÇÃO"
+		Return .F.
+
+	EndIf
+
+	RetIndex("ST9")
+	Set Filter To
+	Set Device To Screen
+	If aRETURN[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(WNREL)
+	EndIf
+	MS_FLUSH()
+	oTmpTbl:Delete()
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInsertTbl
+Insere os registros para elaboração do relatório na tabela temporaria.
+@type static
+
+@author Alexandre Santos
+@since 15/05/2019
+
+@sample fInsertTbl()
+
+@param  cCodeTZ, Caracter, Código do bem filho na estrutura.
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function fInsertTbl( cCodeTZ )
+
+	Local cOrder     := ''
+	Local cPlano     := ''
+	Local cFilIns    := ''
+	Local cOldBem    := ''
+	Local cFilter    := aReturn[7]
+	Local cAliasOS   := GetNextAlias()
+	Local aWhere     := {}
+	Local nTotProd   := 0
+	Local nTotFerr   := 0
+	Local nTotEspc   := 0
+	Local nTotTerc   := 0
+	Local nTotMDO    := 0
+	Local nCost      := 0
+	Local nHours     := 0
+	Local lFirst     := !Empty( cCodeTZ )
+
+	Default cCodeTZ  := ''
+
+	aWhere := fGetWhere( cCodeTZ ) // Retorna condições WHERE e JOIN para tabelas STS, STJ, STL e STT.
+
+	BeginSQL Alias cAliasOS
+
+		SELECT
+			ST9.T9_FILIAL  AS FILBEM ,
+			ST9.T9_CODFAMI AS CODFAMI,
+			ST9.T9_NOME    AS NOME   ,
+			STJ.TJ_CODBEM  AS CODBEM ,
+			STJ.TJ_ORDEM   AS ORDEM  ,
+			STJ.TJ_PLANO   AS PLANO  ,
+			STJ.TJ_CCUSTO  AS CCUSTO ,
+			STJ.TJ_CENTRAB AS CENTRAB,
+			STL.TL_CODIGO  AS CODIINS,
+			STL.TL_TIPOREG AS TIPOREG,
+			STL.TL_USACALE AS USACALE,
+			STL.TL_QUANTID AS QUANTID,
+			STL.TL_TIPOHOR AS TIPOHOR,
+			STL.TL_DTINICI AS DTINICI,
+			STL.TL_HOINICI AS HOINICI,
+			STL.TL_DTFIM   AS DTFIM  ,
+			STL.TL_HOFIM   AS HOFIM  ,
+			STL.TL_UNIDADE AS UNIDADE,
+			STL.TL_CUSTO   AS CUSTO  ,
+			STL.TL_FILIAL  AS FILINS
+		FROM
+			%table:ST9% ST9
+		INNER JOIN
+			%table:STJ% STJ
+				ON STJ.TJ_CODBEM = ST9.T9_CODBEM AND
+				   STJ.%NotDel% AND ST9.%NotDel%
+		INNER JOIN
+			%table:STL% STL
+				ON STL.TL_ORDEM  = STJ.TJ_ORDEM  AND
+		     	   STL.TL_PLANO  = STJ.TJ_PLANO  AND
+				   STL.TL_FILIAL = STJ.TJ_FILIAL AND
+				   RTRIM( STL.TL_SEQRELA ) <> %exp:'0'% AND
+				   STL.%NotDel%
+				   %exp:aWhere[3]%
+		WHERE
+			STJ.TJ_FILIAL BETWEEN %exp:MV_PAR01% AND %exp:MV_PAR02% AND
+			%exp:aWhere[1]%
+			STJ.TJ_TIPOOS = %exp:'B'%
+		UNION
+			SELECT
+				ST9.T9_FILIAL  AS FILBEM ,
+				ST9.T9_CODFAMI AS CODFAMI,
+				ST9.T9_NOME    AS NOME   ,
+				STS.TS_CODBEM  AS CODBEM ,
+				STS.TS_ORDEM   AS ORDEM  ,
+				STS.TS_PLANO   AS PLANO  ,
+				STS.TS_CCUSTO  AS CCUSTO ,
+				STS.TS_CENTRAB AS CENTRAB,
+				STT.TT_CODIGO  AS CODIINS,
+				STT.TT_TIPOREG AS TIPOREG,
+				STT.TT_USACALE AS USACALE,
+				STT.TT_QUANTID AS QUANTID,
+				STT.TT_TIPOHOR AS TIPOHOR,
+				STT.TT_DTINICI AS DTINICI,
+				STT.TT_HOINICI AS HOINICI,
+				STT.TT_DTFIM   AS DTFIM  ,
+				STT.TT_HOFIM   AS HOFIM  ,
+				STT.TT_UNIDADE AS UNIDADE,
+				STT.TT_CUSTO   AS CUSTO  ,
+				STT.TT_FILIAL  AS FILINS
+			FROM
+				%table:ST9% ST9
+			INNER JOIN
+				%table:STS% STS
+					ON STS.TS_CODBEM = ST9.T9_CODBEM AND
+					   STS.%NotDel% AND ST9.%NotDel%
+			INNER JOIN
+				%table:STT% STT
+					ON STT.TT_ORDEM  = STS.TS_ORDEM  AND
+					   STT.TT_PLANO  = STS.TS_PLANO  AND
+					   STT.TT_FILIAL = STS.TS_FILIAL AND
+					   RTRIM( STT.TT_SEQRELA ) <> %exp:'0'% AND
+					   STT.%NotDel%
+					%exp:aWhere[4]%
+			WHERE
+				STS.TS_FILIAL BETWEEN %exp:MV_PAR01% AND %exp:MV_PAR02% AND
+				%exp:aWhere[2]%
+				STS.TS_TIPOOS = %exp:'B'%
+
+	EndSQL
+
+	Do While (cAliasOS)->( !EoF() )
+
+		// Tratamento para o filtro personalizavel da classe SetPrint - Filtro em ADVPL
+		If !Empty( cFilter )
+
+			dbSelectArea( 'ST9' )
+			dbSetOrder( 1 )
+			If !MsSeek( (cAliasOS)->FILBEM + (cAliasOS)->CODBEM )
+
+				(cAliasOS)->( dbSkip() )
+				Loop
+
+			EndIf
+
+		EndIf
+
+		// Caso considere os filhos da estrutura, busca os mesmos e inclue na TRB. Realizada apenas uma vez por Bem pai.
+		If MV_PAR12 == 1 .And. (cAliasOS)->CODBEM != cOldBem .And. Empty( cCodeTZ )
+			fGetCpnts( (cAliasOS)->CODBEM, MV_PAR09, MV_PAR10 )
+			cOldBem := (cAliasOS)->CODBEM
+		EndIf
+
+		cOrder  := (cAliasOS)->ORDEM
+		cPlano  := (cAliasOS)->PLANO
+		cFilIns := (cAliasOS)->FILINS
+		cCCost  := (cAliasOS)->CCUSTO
+		cCWork  := (cAliasOS)->CENTRAB
+		cFamily := (cAliasOS)->CODFAMI
+		cCodeB  := (cAliasOS)->CODBEM
+		cName   := (cAliasOS)->NOME
+
+		Do While (cAliasOS)->( !EoF() ) .And. cOrder == (cAliasOS)->ORDEM .And. cPlano == (cAliasOS)->PLANO .And.;
+		         cFilIns == (cAliasOS)->FILINS
+
+			nHours := NGTQUATINS( (cAliasOS)->CODIINS, (cAliasOS)->TIPOREG, (cAliasOS)->USACALE, (cAliasOS)->QUANTID,;
+			                      (cAliasOS)->TIPOHOR, (cAliasOS)->DTINICI, (cAliasOS)->HOINICI, (cAliasOS)->DTFIM,;
+								  (cAliasOS)->HOFIM, (cAliasOS)->UNIDADE )[1]
+
+			If MV_PAR13 == 2 // STANDARD
+
+				nCost := NGCUSTSTAN( (cAliasOS)->CODIINS, (cAliasOS)->TIPOREG, , , , (cAliasOS)->FILINS )[1]
+
+				If STL->TL_TIPOREG == 'F'
+					nCost := ( nCost * nHours * (cAliasOS)->QUANREC )
+				Else
+					nCost := ( nCost * nHours )
+				EndIf
+
+			Else
+
+				nCost := (cAliasOS)->CUSTO
+
+			EndIf
+
+			Do Case
+
+				Case (cAliasOS)->TIPOREG == 'P'
+					nTotProd += nCost
+
+				Case (cAliasOS)->TIPOREG == 'F'
+					nTotFerr += nCost
+
+				Case (cAliasOS)->TIPOREG == 'E'
+					nTotEspc += nCost
+
+				Case (cAliasOS)->TIPOREG == 'T'
+					nTotTerc += nCost
+
+				OtherWise
+					nTotMDO  += nCost
+
+			EndCase
+
+			(cAliasOS)->( dbSkip() )
+
+		EndDo
+
+		dbSelectArea( cTrb )
+		If !MsSeek( cCCost + cCWork + cFamily + cCodeB )
+
+			RecLock( cTrb, .T. )
+				(cTrb)->CCUSTO  := cCCost
+				(cTrb)->CENTRAB := cCWork
+				(cTrb)->FAMILIA := cFamily
+				(cTrb)->CODBEM  := cCodeB
+				(cTrb)->NOME    := cName
+				(cTrb)->TERCEI  := nTotTerc
+				(cTrb)->MAODEO  := nTotMDO + nTotEspc + nTotFerr
+				(cTrb)->PRODUTO := nTotProd
+			(cTrb)->( MsUnLock() )
+
+			lFirst := .F.
+
+		ElseIf !lFirst // Caso seja filho da estrutura, nunca entra na primeira passagem do loop.
+
+			RecLock( cTrb, .F. )
+				(cTrb)->TERCEI  += nTotTerc
+				(cTrb)->MAODEO  += nTotMDO + nTotEspc + nTotFerr
+				(cTrb)->PRODUTO += nTotProd
+			(cTrb)->( MsUnLock() )
+
+		EndIf
+
+		nTotTerc := 0
+		nTotMDO  := 0
+		nTotEspc := 0
+		nTotFerr := 0
+		nTotProd := 0
+
+	EndDo
+
+	(cAliasOS)->( dbCloseArea() )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetWhere
+Monta condições no formato SQL Embedded para a query principal conforme parâmetros.
+@type static
+
+@author Alexandre Santos
+@since 15/05/2019
+
+@sample fGetWhere()
+
+@param  [cCodeTZ], Caracter, Código do bem filho na estrutura.
+@return Array, 	[1] - Condição aplicada a clausula where para tabela STJ.
+				[2] - Condição aplicada a clausula where para tabela STS.
+				[3] - Condição aplicada a clausula JOIN para tabela STL.
+				[4] - Condição aplicada a clausula JOIN para tabela STT.
+/*/
+//---------------------------------------------------------------------
+Static Function fGetWhere( cCodeTZ )
+
+	Local cQueryTJ  := '%'
+	Local cQueryTS  := '%'
+	Local cQueryTL  := '%'
+	Local cQueryTT  := '%'
+
+	Default cCodeTZ := ''
+
+	Do Case
+
+		Case MV_PAR14 == 1 // O.S. Liberadas
+			cQueryTJ += "STJ.TJ_TERMINO = 'N' AND STJ.TJ_SITUACA = 'L'"
+			cQueryTS += "STS.TS_TERMINO = 'N' AND STS.TS_SITUACA = 'L'"
+
+		Case MV_PAR14 == 2 // O.S. Pendentes
+			cQueryTJ += "STJ.TJ_TERMINO = 'N' AND STJ.TJ_SITUACA = 'P'"
+			cQueryTS += "STS.TS_TERMINO = 'N' AND STS.TS_SITUACA = 'P'"
+
+		Case MV_PAR14 == 3 // O.S. Abertas
+			cQueryTJ += "STJ.TJ_TERMINO = 'N' AND STJ.TJ_SITUACA <> 'C'"
+			cQueryTS += "STS.TS_TERMINO = 'N' AND STS.TS_SITUACA <> 'C'"
+
+		Case MV_PAR14 == 4 // O.S. Finalizadas
+			cQueryTJ += "STJ.TJ_TERMINO = 'S' AND STJ.TJ_SITUACA <> 'C'"
+			cQueryTS += "STS.TS_TERMINO = 'S' AND STS.TS_SITUACA <> 'C'"
+
+			// Intervalo de datas considera O.S. Realização.
+			If MV_PAR15 == 1
+
+				cQueryTS += ' AND ( ( STS.TS_DTMRINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+				cQueryTS += ' AND ( STS.TS_DTMRINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' ) )'
+				cQueryTJ += ' AND ( ( STJ.TJ_DTMRINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+				cQueryTJ += ' AND ( STJ.TJ_DTMRINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' ) )'
+
+			EndIf
+
+	EndCase
+
+	// Intervalo de datas considera O.S. Previsão
+	If MV_PAR15 == 1 .And. MV_PAR14 <> 4
+
+		cQueryTJ += ' AND ( ( STJ.TJ_DTMPINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+		cQueryTJ += ' AND ( STJ.TJ_DTMPINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' ) )'
+		cQueryTS += ' AND ( ( STS.TS_DTMPINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+		cQueryTS += ' AND ( STS.TS_DTMPINI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' ) )'
+
+	EndIf
+
+	// Intervalo de datas considera Insumo.
+	If MV_PAR15 == 2
+
+		cQueryTL += 'AND ( STL.TL_DTINICI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+		cQueryTT += 'AND ( STT.TT_DTINICI BETWEEN ' + ValToSQL( MV_PAR09 ) + ' AND ' + ValToSQL( MV_PAR10 ) + ' )'
+
+	EndIf
+
+	If Empty( cCodeTZ )
+
+		// Filtros iniciais DE-ATE
+		cQueryTJ += 'AND ( STJ.TJ_CCUSTO  BETWEEN ' + ValToSQL( MV_PAR03 ) + ' AND ' + ValToSQL( MV_PAR04 ) + ' ) '
+		cQueryTJ += 'AND ( STJ.TJ_CENTRAB BETWEEN ' + ValToSQL( MV_PAR05 ) + ' AND ' + ValToSQL( MV_PAR06 ) + ' ) '
+		cQueryTS += 'AND ( STS.TS_CCUSTO  BETWEEN ' + ValToSQL( MV_PAR03 ) + ' AND ' + ValToSQL( MV_PAR04 ) + ' ) '
+		cQueryTS += 'AND ( STS.TS_CENTRAB BETWEEN ' + ValToSQL( MV_PAR05 ) + ' AND ' + ValToSQL( MV_PAR06 ) + ' ) '
+		cQueryTJ += 'AND ( ST9.T9_CODFAMI BETWEEN ' + ValToSQL( MV_PAR07 ) + ' AND ' + ValToSQL( MV_PAR08 ) + ' ) '
+		cQueryTS += 'AND ( ST9.T9_CODFAMI BETWEEN ' + ValToSQL( MV_PAR07 ) + ' AND ' + ValToSQL( MV_PAR08 ) + ' ) '
+
+	Else
+		// Condições especificas para busca de O.S. do bem filho.
+		cQueryTJ += 'AND STJ.TJ_CODBEM = ' + ValToSQL( cCodeTZ )
+		cQueryTS += 'AND STS.TS_CODBEM = ' + ValToSQL( cCodeTZ )
+
+	EndIf
+
+	cQueryTJ += ' AND%'
+	cQueryTS += ' AND%'
+	cQueryTL += '%'
+	cQueryTT += '%'
+
+Return { cQueryTJ, cQueryTS, cQueryTL, cQueryTT }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetCpnts
+Processa o bem caso o mesmo possua estrutura inclui seus filhos na TRB.
+@type static
+
+@author Alexandre Santos
+@since 15/05/2019
+
+@sample fGetCpnts( 'cCode', 15/05/2019, 15/05/2050 )
+
+@param cCode , Caracter, Código do bem que será processado.
+@param dDtIni, Data    , Data Inicio da busca.
+@param dDtEnd, Data    , Data Fim da busca.
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function fGetCpnts( cCode, dDtIni, dDtEnd )
+
+	Local cAliasSTZ := GetNextAlias()
+	Local nRecNo    := 0
+	Local aArea     := GetArea()
+
+	BeginSQL Alias cAliasSTZ
+
+		SELECT
+			STZ.TZ_LOCALIZ,
+			STZ.TZ_CODBEM ,
+			STZ.TZ_POSCONT,
+			STZ.TZ_CONTSAI,
+			STZ.TZ_BEMPAI ,
+			STZ.TZ_DATAMOV,
+			STZ.TZ_DATASAI,
+			STZ.TZ_FILIAL
+		FROM
+			%table:STZ% STZ
+		WHERE
+			STZ.TZ_FILIAL = %xFilial:STZ%    AND
+			STZ.TZ_BEMPAI = %exp:cCode%      AND
+			STZ.TZ_DATAMOV <= %exp:dDtEnd%   AND
+			( STZ.TZ_DATASAI >= %exp:dDtIni% OR
+			  STZ.TZ_DATASAI = %exp:''% )    AND
+			STZ.%NotDel%
+
+	EndSQL
+
+	Do While (cAliasSTZ)->( !EoF() )
+
+		nRecNo := (cAliasSTZ)->( RecNo() )
+
+		// Insere os registros do filho na TRB.
+		fInsertTbl( (cAliasSTZ)->TZ_CODBEM )
+
+		// Chamada Recursiva para Buscar os filhos do filho na estrutura.
+		fGetCpnts( (cAliasSTZ)->TZ_CODBEM, dDtIni, dDtEnd )
+
+		(cAliasSTZ)->( dbGoTo( nRecNo ) )
+
+		(cAliasSTZ)->( dbSkip() )
+
+	EndDo
+
+	(cAliasSTZ)->( dbCloseArea() )
+
+	RestArea( aArea )
+
+Return

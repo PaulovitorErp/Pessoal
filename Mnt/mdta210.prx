@@ -1,0 +1,2499 @@
+#INCLUDE "MDTA210.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA210
+Programa de Cadastro de Laudos Ambientais
+
+@author Marcio Costa
+@since 08/07/01
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA210()
+
+	//------------------------------------------------
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	//------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	//---------------------------------------------------------
+	// Define Array contendo as Rotinas a executar do programa
+	// ----------- Elementos contidos por dimensao ------------
+	// 1. Nome a aparecer no cabecalho
+	// 2. Nome da Rotina associada
+	// 3. Usado pela rotina
+	// 4. Tipo de Transa‡„o a ser efetuada
+	//    1 - Pesquisa e Posiciona em um Banco de Dados
+	//    2 - Simplesmente Mostra os Campos
+	//    3 - Inclui registros no Bancos de Dados
+	//    4 - Altera o registro corrente
+	//    5 - Remove o registro corrente do Banco de Dados
+	//-------------------------------------------------------
+	Private aRotina := MenuDef( , .F. )
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	//------------------------------------------------
+	// Define o cabecalho da tela de atualizacoes
+	//------------------------------------------------
+	Private cCadastro := OemtoAnsi(STR0006) //"Laudos Ambientais"
+	Private aCHKDEL := {}, bNGGRAVA
+	Private nSizeCli,nSizeLoj
+	Private cPrograma := "MDTA210"
+	Private cCliMdtPs := Space(Len(SA1->A1_COD+SA1->A1_LOJA))
+	Private lSYP := NGCADICBASE("TO0_MMSYP2","A","TO0",.F.)
+	Private lDESC2 := NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+	Private aMemos
+	Private lTipLauRES := NGCADICBASE('TBB_CODPLA','A','TBB',.F.)
+	Private lTipLauPAE := NGCADICBASE('TO0_ATIVID','A','TO0',.F.)
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+		If !MDT210UPD()//Verifica Aplicacao de Update
+			NGRETURNPRM(aNGBEGINPRM)
+			Return .F.
+		Endif
+
+		If ExistBlock("MDTA2101")
+			ExecBlock("MDTA2101",.F.,.F.)
+		EndIf
+
+		If lSYP
+			aMemos  := {{"TO0_MMSYP2", "TO0_DESC2"}}
+		Endif
+
+		nSizeCli := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+		nSizeLoj := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+		If lSigaMdtPS
+			DbSelectArea("SA1")
+			DbSetOrder(1)
+			mBrowse( 6, 1,22,75,"SA1")
+		Else
+			MDT210CAD()
+		EndIf
+	Endif
+
+	//------------------------------------------------
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210CAD
+Monta um browse com os laudos do cliente, e chama as funções
+para visualizar, incluir, excluir, alterar, etc.
+
+@author Marcio Costa
+@since 08/07/01
+@version MP12
+@return uRet
+/*/
+//---------------------------------------------------------------------
+Function MDT210CAD()
+
+	Local aArea			:= GetArea()
+	Local oldROTINA := aCLONE(aROTINA)
+	Local cFiltraSRJ			//Variavel para filtro
+	Local aIndexSRJ	:= {}		//Variavel Para Filtro
+	Local uRet
+	Local oldCad := cCadastro
+	Local bCondBrw
+	Local cCondBrw
+
+	Private cTO0Cli := SA1->A1_COD
+	Private cTO0Loj := SA1->A1_LOJA
+	Private aTROCAF3 := {}
+
+	Private aCHKDEL := {}, bNGGRAVA
+	Private DTVALIDA  := .T.
+
+	If lSigaMdtPS
+		cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+		aRotina := MenuDef( .F. , .F. )
+	Endif
+
+	If lSigaMdtPS
+		cCadastro := OemToAnsi(STR0006+STR0122+Alltrim(SA1->A1_NOME)) //" do Cliente: "
+	Endif
+
+	If nModulo == 56
+		bCondBrw := {|| Empty(TO0->TO0_TIPREL) .Or. TO0->TO0_TIPREL $ "9/A/B" }
+		cCondBrw := "Empty(TO0->TO0_TIPREL) .Or. TO0->TO0_TIPREL $ '9/A/B'"
+	Else
+		bCondBrw := {|| Empty(TO0->TO0_TIPREL) .Or. TO0->TO0_TIPREL $ "1/2/3/4/5/6/7/8/A/C" }
+		cCondBrw := "Empty(TO0->TO0_TIPREL) .Or. TO0->TO0_TIPREL $ '1/2/3/4/5/6/7/8/A/C'"
+	EndIf
+
+	aCHKDEL := { {'TO0->TO0_LAUDO' , "TO1", 1},;
+				{'TO0->TO0_LAUDO' , "TO2", 1},;
+				{'TO0->TO0_LAUDO' , "TO3", 1},;
+				{'TO0->TO0_LAUDO' , "TO5", 1},;
+				{'TO0->TO0_LAUDO' , "TOZ", 1},;
+				{'TO0->TO0_LAUDO' , "TJG", 1},;
+				{'TO0->TO0_LAUDO' , "TJA", 1},;
+				{'TO0->TO0_LAUDO' , "TIF", 1},;
+				{'TO0->TO0_LAUDO' , "TIG", 1},;
+				{'TO0->TO0_LAUDO' , "TI9", 1},;
+				{'TO0->TO0_LAUDO' , "TIA", 1}}
+
+	DbSelectArea("TO0")
+	If lSigaMdtPS
+		Set Filter To TO0->TO0_CLIENT+TO0->TO0_LOJA == SA1->A1_COD+SA1->A1_LOJA
+	Endif
+
+	dbSetFilter(bCondBrw,cCondBrw)
+
+	DbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TO0")
+
+	DbSelectArea("TO0")
+	TO0->(DbClearFilter())
+
+	aROTINA := aCLONE(oldROTINA)
+	RestArea(aArea)
+	cCadastro := oldCad
+
+Return uRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210OkPc
+Valida tela de inclusao e alteracao
+
+@author Denis Hyroshi de Souza
+@since 17/04/03
+@version MP12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MDT210OkPc()
+
+	Local aArea := GetArea()
+	Local lRet  := .t.
+	If Type("M->TO0_TIPREL") == "C" .and. Type("M->TO0_CC") == "C"
+		If M->TO0_TIPREL == "7"
+			//Se for PCMAT
+			If NGCADICBASE("TLL_CC","D","TLL",.F.)
+				If Empty(M->TO0_CC)
+					MsgInfo(STR0123) //"O campo Centro de Custo deve ser preenchido quando Laudo for PCMAT."
+					lRet := .f.
+				Endif
+			Endif
+		Endif
+	Endif
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210GRIS
+Atualiza campo TO0_GRISCO com o grau de risco da atividade
+executada pelo cliente
+
+@author Denis Hyroshi de Souza
+@since 24/09/03
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT210GRIS(cCliente)
+
+	Local aArea := GetArea()
+
+	If Select("TOE") > 0
+		Dbselectarea("SA1")
+		Dbsetorder(1)
+		If Dbseek(xFilial("SA1")+cCliente)
+			Dbselectarea("TOE")
+			Dbsetorder(1)
+			If Dbseek(xFilial("TOE")+SA1->A1_ATIVIDA)
+				M->TO0_GRISCO := TOE->TOE_GRISCO
+			Endif
+		Endif
+		lRefresh := .T.
+	Endif
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} INS210COPY
+Copia um Laudo ja existente, sendo obrigatorio a alteração
+do codigo do laudo
+
+@author Liber de Esteban O. P.
+@since 08/12/03
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function INS210COPY()
+
+	Local oDlg2
+	Local lWhenCpy	:= GetSx3Cache( 'TO0_TERMO', 'X3_VISUAL' ) == "V"
+	Local lFilDif	:= .F.
+	Local lCadastra	:= .F.
+	Local cFilAux	:= ""
+	Local nCont		:= 0
+	Local nCont2	:= 0
+	Local nOpcc		:= 0
+	Local aFilLau	:= {}
+	Local aSM0		:= {}
+	Local aTabCpy	:= {}
+
+	Private cCodigo    := IIf( ExistIni( 'TO0_LAUDO' ), InitPad( GetSx3Cache( 'TO0_LAUDO', 'X3_RELACAO' ) ), Space( 12 ) )
+	Private cNome      := TO0->TO0_NOME
+	Private cTO0_Laudo := TO0->TO0_Laudo
+	Private cTO0_NOME  := TO0->TO0_NOME
+
+	//Verifica para qual filial o laudo será copiado
+	If lFilDif := MsgYesNo( STR0273 ) //"Deseja copiar o laudo para uma filial diferente da atual?"
+
+		//Seleciona as filiais para cópia do laudo
+		aFilLau := MDTMrkFil()
+
+		//Caso o usuário tenha escolhido alguma filial e clicado em "Salvar"
+		If Len( aFilLau ) > 0
+			lCadastra := .T.
+		EndIf
+
+	Else
+		//Caso for cópia para a mesma filial sempre cadastra
+		lCadastra := .T.
+	EndIf
+
+	If lCadastra
+
+		//Monta tela para definir o nome do laudo de destino
+		lWhenCpy := IIf( !Empty( cCodigo ), .F., !lWhenCpy )
+
+		DEFINE MSDIALOG oDlg2 TITLE OemToAnsi( STR0096 ) From 0,0 To 17,80 OF oMainWnd //"Copiar Laudo"
+
+			oPnlTop := TPanel():New( 00, 00, , oDlg2, , , , , , , , .F., .F. )
+				oPnlTop:Align := CONTROL_ALIGN_ALLCLIENT
+
+				@ 05,05 TO 042,273 LABEL STR0097 OF oPnlTop PIXEL //"Laudo Modelo"
+				@ 0.8,1  SAY OemToAnsi( STR0098 ) Of oPnlTop //"Laudo"
+				@ 0.8,6  MSGET cTO0_LAUDO Picture "@!" Size 42,08 When .F. Of oPnlTop
+				@ 1.9,1  SAY OemToAnsi( STR0099 ) Of oPnlTop//"Nome Laudo "
+				@ 1.9,6  MSGET cTO0_NOME Picture "@!" Size 220,08 When .F. Of oPnlTop
+
+				@ 50,05 TO 088,273 LABEL STR0100 OF oPnlTop PIXEL //"Novo Laudo"
+				@ 4.3,1  SAY OemToAnsi( STR0098 ) Of oPnlTop//"Laudo"
+				@ 4.3,6  MSGET cCodigo Picture "@!" Size 42,08 Valid MDT210VLAU( cCodigo, TO0->TO0_LAUDO, aFilLau ) When lWhenCpy Of oPnlTop
+				@ 5.4,1  SAY OemToAnsi( STR0101 ) Of oPnlTop//"Nome Laudo"
+				@ 5.4,6  MSGET cNome Picture "@!" SIZE 220,08 Valid NaoVazio( cNome ) WHEN .T. Of oPnlTop
+
+		ACTIVATE MSDIALOG oDlg2 ON INIT EnchoiceBar( oDlg2, { || nOpcc:=1, oDlg2:End() }, { || oDlg2:End() } ) CENTERED
+
+		If nOpcc = 1 //Se for confirmada a operação
+
+			If lFilDif
+
+				//Carregas as filiais do sistema
+				aSM0 := FWLoadSM0( .T., .T. )
+
+				//Percorre as filiais para buscar o valor do campo M0_NOME para cada filial e adicionar ao array
+				For nCont := 1 To Len( aFilLau )
+					For nCont2 := 1 To Len( aSM0 )
+						If AllTrim( aSM0[ nCont2, 2 ] ) == AllTrim( aFilLau[ nCont, 1 ] )
+							aAdd( aFilLau[ nCont ], aSM0[ nCont2, 6 ] )
+							Exit
+						EndIf
+					Next nCont2
+				Next nCont
+			Else
+				//Adiciona no array a filial corrente
+				aAdd( aFilLau, { cFilAnt } )
+			EndIf
+
+			//Posiciona na tabela TO0 para realizar a inclusão
+			Dbselectarea( "TO0" )
+
+			For nCont := 1 To FCount()
+
+				x   := "m->" + FieldName( nCont )
+				y   := "TO0->" + FieldName( nCont )
+				&x 	:= &y
+
+			Next nCont
+
+			If lSYP .And. !lDESC2
+				If ExistIni( "TO0_DESC2" )
+					M->TO0_DESC2 := InitPad( GetSx3Cache( 'TO0_DESC2', 'X3_RELACAO' ) )
+				Else
+					M->TO0_DESC2 := ""
+				EndIf
+			Endif
+
+			If lFilDif
+				//Guarda a filial corrente
+				cFilAux := cFilAnt
+
+				//Verifica o compartilhamento das tabelas relacionais
+				//Caso as tabelas estejam compartilhadas entre as filiais copia para a nova
+				If FWModeAccess( "TNE", 3 ) == "C"
+					aAdd( aTabCpy, "TO5" ) //Laudos x Locais
+				EndIf
+				If FWModeAccess( "TN0", 3 ) == "C"
+					aAdd( aTabCpy, "TO1" ) //Laudos x Risco
+				EndIf
+				If FWModeAccess( "TM7", 3 ) == "C"
+					aAdd( aTabCpy, "TO2" ) //Laudos x Equipamentos
+				EndIf
+				If FWModeAccess( "TO4", 3 ) == "C"
+					aAdd( aTabCpy, "TO3" ) //Laudos x Controles
+				EndIf
+				If FWModeAccess( "TAA", 3 ) == "C"
+					aAdd( aTabCpy, "TOZ" ) //Laudos x Planos de Ação
+				EndIf
+				If FWModeAccess( "TBB", 3 ) == "C"
+					aAdd( aTabCpy, "TJG" ) //Laudos x Planos emergenciais MDT/SGA
+				EndIf
+				If FWModeAccess( "TA0", 3 ) == "C"
+					aAdd( aTabCpy, "TJA" ) //Laudos x Requisitos
+				EndIf
+				If FWModeAccess( "TIB", 3 ) == "C"
+					aAdd( aTabCpy, "TIF" ) //Laudos x Questionário Produto Químico
+				EndIf
+				If FWModeAccess( "ST6", 3 ) == "C"
+					aAdd( aTabCpy, "TIG" ) //Laudos x Família
+				EndIf
+				If FWModeAccess( "ST9", 3 ) == "C"
+					aAdd( aTabCpy, "TI9" ) //Laudos x Equipamento Rad.
+				EndIf
+				If FWModeAccess( "TMO", 3 ) == "C"
+					aAdd( aTabCpy, "TIA" ) //Laudos x Programa de Saúde
+				EndIf
+			EndIf
+
+			//Realiza a inclusão do laudo nas filiais informadas
+			For nCont := 1 To Len( aFilLau )
+
+				//Posiciona na filial a ser gravado o laudo
+				cFilAnt := aFilLau[ nCont, 1 ]
+
+				RecLock( "TO0", .T. )
+
+				TO0->TO0_FILIAL := xFilial( "TO0" )
+				TO0->TO0_NOME 	:= AllTrim( cNome ) + IIf( lFilDif, " - " + AllTrim( aFilLau[ nCont, 2 ] ), "" )
+				TO0->TO0_LAUDO 	:= AllTrim( cCodigo )
+
+				For nCont2 := 1 To FCount()
+
+					If FieldName( nCont2 ) == "TO0_FILIAL" .Or. ;
+					FieldName( nCont2 ) == "TO0_NOME"   .Or. ;
+					FieldName( nCont2 ) == "TO0_LAUDO"  .Or. ;
+					FieldName( nCont2 ) == "TO0_MMSYP2"
+						Loop
+					EndIf
+
+					x   := "m->" + FieldName( nCont2 )
+					y   := "TO0->" + FieldName( nCont2 )
+					&y := &x
+
+				Next nCont2
+
+				If lSYP .And. !lDESC2 .And. !Empty( M->TO0_DESC2 )
+					MSMM( , , , M->TO0_DESC2, 1, , , "TO0", "TO0_MMSYP2" )
+				Endif
+
+				Msunlock( "TO0" )
+
+				//Caso seja para uma filial diferente da atual
+				If lFilDif
+					//Copia tabelas relacionais
+					COPY210TAB( aTabCpy, cFilAux )
+				Else
+					//Copia tabelas relacionadas ao laudo
+					COPY210TAB()
+				EndIf
+
+			Next nCont
+
+			If lFilDif
+				//Volta a filial corrente
+				cFilAnt := cFilAux
+			EndIf
+
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210VLAU
+Validação do campo codigo do laudo
+
+@param	cCodigo, Caracter, Código do novo laudo a ser gravado
+@param	cCodGrv, Caracter, Código do Laudo que está sendo copiado
+@param	aFilLau, Array, Array contento as filiais a serem validadas
+
+@return lRet, Lógico, Verdadeiro se o campo for válido
+
+@author Liber de Esteban O. P. - Refeito por: Luis Fellipy Bett
+@since 08/12/03 - 24/03/2020
+/*/
+//---------------------------------------------------------------------
+Function MDT210VLAU( cCodigo, cCodGrv, aFilLau )
+
+	Local aArea		:= GetArea()
+	Local aFilInvl	:= {}
+	Local cMsgInvl	:= STR0274 + "'" + AllTrim( cCodigo ) + "':" //"As seguintes filiais já possuem um laudo com o código "
+	Local lRet		:= .T.
+	Local nCont		:= 0
+
+	//Caso o laudo seja copiado para uma filial diferente da atual
+	If Len( aFilLau ) > 0
+
+		dbSelectArea( "TO0" )
+		dbSetOrder( 1 )
+		For nCont := 1 To Len( aFilLau )
+			If dbSeek( xFilial( "TO0", aFilLau[ nCont, 1 ] ) + cCodigo )
+				aAdd( aFilInvl, { aFilLau[ nCont, 1 ] } )
+			EndIf
+		Next
+
+		If Len( aFilInvl ) > 0
+			For nCont := 1 To Len( aFilInvl )
+				cMsgInvl += CRLF + " - " + aFilInvl[ nCont, 1 ]
+			Next nCont
+
+			Help( ' ', 1, STR0070, , cMsgInvl, 2, 0, , , , , , { STR0275 } ) //"ATENÇÃO"##"Favor escolher outro código"
+			lRet := .F.
+		EndIf
+
+	Else
+
+		If cCodGrv == cCodigo
+			Help( " ", 1, "JAGRAVADO" )
+			lRet := .F.
+		ElseIf ExistChav( "TO0", cCodigo ) .And. NaoVazio( cCodigo )
+			lRet := .T.
+		EndIf
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} COPY210TAB
+Copia os registros das tabelas relacionadas ao laudo
+TO5 - Laudos x Locais
+TO1 - Laudos x Riscos
+TO2 - Laudos x Equipamentos
+TO3 - Laudos x Controles
+TOZ - Laudos x Planos de Ação
+TJG - Laudos x Planos emergenciais MDT
+TJG - Laudos x Planos Emergenciais SGA
+TJA - Laudos x Requisitos
+TIF - Laudos x Questionário Produto Químico
+TIG - Laudos x Família
+TI9 - Laudos x Equipamento Rad.
+TIA - Laudos x Programa de Saúde
+
+@param	aTab, Array, Array com as tabelas a serem copiadas
+@param	cFilAtu, Caracter, Filial em que o usuário fez login no sistema
+
+@author Julia Kondlatsch
+@since 15/02/2018
+@return Null, Sempre Null
+/*/
+//---------------------------------------------------------------------
+Function COPY210TAB( aTab, cFilAtu )
+
+	Local cWhile := ""
+	Local nTab, nFld
+	Local cTable
+	Local aArea
+
+	Default aTab	:= { "TO1", "TO2", "TO3", "TO5", "TOZ", "TJG", "TJA", "TIF", "TIG", "TI9", "TIA" }
+	Default cFilAtu	:= cFilAnt
+
+	For nTab := 1 To Len( aTab )
+
+		cTable := aTab[ nTab ]
+
+		dbselectarea( cTable )
+		dbSetOrder( 01 )
+		dbSeek( xFilial( cTable, cFilAtu ) + cTO0_Laudo )
+		cWhile := 	cTable + "->" + PrefixoCPO( cTable ) + "_FILIAL == '" + xFilial( cTable, cFilAtu ) 	+ "' .AND. " + ;
+					cTable + "->" + PrefixoCPO( cTable ) + "_LAUDO == '"  + cTO0_Laudo 			+ "'"
+
+		While ( cTable )->( !EoF() ) .And. &( cWhile )
+
+			//Copia o conteúdo dos campos para a memória
+			aArea := ( cTable )->( GetArea() )
+			RegToMemory( cTable, .F. )
+
+			//Garava da memória na tabela
+			RecLock( cTable, .T. )
+			For nFld := 1 To FCount()
+				If "_FILIAL" $ FieldName( nFld )
+					FieldPut( nFld, xFilial( cTable ) )
+				ElseIf "_LAUDO" $ FieldName( nFld )
+					FieldPut( nFld, cCodigo )
+				Else
+					FieldPut( nFld, &("M->" + FieldName( nFld ) ) )
+				EndIf
+			Next nFld
+
+			( cTable )->( MsUnLock() )
+			RestArea( aArea )
+			( cTable )->( dbSkip() )
+
+		EndDo
+
+	Next nTab
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} INS2102COP
+Copia os laudos ja existentes do cliente para outros clientes.
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return
+/*/
+//---------------------------------------------------------------------
+Function INS2102COP()
+
+	Local OldRot, nOpca, i
+	Local aArea := GetArea()
+	Local aTO0area
+	Local aSA1area := SA1->(getarea())
+	Local cNumLaudo
+	Local oPnlTop, oTempTable
+	cTO0Cli := TO0->TO0_CLIENT
+	cTO0Loj := TO0->TO0_LOJA
+	Private oDlg
+	Private cDeCliente  := Space(Len(SA1->A1_COD))
+	Private cDeLoja     := Space(Len(SA1->A1_LOJA))
+	Private cAteCliente := Space(Len(SA1->A1_COD))
+	Private cAteLoja    := Space(Len(SA1->A1_LOJA))
+	Private cCli_O      := SA1->A1_COD
+	Private cLoj_O      := SA1->A1_LOJA
+	Private cNom_O      := SA1->A1_NOME
+
+	DbSelectArea("TO0")
+	Set Filter To
+
+	OldRot := aCLONE(aROTINA)
+	aROTINA := {}
+
+	lInverte := .f.
+	cMARCA   := GetMark()
+	lQuery   := .t.
+
+	aDBF := {}
+	AADD(aDBF,{"OK"    , "C", 02, 0})
+	AADD(aDBF,{"CLIENT", "C", Len(SA1->A1_COD) , 0} )
+	AADD(aDBF,{"LOJA"  , "C", Len(SA1->A1_LOJA), 0} )
+	AADD(aDBF,{"NOME"  , "C", 30                , 0} )
+
+	aTRB1 := {}
+	AADD(aTRB1, {"OK"     , NIL, " "                         , } )
+	AADD(aTRB1, {"CLIENT" , NIL, STR0190                   , } ) //"Cliente"
+	AADD(aTRB1, {"LOJA"   , NIL, STR0191                      , } ) //"Loja"
+	AADD(aTRB1, {"NOME"   , NIL, STR0192		                  , } ) //"Nome"
+
+	oTempTable := FWTemporaryTable():New( TRBCLI, aDBF )
+	oTempTable:AddIndex( "1", {"CLIENT", "LOJA"} )
+	oTempTable:Create()
+
+	nOpcx := 3
+	nOpca := 1
+	DEFINE MSDIALOG oDlg FROM  10,20 TO 420,690 TITLE OemToAnsi(STR0096) PIXEL //"Copiar Laudo"
+
+	oPnlTop := TPanel():New( 00 , 00 , , oDlg , , , , , , , 50 , .F. , .F. )
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	@ 03, 06  TO 65, 140 LABEL STR0193  OF oPnlTop PIXEL //"Origem"
+	@ 03, 150 TO 65, 330 LABEL STR0194 OF oPnlTop PIXEL //"Destino"
+
+	@ 12,13 SAY STR0190 SIZE 33,7 OF oPnlTop PIXEL //"Cliente"
+	@ 24,13 SAY STR0191    SIZE 33,7 OF oPnlTop PIXEL //"Loja"
+	@ 36,13 SAY STR0192    SIZE 33,7 OF oPnlTop PIXEL //"Nome"
+
+	@ 12,50  MSGET cCli_O SIZE 050,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTSA1" VALID (ExistCpo("SA1",cCli_O)) HasButton
+	@ 24,50  MSGET cLoj_O SIZE 040,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTCLI" VALID (ExistCpo("SA1",cCli_O+cLoj_O)) HasButton
+	@ 36,50  MSGET cNom_O SIZE 080,10 OF oPnlTop PIXEL PICTURE "@!" WHEN .f.
+
+	@ 12,163 SAY STR0195 SIZE 33,7 OF oPnlTop PIXEL //"De Cliente"
+	@ 12,190 MSGET cDeCliente SIZE 050,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTSA1" VALID (MDTA210SA1(1)) HasButton
+	@ 12,253 SAY STR0196    SIZE 33,7 OF oPnlTop PIXEL //"De Loja"
+	@ 12,280 MSGET cDeLoja SIZE 040,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTCLI" VALID (MDTA210SA1(2)) HasButton
+
+	@ 24,163 SAY STR0197 SIZE 33,7 OF oPnlTop PIXEL //"Ate Cliente"
+	@ 24,190 MSGET cAteCliente SIZE 050,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTSA1" VALID (MDTA210SA1(3)) HasButton
+	@ 24,253 SAY STR0198    SIZE 33,7 OF oPnlTop PIXEL //"Ate Loja"
+	@ 24,280 MSGET cAteLoja SIZE 040,10 OF oPnlTop PIXEL PICTURE "@!" F3 "MDTCLI" VALID (MDTA210SA1(4)) HasButton
+
+	@ 39,165 BUTTON STR0199 OF oPnlTop SIZE 35,12 PIXEL ACTION (MDT210PESQ(),oMark:oBrowse:Refresh(.t.)) //"Pesquisa"
+
+	oMARK := MsSelect():NEW("TRBCLI","OK",,aTRB1,@lINVERTE,@cMARCA,{70,06,200,330})
+	oMARK:bMARK := {|| MDTA210MAQ(cMarca,lInverte)}
+	oMARK:oBROWSE:lHASMARK := .T.
+	oMARK:oBROWSE:lCANALLMARK := .T.
+	oMARK:oBROWSE:bALLMARK := {|| MDTA210INV(cMarca) }
+	ACTIVATE MSDIALOG oDlg ON INIT ( EnchoiceBar(oDlg,{||nOpca:=2,if(MDTA210SA1(5),oDlg:End(),nOpca := 1)},{||nOpca:=1,if(NG210TdOk(.f.),oDlg:End(),nOpca := 1)})) CENTERED
+
+	If nOpca = 2
+
+		Dbselectarea("TRBCLI")
+		Dbgotop()
+		While !Eof()
+
+			If TRBCLI->OK <> cMarca
+			Dbselectarea("TRBCLI")
+			Dbskip()
+			Loop
+			Endif
+			If TRBCLI->CLIENT+TRBCLI->LOJA == cCli_O+cLoj_O
+				Dbselectarea("TRBCLI")
+				Dbskip()
+				Loop
+			Endif
+
+			Dbselectarea("TO0")
+			DbSetOrder(2) //Cliente + Loja
+			DbSeek ( xFilial("TO0") + cCli_O + cLoj_O )
+			While !Eof() .And. xFilial("TO0")+cCli_O+cLoj_O == TO0->(TO0_FILIAL+TO0_CLIENT+TO0_LOJA)
+
+				aTO0area := TO0->(getarea())
+				For i := 1 To FCount()
+					x   := "m->" + FieldName(i)
+					y   := "TO0->" + FieldName(i)
+					&x := &y
+				Next i
+				If lSYP .and. !lDESC2
+					If ExistIni("TO0_DESC2")
+						M->TO0_DESC2 := InitPad( GetSx3Cache( 'TO0_DESC2', 'X3_RELACAO' ) )
+					Else
+						M->TO0_DESC2 := ""
+					EndIf
+				Endif
+
+				cNumLaudo := TO0->TO0_LAUDO
+
+				Dbselectarea("TO0")
+				DbSetOrder(6) //Cliente + Loja + Laudo
+				If DbSeek ( xFilial("TO0") + TRBCLI->CLIENT + TRBCLI->LOJA + cNumLaudo)
+					cNumLaudo := PadR(Alltrim(cNumLaudo)+"A",Len(TO0->TO0_LAUDO))
+					cNumLaudo := Substr(cNumLaudo,1,Len(TO0->TO0_LAUDO))
+					If DbSeek ( xFilial("TO0") + TRBCLI->CLIENT + TRBCLI->LOJA + cNumLaudo)
+						cNumLaudo := PadR(Alltrim(cNumLaudo)+"B",Len(TO0->TO0_LAUDO))
+						cNumLaudo := Substr(cNumLaudo,1,Len(TO0->TO0_LAUDO))
+						If DbSeek ( xFilial("TO0") + TRBCLI->CLIENT + TRBCLI->LOJA + cNumLaudo)
+							//Retorna a proxima numeração do laudo
+							cNumLaudo := GETSXENUM('TO0','TO0_LAUDO')
+							ConfirmSX8()
+						Endif
+					Endif
+				Endif
+
+				RecLock("TO0",.T.)
+				TO0->TO0_FILIAL := xFilial("TO0")
+				TO0->TO0_LAUDO  := cNumLaudo
+				TO0->TO0_CLIENT := TRBCLI->CLIENT
+				TO0->TO0_LOJA   := TRBCLI->LOJA
+
+				For i := 1 To FCount()
+					If ( FieldName(i) == "TO0_FILIAL" ) .OR.;
+					( FieldName(i) == "TO0_LAUDO"  ) .OR.;
+					( FieldName(i) == "TO0_CLIENT" ) .OR.;
+					( FieldName(i) == "TO0_LOJA"   )
+							Loop
+					EndIf
+					x   := "m->" + FieldName(i)
+					y   := "TO0->" + FieldName(i)
+					&y := &x
+				Next i
+				If lSYP .and. !lDESC2 .and. !Empty(M->TO0_DESC2)
+					MSMM(,,, M->TO0_DESC2,1,,,"TO0","TO0_MMSYP2")
+				Endif
+				Msunlock("TO0")
+				Dbselectarea("TO0")
+				restarea(aTO0area)
+				DbSkip()
+			End
+
+			Dbselectarea("TRBCLI")
+			DbSkip()
+		End
+
+	EndIf
+
+	Dbselectarea("TRBCLI")
+	Use
+	aRotina := aCLONE(OldRot)
+
+	DbSelectArea("TO0")
+	Set Filter To TO0->TO0_CLIENT+TO0->TO0_LOJA == cTO0Cli+cTO0Loj
+	RestArea(aArea)
+
+	RestArea(aSA1area)
+
+	lRefresh := .t.
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG210TdOk
+Valida cancelamento de tela de copia de contratos
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return
+/*/
+//---------------------------------------------------------------------
+Function NG210TdOk(lTipo)
+Return MsgYesNo(STR0200,"AVISO") //"Deseja cancelar a geração de cópias de laudos?"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA210SA1
+Valida codigo do Cliente
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDTA210SA1(nTipo)
+
+	Local lRet := .T.
+
+	If nTipo == 1
+		If !ExistCpo("SA1",cDeCliente)
+			lRet := .F.
+		Endif
+	ElseIf nTipo == 2
+		If !ExistCpo("SA1",cDeCliente+cDeLoja)
+			lRet := .F.
+		Endif
+	ElseIf nTipo == 3
+		If !ExistCpo("SA1",cAteCliente)
+			lRet := .F.
+		Endif
+	ElseIf nTipo == 4
+		If !ExistCpo("SA1",cAteCliente+cAteLoja)
+			lRet := .F.
+		Endif
+	ElseIf nTipo == 5
+		If Empty(cDeCliente) .or. Empty(cDeLoja) .or. Empty(cAteCliente) .or. Empty(cAteLoja)
+			MsgStop(STR0201) //"Todos os campos são obrigatórios."
+			lRet := .F.
+		Endif
+		If cAteCliente+cAteLoja < cDeCliente+cDeLoja
+			Help(" ",1,"DEATEINVAL")
+			lRet := .F.
+		Endif
+		If !MsgYesNo(STR0202) //"Confirma a cópia dos laudos?"
+			lRet := .F.
+		Endif
+	Endif
+
+	lRefresh := .T.
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210PESQ
+Busca as empresas pelo filtro.
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT210PESQ()
+
+	Dbselectarea("TRBCLI")
+	Zap
+
+	Dbselectarea("SA1")
+	Dbsetorder(1)
+	Dbseek(xFilial("SA1")+cDeCliente+cDeLoja,.T.)
+	While !eof() .And. xFilial("SA1") == SA1->A1_FILIAL .And. SA1->A1_COD+SA1->A1_LOJA <= cAteCliente+cAteLoja
+
+		If SA1->A1_MSBLQL <> "1"
+
+			Dbselectarea("TRBCLI")
+			Dbgotop()
+			If !Dbseek(SA1->A1_COD+SA1->A1_LOJA)
+				RecLock("TRBCLI",.T.)
+				TRBCLI->OK := cMarca
+				TRBCLI->CLIENT := SA1->A1_COD
+				TRBCLI->LOJA   := SA1->A1_LOJA
+				TRBCLI->NOME   := SA1->A1_NOME
+				Msunlock("TRBCLI")
+			Endif
+
+		EndIf
+
+		Dbselectarea("SA1")
+		Dbskip()
+	End
+
+	Dbselectarea("TRBCLI")
+	Dbgotop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA210MAQ
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA210MAQ(cMarca,lInverte)
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA210INV
+
+@author Andre E. Perez Alvarez
+@since 14/08/06
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDTA210INV(cMarca)
+Local aArea := GetArea()
+
+Dbselectarea("TRBCLI")
+Dbgotop()
+While !eof()
+	TRBCLI->OK := IF(TRBCLI->OK == "  ",cMARCA,"  ")
+	Dbskip()
+End
+
+RestArea(aArea)
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+	5. Nivel de acesso
+	6. Habilita Menu Funcional
+
+@author Rafael Diogo Richter
+@since 29/11/2006
+@version MP12
+@return aRotina
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lSigaMdtPs , lMDI )
+Local aRotina
+
+Default lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+Default lMDI		:= .T.
+
+If !lSigaMdtPS
+	aRotina :=	{ 	{ STR0001 , "AxPesqui"   , 0 , 1	},; //"Pesquisar"
+                    { STR0002 , "MDT210MOD"  , 0 , 2	},; //"Visualizar"
+                    { STR0003 , "MDT210MOD"  , 0 , 3	},; //"Incluir"
+                    { STR0004 , "MDT210MOD"  , 0 , 4	},; //"Alterar"
+                    { STR0005 , "MDT210MOD"  , 0 , 5, 3 },; //"Excluir"
+                    { STR0096 , "INS210COPY" , 0 , 4	},; //"Copiar Laudo"
+					{ STR0231 , "MDT232REL"   , 0 , 1 , , .F. },;//"Relacionamento"
+					{ STR0257,  "MDT210REV"   , 0 , 4 , , .F. } } //"Revisar Laudo"
+
+Else
+	aRotina :=	{ 	{ STR0001 , "AxPesqui"   , 0 , 1	},; //"Pesquisar"
+                   	{ STR0002 , "NGCAD01"    , 0 , 2	},; //"Visualizar"
+                   	{ STR0203 , "MDT210CAD"  , 0 , 4	}}  //"Laudos"
+Endif
+
+lPyme := Iif(Type("__lPyme") <> "U",__lPyme,.F.)
+If !lPyme
+	AAdd( aRotina, { STR0213, "MsDocument", 0, 4 } )  //"Conhecimento"
+EndIf
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Mdt210VlCC
+Valida CC do Laudo
+
+@author Denis
+@since 14/08/06
+@version MP12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function Mdt210VlCC(cTO0_CC)
+Local lRet := .t.
+Local aArea := GetArea()
+
+If Empty(cTO0_CC) .and. M->TO0_TIPREL != "7"
+	Return .T.
+Endif
+
+If !ExistCpo("CTT",cTO0_CC)
+	lRet := .f.
+Else
+	If lSigaMdtps
+		If Substr(cTO0_CC,1,nSizeCli+nSizeLoj) != cCliMdtps
+			MsgInfo(STR0212)//"Este Centro de Custo não pertence ao cliente."
+			lRet := .F.
+		Endif
+	Endif
+	If Type("M->TO0_TIPREL") == "C" .and. lRet
+		If M->TO0_TIPREL == "7"
+			//Se for PCMAT
+			If NGCADICBASE("TLL_CC","D","TLL",.F.)
+				dbSelectArea("TLL")
+				dbSetOrder(1)
+				If !dbSeek(xFilial("TLL")+cTO0_CC)
+					MsgInfo(STR0138) //"Este Centro de Custo não está cadastrado como Obra."
+					lRet := .f.
+				Else
+					If !lSigaMdtps
+						M->TO0_CLIENT := TLL->TLL_CODCON
+						M->TO0_LOJA   := TLL->TLL_LOJCON
+						M->TO0_NOMECL := Posicione("SA1",1,xFilial("SA1")+TLL->TLL_CODCON+TLL->TLL_LOJCON,"A1_NOME")
+					Endif
+					M->TO0_QTDFUN := If(TLL->TLL_NUMERO > 99999 , 99999 , TLL->TLL_NUMERO)
+				Endif
+			Endif
+		Endif
+	Endif
+Endif
+
+RestArea(aArea)
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A210DESTIN
+Troca F3 campo TO0_CC
+
+@author Denis Hyroshi de Souza
+@since 18/08/03
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function A210DESTIN()
+
+	Local aArea := GetArea()
+
+	NGTrocaF3("TO0_CC","CTT   ")
+
+	If lSigaMdtPS
+		NGTrocaF3("TO0_CC","MDTPS6")
+	Endif
+	If Type("M->TO0_TIPREL") == "C"
+		If M->TO0_TIPREL == "7"
+			//Se for PCMAT
+			If NGCADICBASE("TLL_CC","D","TLL",.F.)
+				NGTrocaF3("TO0_CC","TLL   ")
+				If lSigaMdtps
+					NGTrocaF3("TO0_CC","TLLPS1")
+				Endif
+				dbSelectArea("TLL")
+				dbSetOrder(1)
+				If !dbSeek(xFilial("TLL")+M->TO0_CC)
+					M->TO0_CC     := Space( Len( M->TO0_CC ) )
+					M->TO0_NOMECC := Space( 20 )
+				Endif
+			Endif
+		Endif
+	Endif
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210UPD
+Verifica aplicacao do UPDMDT71
+
+@author Roger Rodrigues
+@since 28/09/10
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT210UPD()
+
+	If NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+		If !NGCADICBASE("TO0_MMSYP2","A","TO0",.F.)
+			If !NGINCOMPDIC("UPDMDT15","00000022962/2010",.F.)
+				Return .F.
+			Endif
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210MOD
+Cadastro de Laudo com Modelagem do conteudo do laudo
+
+@author Denis Hyroshi de Souza
+@since 18/02/2011
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT210MOD(cAliasX,nRecnoX,nOpcx)
+
+	Local oDlgModel, nFor
+	Local aSize := MsAdvSize()
+	Local nWidth  := If(SetMdiChild(),aSize[5] -= 03,aSize[5])
+	Local nHeight := If(!(Alltrim(GetTheme()) == "FLAT") .And. !SetMdiChild(),aSize[6] - 30,aSize[6])
+	Local aPages     := {}
+	Local aTitles    := {}
+	Local nOpca      := 0
+	Local aMgetTO0
+	Local aNao    := { "TO0_MMSYP2" , "TO0_DESC2" , "TO0_DESCRI" }
+	Local cNG2OPL := Alltrim(SuperGetMV("MV_NG2OPL",.F.,""))
+
+	Private oPanel210
+	Private aEspcMd := {}
+	Private bInit
+	Private nModel
+	Private lActivate := .f., lLoad := .f.
+	Private nOpc := 0
+	Private M->TO0_DESCRI := ""
+	Private M->TO0_TIPREL := " "
+	Private lEntra210 := .F.
+	Private cMemoTO0  := ""
+	Private lTip_Rel  := NGCADICBASE("TO0_TIPREL","A","TO0",.F.)
+
+	If Type("lSigaMdtPS") == "U"
+		lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	EndIf
+
+	If SuperGetMV("MV_NG2QDO",.F.,"2") != "1" //Verifica se tem integração com o modulo de QDO
+		aAdd( aNao, "TO0_DOCTO" )
+		aAdd( aNao, "TO0_RV" )
+	Endif
+
+	aMgetTO0 := NGCAMPNSX3("TO0",aNao)
+
+	nRecno := TO0->(Recno())
+
+	dbSelectArea("TO0")
+	RegToMemory("TO0",Inclui)
+
+	Aadd(aTitles,OemToAnsi(STR0216)) //"Dados Cadastrais"
+	Aadd(aTitles,OemToAnsi(STR0217)) //"Conteúdo Laudo"
+	Aadd(aPages,"Header 1")
+	Aadd(aPages,"Header 2")
+	nControl := 2
+
+	If !Inclui
+		cMemoTO0 := Alltrim(TO0->TO0_DESCRI)
+		If NGCADICBASE("TO0_MMSYP2","A","TO0",.F.)
+			If !Empty(TO0->TO0_MMSYP2)
+				cMMSYP2 := MSMM(TO0->TO0_MMSYP2,80)
+				If !Empty(cMMSYP2)
+					If !Empty(cMemoTO0)
+						cMemoTO0 += Chr(13)+Chr(10)
+					Endif
+					cMemoTO0 += cMMSYP2
+				Endif
+			Endif
+		ElseIf NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+			If !Empty(TO0->TO0_DESC2)
+				If !Empty(cMemoTO0)
+					cMemoTO0 += Chr(13)+Chr(10)
+				Endif
+				cMemoTO0 += Alltrim(TO0->TO0_DESC2)
+			Endif
+		Endif
+	Endif
+
+	Private aTELA[0][0],aGETS[0]
+
+	DEFINE MSDIALOG oDlgModel TITLE OemToAnsi(cCadastro) FROM 0,0 TO nHeight,nWidth COLOR CLR_BLACK,CLR_WHITE OF oMainWnd Pixel
+	oDlgModel:lEscClose := .f.
+	oFolder := TFolder():New(1,0,aTitles,aPages,oDlgModel,,,,.f.,.f.,aSize[3],aSize[4],)
+	oFolder:bChange := {|| Ng210Fol(oPanel210)}
+	oFolder:aDialogs[1]:oFont := oDlgModel:oFont
+	oFolder:aDialogs[2]:oFont := oDlgModel:oFont
+	oFolder:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Folder 1
+	oEnc01  := MsMGet():New("TO0",TO0->(Recno()),nOpcx,,,,aMgetTO0,{13,0,89,500},,,,,,oFolder:aDialogs[1],,,.F.,,.T.)
+	oEnc01:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Folder 2
+	oPanel210 := TNGLAUDO():New(oFolder:aDialogs[2])
+	If !Inclui
+
+		oPanel210:nTipoLaudo := Val( RETASC( M->TO0_TIPREL , 1 , .F. ))
+
+	Endif
+	oEnc01:SetFocus()
+
+	ACTIVATE MSDIALOG oDlgModel ON INIT EnchoiceBar(oDlgModel,{|| If(MDT210_OK(@nOpca,nOpcx),oDlgModel:End(),nOpca := 0) },{||oDlgModel:End()}) CENTERED
+
+	If nOpca == 1 .and. nOpcx <> 2
+		Begin Transaction
+			Ng210Grv(nOpcx)
+			ConfirmSX8()
+		End Transaction
+		IF nOPCX == 3 .OR. nOPCX == 4
+			//Chama CheckList para inclusao das tabelas relacionadas no Laudo
+			If !Empty(cNG2OPL) .AND. NGCADICBASE('TJ0_LAUDO','A','TJ0',.F.) .AND. TO0->TO0_TIPREL == "3"
+				MDT210PRRO()
+			EndIf
+		ENDIF
+	Else
+		If nOpca <> 1
+			RollBackSX8()
+		EndIf
+	Endif
+
+	dbSelectArea("TO0")
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210_OK
+Valida confirmacao do Laudo
+
+@author Denis
+@since 18/02/2011
+@version MP12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MDT210_OK(nOpca,nOpcx)
+
+	Local lRet := .T.
+
+	If nOpcx == 5
+		If !NGCHKDEL("TO0")
+			Return .F.
+		Endif
+	ElseIf nOpcx == 3 .or. nOpcx == 4
+		If !MDT210OkPc()
+			Return .F.
+		Endif
+		If !obrigatorio(aGets,aTela)
+			Return .F.
+		Endif
+		IF M->TO0_TIPREL == "3" .AND. NGCADICBASE('TO0_FINALI','A','TO0',.F.)
+		IF EMPTY(M->TO0_FINALI)
+			MSGINFO(STR0219+AVSX3("TO0_FINALI",5)+STR0220+AVSX3("TO0_TIPREL",5)+STR0221,STR0070) //"Preenchimento obrigatorio do campo " ## " para " ## " igual a 3 !" ## "Atencao"
+			lRET := .F.
+		ENDIF
+		ENDIF
+	Endif
+
+	If lTip_Rel
+		If lEntra210
+			M->TO0_DESCRI := oPanel210:ModToStr()
+		Else
+			M->TO0_DESCRI := cMemoTO0
+		Endif
+	Endif
+	nOpca := 1
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Ng210Grv
+Efetua a gravacao da tabela de Laudos
+
+@author Denis Hyroshi de Souza
+@since 27/05/2011
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function Ng210Grv(nOpcx)
+
+	Local nx,nCmpo,nX2,nFor
+
+	If nOpcx == 3 .or. nOpcx == 4
+
+		dbSelectArea("TO0")
+		RecLock("TO0",(nOpcx == 3))
+		For nx := 1 To FCOUNT()
+			If Alltrim(FieldName(nx)) <> "TO0_FILIAL" .and. Alltrim(FieldName(nx)) <> "TO0_DESCRI"
+				nCmpo := "M->" + FieldName(nx)
+				FieldPut(nx, &nCmpo.)
+			Endif
+		Next nx
+		TO0->TO0_FILIAL := xFilial("TO0")
+
+		lGrvMemo := .F.
+		//Manipula campos MEMO
+		If Type("aMemos") == "A"
+			If nOpcx == 3
+				For nX2 := 1 to Len(aMemos)
+					cVar := aMemos[nX2][2]
+					cAliasMemo := If(len(aMemos[nX2]) == 3,aMemos[nX2][3],Nil)
+					If Alltrim(aMemos[nX2][1]) == "TO0_MMSYP2" .and. lTip_Rel
+						MSMM(,TamSx3(aMemos[nX2][2])[1],,M->TO0_DESCRI,1,,,"TO0",aMemos[nX2][1],cAliasMemo)
+						lGrvMemo := .T.
+					Else
+						MSMM(,TamSx3(aMemos[nX2][2])[1],,&cVar,1,,,"TO0",aMemos[nX2][1],cAliasMemo)
+					Endif
+				Next nX2
+			ElseIf nOpcx == 4
+				For nX2 := 1 to Len(aMemos)
+					cVar := aMemos[nX2][2]
+					cVar1:= aMemos[nX2][1]
+					cAliasMemo := If(len(aMemos[nX2]) == 3,aMemos[nX2][3],Nil)
+					If Alltrim(aMemos[nX2][1]) == "TO0_MMSYP2" .and. lTip_Rel
+						MSMM(&cVar1,TamSx3(aMemos[nX2][2])[1],,M->TO0_DESCRI,1,,,"TO0",aMemos[nX2][1],cAliasMemo)
+						lGrvMemo := .T.
+					Else
+						MSMM(&cVar1,TamSx3(aMemos[nX2][2])[1],,&cVar,1,,,"TO0",aMemos[nX2][1],cAliasMemo)
+					Endif
+				Next nX2
+			Endif
+		Endif
+
+		If lGrvMemo
+			TO0->TO0_DESCRI := ""
+			If NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+				TO0->TO0_DESC2 := ""
+			Endif
+		Else
+			TO0->TO0_DESCRI := M->TO0_DESCRI
+			If NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+				TO0->TO0_DESC2 := ""
+			Endif
+		Endif
+
+		TO0->(MsUnLock())
+
+		EvalTrigger() // Processa Gatilhos
+
+	ElseIf nOpcx == 5
+
+		//Deleta campos MEMO
+		If Type("aMemos") == "A"
+			For nX2 := 1 To Len(aMemos)
+				cAliasMemo := If(len(aMemos[nX2]) == 3,aMemos[nX2][3],Nil)
+				MSMM(&(aMemos[nX2][1]),,,,2,,,,,cAliasMemo)
+			Next nX2
+		Endif
+
+		//Exclui o laudo
+		dbSelectArea("TO0")
+		RecLock("TO0",.F.)
+		dbDelete()
+		TO0->(MsUnLock())
+
+	EndIf
+
+	If ExistBlock( 'MDTA2102' )
+		ExecBlock( 'MDTA2102', .F., .F., { M->TO0_LAUDO, M->TO0_TIPREL, M->TO0_DTINIC, M->TO0_DTFIM, nOpcx } )
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Ng210Fol
+Validacao ao alterar de Folder
+
+@author Denis Hyroshi de Souza
+@since 27/05/2011
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function Ng210Fol(oPanel)
+
+	Local nValTip
+
+	If oFolder:nOption == 2
+		If !lTip_Rel
+			NGINCOMPDIC("UPDMDTA1","?????????/2011",.F.)
+			oFolder:SetOption(1)
+			Return .F.
+		Endif
+
+		nValTip := Val( RETASC( M->TO0_TIPREL , 1 , .F. ) )
+		If !(nValTip >= 1 .And. nValTip <= 12)
+			MsgInfo("Primeiramente, selecionar o tipo de laudo.")
+			oFolder:SetOption(1)
+			Return .F.
+		Endif
+
+			oPanel:nTipoLaudo := nValTip
+
+		If !lEntra210
+			oPanel210:LoadModel(cMemoTO0)
+		Endif
+		lEntra210 := .T.
+		oPanel:ViewBtn()
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210VTIP
+Valid do campo TO0_TIPREL
+
+@author Denis Hyroshi de Souza
+@since 06/12/2011
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT210VTIP()
+
+	Local lRET,cOALIAS,cFINALI
+
+	lRET    := .T.
+	cOALIAS := ALIAS()
+	If Type("oPanel210:aShapesUt") == "A"
+		If Len(oPanel210:aShapesUt) > 0
+			oPanel210:ResetPnl()
+		Endif
+	Endif
+	IF ALTERA .AND. NGCADICBASE('TO0_FINALI','A','TO0',.F.)
+	IF TO0->TO0_TIPREL <> M->TO0_TIPREL
+		cFINALI := M->TO0_FINALI
+		IF M->TO0_TIPREL <> "3"
+			cFINALI := " "
+		ENDIF
+		IF TO0->TO0_TIPREL == "3" .OR.;
+			(TO0->TO0_TIPREL <> "3" .AND. M->TO0_TIPREL == "3")
+
+			TO1->(DBSETORDER(1))
+			TO1->(DBSEEK(XFILIAL("TO1")+M->TO0_LAUDO,.T.))
+			DO WHILE ! TO1->(EOF()) .AND.;
+				TO1->(TO1_FILIAL+TO1_LAUDO) == (XFILIAL("TO1")+M->TO0_LAUDO)
+
+				TN0->(DBSETORDER(1))
+				IF (TN0->(DBSEEK(XFILIAL("TN0")+TO1->TO1_NUMRIS)))
+				TMA->(DBSETORDER(1))
+				IF ! (TMA->(DBSEEK(XFILIAL("TMA")+TN0->TN0_AGENTE))) .OR.;
+					cFINALI <> TMA->TMA_TIPADI
+
+					MSGINFO(STR0222+AVSX3("TO0_TIPREL",5)+STR0223+; //"Alteracao do campo " ## " nao permitida devido gerar inconsistencia de "
+							AVSX3("TO0_FINALI",5)+STR0224,STR0070) // " entre Laudo e Agente" ## "Atencao"
+					M->TO0_TIPREL := TO0->TO0_TIPREL
+					lRET := .F.
+					EXIT
+				ENDIF
+				ENDIF
+				TO1->(DBSKIP())
+			ENDDO
+		ENDIF
+	ENDIF
+	ENDIF
+	IF ! EMPTY(cOALIAS)
+	DBSELECTAREA(cOALIAS)
+	ENDIF
+
+Return(lRET)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210VQDH
+Valid do campo TO0_DOCTO
+
+@author Denis Hyroshi de Souza
+@since 06/12/2011
+@version MP12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MDT210VQDH()
+
+	If Empty(M->TO0_DOCTO)
+		If Type("M->TO0_RV") == "C"
+			M->TO0_RV := Space(Len(M->TO0_RV))
+		Endif
+		Return .T.
+	Else
+		Return EXISTCPO("QDH",M->TO0_DOCTO)
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210ALL
+
+@return lRet
+/*/
+//---------------------------------------------------------------------
+FUNCTION MDT210ALL(cP_PARA)
+
+	Local lRET,cOALIAS
+
+	cOALIAS := ALIAS()
+	lRET    := .T.
+	cP_PARA := IF(cP_PARA==NIL,"",cP_PARA)
+	IF cP_PARA == "TO0_FINALI"
+	IF M->TO0_TIPREL == "3" .AND.;
+		EMPTY(M->TO0_FINALI)
+
+		MSGINFO(STR0219+AVSX3("TO0_FINALI",5)+" !",STR0070) // "Preenchimento obrigatorio do campo " ##"Atencao"
+		lRET := .F.
+	ELSEIF ALTERA
+		IF M->TO0_FINALI <> TO0->TO0_FINALI
+			TO1->(DBSETORDER(1))
+			TO1->(DBSEEK(XFILIAL("TO1")+M->TO0_LAUDO,.T.))
+			DO WHILE ! TO1->(EOF()) .AND.;
+			TO1->(TO1_FILIAL+TO1_LAUDO) == (XFILIAL("TO1")+M->TO0_LAUDO)
+
+			TN0->(DBSETORDER(1))
+			IF (TN0->(DBSEEK(XFILIAL("TN0")+TO1->TO1_NUMRIS)))
+				TMA->(DBSETORDER(1))
+				IF ! (TMA->(DBSEEK(XFILIAL("TMA")+TN0->TN0_AGENTE))) .OR.;
+					M->TO0_FINALI <> TMA->TMA_TIPADI
+
+					MSGINFO(STR0222+AVSX3("TO0_FINALI",5)+STR0223+; //"Alteracao do campo " ## " nao permitida devido gerar inconsistencia de "
+							AVSX3("TMA_TIPADI",5)+STR0224,STR0070) // " entre Laudo e Agente" ## "Atencao"
+					lRET := .F.
+					EXIT
+				ENDIF
+			ENDIF
+			TO1->(DBSKIP())
+			ENDDO
+		ENDIF
+	ENDIF
+	ENDIF
+	IF ! EMPTY(cOALIAS)
+	DBSELECTAREA(cOALIAS)
+	ENDIF
+
+RETURN(lRET)
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210PRRO
+ - Inicializa MarkBrowse para indicar as rotinas de relacionamentos a
+ aplicada, após a confirmação de Laudo;
+@return Nil
+
+@sample
+MDT210PRRO()
+
+@author
+@since
+/*/
+//---------------------------------------------------------------------
+STATIC FUNCTION MDT210PRRO()
+
+	Local aArea := GetArea()
+	Local cMV_NG2OPL,bOK,bCANCEL,aBUTTONS,nBTOP,nA,nB,aPOS,aSIZE
+
+	Private aCAMPOS,aHEADER,cMARKA,lINVERTE,oTempTRB
+
+	cMV_NG2OPL := SuperGetMV("MV_NG2OPL",.F.," ")
+
+	IF LEFT(cMV_NG2OPL,1) $ "XYxy"
+   // MONTA O TEMPORARIO PARA SELECAO
+		aCAMPOS  := {}
+		aHEADER  := {}
+		cMARKA   := GETMARK()
+		lINVERTE := .F.
+		aSEMSX3  := {{"TREL_FLAG" ,"C",02,0},;
+			{"TREL_OPCAO","C",13,0},;
+			{"TREL_ROTIN","C",20,0}}
+
+		oTempTRB := FWTemporaryTable():New( "TREL", aSEMSX3 )
+		oTempTRB:AddIndex( "1", {"TREL_FLAG"} )
+		oTempTRB:Create()
+
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0225	; TREL->TREL_ROTIN := "MDT210RFUN('TO5')"	//"MDTA230()"*/  // "Locais"
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0226	; TREL->TREL_ROTIN := "MDT210RFUN('TO1')"	//"MDTA215()"  // "Riscos"
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0227	; TREL->TREL_ROTIN := "MDT210RFUN('TO2')"	//"MDTA220()" // "Equipamentos"
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0228	; TREL->TREL_ROTIN := "MDT210RFUN('TO3')"	//"MDTA225()"  //"Controles"
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0229	; TREL->TREL_ROTIN := "MDT210RFUN('TOX')"	//"MDTA691()"  //"Questionarios"
+		TREL->(DBAPPEND())
+		TREL->TREL_OPCAO := STR0230	; TREL->TREL_ROTIN := "MDT210RFUN('TOZ')"	//"MDTA222()" //"Plano de Acao"
+
+		For nA := 2 to LEN(cMV_NG2OPL)
+			nB := VAL(SUBSTR(cMV_NG2OPL,nA,1))
+			If nB > 0 .AND. nB <= TREL->(LASTREC())
+				TREL->(DBGOTO(nB))
+				TREL->TREL_FLAG := cMARKA
+			EndIf
+		Next nA
+
+		If LEFT(cMV_NG2OPLcMV_NG2OPL,1) $ "xX"
+			bOK      := {|| nBTOP := 1,oDLG:END()}
+			bCANCEL  := {|| nBTOP := 0,oDLG:END()}
+			aBUTTONS := {}
+			aCPOTREL := {{"TREL_FLAG" ,," "},;
+				{"TREL_OPCAO",,"Relacionamento"}}
+			nBTOP    := 0
+			aSIZE    := MsAdvSize(,.f.,230)
+			TREL->(DBGOTOP())
+
+			DEFINE MSDIALOG oDLG Title cCADASTRO+" - "+STR0231 From aSIZE[7],0 To aSIZE[6],aSIZE[5] Of oMainWnd Pixel  // "Relacionamentos"
+			@ 13,010 SAY STR0232 Of oDLG Pixel  //"Selecione as funcionalidades que deseja cadastrar em seguida:"
+
+			aPOS     := POSDLG(oDLG)
+			aPOS[1]  := aPOS[1]+10
+			aPOS[3]  := aPOS[3]-15
+			oMSELECT := MSSELECT():New("TREL","TREL_FLAG",,aCPOTREL,@lINVERTE,@cMARKA,aPOS)
+			ACTIVATE MSDIALOG oDLG ON INIT ENCHOICEBAR(oDLG,bOK,bCANCEL,,aBUTTONS) CENTERED
+
+		Else
+			nBTOP := 1
+		EndIf
+		If nBTOP == 1
+			nB := 0
+			TREL->(DBGOTOP())
+			Do While ! TREL->(EOF())
+				If ! EMPTY(TREL->TREL_FLAG)
+					MsgInfo(STR0233+ALLTRIM(TREL->TREL_OPCAO)+" !",STR0070) // "Entrando na rotina de " ## "Atencao"
+					aAreaTO0 := TO0->( GetArea() )
+					&(ALLTRIM(TREL->TREL_ROTIN))
+					RestArea(aAreaTO0)
+					nB := 1
+				EndIf
+				TREL->(DBSKIP())
+			EndDo
+			If nB > 0
+				MsgInfo(STR0234,STR0070) //"Retornando a rotina de Laudo Ambientais !" ## "Atencao"
+			EndIf
+		EndIf
+		oTempTRB:Delete()
+
+	EndIf
+
+	RestArea(aArea)
+
+Return(Nil)
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210RFUN
+ - Função auxiliar para executar das rotinas de relação do Laudo.
+@return Nil
+
+@sample
+MDT210InRe( 'TO3' )
+
+@author Guiherme Benkendorf
+@since 06/11/2013
+/*/
+//---------------------------------------------------------------------
+Function MDT210RFUN( cTabExec )
+	Local nInd	:= 1
+	Local aAreaTO0 := TO0->( GetArea() )
+
+	If lSigaMdtPs
+		If cTabExec $ "TO1/TO2/TO3/TOX/TOZ"
+			nInd := 3
+		ElseIf cTabExec $ "TO5"
+			nInd := 4
+		EndIf
+	EndIf
+
+	RegToMemory( cTabExec , .F. )
+	RestArea( aAreaTO0 )
+
+	dbSelectArea( cTabExec )
+	dbSetOrder( nInd )
+	dbSeek( xFilial( cTabExec ) + If(lSigaMdtPs, cCliMdtPs, "") + TO0->TO0_LAUDO )
+
+	aRotSetOpc( cTabExec , 0 , 4 )
+
+	Do Case
+		Case cTabExec == "TO5"
+			M->TO5_LAUDO := TO0->TO0_LAUDO
+			//Executa função de relacionamento
+			MDT230LO( cTabExec , 0 , 4 )
+			//Limpa valores da variaveis
+			M->TO5_LAUDO	:= Nil
+		Case cTabExec == "TO1"
+			M->TO1_LAUDO := TO0->TO0_LAUDO
+			//Executa função de relacionamento
+			Mdt215Cad( cTabExec , 0 , 4 )
+			//Limpa valores da variaveis
+			M->TO1_LAUDO	:= Nil
+		Case cTabExec == "TO2"
+			lMdtps			:= SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+			lTabTOD			:= NGCADICBASE("TOD_FILIAL","A","TOD",.F.)
+			M->TO2_LAUDO := TO0->TO0_LAUDO
+			//Executa função de relacionamento
+			NG220EQ( cTabExec , 0 , 4 )
+			//Limpa valores da variaveis
+			M->TO2_LAUDO := Nil
+			lMdtps			:= Nil
+			lTabTOD			:= Nil
+		Case cTabExec == "TO3"
+			lMdtps			:= SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+			M->TO3_LAUDO := TO0->TO0_LAUDO
+			//Executa função de relacionamento
+			MDT225CON( cTabExec , 0 , 4 )
+			//Limpa valores da variaveis
+			lMdtps			:= Nil
+			M->TO3_LAUDO := Nil
+
+		Case cTabExec == "TOX"
+			M->TOX_LAUDO := TO0->TO0_LAUDO
+			M->TOX_LAUDO := Nil
+
+		Case cTabExec == "TOZ"
+			M->TOZ_LAUDO := TO0->TO0_LAUDO
+			//Executa função de relacionamento
+			NG222PL( cTabExec , 0 , 4 )
+			//Limpa valores da variaveis
+			M->TOZ_LAUDO	:= Nil
+		End Case
+
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210VL
+Valida código do laudo
+
+@return lRet  - .T. se código válido, .F. caso contrário
+@author Thiago Santos
+@since 10/0t/2013
+@version P10
+@return cRet - Descrição referente ao valor do campo
+/*/
+//---------------------------------------------------------------------
+Function MDT210VL()
+
+	lRet := ExistChav("TO0",M->TO0_LAUDO)
+
+	If lRet
+		If len(Rtrim(M->TO0_LAUDO)) > 10
+			lRet := .F.
+			ShowHelpDlg(STR0251,{STR0252},1,{STR0253},1)
+			//#"Atenção"###"Código do Laudo inválido."###"O Código do Laudo deve possuir no máximo 10 caracteres."
+		Endif
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210REV
+Revisão de laudo técnico pericial
+
+@author Thiago Santos
+@since 10/0t/2013
+@version P10
+@return cRet - Descrição referente ao valor do campo
+/*/
+//---------------------------------------------------------------------
+Function MDT210REV()
+
+	Local cLastLaudo := RTRIM(TO0->TO0_LAUDO)
+	Local claudo := RTRIM(TO0->TO0_LAUDO)
+	Local nOpcc := 0
+	Local nTamLaudo := TAMSX3("TO0_LAUDO")[1]
+	Local oDlg2,i
+	Local nRec := 0
+	Local oPnlTop
+
+	Private cCodigo   	:= ""
+	Private cNome   	:= TO0->TO0_NOME
+	Private cTO0_Laudo	:= TO0->TO0_LAUDO
+	Private cTO0_NOME 	:= TO0->TO0_NOME
+
+	nRec := TO0->(Recno())
+
+	If TO0->TO0_TIPREL <> "3"
+
+		ShowHelpDlg(STR0251,{STR0254},1,{STR0255},1) //#"Atenção"###"Opção não permitida para este Laudo."###"Apenas Laudos Técnicos Periciais podem utilizar esta opção."
+		Return .T.
+
+	Endif
+
+	If Len(RTrim(TO0->TO0_LAUDO)) > 10
+
+		If "_" <> SUBSTR(TO0->TO0_LAUDO,len(RTrim(TO0->TO0_LAUDO))-1,1)
+
+			ShowHelpDlg(STR0251,{STR0254},1,{STR0256},1) //#"Atenção"###"Opção não permitida para este Laudo."###"O código do laudo excede o número de caracteres permitidos para a rotina de revisão."
+			Return .T.
+
+		Endif
+
+	Endif
+
+	If "_" == SUBSTR(cLaudo,len(cLaudo)-1,1)
+
+		TO0->(DbSetOrder(1))
+		TO0->(DbSeek(xFilial("TO0")+SUBSTR(cLaudo,1,len(cLaudo)-1)))
+
+		While TO0->(!Eof()) .AND. TO0->TO0_FILIAL == xFilial("TO0") .AND.  SUBSTR(TO0->TO0_LAUDO,1,len(cLaudo)-1) == SUBSTR(cLaudo,1,len(cLaudo)-1)
+
+			If len(cLaudo) < nTamLaudo .AND. Empty(SUBSTR(TO0->TO0_LAUDO,len(cLaudo)+1,nTamLaudo - len(cLaudo))) .OR. len(cLaudo) == nTamLaudo
+
+				cLastLaudo := RTRIM(TO0->TO0_LAUDO)
+				nRec := TO0->(Recno())
+
+			Endif
+
+			TO0->(DbSkip())
+		Enddo
+
+		cLaudoRev := SUBSTR(cLastLaudo,1,len(cLastLaudo)-1)+SOMA1(SUBSTR(cLastLaudo,len(cLastLaudo),1))
+
+	Else //se clicou no laudo principal
+
+		TO0->(DbSetOrder(1))
+		TO0->(DbSeek(xFilial("TO0")+cLaudo))
+
+		While TO0->(!Eof()) .AND. TO0->TO0_FILIAL == xFilial("TO0") .AND.  SUBSTR(TO0->TO0_LAUDO,1,len(cLaudo)) == cLaudo
+
+			If len(cLaudo) < nTamLaudo -1 .AND. SUBSTR(TO0->TO0_LAUDO,len(cLaudo)+1,1) == "_"
+
+				cLastLaudo := RTRIM(TO0->TO0_LAUDO)
+				nRec := TO0->(Recno())
+
+			Endif
+
+			TO0->(DbSkip())
+		Enddo
+
+		If "_" == SUBSTR(cLastLaudo,len(cLastLaudo)-1,1)
+			cLaudoRev := SUBSTR(cLastLaudo,1,len(cLastLaudo)-1)+SOMA1(SUBSTR(cLastLaudo,len(cLastLaudo),1))
+		Else
+
+			cLaudoRev := cLastLaudo+"_1" //primeira revisao
+
+		Endif
+
+	Endif
+
+	cCodigo := PADR(cLaudoRev,nTamLaudo)
+	cTO0_LAUDO := PADR(cLastLaudo,nTamLaudo)
+
+	If !lSigaMdtPS
+
+		DEFINE MSDIALOG oDlg2 TITLE OemToAnsi(STR0257) From 0,0 To 20,80 OF oMainWnd //"Revisar Laudo"
+
+			oPnlTop := TPanel():New( 00 , 00 , , oDlg2 , , , , , , , , .F. , .F. )
+			oPnlTop:Align := CONTROL_ALIGN_ALLCLIENT
+
+				@ 15,05 TO 052,273 LABEL STR0098 OF oPnlTop PIXEL //"Laudo"
+				@ 1.8,1  SAY OemToAnsi(STR0098) Of oPnlTop //"Laudo"
+				@ 1.8,6  MSGET cTO0_LAUDO Picture "@!" Size 42,08 When .F. Of oPnlTop
+				@ 2.9,1  SAY OemToAnsi(STR0099) Of oPnlTop  //"Nome Laudo "
+				@ 2.9,6  MSGET cTO0_NOME Picture "@!" Size 220,08 When .F. Of oPnlTop
+
+				@ 60,05 TO 098,273 LABEL STR0100 OF oPnlTop PIXEL //"Novo Laudo"
+				@ 5.3,1  SAY OemToAnsi(STR0098) Of oPnlTop   //"Laudo"
+				@ 5.3,6  MSGET cCodigo Picture "@!" Size 42,08 When .F. Of oPnlTop
+				@ 6.4,1  SAY OemToAnsi(STR0101) Of oPnlTop  //"Nome Laudo"
+				@ 6.4,6  MSGET cNome Picture "@!" SIZE 220,08  WHEN .F. Of oPnlTop
+
+		ACTIVATE MSDIALOG oDlg2 ON INIT EnchoiceBar(oDlg2,{||nOpcc:=1,oDlg2:End()},{||oDlg2:End()}) CENTERED
+
+		Dbselectarea("TO0")
+		TO0->(DbGoTo(nRec))
+
+		If nOpcc = 1//Se for confirmada a operação
+
+			FOR i := 1 TO FCount()
+				x   := "m->" + FieldName(i)
+				y   := "TO0->" + FieldName(i)
+				&x 	:= &y
+			Next i
+
+			If lSYP .and. !lDESC2
+				If ExistIni("TO0_DESC2")
+					M->TO0_DESC2 := InitPad( GetSx3Cache( 'TO0_DESC2', 'X3_RELACAO' ) )
+				Else
+					M->TO0_DESC2 := ""
+				EndIf
+			Endif
+
+			RecLock("TO0",.t.)
+			TO0->TO0_FILIAL := xFilial('TO0')
+			TO0->TO0_NOME 	:= cNome
+			TO0->TO0_LAUDO 	:= cCodigo
+
+			FOR i := 1 TO FCount()
+				If FieldName(i) == "TO0_FILIAL" .OR. FieldName(i) == "TO0_NOME" .OR. FieldName(i) == "TO0_LAUDO" .OR. FieldName(i) == "TO0_MMSYP2"
+					Loop
+				EndIf
+				x   := "m->" + FieldName(i)
+				y   := "TO0->" + FieldName(i)
+				&y := &x
+			Next i
+			If lSYP .and. !lDESC2 .and. !Empty(M->TO0_DESC2)
+				MSMM(,,, M->TO0_DESC2,1,,,"TO0","TO0_MMSYP2")
+			Endif
+			Msunlock("TO0")
+
+			//Copia tabelas relacionadas ao laudo
+			COPY210TAB()
+
+			COPY210TJ0()
+
+			DBCOMMITALL()
+
+			//fecha a revisão anterior
+			//to0->tO0_DTVALI
+			TO0->(DbGoTo(nRec))
+			RecLock("TO0",.F.)
+			TO0->TO0_DTVALI := dDataBase - 1
+			TO0->(MsUnlock())
+
+		Endif
+
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} COPY210TJ0
+Revisão de laudo técnico pericial
+
+
+@author Thiago Santos
+@since 10/0t/2013
+@version P10
+@return cRet - Descrição referente ao valor do campo
+/*/
+//---------------------------------------------------------------------
+Static Function COPY210TJ0()
+
+	//Variaveis de controle do For
+	Local i,j
+	//Variaveis de Controle dos campos
+	Local cCampo	:= ""
+	Local dDataIni
+	Local dDataTemp	:= StoD( Space( 8 ) )
+	Local aFiels	:= {}
+	Local aTJ0 := {}
+	Local aTemp		:= {}
+	Local aRiscos := {}
+
+	Local lTN0Depto := NGCADICBASE( "TN0_DEPTO" , "A" , "TN0" , .F. )
+
+	//Variaveis de Psocionamento
+	Private nMatTJ0 , nDtFimTJ0 , nRiscoTJ0 , nDtTJ0Ini , nFilTJ0
+	Private nTpAdiTJ0 , nPerIntTJ0 , nConfexTJ0
+	//Busca todos os riscos em que o Laudo está vinculado
+	dbSelectArea( "TN0" )
+	dBSelectArea( "TO1" )
+	TO1->( dbSetOrder( 1 ) )
+	TO1->( dbSeek( xFilial( "TO1" ) + cTO0_Laudo ) )
+	While TO1->( !Eof() ) .And. TO1->TO1_FILIAL == xFilial( "TO1" ) .And. TO1->TO1_LAUDO == cTO0_Laudo
+
+		TN0->( dbSetOrder( 1 ) )
+		If TN0->( dbSeek( xFilial( "TN0" ) + TO1->TO1_NUMRIS ) )
+			If Empty(TN0->TN0_DTELIM) .Or. TN0->TN0_DTELIM > dDataBase
+				aAdd( aRiscos , TO1->TO1_NUMRIS )
+			EndIf
+		EndIf
+		TO1->( dbSkip() )
+	End
+
+	//Busca todos os campos da TJ0
+	dbSelectArea( "TJ0" )
+	For i := 1 TO FCount()
+		aAdd( aFiels , FieldName( i ) )
+	Next i
+
+	nMatTJ0   := aScan( aFiels , { | x | x == "TJ0_MAT"		} )
+	nDtFimTJ0 := aScan( aFiels , { | x | x == "TJ0_DTFIEX"	} )
+	nRiscoTJ0 := aScan( aFiels , { | x | x == "TJ0_NUMRIS"	} )
+	nDtTJ0Ini := aScan( aFiels , { | x | x == "TJ0_DTINEX"	} )
+	nFilTJ0   := aScan( aFiels , { | x | x == "TJ0_FILIAL"	} )
+	nTpAdiTJ0 := aScan( aFiels , { | x | x == "TJ0_TIPOAD"	} )
+	nPerIntTJ0:= aScan( aFiels , { | x | x == "TJ0_PERINT"	} )
+	nConfexTJ0:= aScan( aFiels , { | x | x == "TJ0_CONFEX"	} )
+
+	//Atualiza os funcionários que deixaram de estar expostos nesta revisão
+	For i := 1 To Len( aTJ0 )
+		lAlterar := .F.
+		dDataTemp	:= StoD( Space( 8 ) )
+		dDataFim := dDataBase
+
+		//Procurando data de fim de exposição
+		TN0->( dbSetOrder( 1 ) )
+		If TN0->( dbSeek( xFilial( "TN0" ) + aTJ0[ i , nRiscoTJ0 ] ) )
+
+			//Data de Eliminação do Risco
+			IF !Empty( TN0->TN0_DTELIM ) .And. TN0->TN0_DTELIM < dDataFim
+				dDataFim := TN0->TN0_DTELIM
+			EndIf
+
+			//Data de Mudança de Tarefa
+			If TN0->TN0_CODTAR <> "*"
+				dbSelectArea( "TN6" )
+				TN6->( dbSetOrder( 1 ) )
+				If TN6->( dbSeek( xFilial( "TN6" ) + TN0->TN0_CODTAR + aTJ0[ i , nMatTJ0 ] ) )
+					//Caso data for superior a início e inferior a já existente, indica atualização do termino de exposição
+					If !Empty(TN6->TN6_DTTERM) .And. TN6->TN6_DTTERM < dDataFim  .And. TN6->TN6_DTTERM >=  aTJ0[ i , nDtTJ0Ini ]
+						dDataFim := TN6->TN6_DTTERM
+						lAlterar := .T.
+					Else
+						dDataTemp := StoD( Space( 8 ) )
+					EndIf
+				EndIf
+			EndIf
+
+			//Data de Mudança de CC ou Departamento
+			If TN0->TN0_CC <> "*"
+				//Caso haja discriminação por Departamento, valida chave composta
+				If lTN0Depto .And. TN0->TN0_DEPTO <> "*"
+					dbSelectArea( "SRE" )
+					SRE->( dbSetOrder( 1 ) )
+					If SRE->( dbSeek( cEmpAnt + cFilAnt + SRA->RA_MAT) )
+	      	   	        //Percorre o mesmo registro de empresa, filial e matrícula procurando alteração de C.C. e Departamento
+						While SRE->( !Eof() ) .And. SRE->RE_EMPD == cEmpAnt .And. ;
+								SRE->RE_FILIALD == cFilAnt .And. SRE->RE_MATD == SRA->RA_MAT
+
+							If SRE->RE_CCD == TN0->TN0_CC .And. SRE->RE_DEPTOD == TN0->TN0_DEPTO
+								dDataTemp := SRE->RE_DATA
+							ElseIf SRE->RE_CCP == TN0->TN0_CC .And. SRE->RE_DEPTOP == TN0->TN0_DEPTO
+								dDataTemp := StoD( Space( 8 ) )
+							EndIf
+							SRE->(DbSkip())
+						End
+
+		      			//Caso data for superior a início e inferior a já existente, indica atualização do termino de exposição
+						If !Empty( dDataTemp ) .And. dDataTemp < dDataFim .And. dDataTemp >=  aTJ0[ i , nDtTJ0Ini ]
+							dDataFim := dDataTemp
+							lAlterar := .T.
+						Else
+							dDataTemp := StoD( Space( 8 ) )
+						EndIf
+					EndIf
+				Else
+					//Se não, valida apenas o C.C.
+					dbSelectArea( "SRE" )
+					SRE->( dbSetOrder( 1 ) )
+					If SRE->( dbSeek( cEmpAnt + cFilAnt + SRA->RA_MAT) )
+	      	   	        //Percorre o mesmo registro de empresa, filial e matrícula procurando alteração de C.C.
+						While SRE->( !Eof() ) .And. SRE->RE_EMPD == cEmpAnt .And. ;
+								SRE->RE_FILIALD == cFilAnt .And. SRE->RE_MATD == SRA->RA_MAT
+
+							If SRE->RE_CCD == TN0->TN0_CC
+								dDataTemp := SRE->RE_DATA
+							ElseIf SRE->RE_CCP == TN0->TN0_CC
+								dDataTemp := StoD( Space( 8 ) )
+							EndIf
+							SRE->(DbSkip())
+						End
+
+						If !Empty( dDataTemp ) .And. dDataTemp < dDataFim .AND. dDataTemp >=  aTJ0[ i , nDtTJ0Ini ]
+							dDataFim := dDataTemp
+							lAlterar := .T.
+						Else
+							dDataTemp := StoD( Space( 8 ) )
+						EndIf
+					EndIf
+				EndIf
+			Else
+				//Caso C.C. não seja discriminado, valida apenas o Departamento
+				If lTN0Depto .And. TN0->TN0_DEPTO <> "*"
+					dbSelectArea( "SRE" )
+					SRE->( dbSetOrder( 1 ) )
+					If SRE->( dbSeek( cEmpAnt + cFilAnt + SRA->RA_MAT) )
+
+	      	   	        //Percorre o mesmo registro de empresa, filial e matrícula procurando alteração de departamento
+						While SRE->( !Eof() ) .And. SRE->RE_EMPD == cEmpAnt .And. ;
+								SRE->RE_FILIALD == cFilAnt .And. SRE->RE_MATD == SRA->RA_MAT
+
+							If SRE->RE_DEPTOD == TN0->TN0_DEPTO
+								dDataTemp := SRE->RE_DATA
+							ElseIf SRE->RE_DEPTOP == TN0->TN0_DEPTO
+								dDataTemp := StoD( Space( 8 ) )
+							EndIf
+							SRE->(DbSkip())
+						End
+
+		      			//Caso data for superior a início e inferior a já existente, indica atualização do termino de exposição
+						If !Empty( dDataTemp ) .And. dDataTemp < dDataFim .AND. dDataTemp >=  aTJ0[ i , nDtTJ0Ini ]
+							dDataFim := dDataTemp
+							lAlterar := .T.
+						Else
+							dDataTemp := StoD( Space( 8 ) )
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			//Verifica se o Funcionario mudou de Filial e deixo de estar exposto
+			If Empty(dDataTemp)
+				dbSelectArea( "SRE" )
+				SRE->( dbSetOrder( 1 ) )
+				IF SRE->( dbSeek( cEmpAnt + cFilAnt + SRA->RA_MAT ) )
+
+					//Percorre procurando alteração de Empresa ou Filial
+					While SRE->( !Eof() ) .And. SRE->RE_EMPD == cEmpAnt .And. ;
+							SRE->RE_FILIALD == cFilAnt .And. SRE->RE_MATD == SRA->RA_MAT
+
+						If ( SRE->RE_EMPP <> cEmpAnt .Or. SRE->RE_FILIALP <> cFilAnt )
+							dDataTemp := SRE->RE_DATA
+						ElseIf ( SRE->RE_EMPP == cEmpAnt .And. SRE->RE_FILIALP == cFilAnt)
+							dDataTemp := StoD( Space( 8 ) )
+						Endif
+						SRE->( dbSkip() )
+					Enddo
+
+	      			//Caso data for superior a início e inferior a já existente, indica atualização do termino de exposição
+					If !Empty( dDataTemp ) .And. dDataTemp < dDataFim .And. dDataTemp >=  aTJ0[ i , nDtTJ0Ini ]
+						dDataFim := dDataTemp
+						lAlterar := .T.
+					Else
+						dDataTemp := StoD( Space( 8 ) )
+					Endif
+
+				Endif
+
+			Endif
+
+			//Verifica se funcionário foi demitido
+			dbSelectArea( "SRA" )
+			SRA->( dbSetOrder( 1 ) )
+			If SRA->( dbSeek( xFilial( "SRA" ) + aTJ0[ i , nMatTJ0 ] ) ) .And. SRA->RA_SITFOLH == "D" .And. ;
+					!Empty( SRA->RA_DEMISSA ) .And. SRA->RA_DEMISSA < dDataFim
+				dDataFim := SRA->RA_DEMISSA
+				lAlterar := .T.
+			EndIf
+
+		Endif
+
+		//Inclui a Data de Fim de Exposição caso haja qualquer alteração
+		If lAlterar
+			aTJ0[ i , nDtFimTJ0 ] := dDataFim
+		EndIf
+	Next i
+
+	//Buscando exposições atuais para o risco
+	For i := 1 To Len( aRiscos )
+		MDTPesqTJ0( aRiscos[ i ] , { | dDtIni | fGrvArrTJ0( dDtIni , aRiscos[ i ] , @aTJ0 , aFiels ) } )
+	Next i
+
+	//Gravando TJ0
+	dbSelectArea( "TJ0" )
+	dbSetOrder( 1 )
+	For i := 1 to len(aTJ0)
+
+		RecLock("TJ0",.T.)
+
+		TJ0->TJ0_FILIAL := xFilial('TJ0')
+		TJ0->TJ0_LAUDO := cCodigo
+
+		FOR j := 1 TO len(aFiels)
+			cCampo := aFiels[j]
+			If cCampo == "TJ0_FILIAL" .OR. cCampo == "TJ0_LAUDO"
+				Loop
+			EndIf
+			y   := "TJ0->" + cCampo
+			&y := aTJ0[i][j]
+		Next j
+
+		Msunlock("TJ0")
+
+	Next i
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGrvArrTJ0
+Grava os valores no array de risco
+
+@return Nill
+
+@sample fGrvArrTJ0( '01/01/2015' , '000000001' , {} , {} )
+
+@author Jackson Machado
+@since 15/05/2015
+/*/
+//---------------------------------------------------------------------
+Static Function fGrvArrTJ0( dDataIni , cRisco , aTJ0 , aFiels )
+
+	Local j
+	Local cCampo	:= ""
+
+	//Adiciona a nova exposição
+	aAdd( aTJ0 , aClone( Array( Len( aFiels ) ) ) )
+	nPosAdd := Len( aTJ0 )
+	For j := 1 to Len( aFiels )
+		cCampo := aFiels[ j ]
+		aTJ0[ nPosAdd , j ] := CriaVar( cCampo )
+	Next j
+	aTJ0[ nPosAdd , nFilTJ0 ]	:= xFilial( "TJ0" )
+	aTJ0[ nPosAdd , nRiscoTJ0 ] := cRisco
+	aTJ0[ nPosAdd , nMatTJ0   ] := SRA->RA_MAT
+	aTJ0[ nPosAdd , nTpAdiTJ0 ] := TMA->TMA_TIPADI
+	aTJ0[ nPosAdd , nPerIntTJ0] := TN0->TN0_PERINT
+	aTJ0[ nPosAdd , nDtTJ0Ini ] := dDataIni
+	aTJ0[ nPosAdd , nDtFimTJ0 ] := StoD( Space( 8 ) )
+	aTJ0[ nPosAdd , nConfexTJ0] := "2"
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT210VDT
+Função para validação de Datas
+
+@return Lógico - Caso data esteja correta, retorna verdadeiro
+
+@sample
+MDT210VDT( 1 )
+
+@author Jackson Machado
+@since 23/09/2013
+/*/
+//---------------------------------------------------------------------
+Function MDT210VDT( nValDt )
+	Local lRet		:= .T.
+
+	Default nValDt	:= 0
+
+	If nValDt == 1
+		If ( !Empty(M->TO0_DTFIM).And. M->TO0_DTINIC > M->TO0_DTFIM ) .Or. ;
+			( !Empty(M->TO0_DTVALI).And. M->TO0_DTINIC > M->TO0_DTVALI )
+			ShowHelpDlg( 	STR0264 , ;//"ATENÇÃO"
+							{ STR0265 } , 2 , ;//"Data de Início deve ser menor que Data de Final e Data de Validade."
+							{ STR0266 } , 2 )//"Favor informar uma data menor."
+			lRet := .F.
+		EndIf
+	ElseIf nValDt == 2
+		If !Empty(M->TO0_DTINIC) .And. !Empty(M->TO0_DTFIM) .And. M->TO0_DTINIC > M->TO0_DTFIM
+			ShowHelpDlg( 	STR0264 , ;//"ATENÇÃO"
+							{ STR0267 } , 2 , ;//"Data de Final deve ser maior que Data de Início."
+							{ STR0268 } , 2 )//"Favor informar uma data maior."
+			lRet := .F.
+		EndIf
+	ElseIf nValDt == 3
+		If !Empty(M->TO0_DTINIC) .And. !Empty(M->TO0_DTVALI) .And. M->TO0_DTINIC > M->TO0_DTVALI
+			ShowHelpDlg( 	STR0264 , ;//"ATENÇÃO"
+							{ STR0269 } , 2 , ;//"Data de Validade deve ser maior que Data de Início."
+							{ STR0268 } , 2 )//"Favor informar uma data maior."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*{Protheus.doc} MDT210CBOX
+Função para separar os itens que serão apresentados no campo Tipo
+de Laudo nos módulos de SGA e MDT.
+
+@return cComboBox
+
+@author Juliani Schlickmann Damasceno
+@since 16/04/2014
+/*/
+//---------------------------------------------------------------------
+Function MDT210CBOX()
+
+	Local cComboBox := ""
+
+	If nModulo == 35
+		cComboBox += "1=PPRA;"
+		cComboBox += "2=PCMSO;"
+		cComboBox += "3=L.T. Pericial;"
+		cComboBox += "4=LTCAT;"
+		cComboBox += "5=DIRBEN 8030;"
+		cComboBox += "6=PGR;"
+		cComboBox += "7=PCMAT"
+		If SuperGetMv( "MV_NG2NR32" , .F. , "2" ) == "1"
+			cComboBox += ";8=PPR"
+		EndIf
+		If Type("lTipLauPAE") == "L" .And. lTipLauPAE
+			cComboBox += ";A=PAE;"
+		EndIf
+		If TMA->( FieldPos( "TMA_PATSYP" ) ) > 0
+			cComboBox += ";C=Ergonomia"
+		EndIf
+	ElseIf nModulo == 56
+		If Type("lTipLauRES") == "L" .And. lTipLauRES
+			cComboBox += "9=PGRSS;"
+		EndIf
+		If Type("lTipLauPAE") == "L" .And. lTipLauPAE
+			cComboBox += "A=PAE;"
+		EndIf
+		cComboBox += "B=Resíduos"
+	EndIf
+
+Return cComboBox
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} Mdt210Lau
+Função para verificação do código do laudo.
+
+@return
+
+@author Juliani Schlickmann Damasceno
+@since 17/04/2014
+/*/
+//---------------------------------------------------------------------
+Function Mdt210Lau()
+
+	Local aModulo  := RetModName()
+	Local nPosMod := 0
+	Local lModDif := .F.
+
+	dbSelectArea("TO0")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TO0")+M->TO0_LAUDO)
+
+		If nModulo == 35
+			If ( lModDif := TO0->TO0_TIPREL $ "9/B" )
+				nPosMod := aScan(aModulo, {|x| x[1] == 56 })
+			EndIf
+		ElseIf nModulo == 56
+			If ( lModDif := TO0->TO0_TIPREL $ "1/2/3/4/5/6/7/8/A" )
+				nPosMod := aScan(aModulo, {|x| x[1] == 35 })
+			EndIf
+		Endif
+
+		If !lModDif
+			ShowHelpDlg( STR0251 , { STR0270 } , 2 , { STR0271 } , 2 ) // "Atenção" ## "Este código já está sendo utilizado." ## "Utilize outro código para o laudo."
+		Else
+			ShowHelpDlg( STR0251 , { STR0272 +aModulo[nPosMod][2] } , 2 , { STR0271 } , 2 ) // "Atenção" ## "Este código está sendo utilizado pelo módulo de " ## "Utilize outro código para o laudo."
+		Endif
+
+		Return .F.
+
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fChkDtSRE
+Função para verificação da data inicio de exposição do risco.
+
+@return
+
+@author Guilherme Benkendorf
+@since 10/09/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fChkDtSRE( dInicio , lCCusto , lSeek )
+
+	Local cCondWhile	:= "SRE->RE_CCP == TN0->TN0_CC .AND. SRE->RE_DATA > dInicio"
+	Local cSeek			:= ".T."
+
+	Default lCCusto		:= .T.
+	Default lSeek			:= .T.
+
+	If !lCCusto
+		cCondWhile := "SRE->RE_EMPD <> cEmpAnt .OR. SRE->RE_FILIALD <> cFilAnt) .AND. SRE->RE_DATA > dInicio"
+	EndIf
+	If lSeek
+		cSeek := "ALLTRIM(TN0->TN0_CC) <> '*'"
+	EndIf
+
+	SRExpRisco( 2 , cEmpAnt+cFilAnt+SRA->RA_MAT , cSeek , @dInicio, TN0->TN0_CC , lCCusto  )
+
+Return dInicio
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTPesqTJ0
+Função de realização de busca do risco exposto e gravação n TJ0
+
+@return
+
+@author Guilherme Benkendorf
+@since 10/09/2014
+/*/
+//---------------------------------------------------------------------
+Function MDTPesqTJ0( cRisco , bGrava )
+
+	Local lTN0Depto := NGCADICBASE( "TN0_DEPTO" , "A" , "TN0" , .F. )
+
+	TN0->(dbSetorder(1))
+	If TN0->(dbSeek(xFilial("TN0")+cRisco))
+		//Busca Agente
+		TMA->(dbSetorder(1))
+		TMA->(dbSeek(xFilial("TMA")+TN0->TN0_AGENTE))
+
+ 		//se risco for associado a uma tarefa específica
+		If AllTrim(TN0->TN0_CODTAR) <> "*"
+			dbSelectArea("TN6")
+			TN6->(dbSetorder(1))
+			TN6->(dbSeek(xFilial("TN6")+TN0->TN0_CODTAR))
+
+			While TN6->(!EOF()) .AND. TN6->TN6_FILIAL == xFilial("TN6") .AND. TN6->TN6_CODTAR == TN0->TN0_CODTAR
+
+				lOK := .T.
+				SRA->(dbSetorder(1))
+				SRA->(dbSeek(xFilial("SRA")+TN6->TN6_MAT))
+
+				//Verifica o Centro de Custo
+				If AllTrim(TN0->TN0_CC) <> "*"
+					If TN0->TN0_CC <> SRA->RA_CC
+						lOK := .F.
+					EndIf
+				EndIf
+
+				If lOK
+		   			// Verifica a Função
+					If AllTrim(TN0->TN0_CODFUN) <> "*"
+						If TN0->TN0_CODFUN <> SRA->RA_CODFUNC
+							lOK := .F.
+						EndIf
+					EndIf
+				EndIf
+
+				If lOK
+		   		// Verifica o Departamento
+					If lTN0Depto .And. AllTrim(TN0->TN0_DEPTO) <> "*"
+						If TN0->TN0_DEPTO <> SRA->RA_DEPTO
+							lOK := .F.
+						EndIf
+					EndIf
+				EndIf
+
+				lOk:= If(lOk, Empty(TN6->TN6_DTTERM) .OR. TN6->TN6_DTTERM > dDataBase,lOk)
+				lOk:= If(lOk, SRA->RA_SITFOLH <> "D",lOk)
+
+				If lOK
+
+		  			//Busca data de início de exposição ao risco
+					dDataIni := TN0->TN0_DTAVAL
+					If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < TN6->TN6_DTINIC
+						dDataIni := TN6->TN6_DTINIC
+					EndIf
+					If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < SRA->RA_ADMISSA
+						dDataIni := SRA->RA_ADMISSA
+					EndIf
+
+      	      		//Busca data de início de exposição ao risco
+					dDataIni := fChkDtSRE( dDataIni )
+
+		         	// Adciona Funcionário exposto
+					Eval( bGrava , dDataIni )
+
+				EndIf
+				TN6->(DBSKIP())
+			End
+
+		//se for relacionado a uma função específica, para qualquer tarefa
+		ElseIf	AllTrim(TN0->TN0_CODFUN) <> "*"
+
+			dbSelectArea("SRA")
+			SRA->(dbSetorder(7)) //fillial + funcao
+			SRA->(dbSeek(xFilial("SRA")+TN0->TN0_CODFUN))
+
+			While SRA->(!Eof()) .AND. SRA->RA_FILIAL == xFilial("SRA") .AND. SRA->RA_CODFUNC == TN0->TN0_CODFUN
+
+
+				If SRA->RA_SITFOLH <> "D"
+
+					If ( AllTrim(TN0->TN0_CC) == "*" .OR. TN0->TN0_CC == SRA->RA_CC ) .And. ;
+							If(lTN0Depto,( AllTrim(TN0->TN0_DEPTO) == "*" .OR. TN0->TN0_DEPTO == SRA->RA_DEPTO ),.T.)
+
+      		      		//Busca data de início de exposição ao risco
+						dDataIni := TN0->TN0_DTAVAL
+						If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < SRA->RA_ADMISSA
+							dDataIni := SRA->RA_ADMISSA
+						EndIf
+
+	      	      		//Busca data de início de exposição ao risco
+						dDataIni := fChkDtSRE( dDataIni )
+
+         	      		// Adciona Funcionário exposto
+						Eval( bGrava , dDataIni )
+
+					EndIf
+
+				EndIf
+
+				SRA->(DbSkip())
+
+			End
+
+		//se for relacionado a um centro de custo específico, para qualquer função equalquer tarefa
+		ElseIf	AllTrim(TN0->TN0_CC) <> "*"
+
+			dbSelectArea("SRA")
+			SRA->(dbSetorder(2)) //fillial + funcao
+			SRA->(dbSeek(xFilial("SRA")+TN0->TN0_CC))
+
+			While SRA->(!Eof()) .AND. SRA->RA_FILIAL == xFilial("SRA") .AND. SRA->RA_CC == TN0->TN0_CC
+
+				If SRA->RA_SITFOLH <> "D"
+					If If(lTN0Depto,( AllTrim(TN0->TN0_DEPTO) == "*" .OR. TN0->TN0_DEPTO == SRA->RA_DEPTO ),.T.)
+		      		//Busca data de início de exposição ao risco
+						dDataIni := TN0->TN0_DTAVAL
+						If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < SRA->RA_ADMISSA
+							dDataIni := SRA->RA_ADMISSA
+						EndIf
+
+		      	   //Busca data de início de exposição ao risco
+						dDataIni := fChkDtSRE( dDataIni , , .F. )
+
+			        // Adciona Funcionário exposto
+						Eval( bGrava , dDataIni )
+					EndIf
+				EndIf
+
+				SRA->(DbSkip())
+			End
+		//se for relacionado a um departamento específico, para qualquer centro de custo, função e qualquer tarefa
+		ElseIf	lTN0Depto .And. AllTrim(TN0->TN0_DEPTO) <> "*"
+
+			dbSelectArea("SRA")
+			SRA->(dbSetorder(2)) //fillial + funcao
+			SRA->(dbSeek(xFilial("SRA")+TN0->TN0_CC))
+
+			While SRA->(!Eof()) .AND. SRA->RA_FILIAL == xFilial("SRA") .AND. SRA->RA_CC == TN0->TN0_CC
+
+				If SRA->RA_SITFOLH <> "D"
+	      	   		//Busca data de início de exposição ao risco
+					dDataIni := TN0->TN0_DTAVAL
+					If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < SRA->RA_ADMISSA
+						dDataIni := SRA->RA_ADMISSA
+					EndIf
+
+      	      		//Busca data de início de exposição ao risco
+					dDataIni := fChkDtSRE( dDataIni , , .F. )
+
+	         		// Adciona Funcionário exposto
+					Eval( bGrava , dDataIni )
+				EndIf
+
+				SRA->(DbSkip())
+			End
+		//se for relacionado a todos os funcionarios da filial
+		Else
+
+			dbSelectArea("SRA")
+			SRA->(DbSetOrder(1)) //fillial + funcao
+			SRA->(DbSeek(xFilial("SRA")))
+
+			While SRA->(!Eof()) .AND. SRA->RA_FILIAL == xFilial("SRA")
+
+				If SRA->RA_SITFOLH <> "D"
+
+      		   		//Busca data de início de exposição ao risco
+					dDataIni := TN0->TN0_DTAVAL
+					If Empty(dDataIni) .OR. !Empty(dDataIni) .AND. dDataIni < SRA->RA_ADMISSA
+						dDataIni := SRA->RA_ADMISSA
+					EndIf
+      	      		//Busca data de início de exposição ao risco
+					dDataIni := fChkDtSRE( dDataIni , .F. )
+
+      	      		// Adciona Funcionário exposto
+					Eval( bGrava , dDataIni )
+
+				EndIf
+
+				SRA->(DbSkip())
+			End
+
+		EndIf
+	EndIf
+Return

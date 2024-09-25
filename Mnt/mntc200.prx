@@ -1,0 +1,445 @@
+#INCLUDE "Mntc200.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC200
+Programa Custo de Manutencao Por Equipamentos
+@author Thiago Olis Machado 
+@since 27/07/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC200()
+
+	Private oTmpTbl1
+	Private cTRB  := GetNextAlias()
+	Private lOutro := .f.
+
+	lEnd := .F.
+
+	If !Pergunte("MNT20G",.T.)
+		Return
+	EndIf
+
+	aCampos  := {}
+	AAdd(aCAMPOS,{"CODBEM" ,"C",16,0})
+	AAdd(aCAMPOS,{"NOME"   ,"C",30,0})
+	AAdd(aCAMPOS,{"CUSTO"  ,"N",14,2})
+	AAdd(aCAMPOS,{"CUSTO2" ,"N",14,2})
+	AAdd(aCAMPOS,{"CUSTO3" ,"N",14,2})
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices 
+	oTmpTbl1:AddIndex( "Ind01" , {"CODBEM"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	Processa({|lEnd| MNTC200PROC()},STR0001) //"Gerando dados para montar o grafico"
+
+Return .T.
+
+//---------------------------------------------------------------------
+
+/*/{Protheus.doc} MNTC200PROC
+Carrega os dados para montar o grafico.
+@author Thiago Olis Machado
+@since 27/07/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC200PROC()
+
+	Local lCustFer  := NGCADICBASE("TJ_CUSTFER","A","STJ",.F.)
+	Local nCUSTO
+	Local oTmpTbl2 
+	
+	Private cTRBV := GetNextAlias()
+
+	DbSelectArea("STJ")
+	DbSetOrder(02)
+	DbSeek(xFilial("STJ")+"B"+MV_PAR03,.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STS")
+	DbSetOrder(02)
+	DbSeek(xFilial("STS")+"B"+MV_PAR03,.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	DbSelectArea("STJ")
+	ProcRegua(nReg)
+	While !Eof() .And. xFilial("STJ") == STJ->TJ_FILIAL  .And.;
+	STJ->TJ_TIPOOS = "B" .And. STJ->TJ_CODBEM <= MV_PAR04
+
+		IncProc(STR0002 + STJ->TJ_ORDEM)  //"Ordem de Servico "
+
+		If STJ->TJ_SITUACA != "L" .And. STJ->TJ_TERMINO != "S"
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf
+
+		// FILTRA A DATA DA ORDEM DE SERVICO CONFORME PARAMETRO E SO ACEITA QUATRO MESES
+		nDia  := day(MV_PAR01)
+		nMes  := Month(MV_PAR01) 
+		nMes1 := nMes + 4   
+		nAno  := year(MV_PAR01)
+		If nMes1 > 12
+			nMes1 := nMes1 -12
+			nAno  := nAno + 1
+		EndIf   
+		cDia  := str(nDia)  
+		cMes  := str(nMes1)
+		cAno  := str(nAno)
+		dData := cTod(cDia+cMes+cAno)
+
+		If STJ->TJ_DTMRFIM < MV_PAR01 .Or. STJ->TJ_DTMRFIM > MV_PAR02 
+			DbSkip()
+			Loop
+		EndIf
+
+		cTipoServ := MNC200TPSE(STJ->TJ_SERVICO)	      
+		// VERIFICA SE CORRETIVA, PREVENTIVA ou OUTROS
+		If cTipoServ != "P" .And. MV_PAR11 == 1
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf 
+
+		If cTipoServ != "C" .And. MV_PAR11 == 2
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf
+
+		If cTipoServ != "O" .And. MV_PAR11 == 3
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf
+
+		If STJ->TJ_CCUSTO < MV_PAR09 .Or. STJ->TJ_CCUSTO > MV_PAR10   
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf
+
+		DbSelectArea("ST9")
+		DbSetOrder(01)
+		If DbSeek(xFilial("ST9")+STJ->TJ_CODBEM)
+			If ST9->T9_CODFAMI < MV_PAR05 .Or. ST9->T9_CODFAMI > MV_PAR06   
+				DbSelectArea("STJ")
+				DbSkip()
+				Loop
+			EndIf
+		Else 
+			DbSelectArea("STJ")
+			DbSkip()
+			Loop
+		EndIf 
+
+		// Verifica Area de manutenção na STJ, ja que se trata de O.S.
+		If STJ->TJ_CODAREA < MV_PAR07 .Or. STJ->TJ_CODAREA > MV_PAR08 
+			DbSelectArea("STJ")
+			Dbskip()
+			Loop
+		EndIf
+
+		//Recalcula o Custo da O.S
+		MNTA901OS("STJ")
+
+		nCUSTO  := 0.00
+		If MV_PAR12 == 1 //Produto
+			nCUSTO := nCUSTO + STJ->TJ_CUSTMAT  + STJ->TJ_CUSTMAA + STJ->TJ_CUSTMAS      
+		ElseIf MV_PAR12 == 2 //Mao de Obra
+			nCUSTO := nCUSTO + STJ->TJ_CUSTMDO 
+		ElseIf MV_PAR12 == 3 //Ferramenta
+			nCUSTO := If(lCustFer,STJ->TJ_CUSTFER,MNTCRETCUST(STJ->TJ_ORDEM,'F',"STJ"))
+		ElseIf MV_PAR12 == 4 //Terceiros
+			nCUSTO := nCUSTO + STJ->TJ_CUSTTER
+		Else //Todos
+			nCUSTO := nCUSTO + STJ->TJ_CUSTMDO + STJ->TJ_CUSTMAT  + STJ->TJ_CUSTMAA + STJ->TJ_CUSTMAS + STJ->TJ_CUSTTER + If(lCustFer,STJ->TJ_CUSTFER,MNTCRETCUST(STJ->TJ_ORDEM,'F',"STJ"))
+		EndIf
+
+		If nCUSTO <= 0.00
+			DbSelectArea("STJ")
+			DbSkip()
+			Loop
+		EndIf
+
+		DbSelectArea(cTRB)
+		If !DbSeek(STJ->TJ_CODBEM)
+			DbAppend()
+			(cTRB)->CODBEM := STJ->TJ_CODBEM
+			(cTRB)->NOME   := SubStr(ST9->T9_NOME,1,20)
+		EndIf
+
+		DbSelectArea("ST4")
+		DbSeek(xFilial("ST4")+STJ->TJ_SERVICO)
+
+		DbSelectArea("STE")
+		DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+		If STE->TE_CARACTE == "C"
+			cTipo := "C"
+		ElseIf STE->TE_CARACTE == "P"
+			cTipo := "P"
+		Else
+			cTipo := "O"
+			lOutro := .t.
+		EndIf
+
+		(cTRB)->CUSTO  := (cTRB)->CUSTO  + If(cTipo = "P", nCUSTO ,0.00)
+		(cTRB)->CUSTO2 := (cTRB)->CUSTO2 + If(cTipo = "C", nCUSTO, 0.00)
+		(cTRB)->CUSTO3 := (cTRB)->CUSTO3 + If(cTipo = "O", nCUSTO, 0.00)
+
+		DbSelectArea("STJ")
+		DbSkip() 
+	End
+
+	DbSelectArea("STS")
+	While !Eof().And. xfilial("STS") == STS->TS_FILIAL  .And.;
+	STS->TS_TIPOOS == "B" .And. STS->TS_CODBEM <= MV_PAR04
+
+		IncProc(STR0002+STS->TS_ORDEM)  //"Ordem de Servico "
+
+		If STS->TS_SITUACA != "L" .And. STS->TS_TERMINO != "S" 
+			DbSelectArea("STS")
+			DbSkip()
+			Loop
+		EndIf
+
+		If STS->TS_DTMRFIM < MV_PAR01 .Or. STS->TS_DTMRFIM > MV_PAR02
+			DbSelectArea("STS")
+			Dbskip()
+			Loop
+		EndIf
+
+		cTipoServ := MNC200TPSE(STS->TS_SERVICO)	      
+		// VERIFICA SE CORRETIVA, PREVENTIVA ou OUTROS
+		If cTipoServ != "P" .And. MV_PAR11 == 1
+			DbSelectArea("STS")
+			Dbskip()
+			Loop
+		EndIf 
+
+		If cTipoServ != "C" .And. MV_PAR11 == 2
+			DbSelectArea("STS")
+			Dbskip()
+			Loop
+		EndIf
+
+		If cTipoServ != "O" .And. MV_PAR11 == 3
+			DbSelectArea("STS")
+			Dbskip()
+			Loop
+		EndIf
+
+		If STS->TS_CCUSTO < MV_PAR09 .Or. STS->TS_CCUSTO > MV_PAR10
+			DbSelectArea("STS")
+			DbSkip()
+			Loop
+		EndIf
+
+		DbSelectArea("ST9")
+		DbSetOrder(01)
+		If DbSeek(xFilial("ST9")+STS->TS_CODBEM)
+			If ST9->T9_CODFAMI < MV_PAR05 .Or.  ST9->T9_CODFAMI > MV_PAR06
+				DbSelectArea("STS")
+				DbSkip()
+				Loop
+			EndIf   
+		Else           
+			DbSelectArea("STS")
+			DbSkip()
+			Loop   
+		Endif
+
+		// Verifica Area de manutenção na STS, ja que se trata de O.S.
+		If STS->TS_CODAREA < MV_PAR07 .Or. STS->TS_CODAREA > MV_PAR08 
+			DbSelectArea("STS")
+			Dbskip()
+			Loop 
+		EndIf
+
+		//Recalcula o Custo da O.S
+		MNTA901OS("STS")
+
+		nCUSTO  := 0.00
+
+		If MV_PAR12 == 1 //Produto
+			nCUSTO := nCUSTO + STS->TS_CUSTMAT  + STS->TS_CUSTMAA + STS->TS_CUSTMAS
+		ElseIf MV_PAR12 == 2 //Mao de Obra
+			nCUSTO := nCUSTO + STS->TS_CUSTMDO
+		ElseIf MV_PAR12 == 3 //Ferramenta
+			nCUSTO := If(lCustFer,STS->TS_CUSTFER,MNTCRETCUST(STS->TS_ORDEM,'F',"STS"))      
+		ElseIf MV_PAR12 == 4 //Ferramenta
+			nCUSTO := nCUSTO + STS->TS_CUSTTER
+		Else //Todos
+			nCUSTO := nCUSTO + STS->TS_CUSTMDO + STS->TS_CUSTMAT  + STS->TS_CUSTMAA + STS->TS_CUSTMAS + STS->TS_CUSTTER + If(lCustFer,STS->TS_CUSTFER,MNTCRETCUST(STS->TS_ORDEM,'F',"STS"))
+		EndIf
+
+		If nCUSTO <= 0.00
+			DbSelectArea("STS")
+			Dbskip()
+			Loop
+		EndIf
+
+		DbSelectArea(cTRB)
+		If !DbSeek(STS->TS_CODBEM)
+			DbAppend()
+			(cTRB)->CODBEM := STS->TS_CODBEM
+			(cTRB)->NOME   := SubStr(ST9->T9_NOME,1,20)
+		Endif
+
+		DbSelectArea("ST4")
+		DbSeek(xFilial("ST4")+STS->TS_SERVICO)
+
+		DbSelectArea("STE")
+		DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+		If STE->TE_CARACTE == "C"
+			cTipo := "C"
+		ElseIf STE->TE_CARACTE == "P"
+			cTipo := "P"
+		Else
+			cTipo := "O"
+			lOutro := .t.
+		EndIf
+
+		(cTRB)->CUSTO  := (cTRB)->CUSTO  + If(cTipo = "P", nCUSTO ,0.00)
+		(cTRB)->CUSTO2 := (cTRB)->CUSTO2 + If(cTipo = "C", nCUSTO, 0.00)
+		(cTRB)->CUSTO3 := (cTRB)->CUSTO3 + If(cTipo = "O", nCUSTO, 0.00)
+
+		DbSelectArea("STS")
+		DbSkip()
+	End
+
+	lRET := .T.
+	DbselectArea(cTRB)
+	DbGotop()
+
+	If Reccount() == 0
+		Help(" ",1,"NGTDADGRAF")//"Nao existem dados para montar o grafico." //"ATENCAO"
+		oTmpTbl1:Delete()
+		Return .t.
+	EndIf
+
+	aDBF3 := {{"CODIGO"  , "C", 16,0 } ,;
+			  {"NOMECOD" , "C", 30,0 } ,;
+			  {"VALOR1"  , "N", 12,2 } ,;
+			  {"VALOR2"  , "N", 12,2}}
+	If lOutro
+		Aadd(aDBF3,{"VALOR3" , "N", 12,2})
+	Endif
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Index
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbselectArea(cTRB)
+	DbGotop()
+	While !Eof() 
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->CODBEM
+		(cTRBV)->NOMECOD := (cTRB)->NOME
+		(cTRBV)->VALOR1  := (cTRB)->CUSTO
+		(cTRBV)->VALOR2  := (cTRB)->CUSTO2
+		If lOutro
+			(cTRBV)->VALOR3  := (cTRB)->CUSTO3
+		Endif
+		DbSelectArea(cTRB)
+		DbSkip()
+	End
+
+	// 1- linha titulo do grafico (janela)
+	// 2- linha titulo da direita do grafico
+	// 3- linha titulo superior do grafico
+	// 4- linha titulo da direita do grafico
+	// 5- linha titulo da inferior do grafico
+	// 6- linha series do grafico
+	// 7- leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8- alias doa arquivo temporario com os dados /ou
+	// 9- matriz com os dados
+
+	cTITUD := STR0004+DtoC(MV_PAR01)+STR0005+DtoC(MV_PAR02)
+	aServicos := {}
+	Aadd(aServicos,STR0009) //"Preventiva"
+	Aadd(aServicos,STR0010) //"Corretiva"
+	If lOutro
+		Aadd(aServicos,STR0012) //"Outros"
+	Endif
+	vCRIGTXT := NGGRAFICO(" "+STR0008," "," ",cTITUD,STR0006,;
+	aServicos,"A",(cTRBV))
+
+	oTmpTbl1:Delete()
+	oTmpTbl2:Delete()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC200TPSE
+Filtra o Tipo de Servico das OS, conforme MV_PAR11
+@author Marcos Wagner Junior
+@since 06/03/2008
+@version undefined
+@param cServico, characters, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNC200TPSE(cServico)
+	Local aOldArea := GetArea()
+
+	DbSelectArea("ST4")
+	Dbsetorder(1)
+	DbSeek(xFilial("ST4")+cServico)
+
+	DbSelectArea("STE")
+	Dbsetorder(1)
+	DbSeek(xFilial("STE")+ST4->T4_TIPOMAN)
+
+	RestArea(aOldArea)
+
+Return STE->TE_CARACTE
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTCRETCUST
+Retorna o total de custo de um determinado tipo de insumo
+@author Vitor Emanuel Batista
+@since 13/03/2009
+@version undefined
+@param cORDEM, characters, descricao
+@param cTIPREG, characters, descricao
+@param cAlias, characters, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTCRETCUST(cORDEM,cTIPREG,cAlias)
+
+	Local nTOTAL := 0.00
+	Local cAliasQry := GetNextAlias()
+
+	If cAlias == "STJ"
+		cQuery := " SELECT SUM(TL_CUSTO) nTOTAL FROM "+RetSQLName("STL")
+		cQuery += " WHERE TL_TIPOREG ='"+cTIPREG+"' AND TL_ORDEM = '"+cORDEM+"'"
+		cQuery += " AND TL_SEQRELA > '0' AND D_E_L_E_T_ != '*'"
+	Else
+		cQuery := " SELECT SUM(TT_CUSTO) nTOTAL FROM "+RetSQLName("STT")
+		cQuery += " WHERE TT_TIPOREG ='"+cTIPREG+"' AND TT_ORDEM = '"+cORDEM+"'"
+		cQuery += " AND TT_SEQRELA > '0' AND D_E_L_E_T_ != '*'"
+	EndIf	
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)	
+	dbSelectArea(cAliasQry)
+	dbGotop()
+	If !Eof()
+		nTOTAL := (cAliasQry)->nTOTAL
+	EndIf
+
+	dbSelectArea(cAliasQry)
+	USE
+Return nTOTAL

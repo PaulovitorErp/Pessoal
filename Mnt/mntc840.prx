@@ -1,0 +1,1274 @@
+#INCLUDE "MNTC840.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC840
+Consulta de custo do bem com as Manutencoes
+
+@author Rafael Diogo Richter
+@since 23/07/2007
+
+@sample MNTC840()
+
+@param
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTC840()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oBrowse     := Nil
+	Local oTmpTbl1    := Nil
+	Local aPesq       := {}
+	Local aFieFilter  := {}
+	Local aDbfE       := {}
+	Local aTrbE       := {}
+	Local cPerg       := "MNC840    "
+
+	Private aRotina   := { { STR0001, 'MNC840PE' , 0, 1    },; // Pesquisar
+						   { STR0002, 'MNC840VI' , 0, 2    },; // Visualizar
+						   { STR0003, 'MNC840PA' , 0, 3, 0 },; // Parametros
+						   { STR0004, 'MNC840DE1', 0, 4, 0 } } // Detalhes
+
+	Private cCadastro    := OemtoAnsi(STR0006) //"Consulta de Custo do Bem com as Manutenções"
+	Private TIPOACOM     := .F.
+	Private TIPOACOM2    := .F.
+	Private lSITUACA     := .T.
+	Private nSequence    := IIf(NGVerify("STL"),'Alltrim(STL->TL_SEQRELA) == "0"','STL->TL_SEQUENC == 0')
+	Private nSequSTT     := IIf(NGVerify("STT"),'Alltrim(STT->TT_SEQRELA) == "0"','STT->TT_SEQUENC == 0')
+	Private cTRBE        := GetNextAlias()
+	Private cTRBB        := GetNextAlias()
+	Private cTRBC        := GetNextAlias()
+	Private cTRBD        := GetNextAlias()
+	Private M->TJ_TIPOOS := "B"
+	Private M->TJ_CODBEM := Space(Len(STJ->TJ_CODBEM))
+
+	If !Pergunte(cPerg, .T.)
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	EndIf
+
+	aAdd(aDbfE,{"CODBEM"  ,"C", TAMSX3("T9_CODBEM")[1],0})
+	aAdd(aDbfE,{"NOMBEM"  ,"C", 30,0})
+	aAdd(aDbfE,{"DTINST"  ,"D", 08,0})
+	aAdd(aDbfE,{"CPREVI"  ,"N", 12,2})
+	aAdd(aDbfE,{"CREALI"  ,"N", 12,2})
+	aAdd(aDbfE,{"VARIAC"  ,"N", 08,2})
+
+	oTmpTbl1 := FWTemporaryTable():New( cTRBE, aDBFE )
+	oTmpTbl1:AddIndex( "Ind01" , {"CODBEM"} )
+	oTmpTbl1:AddIndex( "Ind02" , {"NOMBEM"} )
+	oTmpTbl1:Create()
+
+	//Campos para montagem das colunas que serão apresentadas.
+	aAdd(aTrbE, {STR0014, "CODBEM", "C", TAMSX3("T9_CODBEM")[1],0,"@!"}) //Código Bem
+	aAdd(aTrbE, {STR0015, "NOMBEM", "C", 30, 0, "@!"})				     //Nome
+	aAdd(aTrbE, {STR0016, "DTINST", "D", 08, 0, "99/99/9999"}) 		 	 //Instalação
+	aAdd(aTrbE, {STR0017, "CPREVI", "N", 12, 2, "@E 99,999,999.99"}) 	 //"Previsto"
+	aAdd(aTrbE, {STR0018, "CREALI", "N", 12, 2, "@E 99,999,999.99"}) 	 //"Realizado"
+	aAdd(aTrbE, {STR0019, "VARIAC", "N", 08, 2, "@E 9,999.99%"})	 	 //"Variação"
+
+	//Array contendo campos utilizados nos filtros de usuario.
+	aAdd(aFieFilter, {"CODBEM", STR0014, "C", TAMSX3("T9_CODBEM")[1], 0,"@!"})
+	aAdd(aFieFilter, {"NOMBEM", STR0015, "C", 30, 0,"@!"})
+	aAdd(aFieFilter, {"DTINST", STR0016, "D", 08, 0, "99/99/9999"})
+	aAdd(aFieFilter, {"CPREVI", STR0017, "N", 12, 2, "@E 99,999,999.99"})
+	aAdd(aFieFilter, {"CREALI", STR0018, "N", 12, 2, "@E 99,999,999.99"})
+	aAdd(aFieFilter, {"VARIAC", STR0019, "N", 08, 2, "@E 9,999.99%"})
+
+	Processa({ |lEnd| MNTC840INI() }, STR0020 ) //"Aguarde... Carregando."
+
+	dbSelectArea(cTRBE)
+	dbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq , { STR0014 ,{{"", "C", 255, 0, "", "@!"}}})
+	aAdd( aPesq , { STR0015 ,{{"", "C", 255, 0, "", "@!"}}})
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetAlias(cTRBE)
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:SetFields(aTrbE)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetUseFilter(.T.)
+	oBrowse:SetDBFFilter(.T.)
+	oBrowse:SetFieldFilter(aFieFilter)
+	oBrowse:SetProfileID('1')
+	oBrowse:Activate()
+
+	oTmpTbl1:Delete()
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC840INI
+Gera o arquivo temporario
+@author Rafael Diogo Richter
+@since 23/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC840INI()
+	Local nCusPrev := 0, nCusReal := 0
+
+	dbSelectArea("ST9")
+	dbSetOrder(4)
+	dbSeek(xFilial("ST9")+mv_par01,.T.)
+	ProcRegua(RecCount())
+	While ST9->( !Eof() ) .And. ST9->T9_FILIAL == xFilial("ST9") .And. ST9->T9_CODFAMI <= MV_PAR02
+
+		IncProc()
+
+		If ST9->T9_CODBEM < mv_par03 .Or. ST9->T9_CODBEM > mv_par04
+			ST9->(dbSkip())
+			Loop
+		EndIf
+
+		nCusPrev := 0
+		nCusReal := 0
+		lImp := .F.
+
+		dbSelectArea( "STS" )
+		dbSetOrder( 2 ) //TS_FILIAL+TS_TIPOOS+TS_CODBEM+TS_SERVICO+TS_SEQRELA
+		If dbSeek( xFilial( "STS" ) + "B" + ST9->T9_CODBEM )
+			While STS->( !Eof() ) .And. STS->TS_FILIAL == xFilial( "STS" ) .And. STS->TS_TIPOOS == "B" .And.;
+			STS->TS_CODBEM == ST9->T9_CODBEM
+
+				If STS->TS_TERMINO == "N" .Or. STS->TS_DTMRFIM < mv_par05 .Or. STS->TS_DTMRFIM > mv_par06
+					STS->(dbSkip())
+					Loop
+				EndIf
+
+				dbSelectArea( "STT" )
+				dbSetOrder( 1 ) //TT_FILIAL+TT_ORDEM+TT_PLANO+TT_TAREFA+TT_TIPOREG+TT_CODIGO+TT_SEQRELA+TT_SEQTARE
+				If dbSeek( xFilial( "STT" ) + STS->TS_ORDEM )
+					While STT->( !Eof() ) .And. STT->TT_FILIAL == xFilial( "STT" ) .And. STT->TT_ORDEM == STS->TS_ORDEM
+						lImp := .T.
+						If &nSequSTT
+							nCusPrev += STT->TT_CUSTO
+						Else
+							nCusReal += STT->TT_CUSTO
+						EndIf
+						dbSelectArea( "STT" )
+						STT->(dbSkip())
+					End
+				EndIf
+				dbSelectArea( "STS" )
+				STS->(dbSkip())
+			End
+		EndIf
+
+		dbSelectArea("STJ")
+		dbSetOrder(2)
+		If dbSeek(xFilial("STJ")+"B"+ST9->T9_CODBEM)
+			While STJ->( !Eof() ) .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And.;
+			STJ->TJ_CODBEM == ST9->T9_CODBEM
+
+				If STJ->TJ_TERMINO == "N" .Or. STJ->TJ_DTMRFIM < mv_par05 .Or. STJ->TJ_DTMRFIM > mv_par06
+					STJ->(dbSkip())
+					Loop
+				EndIf
+
+				dbSelectArea("STL")
+				dbSetOrder(1)
+ 				If dbSeek(xFilial("STL")+STJ->TJ_ORDEM)
+					While STL->( !Eof() ) .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM
+						lImp := .T.
+						If &nSequence
+							nCusPrev += STL->TL_CUSTO
+						Else
+							nCusReal += STL->TL_CUSTO
+						EndIf
+						dbSelectArea("STL")
+						STL->(dbSkip())
+					End
+				EndIf
+				dbSelectArea("STJ")
+				STJ->(dbSkip())
+			End
+		EndIf
+
+		If lImp
+			dbSelectArea(cTRBE)
+			If !dbSeek(ST9->T9_CODBEM)
+				Reclock((cTRBE),.T.)
+			Else
+				Reclock((cTRBE),.F.)
+			EndIf
+			(cTRBE)->CODBEM := ST9->T9_CODBEM
+			(cTRBE)->NOMBEM := SubStr(ST9->T9_NOME,1,30)
+			(cTRBE)->DTINST := ST9->T9_DTINSTA
+			(cTRBE)->CPREVI := nCusPrev
+			(cTRBE)->CREALI := nCusReal
+			If nCusPrev > nCusReal
+				(cTRBE)->VARIAC := -(Round(100-(nCusReal*100)/nCusPrev,2))
+			ElseIf nCusPrev < nCusReal
+				(cTRBE)->VARIAC := Round(100-(nCusPrev*100)/nCusReal,2)
+			Else
+				(cTRBE)->VARIAC := 0
+			EndIf
+		EndIf
+
+		dbSelectArea("ST9")
+		dbSetOrder(4)
+		dbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840PE
+Pesquisa especifica
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840PE()
+
+	Local oDlgPesq, oOrdem, oChave, oBtOk, oBtCan, oBtPar
+	Local cOrdem
+	Local cChave	:= Space(255)
+	Local aOrdens	:= {}
+	Local nOrdem := 1
+	Local nOpca
+
+	aAdd( aOrdens, STR0014) //"Bem"
+	aAdd( aOrdens, STR0015) //"Nome"
+
+	Define msDialog oDlgPesq Title STR0021 From 00,00 To 100,500 pixel //"Pesquisa"
+
+	@ 005, 005 combobox oOrdem var cOrdem items aOrdens size 210,08 PIXEL OF oDlgPesq ON CHANGE nOrdem := oOrdem:nAt
+	@ 020, 005 msget oChave var cChave size 210,08 of oDlgPesq pixel
+
+	define sButton oBtOk  from 05,218 type 1 action (nOpcA := 1, oDlgPesq:End()) enable of oDlgPesq pixel
+	define sButton oBtCan from 20,218 type 2 action (nOpcA := 0, oDlgPesq:End()) enable of oDlgPesq pixel
+	define sButton oBtPar from 35,218 type 5 when .F. of oDlgPesq pixel
+
+	Activate MsDialog oDlgPesq Center
+
+	If nOpca == 1
+		If nOrdem == 1
+			DbSelectArea(cTRBE)
+			dbSetOrder(1)
+			DbSeek(Alltrim(cChave))
+		ElseIf nOrdem == 2
+			DbSelectArea((cTRBE))
+			dbSetOrder(2)
+			DbSeek(Alltrim(cChave))
+		EndIf
+	EndIf
+
+	DbSelectArea(cTRBE)
+	DbSetOrder(1)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840VI
+Visualizacao a consulta
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840VI()
+
+	DbSelectArea("ST9")
+	DbSetOrder(01)
+	DbSeek(xFilial("ST9")+(cTRBE)->CODBEM)
+
+	NGCAD01("ST9",Recno(),1)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840PA
+Reprocessa o browse de acordo com os parametros
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840PA()
+
+	If !Pergunte("MNC840",.T.)
+		Return
+	EndIf
+
+	DbSelectArea(cTRBE)
+	Zap
+
+	Processa({ |lEnd| MNTC840INI() }, STR0020 ) //"Aguarde... Carregando."
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840DE1
+Consulta de Custo das Manutenções por Tipo de Insumo
+@type function
+
+@author Rafael Diogo Richter
+@since 24/07/2007
+
+@sample MNC840DE1()
+
+@param
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNC840DE1()
+
+	Local aRotinaOld := aClone(aRotina)
+	Local aDbfB      := {}
+	Local aPesq      := {}
+	Local aTrbB      := {}
+	Local aFieFilter := {}
+	Local oTmpTbl2   := Nil
+	Local oBrowse    := Nil
+
+	aRotina := { { STR0004, 'MNC840DE2' , 0, 2, 0 } } // Detalhes
+
+	cCadastro := OemtoAnsi(STR0022) //"Consulta de Custo das Manutenções por Tipo de Insumo"
+
+	aAdd(aDbfB, {"TIPOIN", "C", 15, 0})
+	aAdd(aDbfB, {"CPREVI", "N", 12, 2})
+	aAdd(aDbfB, {"CREALI", "N", 12, 2})
+	aAdd(aDbfB, {"VARIAC", "N", 08, 2})
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New(cTRBB, aDbfB)
+	oTmpTbl2:AddIndex( "Ind01" ,{"TIPOIN"})
+	oTmpTbl2:Create()
+
+	//Campos para montagem das colunas que serão apresentadas.
+	aAdd(aTrbB, {STR0023, "TIPOIN", "C", 15, 0, "@!"               }) //"Tipo Insumo"
+	aAdd(aTrbB, {STR0017, "CPREVI", "N", 12, 2, "@E 99,999,999.99" }) //"Previsto"
+	aAdd(aTrbB, {STR0018, "CREALI", "N", 12, 2, "@E 99,999,999.99" }) //"Realizado"
+	aAdd(aTrbB, {STR0019, "VARIAC", "N", 08, 2, "@E 9,999.99%"     }) //"Variação"
+
+	//Array contendo campos utilizados nos filtros de usuario.
+	aAdd(aFieFilter, {"TIPOIN", STR0023, "C", 15, 0, "@!"               }) //"Tipo Insumo"
+	aAdd(aFieFilter, {"CPREVI", STR0017, "N", 12, 2, "@E 99,999,999.99" }) //"Previsto"
+	aAdd(aFieFilter, {"CREALI", STR0018, "N", 12, 2, "@E 99,999,999.99" }) //"Realizado"
+	aAdd(aFieFilter, {"VARIAC", STR0019, "N", 08, 2, "@E 9,999.99%"     }) //"Variação"
+
+	Processa({ |lEnd| MNC840T1() }, STR0020 ) //"Aguarde... Carregando."
+
+	dbSelectArea(cTRBB)
+	dbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd(aPesq, {STR0023 ,{{"","C" , 255 , 0 ,"","@!"} }} )
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetAlias(cTRBB)
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetSeek(.T., aPesq)
+	oBrowse:SetFields(aTRBB)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetUseFilter(.T.)
+	oBrowse:SetDBFFilter(.T.)
+	oBrowse:SetFieldFilter(aFieFilter)
+	oBrowse:SetProfileID( '2' )
+	oBrowse:Activate()
+
+	oTmpTbl2:Delete()
+
+	aRotina   := aClone(aRotinaOld)
+	cCadastro := OemtoAnsi(STR0006) //"Consulta de Custo do Bem com as Manutenções"
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840T1
+Gera o arquivo temporario
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840T1()
+
+	Local aArea := GetArea()
+	Local i := 0
+	Local aInsumos := {{"Ferramenta",0,0},{"Mão de Obra",0,0},{"Produto",0,0},{"Terceiros",0,0},{"Especialidade",0,0}}
+
+	dbSelectArea( "STS" )
+	dbSetOrder( 02 )
+	ProcRegua(RecCount())
+	If dbSeek( xFilial( "STS" ) + "B" + (cTRBE)->CODBEM )
+		While STS->( !Eof() ) .And. STS->TS_FILIAL == xFilial( "STS" ) .And. STS->TS_TIPOOS == "B" .And.;
+		STS->TS_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STS->TS_TERMINO == "N" .Or. STS->TS_DTMRFIM < mv_par05 .Or. STS->TS_DTMRFIM > mv_par06
+				STS->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea( "STT" )
+			dbSetOrder( 01 )
+			If dbSeek( xFilial( "STT" ) + STS->TS_ORDEM )
+				While STT->( !Eof() ) .And. STT->TT_FILIAL == xFilial( "STT" ) .And. STT->TT_ORDEM == STS->TS_ORDEM
+
+					If STT->TT_TIPOREG == "F"
+						If &nSequSTT
+							aInsumos[1][2] += STT->TT_CUSTO
+						Else
+							aInsumos[1][3] += STT->TT_CUSTO
+						EndIf
+					ElseIf STT->TT_TIPOREG == "M"
+						If &nSequSTT
+							aInsumos[2][2] += STT->TT_CUSTO
+						Else
+							aInsumos[2][3] += STT->TT_CUSTO
+						EndIf
+					ElseIf STT->TT_TIPOREG == "P"
+						If &nSequSTT
+							aInsumos[3][2] += STT->TT_CUSTO
+						Else
+							aInsumos[3][3] += STT->TT_CUSTO
+						EndIf
+					ElseIf STT->TT_TIPOREG == "T"
+						If &nSequSTT
+							aInsumos[4][2] += STT->TT_CUSTO
+						Else
+							aInsumos[4][3] += STT->TT_CUSTO
+						EndIf
+					ElseIf STT->TT_TIPOREG == "E"
+						If &nSequSTT
+							aInsumos[5][2] += STT->TT_CUSTO
+						Else
+							aInsumos[5][3] += STT->TT_CUSTO
+						EndIf
+					EndIf
+					dbSelectArea( "STT" )
+					STT->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STS" )
+			STS->(dbSkip())
+		End
+	EndIf
+
+	dbSelectArea("STJ")
+	dbSetOrder(2)
+	ProcRegua(RecCount())
+	If dbSeek(xFilial("STJ")+"B"+(cTRBE)->CODBEM)
+		While STJ->( !Eof() ) .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And.;
+		STJ->TJ_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STJ->TJ_TERMINO == "N" .Or. STJ->TJ_DTMRFIM < mv_par05 .Or. STJ->TJ_DTMRFIM > mv_par06
+				STJ->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea("STL")
+			dbSetOrder(1)
+			If dbSeek(xFilial("STL")+STJ->TJ_ORDEM)
+				While STL->( !Eof() ) .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM
+
+					If STL->TL_TIPOREG == "F"
+						If &nSequence
+							aInsumos[1][2] += STL->TL_CUSTO
+						Else
+							aInsumos[1][3] += STL->TL_CUSTO
+						EndIf
+					ElseIf STL->TL_TIPOREG == "M"
+						If &nSequence
+							aInsumos[2][2] += STL->TL_CUSTO
+						Else
+							aInsumos[2][3] += STL->TL_CUSTO
+						EndIf
+					ElseIf STL->TL_TIPOREG == "P"
+						If &nSequence
+							aInsumos[3][2] += STL->TL_CUSTO
+						Else
+							aInsumos[3][3] += STL->TL_CUSTO
+						EndIf
+					ElseIf STL->TL_TIPOREG == "T"
+						If &nSequence
+							aInsumos[4][2] += STL->TL_CUSTO
+						Else
+							aInsumos[4][3] += STL->TL_CUSTO
+						EndIf
+					ElseIf STL->TL_TIPOREG == "E"
+						If &nSequence
+							aInsumos[5][2] += STL->TL_CUSTO
+						Else
+							aInsumos[5][3] += STL->TL_CUSTO
+						EndIf
+					EndIf
+					dbSelectArea( "STL" )
+					STL->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STJ" )
+			STJ->(dbSkip())
+		End
+	EndIf
+
+	For i := 1 To 5
+		dbSelectArea(cTRBB)
+		Reclock((cTRBB),.T.)
+		(cTRBB)->TIPOIN := aInsumos[i][1]
+		(cTRBB)->CPREVI := aInsumos[i][2]
+		(cTRBB)->CREALI := aInsumos[i][3]
+		If aInsumos[i][2] > aInsumos[i][3]
+			(cTRBB)->VARIAC := -(Round(100-(aInsumos[i][3]*100)/aInsumos[i][2],2))
+		ElseIf aInsumos[i][2] < aInsumos[i][3]
+			(cTRBB)->VARIAC := Round(100-(aInsumos[i][2]*100)/aInsumos[i][3],2)
+		Else
+			(cTRBB)->VARIAC := 0
+		EndIf
+	Next
+
+	RestArea( aArea )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840DE2
+Consulta de Custo das Manutenções pos Insumo.
+@type function
+
+@author Rafael Diogo Richter
+@since 24/07/2007
+
+@sample MNC840DE2()
+
+@param
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNC840DE2()
+
+	Local aRotinaOld2 := aClone(aRotina)
+	Local aDbfC       := {}
+	Local aPesq       := {}
+	Local aFieFilter  := {}
+	Local aTrbC       := {}
+	Local nSizeCod    := IIf((TAMSX3("B1_COD")[1]) < 1, 15, (TAMSX3("B1_COD")[1]))
+	Local oTmpTbl3    := Nil
+	Local oBrowse     := Nil
+
+	aRotina   := { { STR0004, 'MNC840DE3', 0, 2, 0 } } // Detalhes
+
+	cCadastro := OemToAnsi(STR0024) //Consulta de Custo das Manutenções por Insumo
+
+	aAdd(aDbfC, {"TIPORE", "C", 01      ,0})
+	aAdd(aDbfC, {"CODIGO", "C", nSizeCod,0})
+	aAdd(aDbfC, {"NOME"	 , "C", 40      ,0})
+	aAdd(aDbfC, {"CPREVI", "N", 12      ,2})
+	aAdd(aDbfC, {"CREALI", "N", 12      ,2})
+	aAdd(aDbfC, {"VARIAC", "N", 08      ,2})
+
+	oTmpTbl3 := FWTemporaryTable():New(cTrbC , aDbfC)
+	oTmpTbl3:AddIndex( "Ind01" , {"TIPORE","CODIGO"} )
+	oTmpTbl3:Create()
+
+	//Campos para montagem das colunas que serão apresentadas.
+	aAdd(aTrbC, {STR0025, "CODIGO", "C", nSizeCod,  , "@!"               }) //Código
+	aAdd(aTrbC, {STR0015, "NOME"  , "C", 40      , 0, "@!"               }) //Nome
+	aAdd(aTrbC, {STR0051, "TIPORE", "C", 01      , 0, "@!"               }) //Tipo Recurso
+	aAdd(aTrbC, {STR0017, "CPREVI", "N", 12      , 2, "@E 99,999,999.99" }) //Previsto
+	aAdd(aTrbC, {STR0018, "CREALI", "N", 12      , 2, "@E 99,999,999.99" }) //Realizado
+	aAdd(aTrbC, {STR0019, "VARIAC", "N", 08      , 2, "9,999.99%"        }) //Variação
+
+	//Array contendo campos utilizados nos filtros de usuario.
+	aAdd(aFieFilter, {"CODIGO", STR0025, "C", nSizeCod,  , "@!"               }) //Código
+	aAdd(aFieFilter, {"NOME"  , STR0015, "C", 40      , 0, "@!"               }) //Nome
+	aAdd(aFieFilter, {"TIPORE", STR0051, "C", 01      , 0, "@!"               }) //Tipo Recurso
+	aAdd(aFieFilter, {"CPREVI", STR0017, "N", 12      , 2, "@E 99,999,999.99" }) //Previsto
+	aAdd(aFieFilter, {"CREALI", STR0018, "N", 12      , 2, "@E 99,999,999.99" }) //Realizado
+	aAdd(aFieFilter, {"VARIAC", STR0019, "N", 08      , 2, "9,999.99%"        }) //Variação
+
+	Processa({ |lEnd| MNC840T2() }, STR0020 ) //Aguarde... Carregando.
+
+	dbSelectArea(cTrbC)
+	dbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd(aPesq, {STR0051 + " + " + STR0025, {{"", "C", 255, 0, "", "@!"}}})
+
+	oBrowse := FWMBrowse():New()
+	oBrowse:SetAlias(cTrbC)
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:SetFields(aTrbC)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetUseFilter(.T.)
+	oBrowse:SetDBFFilter(.T.)
+	oBrowse:SetFieldFilter(aFieFilter)
+	oBrowse:SetProfileID('3')
+	oBrowse:Activate()
+
+	oTmpTbl3:Delete()
+
+	aRotina   := aClone(aRotinaOld2)
+	cCadastro := OemToAnsi(STR0022) //"Consulta de Custo das Manutenções por Tipo de Insumo"
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840T2
+Gera o arquivo temporario
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840T2()
+
+	Local aArea := GetArea()
+
+	dbSelectArea( "STS" )
+	dbSetOrder( 02 )
+	ProcRegua(RecCount())
+	If dbSeek( xFilial( "STS" ) + "B" + (cTRBE)->CODBEM )
+		While STS->( !Eof() ) .And. STS->TS_FILIAL == xFilial( "STS" ) .And. STS->TS_TIPOOS == "B" .And.;
+		STS->TS_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STS->TS_TERMINO == "N" .Or. STS->TS_DTMRFIM < mv_par05 .Or. STS->TS_DTMRFIM > mv_par06
+				STS->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea( "STT" )
+			dbSetOrder( 01 )
+			If dbSeek( xFilial( "STT" ) + STS->TS_ORDEM )
+				While STT->( !Eof() ) .And. STT->TT_FILIAL == xFilial( "STT" ) .And. STT->TT_ORDEM == STS->TS_ORDEM
+					If Upper(AllTrim((cTRBB)->TIPOIN)) == "FERRAMENTA" .And. STT->TT_TIPOREG == "F"
+						dbSelectArea(cTRBC)
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_TIPOREG+STT->TT_CODIGO)
+							Reclock( (cTRBC), .T. )
+						Else
+							Reclock((cTRBC), .F. )
+						EndIf
+						(cTRBC)->TIPORE := STT->TT_TIPOREG
+						(cTRBC)->CODIGO := STT->TT_CODIGO
+
+						SH4->(DbSeek(xFilial("SH4")+AllTrim(STT->TT_CODIGO)))
+						(cTRBC)->NOME := Left(SH4->H4_DESCRI,40)
+
+						If &nSequSTT
+							(cTRBC)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBC)->CREALI += STT->TT_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "MÃO DE OBRA" .And. STT->TT_TIPOREG == "M"
+						dbSelectArea(cTRBC )
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_TIPOREG+STT->TT_CODIGO)
+							Reclock( (cTRBC), .T. )
+						Else
+							Reclock((cTRBC), .F. )
+						EndIf
+						(cTRBC)->TIPORE := STT->TT_TIPOREG
+						(cTRBC)->CODIGO := STT->TT_CODIGO
+
+						ST1->(DbSeek(xFilial("ST1")+AllTrim(STT->TT_CODIGO)))
+						(cTRBC)->NOME := Left(ST1->T1_NOME,40)
+
+						If &nSequSTT
+							(cTRBC)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBC)->CREALI += STT->TT_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "PRODUTO" .And. STT->TT_TIPOREG == "P"
+						dbSelectArea(cTRBC )
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_TIPOREG+STT->TT_CODIGO)
+							Reclock((cTRBC), .T. )
+						Else
+							Reclock((cTRBC), .F. )
+						EndIf
+						(cTRBC)->TIPORE := STT->TT_TIPOREG
+						(cTRBC)->CODIGO := STT->TT_CODIGO
+
+						SB1->(DbSeek(xFilial("SB1")+AllTrim(STT->TT_CODIGO)))
+						(cTRBC)->NOME := Left(SB1->B1_DESC,40)
+
+						If &nSequSTT
+							(cTRBC)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBC)->CREALI += STT->TT_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "TERCEIROS" .And. STT->TT_TIPOREG == "T"
+						dbSelectArea(cTRBC)
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_TIPOREG+STT->TT_CODIGO)
+							Reclock( (cTRBC), .T. )
+						Else
+							Reclock( (cTRBC), .F. )
+						EndIf
+						(cTRBC)->TIPORE := STT->TT_TIPOREG
+						(cTRBC)->CODIGO := STT->TT_CODIGO
+
+						SA2->(DbSeek(xFilial("SA2")+AllTrim(STT->TT_CODIGO)))
+						(cTRBC)->NOME := Left(SA2->A2_NOME,40)
+
+						If &nSequSTT
+							(cTRBC)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBC)->CREALI += STT->TT_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "ESPECIALIDADE" .And. STT->TT_TIPOREG == "E"
+						dbSelectArea( cTRBC )
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_TIPOREG+STT->TT_CODIGO)
+							Reclock((cTRBC), .T. )
+						Else
+							Reclock( (cTRBC), .F. )
+						EndIf
+						(cTRBC)->TIPORE := STT->TT_TIPOREG
+						(cTRBC)->CODIGO := STT->TT_CODIGO
+
+						ST0->(DbSeek(xFilial("ST0")+AllTrim(STT->TT_CODIGO)))
+						(cTRBC)->NOME := Left(ST0->T0_NOME,40)
+
+						If &nSequSTT
+							(cTRBC)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBC)->CREALI += STT->TT_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					EndIf
+					dbSelectArea( "STT" )
+					STT->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STS" )
+			STS->(dbSkip())
+		End
+	EndIf
+
+	dbSelectArea("STJ")
+	dbSetOrder(2)
+	ProcRegua(RecCount())
+	If dbSeek(xFilial("STJ")+"B"+(cTRBE)->CODBEM)
+		While STJ->( !Eof() ) .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And.;
+		STJ->TJ_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STJ->TJ_TERMINO == "N" .Or. STJ->TJ_DTMRFIM < mv_par05 .Or. STJ->TJ_DTMRFIM > mv_par06
+				STJ->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea("STL")
+			dbSetOrder(1)
+			If dbSeek(xFilial("STL")+STJ->TJ_ORDEM)
+				While STL->( !Eof() ) .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM
+					If Upper(AllTrim((cTRBB)->TIPOIN)) == "FERRAMENTA" .And. STL->TL_TIPOREG == "F"
+						dbSelectArea(cTRBC)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_TIPOREG+STL->TL_CODIGO)
+							Reclock((cTRBC),.T.)
+						Else
+							Reclock((cTRBC),.F.)
+						EndIf
+						(cTRBC)->TIPORE := STL->TL_TIPOREG
+						(cTRBC)->CODIGO := STL->TL_CODIGO
+
+						SH4->(DbSeek(xFilial("SH4")+AllTrim(STL->TL_CODIGO)))
+						(cTRBC)->NOME := Left(SH4->H4_DESCRI,40)
+
+						If &nSequence
+							(cTRBC)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBC)->CREALI += STL->TL_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "MÃO DE OBRA" .And. STL->TL_TIPOREG == "M"
+						dbSelectArea(cTRBC)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_TIPOREG+STL->TL_CODIGO)
+							Reclock((cTRBC),.T.)
+						Else
+							Reclock((cTRBC),.F.)
+						EndIf
+						(cTRBC)->TIPORE := STL->TL_TIPOREG
+						(cTRBC)->CODIGO := STL->TL_CODIGO
+
+						ST1->(DbSeek(xFilial("ST1")+AllTrim(STL->TL_CODIGO)))
+						(cTRBC)->NOME := Left(ST1->T1_NOME,40)
+
+						If &nSequence
+							(cTRBC)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBC)->CREALI += STL->TL_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "PRODUTO" .And. STL->TL_TIPOREG == "P"
+						dbSelectArea(cTRBC)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_TIPOREG+STL->TL_CODIGO)
+							Reclock((cTRBC),.T.)
+						Else
+							Reclock((cTRBC),.F.)
+						EndIf
+						(cTRBC)->TIPORE := STL->TL_TIPOREG
+						(cTRBC)->CODIGO := STL->TL_CODIGO
+
+						SB1->(DbSeek(xFilial("SB1")+AllTrim(STL->TL_CODIGO)))
+						(cTRBC)->NOME := Left(SB1->B1_DESC,40)
+
+						If &nSequence
+							(cTRBC)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBC)->CREALI += STL->TL_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "TERCEIROS" .And. STL->TL_TIPOREG == "T"
+						dbSelectArea(cTRBC)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_TIPOREG+STL->TL_CODIGO)
+							Reclock((cTRBC),.T.)
+						Else
+							Reclock((cTRBC),.F.)
+						EndIf
+						(cTRBC)->TIPORE := STL->TL_TIPOREG
+						(cTRBC)->CODIGO := STL->TL_CODIGO
+
+						SA2->(DbSeek(xFilial("SA2")+AllTrim(STL->TL_CODIGO)))
+						(cTRBC)->NOME := Left(SA2->A2_NOME,40)
+
+						If &nSequence
+							(cTRBC)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBC)->CREALI += STL->TL_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					ElseIf Upper(AllTrim((cTRBB)->TIPOIN)) == "ESPECIALIDADE" .And. STL->TL_TIPOREG == "E"
+						dbSelectArea(cTRBC)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_TIPOREG+STL->TL_CODIGO)
+							Reclock((cTRBC),.T.)
+						Else
+							Reclock((cTRBC),.F.)
+						EndIf
+						(cTRBC)->TIPORE := STL->TL_TIPOREG
+						(cTRBC)->CODIGO := STL->TL_CODIGO
+
+						ST0->(DbSeek(xFilial("ST0")+AllTrim(STL->TL_CODIGO)))
+						(cTRBC)->NOME := Left(ST0->T0_NOME,40)
+
+						If &nSequence
+							(cTRBC)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBC)->CREALI += STL->TL_CUSTO
+						EndIf
+
+						If (cTRBC)->CPREVI > (cTRBC)->CREALI
+							(cTRBC)->VARIAC := -(Round(100-((cTRBC)->CREALI*100)/(cTRBC)->CPREVI,2))
+						ElseIf (cTRBC)->CPREVI < (cTRBC)->CREALI
+							(cTRBC)->VARIAC := Round(100-((cTRBC)->CPREVI*100)/(cTRBC)->CREALI,2)
+						Else
+							(cTRBC)->VARIAC := 0
+						EndIf
+					EndIf
+					dbSelectArea( "STL" )
+					STL->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STJ" )
+			STJ->(dbSkip())
+		End
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840DE3
+Consulta de Custo das Manutenções por OS
+@type function
+
+@author Rafael Diogo Richter
+@since 24/07/2007
+
+@sample MNC840DE3()
+
+@param
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNC840DE3()
+
+	Local aRotinaOld3 := aClone(aRotina)
+	Local aDbfD       := {}
+	Local aTrbD       := {}
+	Local aFieFilter  := {}
+	Local aPesq       := {}
+	Local oTmpTbl4    := Nil
+	Local oBrowse     := Nil
+
+	aRotina := { { STR0002, 'MNTC840DET(6)', 0, 1 },; // Visualizar
+				 { STR0053, 'MNTC840INS'   , 0, 4 },; // Detalhes Insumo
+				 { STR0052, 'MNTC840DET(1)', 0, 4 },; // Detalhes O.S.
+				 { STR0026, 'MNTC840DET(2)', 0, 4 },; // Ocorren
+				 { STR0027, 'MNTC840DET(3)', 0, 4 },; // Problemas
+				 { STR0028, 'MNTC840DET(4)', 0, 4 },; // Motivo Atraso
+				 { STR0029, 'MNTC840DET(5)', 0, 4 } } // Etapas
+
+	cCadastro := OemToAnsi( STR0030 ) //Consulta de Custo de Insumos por O.S.
+
+	aAdd(aDbfD, {"ORDEM" , "C", 06, 0})
+	aAdd(aDbfD, {"PLANO" , "C", 06, 0})
+	aAdd(aDbfD, {"CPREVI", "N", 12, 2})
+	aAdd(aDbfD, {"CREALI", "N", 12, 2})
+	aAdd(aDbfD, {"DATAPL", "D", 08, 0})
+	aAdd(aDbfD, {"VARIAC", "N", 08, 2})
+	aAdd(aDbfD, {"OSHIST", "C", 01, 0})
+
+	oTmpTbl4 := FWTemporaryTable():New(cTrbD, aDbfD)
+	oTmpTbl4:AddIndex( "Ind01" , {"ORDEM","PLANO"} )
+	oTmpTbl4:Create()
+
+	//Campos para montagem das colunas que serão apresentadas.
+	aAdd(aTrbD, {STR0031, "ORDEM" , "C", 06, 0, "@!"               }) //Num O.S.
+	aAdd(aTrbD, {STR0032, "PLANO" , "C", 06, 0, "@!"               }) //Plano
+	aAdd(aTrbD, {STR0017, "CPREVI", "N", 12, 2, "@E 99,999,999.99" }) //Previsto
+	aAdd(aTrbD, {STR0018, "CREALI", "N", 12, 2, "@E 99,999,999.99" }) //Realizado
+	aAdd(aTrbD, {STR0050, "DATAPL", "D", 08, 0, "99/99/9999"       }) //Data Aplicação
+	aAdd(aTrbD, {STR0019, "VARIAC", "N", 08, 2, "9,999.99%"        }) //Variação
+
+	//Array contendo campos utilizados nos filtros de usuario.
+	aAdd(aFieFilter, {"ORDEM" , STR0031, "C", 06, 0, "@!"               }) //Num O.S.
+	aAdd(aFieFilter, {"PLANO" , STR0032, "C", 06, 0, "@!"               }) //Plano
+	aAdd(aFieFilter, {"CPREVI", STR0017, "N", 12, 2, "@E 99,999,999.99" }) //Previsto
+	aAdd(aFieFilter, {"CREALI", STR0018, "N", 12, 2, "@E 99,999,999.99" }) //Realizado
+	aAdd(aFieFilter, {"DATAPL", STR0050, "D", 08, 0, "99/99/9999"       }) //Data Aplicação
+	aAdd(aFieFilter, {"VARIAC", STR0019, "N", 08, 2, "9,999.99%"        }) //Variação
+
+	Processa({ |lEnd| MNC840T3() }, STR0020 ) //Aguarde... Carregando.
+
+	dbSelectArea(cTrbD)
+	dbGoTop()
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd(aPesq, {STR0031 + " + " + STR0032, {{"","C" , 255 , 0 ,"","@!"}}})
+
+	oBrowse := FWMBrowse():New()
+	oBrowse:SetAlias(cTrbD)
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:SetFields(aTrbD)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetUseFilter(.T.)
+	oBrowse:SetDBFFilter(.T.)
+	oBrowse:SetFieldFilter(aFieFilter)
+	oBrowse:SetProfileID('4')
+	oBrowse:Activate()
+
+	oTmpTbl4:Delete()
+
+	aRotina   := aClone(aRotinaOld3)
+	cCadastro := OemToAnsi(STR0024) //Consulta de Custo das Manutenções por Insumo
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC840T3
+Gera o arquivo temporario
+@author Rafael Diogo Richter
+@since 24/07/2007
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC840T3()
+
+	Local aArea := GetArea()
+
+	dbSelectArea( "STS" )
+	dbSetOrder( 02 )
+	ProcRegua(RecCount())
+	If dbSeek( xFilial( "STS" )+"B"+(cTRBE)->CODBEM )
+		While STS->( !Eof() ) .And. STS->TS_FILIAL == xFilial( "STS" ) .And. STS->TS_TIPOOS == "B" .And.;
+		STS->TS_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STS->TS_TERMINO == "N" .Or. STS->TS_DTMRFIM < mv_par05 .Or. STS->TS_DTMRFIM > mv_par06
+				STS->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea( "STT" )
+			dbSetOrder( 01 )
+			If dbSeek( xFilial( "STT" )+STS->TS_ORDEM+STS->TS_PLANO )
+				While STT->( !Eof() ) .And. STT->TT_FILIAL == xFilial( "STT" ) .And. STT->TT_ORDEM == STS->TS_ORDEM
+
+					If STT->TT_TIPOREG == (cTRBC)->TIPORE .And. STT->TT_CODIGO == (cTRBC)->CODIGO
+						dbSelectArea(cTRBD)
+						dbSetOrder( 01 )
+						If !dbSeek(STT->TT_ORDEM+STT->TT_PLANO)
+							Reclock( (cTRBD), .T. )
+						Else
+							Reclock( (cTRBD), .F. )
+						EndIf
+						(cTRBD)->ORDEM := STT->TT_ORDEM
+						(cTRBD)->PLANO := STT->TT_PLANO
+
+						If &nSequSTT
+							(cTRBD)->CPREVI += STT->TT_CUSTO
+						Else
+							(cTRBD)->CREALI += STT->TT_CUSTO
+						EndIf
+						(cTRBD)->DATAPL := STT->TT_DTINICI
+						If (cTRBD)->CPREVI > (cTRBD)->CREALI
+							(cTRBD)->VARIAC := -(Round(100-((cTRBD)->CREALI*100)/(cTRBD)->CPREVI,2))
+						ElseIf (cTRBD)->CPREVI < (cTRBD)->CREALI
+							(cTRBD)->VARIAC := Round(100-((cTRBD)->CPREVI*100)/(cTRBD)->CREALI,2)
+						Else
+							(cTRBD)->VARIAC := 0
+						EndIf
+						(cTRBD)->OSHIST := "S"
+						(cTRBD)->(MsUnLock())
+					EndIf
+					dbSelectArea( "STT" )
+					STT->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STS" )
+			STS->(dbSkip())
+		End
+	EndIf
+
+	dbSelectArea("STJ")
+	dbSetOrder(2)
+	ProcRegua(RecCount())
+	If dbSeek(xFilial("STJ")+"B"+(cTRBE)->CODBEM)
+		While STJ->( !Eof() ) .And. STJ->TJ_FILIAL == xFilial("STJ") .And. STJ->TJ_TIPOOS == "B" .And.;
+		STJ->TJ_CODBEM == (cTRBE)->CODBEM
+
+			IncProc()
+
+			If STJ->TJ_TERMINO == "N" .Or. STJ->TJ_DTMRFIM < mv_par05 .Or. STJ->TJ_DTMRFIM > mv_par06
+				STJ->(dbSkip())
+				Loop
+			EndIf
+
+			dbSelectArea("STL")
+			dbSetOrder(1)
+			If dbSeek(xFilial("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+				While STL->( !Eof() ) .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_ORDEM == STJ->TJ_ORDEM
+
+					If STL->TL_TIPOREG == (cTRBC)->TIPORE .And. STL->TL_CODIGO == (cTRBC)->CODIGO
+						dbSelectArea(cTRBD)
+						dbSetOrder(1)
+						If !dbSeek(STL->TL_ORDEM+STL->TL_PLANO)
+							Reclock((cTRBD),.T.)
+						Else
+							Reclock((cTRBD),.F.)
+						EndIf
+						(cTRBD)->ORDEM := STL->TL_ORDEM
+						(cTRBD)->PLANO := STL->TL_PLANO
+
+						If &nSequence
+							(cTRBD)->CPREVI += STL->TL_CUSTO
+						Else
+							(cTRBD)->CREALI += STL->TL_CUSTO
+						EndIf
+						(cTRBD)->DATAPL := STL->TL_DTINICI
+						If (cTRBD)->CPREVI > (cTRBD)->CREALI
+							(cTRBD)->VARIAC := -(Round(100-((cTRBD)->CREALI*100)/(cTRBD)->CPREVI,2))
+						ElseIf (cTRBD)->CPREVI < (cTRBD)->CREALI
+							(cTRBD)->VARIAC := Round(100-((cTRBD)->CPREVI*100)/(cTRBD)->CREALI,2)
+						Else
+							(cTRBD)->VARIAC := 0
+						EndIf
+						(cTRBD)->OSHIST := "N"
+						(cTRBD)->(MsUnLock())
+					EndIf
+					dbSelectArea( "STL" )
+					STL->(dbSkip())
+				End
+			EndIf
+			dbSelectArea( "STJ" )
+			STJ->(dbSkip())
+		End
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//----------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTC840DET
+Rotina que realiza a chamada das consultas conforme acionado pelo ações realcionadas.
+@type function
+
+@author Alexandre Santos
+@since 15/08/2018
+
+@sample MNTC840DET(1)
+
+@param nDetails, Númerico, Valor correspondente a qual consulta de detalhes deve ser acionada.
+@return
+/*/
+//----------------------------------------------------------------------------------------------------------
+Function MNTC840DET(nDetails)
+
+	Local cTable := IIf((cTrbD)->OSHIST == "S", "STS", "STJ")
+	Local aArea  := GetArea()
+
+	dbSelectArea(cTable)
+	dbSetOrder(1)
+	dbSeek(xFilial(cTable) + (cTrbD)->ORDEM + (cTrbD)->PLANO)
+
+	Do Case
+
+		Case nDetails == 1 //Insumos
+			MNTCOSDE()
+		Case nDetails == 2 //Ocorrências
+			MNTCOCOR()
+		Case nDetails == 3 //Problemas
+			MNTC550A()
+		Case nDetails == 4 //Motivo de Atraso
+			NGATRASOS()
+		Case nDetails == 5 //Etapas
+			MNTC550B()
+		Case nDetails == 6 //Visualizar
+			NGCAD01(cTable, Recno(), 1 )
+	EndCase
+
+	RestArea(aArea)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTC840INS
+Exibe detalhes do insumo por OS
+@type  Function
+
+@author Lucas Meneghelli Pereira
+@since 17/08/18
+/*/
+//-------------------------------------------------------------------
+Function MNTC840INS()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	aRotina    := {{STR0002,"MNT600VS()", 0, 2}}   //"Visualizar"
+
+	dbSelectArea( "STS" )
+	dbSetOrder( 01 )
+
+	If dbSeek( xFilial( "STS" ) + ( cTRBD )->ORDEM + ( cTRBD )->PLANO )
+
+		M->TS_ORDEM := STS->TS_ORDEM
+		M->TS_PLANO := STS->TS_PLANO
+
+		cFiltro := "STT->TT_FILIAL == '" + xFilial( "STT" ) + "' .And. STT->TT_ORDEM == M->TS_ORDEM "
+		cFiltro += " .And. STT->TT_PLANO == M->TS_PLANO .And. STT->TT_CODIGO == (cTRBC)->CODIGO"
+		NGNewMBrw( "STT", cFiltro, 1, aRotina )
+
+	Else
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+
+		If dbSeek( xFilial( "STJ" ) + ( cTRBD )->ORDEM + ( cTRBD )->PLANO )
+
+			M->TJ_ORDEM := STJ->TJ_ORDEM
+			M->TJ_PLANO := STJ->TJ_PLANO
+
+			cFiltro := "STL->TL_FILIAL == '" + xFilial( "STL" ) + "' .And. STL->TL_ORDEM == M->TJ_ORDEM "
+			cFiltro += " .And. STL->TL_PLANO == M->TJ_PLANO .And. STL->TL_CODIGO == (cTRBC)->CODIGO"
+			NGNewMBrw( "STL", cFiltro, 1, aRotina )
+
+		EndIf
+	EndIf
+
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return

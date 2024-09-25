@@ -1,0 +1,4208 @@
+#Include "Mdta970.ch"
+#Include "Protheus.ch" 
+
+Static __cArqTab
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA970
+Programa de transferência de dados da ficha médica de uma Filial/Empresa para uma outra Filial/Empresa.
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample MDTA970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA970()
+
+	// Armazena variaveis p/ devolucao ( NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	__cArqTab := cArqTab			//Inicializa Variavel Estatica
+
+	Private aAC  := { STR0001, STR0002 },; //"Abandona"###"Confirma"
+			aCRA := { STR0002, STR0003, STR0001 } //"Confirma"###"Redigita"###"Abandona"
+	Private aRotina	:=	MenuDef()
+	Private cFilFun := "", cCCusto := ""
+	Private cCodFun := "", cCBO    := ""
+	Private cNewTM0 := "", cTnotra := ""
+	Private cDepto  := ""
+	Private cPrograma := "MDTA970"
+	Private cAlias    := "TM0"
+	Private cCadastro := STR0007 // "Transferência de Ficha Medica
+	Private aSM0Area := SM0->( GetArea() )
+	Private cArqTab := MDTA970ARQ( cArqTab )
+	Private nTamTable := Len( cArqTab )
+	Private lHelpEnable := .T.
+
+	cCadastro := OemToAnsi( cCadastro )
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 1 )
+	mBrowse( 6, 1, 22, 75, "TM0" )
+	cArqTab := __cArqTab    //Devolve o valor original por Variavel Estatica
+
+	// Devolve variaveis armazenadas ( NGRIGHTCLICK)
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TRANSFICHA
+Programa de transferência de dados da ficha médica de uma Filial/Empresa para uma outra Filial/Empresa.
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample TRANSFICHA()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function TRANSFICHA()
+
+	Local cPerg := Padr( "MDT970", 10 )
+	Local aAreaTm0 := TM0->( GetArea() )
+	Local aTblOpen := {}
+
+	Private cSvFilAnt := cFilAnt	//Salva a Filial Corrente
+	Private cSvEmpAnt := cEmpAnt	//Salva a Empresa Corrente
+	Private cTipoExame := " "
+	Private cNUMFIC := TM0->TM0_NUMFIC
+	Private cMATFUN := TM0->TM0_MAT
+	Private cFILFIC := TM0->TM0_FILIAL
+	Private cTM0_RG := TM0->TM0_RG
+
+	// Mostra help de transferencia
+	If lHelpEnable
+		lHelpEnable := .F.
+		If !A970HELP()
+			Return .T.
+		EndIf
+	EndIf
+
+	If pergunte( cPerg, .T. )
+		//Retorna a Empresa/Filial Atual
+		cFilAnt	:= cSvFilAnt
+		cEmpAnt := cSvEmpAnt
+		RestArea( aSM0Area )
+		Processa( {|lEnd| PROCT970( .F. ) }, STR0008 ) //"Processando Arquivo..."
+	EndIf
+
+	//Retorna a Empresa/Filial Atual
+	cFilAnt	:= cSvFilAnt
+	cEmpAnt := cSvEmpAnt
+	RestArea( aSM0Area )
+	Restarea( aAreaTm0 )
+	cArqTab := __cArqTab
+
+	aTblOpen 	:= {{ "SRA", 01 }}
+	NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PROCT970
+Atualiza tabelas:TM0, TM5, TMI, TMT, TM9, TM2, TM6, TMF, TNA
+@type Function
+
+@author  Denis Hyroshi de Souza
+@since   18/02/2003
+
+@sample  PROCT970( .T. )
+@param lAt970, lógico, indica se foi chamado pela rotina automática
+@return lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function PROCT970( lAt970 )
+
+	Local cAviso        := STR0009 //"ATENCAO"
+	Local lAchouFil     := .F.
+	Local cHelpFil      := ""
+	Local oTempTable
+	Local aTblOpen      := {}
+
+	Private aAcident 	:= {}
+	Private cFicsalvo	:= Space( 9 )
+	Private lAuto970	:= lAt970
+	Private aASOs	    := {}
+
+	Default lAt970 		:= .F. //Indica se foi chamado pela rotina automatica
+
+	If mv_par01 == cSvEmpAnt .And. mv_par02 == cSvFilAnt // Valida a transferência
+		Return
+	EndIf
+
+	aTblOpen 	:= { { "TM0", 01 } }
+	NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+	mv_par02 := PadR( mv_par02, Len( TM0->TM0_FILIAL ) )
+
+	NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+	If !lAuto970
+		//VALIDANDO PARAMETROS DO SX1
+		If !EMPCHKNEW( mv_par01 )
+			Return .F.
+		EndIf
+		If !FILCHKNEW( mv_par01, mv_par02 )
+			Return .F.
+		EndIf
+		If !MATCHKNEW( mv_par03 )
+			Return .F.
+		EndIf
+
+		cFilAnt := cSvFilAnt
+		cEmpAnt := cSvEmpAnt
+		Restarea( aSM0Area )
+
+		If cSvEmpAnt == Mv_par01 // Se for transferencia de filial
+			If FindFunction( "FwModeAccess" )
+				If FWModeAccess( "TM0" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM0 - "+STR0032 //"Ficha Medica"
+				EndIf
+				If FWModeAccess( "TM5" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM5 - "+STR0033 //"Exames do Funcionario"
+				EndIf
+				If FWModeAccess( "TMF" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMF - "+STR0034 //"Restricoes do Funcionario"
+				EndIf
+				If FWModeAccess( "TNA" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNA - "+STR0035 //"Doencas do Funcionario"
+				EndIf
+				If FWModeAccess( "TMT" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMT - "+STR0036 //"Diagnostico"
+				EndIf
+				If FWModeAccess( "TM2" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM2 - "+STR0037 //"Medicamentos Utilizados"
+				EndIf
+				If FWModeAccess( "TMI" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMI - "+STR0038 //"Questionario do Funcionario"
+				EndIf
+				If FWModeAccess( "TMN" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMN - "+STR0039 //"Funcionarios em Programas Especiais"
+				EndIf
+				If FWModeAccess( "TNY" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNY - "+STR0078 //"Atestados Medicos"
+				EndIf
+				If FWModeAccess( "TMY" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMY - "+STR0079 //"Atestados de Saude Ocupacional - ASO"
+				EndIf
+				If FWModeAccess( "TNF" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNF - "+STR0080 //"EPIs Entregues ao Funcionario"
+				EndIf
+				If FWModeAccess( "TNC" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNC - "+STR0110 //"Acidentes de Trabalho"
+				EndIf
+				If FWModeAccess( "TMJ" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMJ - "+STR0111 //"Agenda de Consultas Medicas"
+				EndIf
+				If FWModeAccess( "TOF" ) == "C"
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TOF - "+STR0112 //"Licença Maternidade"
+				EndIf
+				If NGCADICBASE( "TL5_NUMFIC", "A", "TL5", .F. )
+					If FWModeAccess( "TL5" ) == "C"
+						lAchouFil := .T.
+						cHelpFil  += CHR( 13 )+"TL5 - "+STR0113 //"Atendimento de Enfermagem"
+					EndIf
+				EndIf
+				If NGCADICBASE( "TL9_NUMFIC", "A", "TL9", .F. )
+					If FWModeAccess( "TL9" ) == "C"
+						lAchouFil := .T.
+						cHelpFil  += CHR( 13 )+"TL9 - "+STR0114 //"Vacinas do Funcionário"
+					EndIf
+				EndIf
+			Else
+				If Empty( xFilial( "TM0" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM0 - "+STR0032 //"Ficha Medica"
+				EndIf
+				If Empty( xFilial( "TM5" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM5 - "+STR0033 //"Exames do Funcionario"
+				EndIf
+				If Empty( xFilial( "TMF" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMF - "+STR0034 //"Restricoes do Funcionario"
+				EndIf
+				If Empty( xFilial( "TNA" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNA - "+STR0035 //"Doencas do Funcionario"
+				EndIf
+				If Empty( xFilial( "TMT" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMT - "+STR0036 //"Diagnostico"
+				EndIf
+				If Empty( xFilial( "TM2" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TM2 - "+STR0037 //"Medicamentos Utilizados"
+				EndIf
+				If Empty( xFilial( "TMI" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMI - "+STR0038 //"Questionario do Funcionario"
+				EndIf
+				If Empty( xFilial( "TMN" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMN - "+STR0039 //"Funcionarios em Programas Especiais"
+				EndIf
+				If Empty( xFilial( "TNY" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNY - "+STR0078 //"Atestados Medicos"
+				EndIf
+				If Empty( xFilial( "TMY" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMY - "+STR0079 //"Atestados de Saude Ocupacional - ASO"
+				EndIf
+				If Empty( xFilial( "TNF" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNF - "+STR0080 //"EPIs Entregues ao Funcionario"
+				EndIf
+				If Empty( xFilial( "TNC" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TNC - "+STR0110 //"Acidentes de Trabalho"
+				EndIf
+				If Empty( xFilial( "TMJ" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TMJ - "+STR0111 //"Agenda de Consultas Medicas"
+				EndIf
+				If Empty( xFilial( "TOF" ) )
+					lAchouFil := .T.
+					cHelpFil  += CHR( 13 )+"TOF - "+STR0112 //"Licença Maternidade"
+				EndIf
+				If NGCADICBASE( "TL5_NUMFIC", "A", "TL5", .F. )
+					If Empty( xFilial( "TL5" ) )
+						lAchouFil := .T.
+						cHelpFil  += CHR( 13 )+"TL5 - "+STR0113 //"Atendimento de Enfermagem"
+					EndIf
+				EndIf
+				If NGCADICBASE( "TL9_NUMFIC", "A", "TL9", .F. )
+					If Empty( xFilial( "TL9" ) )
+						lAchouFil := .T.
+						cHelpFil  += CHR( 13 )+"TL9 - "+STR0114 //"Vacinas do Funcionário"
+					EndIf
+				EndIf
+			EndIf
+			If lAchouFil
+				If !IsBlind()
+					Msgstop( STR0010+; //"Nao foi possivel concluir a transferencia."
+							STR0040+CHR( 13 )+cHelpFil, cAviso ) //" As tabelas abaixo não podem ser de modo compartilhado, e sim exclusivo."
+				EndIf
+				Return .F.
+			EndIf
+		EndIf
+
+		aTblOpen 	:= { { "TM0", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 03 )
+		If dbSeek( mv_par02+Mv_par03 )
+			If !IsBlind() .And. Msgyesno( STR0081 + Alltrim( mv_par03 ) + STR0082 + Alltrim( TM0->TM0_NUMFIC ) + CHR( 13 ); //"O funcionário de matricula "###" ja possui uma ficha medica: "
+						+ STR0083 , cAviso ) //"Deseja que seus dados sejam transferidos para esta ficha?"
+				cFicsalvo := TM0->TM0_NUMFIC
+			Else
+				NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+				Return .F.
+			EndIf
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+	Else
+		aTblOpen 	:= { { "TM0", 01 }, { "SRA", 01 }, { "SRJ", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		cEmpAnt := Mv_par01
+		cFilAnt := Mv_par02
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 03 )
+		If dbSeek( mv_par02+Mv_par03 )
+			cFicsalvo := TM0->TM0_NUMFIC
+		EndIf
+
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )//RA_FILIAL+RA_MAT
+		dbSeek( xFilial( "SRA", mv_par02 )+Mv_par03 )
+		cFilFun := mv_par02
+		cCodFun := SRA->RA_CODFUNC
+		cCCusto := SRA->RA_CC
+		If NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+			cDepto  := SRA->RA_DEPTO
+		EndIf
+
+		cTnotra := SRA->RA_TNOTRAB
+		dbSelectArea( "SRJ" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SRJ" )+SRA->RA_CODFUNC )
+		cCBO := SRJ->RJ_CBO
+		If FieldPos( "RJ_CODCBO" ) > 0
+			If !Empty( SRJ->RJ_CODCBO )
+				cCBO := SRJ->RJ_CODCBO
+			EndIf
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		cEmpAnt := cSvEmpAnt
+		cFilAnt := cSvFilAnt
+	EndIf
+
+	aDBF := {{"TABELA", "C", 03, 0},;
+		{"TIPO", "C", 1, 0},;
+		{"VALOR", "C", 15, 0},;
+		{"VALOR2", "C", 4, 0},;
+		{"VALOR3", "C", 50, 0},;
+		{"VALOR4", "C", 12, 0}}
+
+	oTempTable := FWTemporaryTable():New( "TRB970", aDBF )
+	oTempTable:AddIndex( "1", {"TIPO", "TABELA", "VALOR", "VALOR2", "VALOR3", "VALOR4"} )
+	oTempTable:Create()
+
+	If !IsBlind()
+
+		ProcRegua( 11 )
+		IncProc( STR0115 + "TM0" ) // "Transferindo : Arquivo "
+
+	EndIf
+
+	fVeriImp() // Função para verificar a transferência
+
+	dbSelectArea( 'TRB970' )
+	Dbgotop()
+
+	If RECCOUNT() == 0
+
+		FICHA970() // Transfere a ficha médica
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMY" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par13 == 1  //SE DESEJAR TRANSFERIR ASO
+
+			ATASO970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TM5" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par04 == 1 .Or. mv_par05 == 1 //SE DESEJAR TRANSFERIR EXAMES
+
+			EXAME970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMF" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par06 == 1  //SE DESEJAR TRANSFERIR RESTRICOES
+
+			RESTR970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TNA" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par07 == 1  //SE DESEJAR TRANSFERIR DOENCAS
+
+			DOENC970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TNC" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par16 == 1  //SE DESEJAR TRANSFERIR ACIDENTES
+
+			fAcidentes()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMT" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par08 == 1  //SE DESEJAR TRANSFERIR DIAGNOSTICOS
+
+			DIAGN970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TM2" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par09 == 1  //SE DESEJAR TRANSFERIR MEDICAMENTOS
+
+			MEDIC970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMI" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par10 == 1  //SE DESEJAR TRANSFERIR QUESTIONARIOS
+
+			QUEST970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMN" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par11 == 1  //SE DESEJAR TRANSFERIR PROGRAMAS DE SAUDE
+
+			SAUDE970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TNY" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par12 == 1  //SE DESEJAR TRANSFERIR ATESTADOS MEDICOS
+
+			ATEST970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TNF" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par15 == 1  //SE DESEJAR TRANSFERIR ENTREGA DE EPI
+
+			EPISA970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TMJ" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par17 == 1  //SE DESEJAR TRANSFERIR CONSULTA
+
+			fTMJ_970()
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0115 + "TOF" ) //"Transferindo : Arquivo "
+
+		EndIf
+
+		If mv_par18 == 1  //SE DESEJAR TRANSFERIR LICENCA MATERNIDADE
+
+			fTOF_970()
+
+		EndIf
+
+		If NGCADICBASE( "TL5_NUMFIC", "A", "TL5", .F. )
+
+			If !IsBlind()
+
+				IncProc( STR0115 + "TL5" ) //"Transferindo : Arquivo "
+
+			EndIf
+
+			If mv_par19 == 1  //SE DESEJAR TRANSFERIR ATEND. ENFERMAGEM
+
+				fTL5_970()
+
+			EndIf
+
+		EndIf
+
+		If NGCADICBASE( "TL9_NUMFIC", "A", "TL9", .F. )
+
+			If !IsBlind()
+
+				IncProc( STR0115 + "TL9" ) //"Transferindo : Arquivo "
+
+			EndIf
+
+			If mv_par20 == 1  //SE DESEJAR TRANSFERIR VACINAS FUNC.
+
+				fTL9_970()
+
+			EndIf
+
+		EndIf
+
+		If !IsBlind()
+
+			IncProc( STR0095 ) //"Finalizando..."
+
+		EndIf
+
+	EndIf
+
+	dbSelectArea( "TRB970" )
+	Dbgotop()
+
+	If RECCOUNT() >= 1  // SE TIVER ERROS CHAMA ROTINA PARA LISTA-LOS
+
+		If !IsBlind() .And. Msgyesno( STR0013, OemToAnsi( STR0007 ) )  //"Deseja Listar os Erros Ocorridos na Transferencia?"   //"Transferˆncia de Ficha Medica"
+
+			NG970IMP()
+
+		EndIf
+
+	EndIf
+
+	USE
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EMPCHKNEW
+Verifica se existe empresa
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample EMPCHKNEW( "T3" )
+@param cEmp, caracter, empresa do funcionário
+@return lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function EMPCHKNEW( cEmp )
+
+	IF !( lRet := SM0->( dbSeek( cEmp ) ) )
+		Help( " ", 1, "A180NEMPR" )
+		Return .F.
+	EndIf
+	cEmpAnt := cEmp
+
+Return .T.
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FILCHKNEW
+Verifica se existe filial
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample FILCHKNEW( "T3", "D MG 01 " )
+@param cEmp, caracter, empresa do funcionário
+@param cFil, caracter, filial do funcionário
+@return lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function FILCHKNEW( cEmp, cFil )
+
+	IF !( lRet := SM0->( dbSeek( cEmp+cFil ) ) )
+		Help( " ", 1, "A180NFIL" )
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MATCHKNEW
+Verifica se existe a Matricula na filial nova
+@type Function
+
+@author Denis Hyroshi de Souza
+@since  18/02/2003
+
+@sample MATCHKNEW( "000001" )
+@param cMaT, caracter, matrícula do funcionário
+@return lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function MATCHKNEW( cMat )
+
+	Local cLabel := STR0014 //"Matricula '"
+	Local cText  := STR0015 //"' nao existe para a filial '"
+	Local cAviso := STR0009 //"ATENCAO"
+	Local aTblOpen := {}
+
+	cEmpAnt := cSvEmpAnt
+
+	aTblOpen 	:= { { "SRA", 01 } }
+	NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+	mv_par02 := PadR( mv_par02, Len( SRA->RA_FILIAL ) )
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+	If !dbSeek( xFilial( "SRA", mv_par02 ) +cMat )
+		If !IsBlind()
+			Msgstop( cLabel+alltrim( cMat )+cText+mv_par02+STR0096+Mv_par01+"'.", cAviso ) //"' e Empresa '"
+		EndIf
+		Return .F.
+	EndIf
+
+	//Carrega dados do funcionario da empresa/filial destino
+	cFilFun := mv_par02
+	cCodFun := SRA->RA_CODFUNC
+	cCCusto := SRA->RA_CC
+	If NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+		cDepto  := SRA->RA_DEPTO
+	EndIf
+	cTnotra := SRA->RA_TNOTRAB
+	dbSelectArea( "SRJ" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "SRJ" )+SRA->RA_CODFUNC )
+	cCBO := SRJ->RJ_CBO
+	If FieldPos( "RJ_CODCBO" ) > 0
+		If !Empty( SRJ->RJ_CODCBO )
+			cCBO := SRJ->RJ_CODCBO
+		EndIf
+	EndIf
+	//Termino
+
+	cEmpAnt := Mv_par01
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FICHA970
+Grava TM0 em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample FICHA970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function FICHA970()
+
+	Local aArea := GetArea()
+	Local aFields := {}
+	Local aTblOpen := { { 'TM0', 01 } }
+
+	Local cCaminho := fControle( 'TM0' )
+	Local strField
+
+	Local i
+
+	If Empty( cFicsalvo )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TM0" )+cNUMFIC )
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, { strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' ) } )
+			Next i
+		EndIf
+
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		If len( aFields ) > 0
+
+			cNum := Space( 9 )
+			If mv_par14 == 1
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				If !dbSeek( xFilial( "TM0", mv_par02 )+cNUMFIC )
+					cNum := cNUMFIC
+				EndIf
+			EndIf
+
+			If Empty( cNum )
+
+				cFilAnt := Mv_par02
+				cEmpAnt := Mv_par01
+
+				cNUM := GETSXENUM( 'TM0', 'TM0_NUMFIC', cCaminho )
+
+				cFilAnt := cSvFilAnt
+				CEmpAnt := cSvEmpAnt
+
+				CONFIRMSX8()
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				If dbSeek( xFilial( "TM0", mv_par02 )+cNUM )
+					Dbgobottom()
+					cNum := Strzero( Val( TM0->TM0_NUMFIC )+1, 9 )
+				EndIf
+				If mv_par14 == 1
+					If !IsBlind()
+						MsgInfo( STR0097+cNUMFIC+STR0098+; //"A ficha médica "###" já existe na empresa/filial destino. "
+								STR0099+cNum+"." ) //"A nova ficha será a "
+					EndIf
+				EndIf
+			EndIf
+
+			dbSelectArea( "TM0" )
+			Reclock( "TM0", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1 ]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TM0_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TM0", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TM0_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNUM )
+				ElseIf  AllTrim( cCampo ) == "TM0_FILFUN"
+					FieldPut( FieldPos( cCampo ), cFilFun )
+				ElseIf  AllTrim( cCampo ) == "TM0_MAT"
+					FieldPut( FieldPos( cCampo ), mv_par03 )
+				ElseIf  AllTrim( cCampo ) == "TM0_CODFUN"
+					FieldPut( FieldPos( cCampo ), cCodFun )
+				ElseIf  AllTrim( cCampo ) == "TM0_CC"
+					FieldPut( FieldPos( cCampo ), cCCusto )
+				ElseIf  AllTrim( cCampo ) == "TM0_DEPTO"
+					FieldPut( FieldPos( cCampo ), cDepto )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3 ] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TM0->( MsUnlock() )
+			cNewTM0 := cNUM
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+	Else
+		aTblOpen 	:= { { "TM0", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TM0" )+cNUMFIC )
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, { strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' ) } )
+			Next i
+		EndIf
+
+		aTblOpen 	:= { { "TM0", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+		If len( aFields ) > 0
+
+			dbSelectArea( "TM0" )
+			dbSetOrder( 1 )
+			IF dbSeek( xFilial( "TM0", mv_par02 )+cFicSalvo )
+				Reclock( "TM0", .F. )
+				For i := 1 to len( aFields )
+					cCampo := aFields[ i, 1]
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+						Loop
+					EndIf
+					If  AllTrim( cCampo ) == "TM0_FILIAL"
+						Loop
+					ElseIf  AllTrim( cCampo ) == "TM0_NUMFIC"
+						Loop
+					ElseIf  AllTrim( cCampo ) == "TM0_FILFUN"
+						Loop
+					ElseIf  AllTrim( cCampo ) == "TM0_MAT"
+						Loop
+					ElseIf  AllTrim( cCampo ) == "TM0_CODFUN"
+						FieldPut( FieldPos( cCampo ), cCodFun )
+					ElseIf  AllTrim( cCampo ) == "TM0_CC"
+						FieldPut( FieldPos( cCampo ), cCCusto )
+					ElseIf  AllTrim( cCampo ) == "TM0_DEPTO"
+						FieldPut( FieldPos( cCampo ), cDepto )
+					Else
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+						EndIf
+					EndIf
+				Next i
+				TM0->( MsUnlock() )
+			EndIf
+		EndIf
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+		cNewTM0 := cFicsalvo
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EXAME970
+Grava TM5 em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample EXAME970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function EXAME970()
+
+	Local nRecTM5 := 0, nPCMSO := space( 6 ), i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+	Local lVer11				// Informa se o ambiente esta sendo executado no Protheus 11 ou posterior
+
+	Private cOrigex := "1", cNatexa := space( 1 )
+
+	dbSelectArea( "SX2" )
+	lVer11 := SX2->( FieldPos( "X2_MODOUN" ) ) > 0 .Or. SX2->( FieldPos( "X2_MODOEMP" ) ) > 0
+
+	If xFilial( "TM5" ) != mv_par02 .Or. cSvEmpAnt != mv_par01
+		dbSelectArea( "TM5" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TM5" )+cNUMFIC )
+		While !eof() .And. xFilial( "TM5" ) == TM5->TM5_FILIAL .And. TM5->TM5_NUMFIC == cNUMFIC
+			nPCMSO := space( 6 )
+			cOrigex := "1"
+			cNatexa := TM5->TM5_NATEXA
+			dbSelectArea( "TM4" )
+			dbSetOrder( 01 )
+			dbSeek( xFilial( "TM4" )+TM5->TM5_EXAME )
+			cTipoExame := TM4->TM4_INDRES
+			dbSelectArea( "TM5" )
+
+			If !Empty( TM5->TM5_DTRESU ) .And. mv_par04 = 2
+				dbSelectArea( "TM5" )
+				Dbskip()
+				Loop
+			EndIf
+			If Empty( TM5->TM5_DTRESU ) .And. mv_par05 = 2
+				dbSelectArea( "TM5" )
+				Dbskip()
+				Loop
+			EndIf
+
+			dbSelectArea( "TM5" )
+			nRecTM5 := Recno()
+
+			//Transfere os relacionamentos TM9, TM6 e TN4
+			fTM5_970( TM5->TM5_FILIAL, TM5->TM5_NUMFIC, TM5->TM5_EXAME, TM5->TM5_DTPROG, TM5->TM5_HRPROG )
+
+			dbSelectArea( "TM5" )
+			If TM5->TM5_ORIGEX == "2"
+				nPCMSO  := PCMSO970()
+			EndIf
+
+			aFields := {}
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' ), TM5->TM5_DTRESU} )
+			Next i
+			cChv_temp := DtoS( TM5->TM5_DTPROG ) + TM5->TM5_EXAME
+
+			aTblOpen 	:= { { "TM5", 01 } }
+			NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+			dbSelectArea( "TM5" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TM5", mv_par02 ) + cNewTM0 + cChv_temp )
+				Reclock( "TM5", .F. )
+				DbDelete()
+				MsUnlock( "TM5" )
+			EndIf
+
+			If len( aFields ) > 0
+				dbSelectArea( "TM5" )
+				Reclock( "TM5", .T. )
+				For i := 1 to len( aFields )
+					cCampo := aFields[ i, 1]
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+						Loop
+					EndIf
+					If  AllTrim( cCampo ) == "TM5_FILIAL"
+						FieldPut( FieldPos( cCampo ), xFilial( "TM5", mv_par02 ) )
+					ElseIf  AllTrim( cCampo ) == "TM5_NUMFIC"
+						FieldPut( FieldPos( cCampo ), cNewTM0 )
+					ElseIf  AllTrim( cCampo ) == "TM5_FILFUN"
+						FieldPut( FieldPos( cCampo ), cFilFun )
+					ElseIf  AllTrim( cCampo ) == "TM5_MAT"
+						FieldPut( FieldPos( cCampo ), mv_par03 )
+					ElseIf  AllTrim( cCampo ) == "TM5_CC"
+						dbSelectArea( "SX2" )
+						dbSetOrder( 1 )
+						dbSeek( "CTT" )
+						dbSelectArea( "TM5" )
+						If	lVer11
+							If FWModeAccess( "TM5", 1 ) + FWModeAccess( "TM5", 2 ) + FWModeAccess( "TM5", 3 ) == "CCC"
+								If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] ) .And. !Empty( aFields[ i, 4] )
+									FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+								Else
+									FieldPut( FieldPos( cCampo ), cCCusto )
+								EndIf
+							Else
+								FieldPut( FieldPos( cCampo ), cCCusto )
+							EndIf
+						ElseIf ALLTRIM( FWModeAccess( "TM5", 3 ) ) == "C"
+							If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] ) .And. !Empty( aFields[ i, 4] )
+								FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+							Else
+								FieldPut( FieldPos( cCampo ), cCCusto )
+							EndIf
+						Else
+							FieldPut( FieldPos( cCampo ), cCCusto )
+						EndIf
+					ElseIf  AllTrim( cCampo ) == "TM5_CODFUN"
+						dbSelectArea( "SX2" )
+						dbSetOrder( 1 )
+						dbSeek( "SRJ" )
+						dbSelectArea( "TM5" )
+						If lVer11
+							If FWModeAccess( "TM5", 1 ) + FWModeAccess( "TM5", 2 ) + FWModeAccess( "TM5", 3 ) == "CCC"
+								If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] ) .And. !Empty( aFields[ i, 4] )
+									FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+								Else
+									FieldPut( FieldPos( cCampo ), cCodFun )
+								EndIf
+							Else
+								FieldPut( FieldPos( cCampo ), cCodFun )
+							EndIf
+						ElseIf ALLTRIM( FWModeAccess( "TM5", 3 ) ) == "C"
+							If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] ) .And. !Empty( aFields[ i, 4] )
+								FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+							Else
+								FieldPut( FieldPos( cCampo ), cCodFun )
+							EndIf
+						Else
+							FieldPut( FieldPos( cCampo ), cCodFun )
+						EndIf
+					ElseIf  AllTrim( cCampo ) == "TM5_TNOTRA"
+						FieldPut( FieldPos( cCampo ), cTnotra )
+					ElseIf  AllTrim( cCampo ) == "TM5_CBO"
+						FieldPut( FieldPos( cCampo ), cCBO )
+					ElseIf  AllTrim( cCampo ) == "TM5_PCMSO"
+						FieldPut( FieldPos( cCampo ), nPCMSO )
+					ElseIf  AllTrim( cCampo ) == "TM5_NATEXA"
+						FieldPut( FieldPos( cCampo ), cNatexa )
+					ElseIf  AllTrim( cCampo ) == "TM5_NUMASO"
+						If mv_par13 == 2 //Se não for repassar o ASO para a nova filial
+							FieldPut( FieldPos( cCampo ), "" )
+						Else
+							If ( nSrcASO := aScan( aASOs, { | x | x[ 1 ] == aFields[ i, 2 ] } ) ) > 0
+								FieldPut( FieldPos( cCampo ), aASOs[ nSrcASO, 2 ] )
+							EndIf
+						EndIf
+					Else
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+						EndIf
+					EndIf
+				Next i
+				TM5->( MsUnlock() )
+			EndIf
+
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+			dbSelectArea( "TM5" )
+			dbSetOrder( 1 )
+			Dbgoto( nRecTM5 )
+			Dbskip()
+		End
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTM5_970
+Transfere os relacionamentos TM9, TM6 e TN4
+@type Static Function
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+@sample fTM5_970("D MG 01", "000000001", "00001", "22/08/2019", "18:00")
+
+@param cFilTM, Caracter, apresenta a filial do funcionário antes da transferência
+@param cFichaTM, Caracter, apresenta a ficha médica do funcionário
+@param cExameTM, Caracter, apresenta o exame do funcionário
+@param dDataTM, Data, apresenta a data do exame do funcionário
+@param cHoraTM, Caracter, apresenta a hora do exame do funcionário
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fTM5_970( cFilTM, cFichaTM, cExameTM, dDataTM, cHoraTM )
+
+	Local nRecTM5 := 0, i, nX
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	Private a970exam := {}
+
+	aAdd( a970exam, {"TM6", 2, "TM6->( TM6_FILIAL+TM6_NUMFIC+DTOS( TM6_DTPROG )+TM6_HRPROG+TM6_EXAME )" } )
+	aAdd( a970exam, {"TM9", 3, "TM9->( TM9_FILIAL+TM9_NUMFIC+DTOS( TM9_DTPROG )+TM9_HRPROG+TM9_EXAME )" } )
+	aAdd( a970exam, {"TN4", 3, "TN4->( TN4_FILIAL+TN4_NUMFIC+DTOS( TN4_DTPROG )+TN4_HRPROG+TN4_EXAME )" } )
+
+	For nX := 1 To Len( a970exam )
+		dbSelectArea( a970exam[nX, 1] )
+		dbSetOrder( a970exam[nX, 2] )
+		dbSeek( xFilial( a970exam[nX, 1], cFilTM )+cFichaTM+DtoS( dDataTM )+cHoraTM+cExameTM )
+		While !eof() .And. xFilial( a970exam[nX, 1], cFilTM )+cFichaTM+DtoS( dDataTM )+cHoraTM+cExameTM == &( a970exam[nX, 3] )
+
+			dbSelectArea( a970exam[nX, 1] )
+			nRecTM5 := Recno()
+
+			aFields := {}
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+			Next i
+
+			cChv_temp := ""
+			If a970exam[nX, 1] == "TM6"
+				cChv_temp := TM6->TM6_ITEM
+			ElseIf a970exam[nX, 1] == "TM9"
+				cChv_temp := TM9->TM9_INDVIA
+			EndIf
+
+			aTblOpen 	:= { { a970exam[nX, 1], 01 } }
+			NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+			dbSelectArea( a970exam[nX, 1] )
+			dbSetOrder( a970exam[nX, 2] )
+			dbSeek( xFilial( a970exam[nX, 1], mv_par02 )+cNewTM0+DtoS( dDataTm )+cHoraTM+cExameTm )
+			While !eof() .And. xFilial( a970exam[nX, 1], mv_par02 )+cNewTM0+DtoS( dDataTm )+cHoraTM+cExameTM == &( a970exam[nX, 3] )
+				If a970exam[nX, 1] == "TM6"
+					If TM6->TM6_ITEM <> cChv_temp
+						dbSkip()
+						Loop
+					EndIf
+				ElseIf a970exam[nX, 1] == "TM9"
+					If TM9->TM9_INDVIA <> cChv_temp
+						dbSkip()
+						Loop
+					EndIf
+				EndIf
+				Reclock( a970exam[nX, 1], .F. )
+				DbDelete()
+				MsUnlock( a970exam[nX, 1] )
+				dbSkip()
+			End
+
+			If len( aFields ) > 0
+				dbSelectArea( a970exam[nX, 1] )
+				Reclock( a970exam[nX, 1], .T. )
+				For i := 1 to len( aFields )
+					cCampo := aFields[ i, 1]
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+						Loop
+					EndIf
+					If  AllTrim( cCampo ) == a970exam[nX, 1]+"_FILIAL"
+						FieldPut( FieldPos( cCampo ), xFilial( a970exam[nX, 1], mv_par02 ) )
+					ElseIf  AllTrim( cCampo ) == a970exam[nX, 1]+"_NUMFIC"
+						FieldPut( FieldPos( cCampo ), cNewTM0 )
+					Else
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+						EndIf
+					EndIf
+				Next i
+				( a970exam[nX, 1] )->( MsUnlock() )
+			EndIf
+
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+			dbSelectArea( a970exam[nX, 1] )
+			dbSetOrder( a970exam[nX, 2 ] )
+			dbGoto( nRecTM5 )
+			dbSkip()
+		End
+	Next nX
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTL5_970
+Grava TL5 em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+@sample fTL5_970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fTL5_970()
+
+	Local nRecTL5 := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TL5" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "TL5" )+cNUMFIC )
+		While !eof() .And. xFilial( "TL5" ) == TL5->TL5_FILIAL .And. TL5->TL5_NUMFIC == cNUMFIC
+			nRecTL5 := Recno()
+
+			aFields := {}
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+			Next i
+			cChv_temp := DTOS( TL5->TL5_DTATEN ) + TL5->TL5_HRATEN + TL5->TL5_INDICA
+
+			aTblOpen 	:= { { "TL5", 01 } }
+			NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+			dbSelectArea( "TL5" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TL5", mv_par02 ) + cNewTM0 + cChv_temp )
+				NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+				dbSelectArea( "TL5" )
+				Dbgoto( nRecTL5 )
+				Dbskip()
+				Loop
+			EndIf
+
+			If len( aFields ) > 0
+				dbSelectArea( "TL5" )
+				Reclock( "TL5", .T. )
+				For i := 1 to len( aFields )
+					cCampo := aFields[ i, 1]
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+						Loop
+					EndIf
+					If  AllTrim( cCampo ) == "TL5_FILIAL"
+						FieldPut( FieldPos( cCampo ), xFilial( "TL5", mv_par02 ) )
+					ElseIf  AllTrim( cCampo ) == "TL5_NUMFIC"
+						FieldPut( FieldPos( cCampo ), cNewTM0 )
+					Else
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+						EndIf
+					EndIf
+				Next i
+				TL5->( MsUnlock() )
+			EndIf
+
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+			dbSelectArea( "TL5" )
+			dbSetOrder( 1 )
+			Dbgoto( nRecTL5 )
+			Dbskip()
+		End
+
+		// Caso faça a transferência do atendimento, realiza a transferencia dos medicamentos também
+ 		dbSelectArea( "TY3" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TY3" )+cNUMFIC )
+		While !eof() .And. xFilial( "TY3" ) == TY3->TY3_FILIAL .And. TY3->TY3_NUMFIC == cNUMFIC
+			If !CHKKEY970( "TM1", 1, TY3->TY3_CODMED )
+				dbSelectArea( "TY3" )
+				Dbskip()
+				Loop
+			EndIf
+			nRecTY3 := Recno()
+
+			aFields := {}
+			For i := 1 TO FCount()
+				strField   := FieldName( i )
+				Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+			Next i
+			cChv_temp := DTOS( TY3->TY3_DTATEN ) + TY3->TY3_HRATEN + TY3->TY3_INDICA + TY3->TY3_CODMED
+
+			aTblOpen 	:= { { "TY3", 01 } }
+			NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+			dbSelectArea( "TY3" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TY3", mv_par02 ) + cNewTM0 + cChv_temp )
+				NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+				dbSelectArea( "TY3" )
+				Dbgoto( nRecTY3 )
+				Dbskip()
+				Loop
+			EndIf
+
+			If len( aFields ) > 0
+				dbSelectArea( "TY3" )
+				Reclock( "TY3", .T. )
+				For i := 1 to len( aFields )
+					cCampo := aFields[ i, 1]
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+						Loop
+					EndIf
+					If  AllTrim( cCampo ) == "TY3_FILIAL"
+						FieldPut( FieldPos( cCampo ), xFilial( "TY3", mv_par02 ) )
+					ElseIf  AllTrim( cCampo ) == "TY3_NUMFIC"
+						FieldPut( FieldPos( cCampo ), cNewTM0 )
+					Else
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+						EndIf
+					EndIf
+				Next i
+				TL5->( MsUnlock() )
+			EndIf
+
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+			dbSelectArea( "TY3" )
+			dbSetOrder( 1 )
+			Dbgoto( nRecTY3 )
+			Dbskip()
+		End
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTL9_970
+Grava TL9 em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+@sample fTL9_970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fTL9_970()
+
+	Local nRecTL9 := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TL9" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TL9" )+cNUMFIC )
+	While !eof() .And. xFilial( "TL9" ) == TL9->TL9_FILIAL .And. TL9->TL9_NUMFIC == cNUMFIC
+		nRecTL9 := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := DTOS( TL9->TL9_DTPREV ) + TL9->TL9_VACINA
+
+		aTblOpen 	:= { { "TL9", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TL9" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TL9", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TL9" )
+			Dbgoto( nRecTL9 )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TL9" )
+			Reclock( "TL9", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TL9_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TL9", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TL9_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TL9->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TL9" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTL9 )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTMJ_970
+Grava TMJ em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+@sample fTMJ_970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fTMJ_970()
+
+	Local nRecTMJ := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TMJ" )
+	dbSetOrder( 2 )
+	dbSeek( xFilial( "TMJ" )+cNUMFIC )
+	While !eof() .And. xFilial( "TMJ" ) == TMJ->TMJ_FILIAL .And. TMJ->TMJ_NUMFIC == cNUMFIC
+		nRecTMJ := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := TMJ->TMJ_CODUSU + DTOS( TMJ->TMJ_DTCONs ) + TMJ->TMJ_HRCONS
+
+		aTblOpen 	:= { { "TMJ", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TMJ" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TMJ", mv_par02 ) + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TMJ" )
+			dbSetOrder( 2 )
+			Dbgoto( nRecTMJ )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TMJ" )
+			Reclock( "TMJ", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TMJ_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TMJ", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TMJ_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TMJ->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TMJ" )
+		dbSetOrder( 2 )
+		Dbgoto( nRecTMJ )
+		Dbskip()
+	End
+
+Return .T.
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTOF_970
+Grava TOF em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+@sample fTOF_970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fTOF_970()
+
+	Local nRecTOF := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TOF" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TOF" )+cNUMFIC )
+	While !eof() .And. xFilial( "TOF" ) == TOF->TOF_FILIAL .And. TOF->TOF_NUMFIC == cNUMFIC
+		nRecTOF := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := DTOS( TOF->TOF_DTULME )
+
+		aTblOpen 	:= { { "TOF", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TOF" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TOF", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TOF" )
+			dbSetOrder( 1 )
+			Dbgoto( nRecTOF )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TOF" )
+			Reclock( "TOF", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TOF_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TOF", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TOF_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TOF->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+
+		dbSelectArea( "TOF" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTOF )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fAcidentes
+Transfere os registros de acidentes (TNC, TNU, TNZ, TNT e TAA)
+
+@author Denis Hyroshi de Souza
+@since 17/08/2010
+
+/*/
+//-------------------------------------------------------------------
+Static Function fAcidentes()
+
+	Local aArea
+	Local aCampos := {}
+	Local aCausas := {}
+	Local aPlanos := {}
+	Local aCodPla := {}
+	Local aPlaMan := {}
+	Local aTabelas := { { 'TNC' }, { 'TNU' }, { 'TNZ' }, { 'TNT' }, { 'TNV' }, { 'TAA' } }
+	Local aProviden := {}
+	Local aInvestiga := {}
+
+	Local cCampo := ''
+	Local cChave := ''
+	Local cNumAci := ''
+	Local cCodPla := ''
+	Local cCaminho := fControle( 'TNC' )
+
+	Local nPosNovo := 0
+	Local nCampo := 0
+
+	DbSelectArea( 'TNC' )
+	DbSetOrder( 7 ) // TNC_FILIAL + TNC_NUMFIC + TNC_ACIDEN
+
+	If DbSeek( xFilial( 'TNC' ) + cNumFic )
+
+		While ( 'TNC' )->( !Eof() ) .And. xFilial( 'TNC' ) == TNC->TNC_FILIAL .And. TNC->TNC_NUMFIC == cNumFic
+
+			aArea := ( 'TNC' )->( GetArea() )
+
+			aCampos := {}
+			aCausas := {}
+			aPlanos := {}
+			aCodPla := {}
+			aPlaMan := {}
+			aProviden := {}
+			aInvestiga := {}
+
+			For nCampo := 1 To ( 'TNC' )->( FCount() )
+
+				cCampo := FieldName( nCampo )
+				Aadd( aCampos, {;
+					cCampo,; // Nome do campo
+					FieldGet( nCampo ),; // Valor do campo
+					GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+				} )
+
+			Next nCampo
+
+			cChave := TNC->TNC_HRACID + DtoS( TNC->TNC_DTACID )
+
+			//--------------------------------------------------------------
+			// Busca as investigações e planos de ação vinculados ao mandato
+			//--------------------------------------------------------------
+
+			DbSelectArea( 'TNU' )
+			DbSetOrder( 1 ) // TNU_FILIAL + TNU_ACIDEN + TNU_MANDAT
+
+			If DbSeek( xFilial( 'TNU' ) + TNC->TNC_ACIDEN )
+
+				While ( 'TNU' )->( !Eof() ) .And. xFilial( 'TNU' ) == TNU->TNU_FILIAL .And. TNU->TNU_ACIDEN == TNC->TNC_ACIDEN
+
+					For nCampo := 1 To ( 'TNU' )->( FCount() )
+
+						cCampo := FieldName( nCampo )
+						Aadd( aInvestiga, {;
+							cCampo,; // Nome do campo
+							( 'TNU' )->( FieldGet( nCampo ) ),; // Valor do campo
+							GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+						} )
+
+					Next nCampo
+
+					DbSelectArea( 'TNV' )
+					DbSetOrder( 1 ) // TNV_FILIAL + TNV_MANDAT + TNV_CODPLA
+
+					If DbSeek( xFilial( 'TNV' ) + TNU->TNU_MANDAT )
+
+						While( 'TNV' )->( !Eof() ) .And. xFilial( 'TNV' ) == TNV->TNV_FILIAL .And. TNV->TNV_MANDAT == TNU->TNU_MANDAT
+
+							For nCampo := 1 To ( 'TNV' )->( FCount() )
+
+								cCampo := FieldName( nCampo )
+								Aadd( aPlaMan, {;
+									cCampo,; // Nome do campo
+									( 'TNV' )->( FieldGet( nCampo ) ),; // Valor do campo
+									GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+								} )
+
+							Next nCampo
+
+							DbSelectArea( 'TAA' )
+							DbSetOrder( 1 ) // TAA_FILIAL + TAA_CODPLA
+
+							If DbSeek( xFilial( 'TAA' ) + TNV->TNV_CODPLA )
+
+								While ( 'TAA' )->( !Eof() ) .And. xFilial( 'TAA' ) == TAA->TAA_FILIAL .And. TAA->TAA_CODPLA == TNV->TNV_CODPLA
+
+									For nCampo := 1 To ( 'TAA' )->( FCount() )
+
+										cCampo := FieldName( nCampo )
+										Aadd( aPlanos, {;
+											cCampo,; // Nome do campo
+											( 'TAA' )->( FieldGet( nCampo ) ),; // Valor do campo
+											GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+										} )
+
+									Next nCampo
+
+									( 'TAA' )->( Dbskip() )
+
+								End
+
+							EndIf
+
+							( 'TNV' )->( Dbskip() )
+
+						End
+
+					EndIf
+
+					( 'TNU' )->( Dbskip() )
+
+				End
+
+			EndIf
+
+			//----------------
+			// Busca as causas
+			//----------------
+
+			DbSelectArea( 'TNZ' )
+			DbSetOrder( 1 ) // TNU_FILIAL + TNU_ACIDEN + TNU_MANDAT
+
+			If DbSeek( xFilial( 'TNZ' ) + TNC->TNC_ACIDEN )
+
+				While ( 'TNZ' )->( !Eof() ) .And. xFilial( 'TNZ' ) == TNZ->TNZ_FILIAL .And. TNZ->TNZ_ACIDEN == TNC->TNC_ACIDEN
+
+					For nCampo := 1 To ( 'TNZ' )->( FCount() )
+
+						cCampo := FieldName( nCampo )
+						Aadd( aCausas, {;
+							cCampo,; // Nome do campo
+							( 'TNZ' )->( FieldGet( nCampo ) ),; // Valor do campo
+							GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+						} )
+
+					Next nCampo
+
+					( 'TNZ' )->( Dbskip() )
+
+				End
+
+			EndIf
+
+			//--------------------------------------------------
+			// Busca as providências e os planos de ação tomados
+			//--------------------------------------------------
+
+			DbSelectArea( 'TNT' )
+			DbSetOrder( 1 ) // TNU_FILIAL + TNU_ACIDEN + TNU_MANDAT
+
+			If DbSeek( xFilial( 'TNT' ) + TNC->TNC_ACIDEN )
+
+				While ( 'TNT' )->( !Eof() ) .And. xFilial( 'TNT' ) == TNT->TNT_FILIAL .And. TNT->TNT_ACIDEN == TNC->TNC_ACIDEN
+
+					For nCampo := 1 To ( 'TNT' )->( FCount() )
+
+						cCampo := FieldName( nCampo )
+						Aadd( aProviden, {;
+							cCampo,; // Nome do campo
+							( 'TNT' )->( FieldGet( nCampo ) ),; // Valor do campo
+							GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+						} )
+
+					Next nCampo
+
+					DbSelectArea( 'TAA' )
+					DbSetOrder( 1 ) // TAA_FILIAL + TAA_CODPLA
+
+					If DbSeek( xFilial( 'TAA' ) + TNT->TNT_CODPLA )
+
+						While ( 'TAA' )->( !Eof() ) .And. xFilial( 'TAA' ) == TAA->TAA_FILIAL .And. TAA->TAA_CODPLA == TNT->TNT_CODPLA
+
+							For nCampo := 1 To ( 'TAA' )->( FCount() )
+
+								cCampo := FieldName( nCampo )
+								Aadd( aPlanos, {;
+									cCampo,; // Nome do campo
+									( 'TAA' )->( FieldGet( nCampo ) ),; // Valor do campo
+									GetSx3Cache( cCampo, 'X3_TIPO' ); // Tipo do campo
+								} )
+
+							Next nCampo
+
+							( 'TAA' )->( Dbskip() )
+
+						End
+
+					EndIf
+
+					( 'TNT' )->( Dbskip() )
+
+				End
+
+			EndIf
+
+			NGPrepTBL( aTabelas, Mv_par01, Mv_par02 ) // Posiciona na empresa e filial destino
+
+			//----------------------------------------------------------------
+			// Deleta os acidentes iguais caso já existam na nova ficha médica
+			//----------------------------------------------------------------
+
+			DbSelectArea( 'TNC' )
+			DbSetOrder( 7 ) // TNC_FILIAL + TNC_NUMFIC + TNC_ACIDEN
+
+			If DbSeek( xFilial( 'TNC' ) + cNewTM0 )
+
+				While ( 'TNC' )->( !Eof() ) .And. xFilial( 'TNC' ) == TNC->TNC_FILIAL .And. TNC->TNC_NUMFIC == cNewTM0
+
+					If cChave != TNC->TNC_HRACID + DtoS( TNC->TNC_DTACID )
+						( 'TNC' )->( Dbskip() )
+						Loop
+					EndIf
+
+					Reclock( 'TNC', .F. )
+						( 'TNC' )->( DbDelete() )
+					MsUnlock( 'TNC' )
+
+					( 'TNC' )->( Dbskip() )
+
+				End
+
+			EndIf
+
+			cNumAci := GetSXENum( 'TNC', 'TNC_ACIDEN', cCaminho )
+
+			ConfirmSX8()
+
+			//-------------------
+			// Grava o acidente
+			//-------------------
+			Reclock( 'TNC', .T. )
+
+				For nCampo := 1 To Len( aCampos )
+
+					cCampo := aCampos[ nCampo, 1 ]
+
+					If AllTrim( cCampo ) == 'TNC_FILIAL'
+
+						( 'TNC' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TNC' ) ) )
+
+					ElseIf AllTrim( cCampo ) == 'TNC_NUMFIC'
+
+						( 'TNC' )->( FieldPut( FieldPos( cCampo ), cNewTM0 ) )
+
+					ElseIf AllTrim( cCampo ) == 'TNC_ACIDEN'
+
+						( 'TNC' )->( FieldPut( FieldPos( cCampo ), cNumAci ) )
+
+						// Salva o número do acidente de origem e o número do novo acidente
+						aAdd( aAcident, { aCampos[ nCampo, 2 ], cNumAci } )
+
+					Else
+
+						 // Verifica pelo menos se o campo é do mesmo tipo
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aCampos[ nCampo, 3 ] )
+
+							( 'TNC' )->( FieldPut( FieldPos( cCampo ), aCampos[ nCampo, 2 ] ) )
+
+						EndIf
+
+					EndIf
+
+				Next nCampo
+
+			( 'TNC' )->( MsUnlock() )
+
+			//-----------------------
+			// Grava as investigações
+			//-----------------------
+			For nCampo := 1 To Len( aInvestiga )
+
+				cCampo := aInvestiga[ nCampo, 1 ]
+
+				If AllTrim( cCampo ) == 'TNU_FILIAL'
+
+					Reclock( 'TNU', .T. )
+
+					( 'TNU' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TNU' ) ) )
+
+				ElseIf AllTrim( cCampo ) == 'TNU_ACIDEN'
+
+					// Busca o novo número do acidente
+					If ( nPosNovo := aScan( aAcident, { | x | x[ 1 ] == aInvestiga[ nCampo, 2 ] } ) ) > 0
+						( 'TNU' )->( FieldPut( FieldPos( cCampo ), aAcident[ nPosNovo, 2 ] ) )
+					EndIf
+
+				Else
+
+						// Verifica pelo menos se o campo é do mesmo tipo
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aInvestiga[ nCampo, 3 ] )
+
+						( 'TNU' )->( FieldPut( FieldPos( cCampo ), aInvestiga[ nCampo, 2 ] ) )
+
+					EndIf
+
+				EndIf
+
+				If Mod( nCampo, ( 'TNU' )->( FCount() ) ) == 0
+					( 'TNU' )->( MsUnlock() )
+				EndIf
+
+			Next nCampo
+
+			//----------------
+			// Grava as causas
+			//----------------
+			For nCampo := 1 To Len( aCausas )
+
+				cCampo := aCausas[ nCampo, 1 ]
+
+				If AllTrim( cCampo ) == 'TNZ_FILIAL'
+
+					Reclock( 'TNZ', .T. )
+
+					( 'TNZ' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TNZ' ) ) )
+
+				ElseIf AllTrim( cCampo ) == 'TNZ_ACIDEN'
+
+					// Busca o novo número do acidente
+					If ( nPosNovo := aScan( aAcident, { | x | x[ 1 ] == aCausas[ nCampo, 2 ] } ) ) > 0
+						( 'TNZ' )->( FieldPut( FieldPos( cCampo ), aAcident[ nPosNovo, 2 ] ) )
+					EndIf
+
+				Else
+
+						// Verifica pelo menos se o campo é do mesmo tipo
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aCausas[ nCampo, 3 ] )
+
+						( 'TNZ' )->( FieldPut( FieldPos( cCampo ), aCausas[ nCampo, 2 ] ) )
+
+					EndIf
+
+				EndIf
+
+				If Mod( nCampo, ( 'TNZ' )->( FCount() ) ) == 0
+					( 'TNZ' )->( MsUnlock() )
+				EndIf
+
+			Next nCampo
+
+			//----------------------------------------------------------------
+			// Grava os planos de ação
+			//----------------------------------------------------------------
+			For nCampo := 1 To Len( aPlanos )
+
+				cCampo := aPlanos[ nCampo, 1 ]
+
+				If AllTrim( cCampo ) == 'TAA_FILIAL'
+
+					cCodPla := Sg090Num()
+
+					Reclock( 'TAA', .T. )
+
+					( 'TAA' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TAA' ) ) )
+
+				ElseIf AllTrim( cCampo ) == 'TAA_CODPLA'
+
+					( 'TAA' )->( FieldPut( FieldPos( cCampo ), cCodPla ) )
+
+					// Salva o número do plano de origem e o número do novo plano
+					aAdd( aCodPla, { aPlanos[ nCampo, 2 ], cCodPla } )
+
+				Else
+
+					// Verifica pelo menos se o campo é do mesmo tipo
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aPlanos[ nCampo, 3 ] )
+
+						( 'TAA' )->( FieldPut( FieldPos( cCampo ), aPlanos[ nCampo, 2 ] ) )
+
+					EndIf
+
+				EndIf
+
+				If Mod( nCampo, ( 'TAA' )->( FCount() ) ) == 0
+					( 'TAA' )->( MsUnlock() )
+				EndIf
+
+			Next nCampo
+
+			//----------------------
+			// Grava as providências
+			//----------------------
+			For nCampo := 1 To Len( aProviden )
+
+				cCampo := aProviden[ nCampo, 1 ]
+
+				If AllTrim( cCampo ) == 'TNT_FILIAL'
+
+					Reclock( 'TNT', .T. )
+
+					( 'TNT' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TNT' ) ) )
+
+				ElseIf AllTrim( cCampo ) == 'TNT_ACIDEN'
+
+					// Busca o novo número do acidente
+					If ( nPosNovo := aScan( aAcident, { | x | x[ 1 ] == aProviden[ nCampo, 2 ] } ) ) > 0
+						( 'TNT' )->( FieldPut( FieldPos( cCampo ), aAcident[ nPosNovo, 2 ] ) )
+					EndIf
+
+				ElseIf AllTrim( cCampo ) == 'TNT_CODPLA'
+
+					// Busca o novo número do plano
+					If ( nPosNovo := aScan( aCodPla, { | x | x[ 1 ] == aProviden[ nCampo, 2 ] } ) ) > 0
+						( 'TNT' )->( FieldPut( FieldPos( cCampo ), aCodPla[ nPosNovo, 2 ] ) )
+					EndIf
+
+				Else
+
+						// Verifica pelo menos se o campo é do mesmo tipo
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aProviden[ nCampo, 3 ] )
+
+						( 'TNT' )->( FieldPut( FieldPos( cCampo ), aProviden[ nCampo, 2 ] ) )
+
+					EndIf
+
+				EndIf
+
+				If Mod( nCampo, ( 'TNT' )->( FCount() ) ) == 0
+					( 'TNT' )->( MsUnlock() )
+				EndIf
+
+			Next nCampo
+
+			//----------------------------------------------------------------
+			// Grava os planos de ação do mandato
+			//----------------------------------------------------------------
+			For nCampo := 1 To Len( aPlaMan )
+
+				cCampo := aPlaMan[ nCampo, 1 ]
+
+				If AllTrim( cCampo ) == 'TNV_FILIAL'
+
+					Reclock( 'TNV', .T. )
+
+					( 'TNV' )->( FieldPut( FieldPos( cCampo ), xFilial( 'TNV' ) ) )
+
+				ElseIf AllTrim( cCampo ) == 'TNV_CODPLA'
+
+					// Busca o novo número do plano
+					If ( nPosNovo := aScan( aCodPla, { | x | x[ 1 ] == aPlaMan[ nCampo, 2 ] } ) ) > 0
+						( 'TNV' )->( FieldPut( FieldPos( cCampo ), aCodPla[ nPosNovo, 2 ] ) )
+					EndIf
+
+				Else
+
+					// Verifica pelo menos se o campo é do mesmo tipo
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aPlaMan[ nCampo, 3 ] )
+
+						( 'TNV' )->( FieldPut( FieldPos( cCampo ), aPlaMan[ nCampo, 2 ] ) )
+
+					EndIf
+
+				EndIf
+
+				If Mod( nCampo, ( 'TNV' )->( FCount() ) ) == 0
+					( 'TNV' )->( MsUnlock() )
+				EndIf
+
+			Next nCampo
+
+			NGPrepTBL( aTabelas, cSvEmpAnt, cSvFilAnt )
+
+			RestArea( aArea )
+
+			( 'TNC' )->( Dbskip() )
+
+		End
+
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PCMSO970
+Busca PCMSO
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample PCMSO970()
+@return cPcmso, Caracter, Código do PCMSO
+/*/
+//-------------------------------------------------------------------
+Function PCMSO970()
+
+	Local cPcmso := space( 6 )
+	Local aArea := GetArea()
+	Local cFil := space( 02 )
+	Local aTblOpen := {}
+
+	aTblOpen 	:= { { "TMW", 01 } }
+	NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+	cFil := xFilial( "TMW", mv_par02 )
+	dbSelectArea( "TMW" )
+	dbSetOrder( 1 )
+	Dbgobottom()
+	Do While !BOF()
+		If TMW->TMW_FILIAL != cFil
+			Dbskip( -1 )
+			Loop
+		EndIf
+		If TM5->TM5_DTPROG >= TMW->TMW_DTINIC .And. TM5->TM5_DTPROG <= TMW->TMW_DTFIM
+			cPcmso := TMW->TMW_PCMSO
+			cOrigex := TM5->TM5_ORIGEX
+			cNatexa := TM5->TM5_NATEXA
+			Exit
+		EndIf
+		DbSkip( -1 )
+	End
+
+	NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+	Restarea( aArea )
+
+Return cPcmso
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} RESTR970
+Grava restricoes em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample RESTR970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function RESTR970()
+
+	Local nRecTMF := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TMF" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TMF" )+cNUMFIC )
+	While !eof() .And. xFilial( "TMF" ) == TMF->TMF_FILIAL .And. TMF->TMF_NUMFIC == cNUMFIC
+		nRecTMF := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := TMF->TMF_RESTRI + DTOS( TMF->TMF_DTINIC )
+
+		aTblOpen 	:= { { "TMF", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TMF" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TMF", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TMF" )
+			Dbgoto( nRecTMF )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TMF" )
+			Reclock( "TMF", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) ) //GetSx3Cache( cCampo, 'X3_TIPO' ) == "U"
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TMF_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TMF", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TMF_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TMF->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TMF" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTMF )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DOENC970
+Grava doencas em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample DOENC970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function DOENC970()
+
+	Local nRecTNA := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TNA" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TNA" )+cNUMFIC )
+	While !eof() .And. xFilial( "TNA" ) == TNA->TNA_FILIAL .And. TNA->TNA_NUMFIC == cNUMFIC
+		nRecTNA := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := TNA->TNA_CID + DTOS( TNA->TNA_DTINIC )
+
+		aTblOpen 	:= { { "TNA", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TNA" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TNA", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TNA" )
+			Dbgoto( nRecTNA )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TNA" )
+			Reclock( "TNA", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TNA_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TNA", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TNA_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TNA->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TNA" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTNA )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DIAGN970
+Grava diagnosticos em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample DIAGN970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function DIAGN970()
+
+	Local nRecTMT 	:= 0, i, nX
+	Local aFields 	:= {}, strField := ""
+	Local dDataDiag := STOD( Space( TAMSX3( "TMT_DTCONS" )[ 1 ] ) )
+	Local cHoraDiag := ""
+
+	dbSelectArea( "TMT" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TMT" )+cNUMFIC )
+	While !eof() .And. xFilial( "TMT" ) == TMT->TMT_FILIAL .And. TMT->TMT_NUMFIC == cNUMFIC
+		nRecTMT := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+
+		aTblOpen 	:= { { "TMT", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		If len( aFields ) > 0
+			nDtDiag := aScan( aFields, {|x| x[ 1 ] == "TMT_DTCONS" } )
+			nHrDiag := aScan( aFields, {|x| x[ 1 ] == "TMT_HRCONS" } )
+
+			If !Empty( aFields[nDtDiag, 2] )
+				dDataDiag := aFields[nDtDiag, 2]
+			EndIf
+			If !Empty( aFields[nHrDiag, 2] )
+				cHoraDiag := aFields[nHrDiag, 2]
+			EndIf
+		EndIf
+
+		dbSelectArea( "TMT" )
+		dbSetOrder( 3 ) //TMT_FILIAL+TMT_NUMFIC+DTOS( TMT_DTCONS )+TMT_HRCONS
+		If dbSeek( xFilial( "TMT", mv_par02 ) + cNewTM0 + DTOS( dDataDiaG ) + cHoraDiag )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TMT" )
+			Dbgoto( nRecTMT )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TMT" )
+			Reclock( "TMT", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TMT_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TMT", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TMT_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				ElseIf  AllTrim( cCampo ) == "TMT_FILFUN"
+					FieldPut( FieldPos( cCampo ), cFilFun )
+				ElseIf  AllTrim( cCampo ) == "TMT_CC"
+					FieldPut( FieldPos( cCampo ), cCCusto )
+				ElseIf  AllTrim( cCampo ) == "TMT_CODFUN"
+					FieldPut( FieldPos( cCampo ), cCodFun )
+				ElseIf  AllTrim( cCampo ) == "TMT_CBO"
+					FieldPut( FieldPos( cCampo ), cCBO )
+				ElseIf  AllTrim( cCampo ) == "TMT_ACIDEN"
+					If Len( aAcident ) > 0
+						//verifica o código anterior, pois ao passar
+						//para nova filial pode alterar o código do acidente
+						If ( nX := aScan( aAcident, { |x| x[ 1 ] == aFields[ i][2] } ) ) > 0
+							FieldPut( FieldPos( cCampo ), aAcident[ nX, 2 ] ) //add o novo valor
+						EndIf
+					EndIf
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TMT->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TMT" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTMT )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MEDIC970
+Grava medicamentos em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample MEDIC970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MEDIC970()
+
+	Local aFields := {}
+	Local aTblOpen := { { "TM2", 01 } }
+
+	Local cNUM := space( 6 )
+	Local strField := ''
+	Local cCaminho := fControle( 'TM2' )
+
+	Local i
+	Local nRecTM2 := 0
+
+	dbSelectArea( "TM2" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TM2" )+cNUMFIC )
+	While !eof() .And. xFilial( "TM2" ) == TM2->TM2_FILIAL .And. TM2->TM2_NUMFIC == cNUMFIC
+		nRecTM2 := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := DTOS( TM2->TM2_DTCONS ) + TM2->TM2_HRCONS + TM2->TM2_CODMED
+
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TM2" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TM2", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TM2" )
+			Dbgoto( nRecTM2 )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+
+			cFilAnt := Mv_par02
+			cEmpAnt := Mv_par01
+
+			cNUM := GETSXENUM( 'TM2', 'TM2_SEQMOV', cCaminho )
+
+			cFilAnt := cSvFilAnt
+			CEmpAnt := cSvEmpAnt
+
+			CONFIRMSX8()
+
+			dbSelectArea( "TM2" )
+			Reclock( "TM2", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TM2_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TM2", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TM2_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				ElseIf  AllTrim( cCampo ) == "TM2_SEQMOV"
+					FieldPut( FieldPos( cCampo ), cNUM )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TM2->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TM2" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTM2 )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} QUEST970
+Grava questionários em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample QUEST970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function QUEST970()
+
+	Local nRecTMI := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TMI" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TMI" )+cNUMFIC )
+	While !eof() .And. xFilial( "TMI" ) == TMI->TMI_FILIAL .And. TMI->TMI_NUMFIC == cNUMFIC
+		nRecTMI := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := DTOS( TMI->TMI_DTREAL ) + TMI->TMI_QUESTI + TMI->TMI_QUESTA
+
+		aTblOpen 	:= { { "TMI", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TMI" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TMI", mv_par02 ) + cNewTM0 + cChv_temp )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TMI" )
+			Dbgoto( nRecTMI )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TMI" )
+			Reclock( "TMI", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TMI_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TMI", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TMI_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TMI->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TMI" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTMI )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SAUDE970
+Grava programas de saúde em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample SAUDE970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SAUDE970()
+
+	Local nRecTMN := 0, i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TMN" )
+	dbSetOrder( 2 )
+	dbSeek( xFilial( "TMN" )+cNUMFIC )
+	While !eof() .And. xFilial( "TMN" ) == TMN->TMN_FILIAL .And. TMN->TMN_NUMFIC == cNUMFIC
+		nRecTMN := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+		cChv_temp := TMN->TMN_CODPRO
+
+		aTblOpen 	:= { { "TMN", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TMN" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TMN", mv_par02 ) + cChv_temp + cNewTM0 )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TMN" )
+			Dbgoto( nRecTMN )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TMN" )
+			Reclock( "TMN", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TMN_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TMN", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TMN_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TMN->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TMN" )
+		dbSetOrder( 2 )
+		Dbgoto( nRecTMN )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ATEST970
+Grava atestados médicos em empresa/filial destino
+@type Function
+
+@author Liber de Esteban O.P.
+@since 01/2005
+
+@sample ATEST970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function ATEST970()
+
+	Local i
+	Local aFields := {}, strField := ""
+	Local nDTINIC := 0
+	Local nHRINIC := 0
+	Local aTblOpen := {}
+
+	dbSelectArea( "TNY" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TNY" )+cNUMFIC )
+	While !eof() .And. xFilial( "TNY" ) == TNY->TNY_FILIAL .And. TNY->TNY_NUMFIC == cNUMFIC
+		nRecTNY := Recno()
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+
+		aTblOpen 	:= { { "TNY", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		nDTINIC := aScan( aFields, {|x| x[ 1 ] == "TNY_DTINIC" } )
+		nHRINIC := aScan( aFields, {|x| x[ 1 ] == "TNY_HRINIC" } )
+
+		dbSelectArea( "TNY" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TNY", mv_par02 ) + cNewTM0 + DTOS( aFields[nDTINIC, 2 ] ) + aFields[nHRINIC, 2 ] )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TNY" )
+			Dbgoto( nRecTNY )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TNY" )
+			Reclock( "TNY", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TNY_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TNY", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TNY_NUMFIC"
+					FieldPut( FieldPos( cCampo ), cNewTM0 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TNY->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TNY" )
+		dbSetOrder( 1 )
+		Dbgoto( nRecTNY )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ATASO970
+Grava ASO em empresa/filial destino
+
+@author Denis Hyroshi de Souza
+@since 31/01/2005
+
+/*/
+//-------------------------------------------------------------------
+Function ATASO970()
+
+	Local aFields := {}
+	Local aTblOpen := {}
+
+	Local cFilsxe := ''
+	Local strField := ''
+
+	Local i := 0
+	Local j := 0
+
+	aTblOpen := { { 'TMY', 01 } }
+	NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+	cPathTM0 := Alltrim( x2path( 'TMY' ) )
+	cFilsxe := xFilial( 'TMY', mv_par02 ) + Substr( cPathTM0, 1, len( cPathTM0 ) - 3 ) + Mv_par01 + '0'
+
+	NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+	// Posiciona no ASO de origem para copiar os dados que serão transferidos
+	dbSelectArea( 'TMY' )
+	dbSetOrder( 2 )
+	If dbSeek( xFilial( 'TMY' ) + cNUMFIC )
+
+		While !Eof() .And. xFilial( 'TMY' ) == TMY->TMY_FILIAL .And. TMY->TMY_NUMFIC == cNUMFIC
+
+			// Salva RECNO do exame de origem para posicionar de novo posteriormente
+			nRecTMY := Recno()
+
+			aFields := {}
+
+			// Monta Array com estrutura e dados dos exames
+			For i := 1 To FCount()
+
+				strField := FieldName( i )
+				aAdd( aFields, { strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' ) } )
+
+			Next i
+
+			cChv_temp := TMY->TMY_NUMASO
+
+			aTblOpen 	:= { { 'TMY', 01 } }
+			NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+			// Procura exames cadastrados na filial destino pela nova ficha médica
+			dbSelectArea( 'TMY' )
+			dbSetOrder( 2 )
+			If dbSeek( xFilial( 'TMY', mv_par02 ) + cNewTM0 )
+
+				While !Eof() .And. xFilial( 'TMY', mv_par02 ) + cNewTM0 == TMY->TMY_FILIAL + TMY->TMY_NUMFIC
+
+					If cChv_temp != TMY_NUMASO
+
+						TMY->( dbSkip() )
+						Loop
+
+					EndIf
+
+					Reclock( 'TMY', .F. )
+						DbDelete()
+					MsUnlock( 'TMY' )
+
+					TMY->( dbSkip() )
+
+				End
+
+			EndIf
+
+			// Cadastra exames copiados na filial destino
+			If len( aFields ) > 0
+
+				cFilAnt := Mv_par02
+				cNewASO := NextNumASO( cFilSXE )
+				cFilAnt := cSvFilAnt
+
+				CONFIRMSX8()
+
+				dbSelectArea( 'TMY' )
+				Reclock( 'TMY', .T. )
+
+				For i := 1 To len( aFields )
+
+					cCampo := aFields[ i, 1 ]
+
+					If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+
+						Loop
+
+					EndIf
+
+					If AllTrim( cCampo ) == 'TMY_FILIAL'
+
+						FieldPut( FieldPos( cCampo ), xFilial( 'TMY', mv_par02 ) )
+
+					ElseIf AllTrim( cCampo ) == 'TMY_NUMFIC'
+
+						FieldPut( FieldPos( cCampo ), cNewTM0 )
+
+					ElseIf AllTrim( cCampo ) == 'TMY_NUMASO'
+
+						FieldPut( FieldPos( cCampo ), cNewASo )
+						aAdd( aASOs, { aFields[ i, 2 ], cNewASO } )
+
+					Else
+
+						If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3 ] )
+
+							FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+
+						EndIf
+
+					EndIf
+
+				Next i
+
+				TMY->( MsUnlock() )
+
+			EndIf
+
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+			// Retorna ao loop de exames na filial origem
+			dbSelectArea( 'TMY' )
+			dbSetOrder( 2 )
+			dbGoTo( nRecTMY )
+			TMY->( dbSkip() )
+
+		End
+
+	EndIf
+
+	If mv_par04 == 2 //Se o exame não for repassado para a nova filial
+
+		For j := 1 to Len( aASOs )
+
+			dbSelectArea( 'TM5' )
+			dbSetOrder( 4 ) // TM5_FILIAL + TM5_NUMASO
+
+			While dbSeek( xFilial( 'TM5' ) + aASOs[ j, 1 ] )
+
+				Reclock( 'TM5', .F. )
+					TM5->TM5_NUMASO := ''
+				MsUnlock( 'TM5' )
+
+			End
+
+		Next j
+
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EPISA970
+Grava entrega de EPI em empresa/filial destino
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 28/01/2008
+
+@sample EPISA970()
+@return lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function EPISA970()
+
+	Local i
+	Local aFields := {}, strField := ""
+	Local aTblOpen := {}
+
+	dbSelectArea( "TNF" )
+	dbSetOrder( 3 )
+	dbSeek( xFilial( "TNF" )+cMATFUN )
+	While !eof() .And. xFilial( "TNF" ) == TNF->TNF_FILIAL .And. TNF->TNF_MAT == cMATFUN
+		nRecTNF := Recno()
+		cChvTNF := TNF->( TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAp ) + Mv_par03 + DTOS( TNF->TNF_DTENTR ) + TNF->TNF_HRENTR
+
+		aFields := {}
+		For i := 1 TO FCount()
+			strField   := FieldName( i )
+			Aadd( aFields, {strField, FieldGet( i ), GetSx3Cache( strField, 'X3_TIPO' )} )
+		Next i
+
+		aTblOpen 	:= { { "TNF", 01 } }
+		NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+		dbSelectArea( "TNF" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TNF", mv_par02 ) + cChvTNF )
+			NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+			dbSelectArea( "TNF" )
+			dbSetOrder( 3 )
+			Dbgoto( nRecTNF )
+			Dbskip()
+			Loop
+		EndIf
+
+		If len( aFields ) > 0
+			dbSelectArea( "TNF" )
+			Reclock( "TNF", .T. )
+			For i := 1 to len( aFields )
+				cCampo := aFields[ i, 1]
+				If Empty( GetSx3Cache( cCampo, 'X3_TIPO' ) )
+					Loop
+				EndIf
+				If  AllTrim( cCampo ) == "TNF_FILIAL"
+					FieldPut( FieldPos( cCampo ), xFilial( "TNF", mv_par02 ) )
+				ElseIf  AllTrim( cCampo ) == "TNF_MAT"
+					FieldPut( FieldPos( cCampo ), mv_par03 )
+				Else
+					If ( GetSx3Cache( cCampo, 'X3_TIPO' ) == aFields[ i, 3] )
+						FieldPut( FieldPos( cCampo ), aFields[ i, 2 ] )
+					EndIf
+				EndIf
+			Next i
+			TNF->( MsUnlock() )
+		EndIf
+
+		NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+
+		dbSelectArea( "TNF" )
+		dbSetOrder( 3 )
+		Dbgoto( nRecTNF )
+		Dbskip()
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHKKEY970
+Verifica chave
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@param cAlias, Alias da tabela
+@param nOr, índice a ser utilizado
+@param cField, espaço para informar campo 1
+@param cField2, espaço para informar campo 2
+@param cField3, espaço para informar campo 3
+@param cField4, espaço para informar campo 4
+
+@return lRet, indica se encontrou o registro
+/*/
+//-------------------------------------------------------------------
+Function CHKKEY970( cAlias, nOr, cField, cField2, cField3, cField4 )
+
+	Local lRet := .F., strField, strField2
+	Local aArea := GetArea()
+	Local aTblOpen := {}
+
+	Default cField2 := ""
+	Default cField3 := ""
+	Default cField4 := ""
+
+	aTblOpen 	:= { { cAlias, 01 } }
+	NGPrepTBL( aTblOpen, Mv_par01, Mv_par02 )
+
+	dbSelectArea( cAlias )
+	dbSetOrder( nOr )
+	If dbSeek( xFilial( cAlias, Mv_par02 ) + cField + cField2 + cField3 + cField4 )
+
+		If cAlias == "TM4" .And. !lAuto970
+			If cTipoExame != TM4->TM4_INDRES
+				strField := Alltrim( cFielD )
+				strField2 := Alltrim( cField2 )
+				dbSelectArea( "TRB970" )
+				Dbgotop()
+				If !dbSeek( "2" + cAlias + PadR( strField, len( TRB970->VALOR ) ) + PadR( strField2, len( TRB970->VALOR2 ) ) )
+					RecLock( "TRB970", .T. )
+					TRB970->TABELA := cAlias
+					TRB970->TIPO   := "2"
+					TRB970->VALOR  := PadR( strField, len( TRB970->VALOR ) )
+					TRB970->VALOR2 := PadR( strField2, len( TRB970->VALOR2 ) )
+					TRB970->( MsUnlock() )
+				EndIf
+			Else
+				lRet := .T.
+			EndIf
+		Else
+			lRet := .T.
+		EndIf
+
+	ElseIf cAlias == 'TN3' .And. fEpiGen( cField3 )
+
+		lRet := .T.
+
+	Else
+
+		strField  := Alltrim( cFielD )
+		strField2 := Alltrim( cField2 )
+		strField3 := Alltrim( cField3 )
+		strField4 := Alltrim( cField4 )
+		dbSelectArea( "TRB970" )
+		Dbgotop()
+		If !dbSeek( "1" + cAlias + PadR( strField, len( TRB970->VALOR ) ) + ;
+								PadR( strField2, len( TRB970->VALOR2 ) ) + ;
+								PadR( strField3, len( TRB970->VALOR3 ) ) + ;
+								PadR( strField4, len( TRB970->VALOR4 ) ) )
+			RecLock( "TRB970", .T. )
+			TRB970->TABELA := cAlias
+			TRB970->TIPO   := "1"
+			TRB970->VALOR  := PadR( strField, len( TRB970->VALOR ) )
+			TRB970->VALOR2 := PadR( strField2, len( TRB970->VALOR2 ) )
+			TRB970->VALOR3 := PadR( strField3, len( TRB970->VALOR3 ) )
+			TRB970->VALOR4 := PadR( strField4, len( TRB970->VALOR4 ) )
+			TRB970->( MsUnlock() )
+		EndIf
+	EndIf
+
+	NGPrepTBL( aTblOpen, cSvEmpAnt, cSvFilAnt )
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG970IMP
+Impressao dos Erros ocorridos na gravação
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 18/02/2003
+
+@sample NG970IMP()
+@return Nil, sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function NG970IMP()
+
+	Local wnrel	  := "MDTA970"
+	Local cDesc1  := STR0016 //"Relatorio de apresentacao dos Erros ocorridos durante o processamento da "
+	Local cDesc2  := STR0017 //"Transferencia de Ficha Medica para uma outra filial.
+	Local cDesc3  := " "
+	Local cString := "TM0"
+
+	Private nomeprog := "MDTA970"
+	Private tamanho  := "M"
+	Private aReturn  := {STR0018, 1, STR0019, 2, 2, 1, "", 1} //"Zebrado"###"Administracao"
+	Private titulo   := STR0020 //"Erros Ocorridos na Transferencia"
+	Private ntipo    := 0
+	Private nLastKey := 0
+	Private cabec1, cabec2
+
+	wnrel:=SetPrint( cString, wnrel, , Titulo, cDesc1, cDesc2, cDesc3, .F., "" )
+	If nLastKey == 27
+		Set Filter to
+		Return
+	EndIf
+	SetDefault( aReturn, cString )
+	If nLastKey == 27
+		Set Filter to
+		Return
+	EndIf
+	RptStatus( {|lEnd| R970Imp( @lEnd, wnRel, Titulo, Tamanho ) }, Titulo )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} R970Imp
+Chamada do Relatório
+@type Static Function
+
+@author Denis Hyroshi de Souza
+@since 13/03/2003
+
+@sample R970Imp()
+@param LEnd, lógico, variável que informa o início da impressão
+@param wnRel, contem o nome do fonte
+@param Titulo, contém o título do relatório
+@param Tamanho, contém o tamanho do relatório
+@return Nil, sempre nulo
+/*/
+//-------------------------------------------------------------------
+Static Function R970Imp( lEnd, wnRel, titulo, tamanho )
+
+	Local lTM4 := .T.
+	Local lTME := .T.
+	Local lTMR := .T.
+	Local lTM1 := .T.
+	Local lTMH := .T.
+	Local lTMO := .T.
+	Local lTMK := .T.
+	Local lTIP := .T.
+	Local lSA2 := .T.
+	Local lSB1 := .T.
+	Local lTN3 := .T.
+	Local lTL6 := .T.
+	Local lTNG := .T.
+	Local lTNH := .T.
+	Local lTOI := .T.
+	Local lTOJ := .T.
+	Local lTNP := .T.
+	Local lTNN := .T.
+	Local lTND := .T.
+	Local lSRA := .T.
+	Local lQAA := .T.
+
+	Private li := 80, m_pag := 1
+
+	nTipo  := IIF( aReturn[4]==1, 15, 18)
+	cabec1 := " "
+	cabec2 := " "
+
+	dbSelectArea( "TRB970" )
+	Dbgotop()
+	SetRegua( LastRec() )
+	While !Eof()
+	IncRegua()
+	If TRB970->TIPO == "1"
+		If TRB970->TABELA == "TM4"
+			If lTM4
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0021 //"- Exames que não existem na filial destino:"
+				lTM4 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TNP"
+			If lTNP
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0130 //"- Emitentes de Atestados Médicos que não existem na filial destino:"
+				lTNP := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TME"
+			If lTME
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0023 //"- Restrições que não existem na filial destino:"
+				lTME := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "SA2"
+			If lSA2
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + "- "+STR0100 //"- Fornecedores que não existem na filial destino:"
+				lSA2 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0101+Alltrim( TRB970->VALOR ) //"Fornecedor: "
+			@li, 027 Psay STR0102+Alltrim( TRB970->VALOR2 ) //"Loja: "
+		ElseIf TRB970->TABELA == "SB1"
+			If lSB1
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + "- "+STR0103 //"- Produtos ( EPI ) que não existem na filial destino:"
+				lSB1 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TN3"
+			If lTN3
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + "- "+STR0104 //"- Fornecedores de EPI que não existem na filial destino:"
+				lTN3 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005;
+				Psay STR0101 + Alltrim( TRB970->VALOR ) ; // "Fornecedor: "
+				+ Space( 10 ) + STR0102 + Alltrim( TRB970->VALOR2 ) ; // "Loja: "
+				+ Space( 10 ) + STR0105 + Alltrim( TRB970->VALOR3 ) ; //"Cod. EPI: "
+				+ Space( 10 ) + STR0106 + Alltrim( TRB970->VALOR4 ) //"Num. CA: "
+		ElseIf TRB970->TABELA == "TMR"
+			If lTMR
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0024 //"- Doenças que não existem na filial destino:"
+				lTMR := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TM1"
+			If lTM1
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0025 //"- Medicamentos que não existem na filial destino:"
+				lTM1 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TMH"
+			If lTMH
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0026 //"- Questionários que não existem na filial destino:"
+				lTMH := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0027+Alltrim( TRB970->VALOR ) //"Questionário: "
+			@li, 027 Psay STR0028+Alltrim( TRB970->VALOR2 )		 //"Questão: "
+		ElseIf TRB970->TABELA == "TMO"
+			If lTMO
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0029 //"- Programas de Saude que não existem na filial destino:"
+				lTMO := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TL6"
+			If lTL6
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0116 //"- Vacinas que não existem na filial destino:"
+				lTL6 := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TNG"
+			If lTNG
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0117 //"- Tipos de Acidente que não existem na filial destino:"
+				lTNG := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TNH"
+			If lTNH
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0118 //"- Objetos Acidente que não existem na filial destino:"
+				lTNH := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TOI"
+			If lTOI
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0119 //"- Partes do Corpo que não existem na filial destino:"
+				lTOI := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+		ElseIf TRB970->TABELA == "TOJ"
+			If lTOJ
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + " " + STR0120 //"- Naturezas de Lesão que não existem na filial destino:"
+				lTOJ := .F.
+			EndIf
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+
+		ElseIf TRB970->TABELA == 'TNN'
+
+			If lTNN
+
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + ' - ' + STR0136 + ':' // "Mandatos que não existem na filial destino"
+
+				lTNN := .F.
+
+			EndIf
+
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+
+		ElseIf TRB970->TABELA == 'TMK'
+
+			If lTMK
+
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + Space( 1 ) + STR0022 // "Médicos que não existem na filial destino:"
+
+				lTMK := .F.
+
+			EndIf
+
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+
+		ElseIf TRB970->TABELA == 'TND'
+
+			If lTND
+
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + ' - ' + STR0137 + ':' // "Causas de acidente que não existem na filial destino"
+
+				lTND := .F.
+
+			EndIf
+
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+
+		ElseIf TRB970->TABELA == 'SRA'
+
+			If lSRA
+
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + ' - ' + STR0138 + ':' // "Funcionários que não existem na filial destino"
+
+				lSRA := .F.
+
+			EndIf
+
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR ) // "Código:"
+
+		ElseIf TRB970->TABELA == 'QAA'
+
+			If lQAA
+
+				SomaLinha()
+				SomaLinha()
+				@li, 000 Psay TRB970->TABELA + ' - ' + STR0139 + ':' // "Usuários que não existem na filial destino"
+
+				lQAA := .F.
+
+			EndIf
+
+			SomaLinha()
+			@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR ) // "Código:"
+
+		EndIf
+
+	Else
+		If lTIP
+			SomaLinha()
+			SomaLinha()
+			@li, 000 Psay TRB970->TABELA + " " + STR0030 //"- Exames que o tipo de resultado é incompativel com o mesmo exame da filial destino:"
+			lTIP := .F.
+		EndIf
+		SomaLinha()
+		@li, 005 Psay STR0135 + Space( 1 ) + Alltrim( TRB970->VALOR )
+	EndIf
+
+	dbSelectArea( "TRB970" )
+	dbskip()
+	End
+	If !lTM4 .Or. !lTME .Or. !lTMR .Or. !lTM1 .Or. !lTMH .Or. !lTMO .Or. !lTMK .Or. !lTNP .Or. !lTIP .Or. !lTL6 .Or. !lTNG .Or. !lTNH .Or. !lTOI .Or. !lTOJ
+
+		SomaLinha()
+		SomaLinha()
+		@li, 000 Psay STR0132 // "A transferência da ficha médica não ocorreu pelo(s) problema(s) supracitado(s)."
+		SomaLinha()
+		SomaLinha()
+		@li, 000 Psay STR0133 // "Para transferir a ficha médica, após resolver os problemas apresentados, concluir a transferência na rotina Transferência de ficha."
+		SomaLinha()
+		SomaLinha()
+		@li, 000 Psay STR0134 // "Miscelânia > Arquivos > Transf. de filial."
+
+	EndIf
+
+	Set Filter To
+	Set device to Screen
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel )
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Somalinha
+Incrementa linha e controla salto de página
+@type Static Function
+
+@author Denis Hyroshi de Souza
+@since 19/03/2003
+
+@sample Somalinha()
+@return Nil, sempre nulo
+/*/
+//-------------------------------------------------------------------
+Static Function Somalinha()
+
+    Li++
+    If Li > 58
+        Cabec( titulo, cabec1, cabec2, nomeprog, tamanho, nTipo )
+    EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA970ARQ
+Abre arquivos que nao foram inicializados
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 19/03/2003
+
+@sample MDTA970ARQ()
+@param cArq970, caracter, nome do arquivo a ser aberto
+@return cFileJob, caracter, retorna a tabela de trabalho
+/*/
+//-------------------------------------------------------------------
+Function MDTA970ARQ( cArq970 )
+
+	Local cFileJob := Alltrim( cArq970 )
+	Local nAT, cMd, nFor
+	Local aFileJob := {"SRA", "TM0", "TMW", "TM5", "TM4", "TMF", "TME", "TNA", "TMR", "TMT",;
+					"TMK", "TM2", "TM1", "TMI", "TMH", "TMN", "TMO", "SA2", "SB1", "TN3",;
+					"TNF", "TM9", "TM6", "TN4", "TL5", "TL9", "TL6", "TNC", "TMJ", "TOF",;
+					"TNG", "TNH", "TOI", "TOJ", "TNP"}
+
+	For nFor := 1 to Len( aFileJob )
+		cMd :=If( FindFunction( "FWModeAccess" ), FWModeAccess( aFileJob[nFor] ), If( Empty( xFilial( aFileJob[nFor] ) ), "C", "E" ) )
+		nAT := AT( aFileJob[nFor], cFileJob )
+		IF nAT <= 0
+			cFileJob += aFileJob[nFor]+cMd+"/"
+		EndIf
+	Next nFor
+
+Return cFileJob
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} A970HELP
+Janela de aviso com botões
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 15/12/2003
+
+@sample A970HELP()
+@return lRET, lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function A970HELP()
+
+	Local oDLG970, oSCR970, oSay, n970
+	Local lRET := .F.
+
+	Private aMessage := {}
+
+	Aadd( aMessage, STR0042 ) //"Antes de executar a Transferencia, verificar na"
+	Aadd( aMessage, STR0043 ) //"Empresa/Filial destino se existem os mesmos registros"
+	Aadd( aMessage, STR0044 ) //"relacionados na Empresa/Filial origem para as tabelas"
+	Aadd( aMessage, STR0045 ) //"apresentadas a seguir:"
+	Aadd( aMessage, " " )
+	Aadd( aMessage, "TM4 - "+STR0046 ) //"Exames"
+	Aadd( aMessage, "TME - "+STR0047 )  //"Restrições"
+	Aadd( aMessage, "TMR - "+STR0048 ) //"C.I.D."
+	Aadd( aMessage, "TMK - "+STR0049 ) //"Usuários de Medicina e Segurança do Trabalho"
+	Aadd( aMessage, "TNP - "+STR0131 ) //"Emitentes de Atestados Médicos"
+	Aadd( aMessage, "TM1 - "+STR0050 ) //"Medicamentos"
+	Aadd( aMessage, "TMH - "+STR0051 ) //"Questões do Questionario"
+	Aadd( aMessage, "TMO - "+STR0052 ) //"Programas de Saúde"
+	Aadd( aMessage, "SA2 - "+STR0107 ) //"Fornecedores"
+	Aadd( aMessage, "SB1 - "+STR0108 ) //"Produtos ( EPI )"
+	Aadd( aMessage, "TN3 - "+STR0109 ) //"Fornecedores de EPI"
+	Aadd( aMessage, "TL6 - "+STR0121 ) //"Vacinas"
+	Aadd( aMessage, "TNG - "+STR0126 ) //"Tipos de Acidente"
+	Aadd( aMessage, "TNH - "+STR0127 )  //"Objetos Acidente"
+	Aadd( aMessage, "TOI - "+STR0128 ) //"Partes do Corpo"
+	Aadd( aMessage, "TOJ - "+STR0129 ) //"Naturezas de Lesão"
+	Aadd( aMessage, " " )
+	Aadd( aMessage, STR0053 ) //"OBS: Caso algum registro não exista na Empresa/Filial"
+	Aadd( aMessage, STR0054 ) //"destino, as informações relacionadas não serão "
+	Aadd( aMessage, STR0055 ) //"transferidas."
+	Aadd( aMessage, " " )
+	Aadd( aMessage, STR0056 ) //"Ex.: Se na Empresa/Filial Origem o exame de Audiometria"
+	Aadd( aMessage, STR0059 ) //"tem o código '000001', na Empresa/Filial Destino deverá"
+	Aadd( aMessage, STR0060 ) //"existir o mesmo exame com o código '000001', caso contrário, "
+	Aadd( aMessage, STR0057 )  //"não haverá transferência desse exame."
+
+	nScroll := Len( aMessage )
+
+	DEFINE MSDIALOG oDLG970 FROM 0, 0 TO 290, 450 TITLE STR0058 Of oMainWnd PIXEL //"Help do Programa de Transferencia"
+
+	@ 0, 00 BITMAP oBmp RESNAME "LOGIN" oF oDLG970 SIZE 50, 400 NOBORDER WHEN .F. PIXEL
+	@ 5,53 SCROLLBOX oSCR970 SIZE 120, 170 OF oDLG970 VERTICAL BORDER
+
+	For n970 := 1 to nScroll
+		cTextSay := '{||"'+OemToAnsi( aMessage[n970] )+'"}'
+		oSay     := tSay():New( ( 8*n970 ), 6, MontaBlock( cTextSay ), oSCR970, , , , , , .T., , , , )
+	Next n970
+
+	DEFINE SBUTTON FROM 132, 160 TYPE 1 ENABLE OF oDLG970 ACTION EVAL({|| lRET := .T., oDLG970:END()} )
+	DEFINE SBUTTON FROM 132, 190 TYPE 2 ENABLE OF oDLG970 ACTION EVAL({|| lRET := .F., oDLG970:END()} )
+
+	ACTIVATE MSDIALOG oDLG970 CENTERED
+
+Return lRET
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilização do Menu Funcional
+@type Static Function
+
+@author Rafael Diogo Richter
+@since 29/11/2006
+
+
+@sample  MenuDef()
+@return aRotina, Array, Array com opcoes da rotina.
+@obs Parametros do array a Rotina:
+		1. Nome a aparecer no cabecalho
+		2. Nome da Rotina associada
+		3. Reservado
+		4. Tipo de Transação a ser efetuada:
+		    1 - Pesquisa e Posiciona em um Banco de Dados
+		    2 - Simplesmente Mostra os Campos
+		    3 - Inclui registros no Bancos de Dados
+		    4 - Altera o registro corrente
+		    5 - Remove o registro corrente do Banco de Dados
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := { {STR0004, "AxPesqui", 0, 1},; //"Pesquisar"
+					   {STR0005, "NGCAD01", 0, 2},; //"Visualizar"
+					   {STR0006, "TRANSFICHA", 0, 4}} //"Transferir"
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AutoMdt970
+Transferência automática de empresa/filial
+@type Function
+
+@author Denis Hyroshi de Souza
+@since 13/08/2010
+
+@sample AutoMdt970()
+@param c970Oemp, caracter, empresa de origem
+@param c970Demp, caracter, empresa de destino
+@param c970Ofil, caracter, filial de origem
+@param c970Dfil, caracter, filial de destino
+@param c970Omat, caracter, matrícula de origem
+@param c970Dmat, caracter, matrícula de destino
+@param c970Ocus, caracter, centro de custo de origem
+@param c970Dcus, caracter, centro de custo de destino
+@return lógico, .T. ou .F.
+/*/
+//-------------------------------------------------------------------
+Function AutoMdt970( c970Oemp, c970Demp, c970Ofil, c970Dfil, c970Omat, c970Dmat, c970Ocus, c970Dcus )
+
+	Local Area := GetArea()
+	Local aOldAmb := {cEmpAnt, cFilAnt}
+	Local cPerg := Padr( "MDT970", 10 )
+	Private nTamTable
+
+	cArqTab := MDTA970ARQ( cArqTab )
+	nTamTable := Len( cArqTab )
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 03 )
+	If !dbSeek( c970Ofil+c970Omat )
+		RestArea( Area )
+		Return .F.
+	EndIf
+
+	Private cSvFilAnt := c970Ofil
+	Private cSvEmpAnt := c970Oemp
+	Private cTipoExame := " "
+	Private cNUMFIC := TM0->TM0_NUMFIC
+	Private cMATFUN := TM0->TM0_MAT
+	Private cFILFIC := TM0->TM0_FILIAL
+	Private cTM0_RG := TM0->TM0_RG
+	Private cFilFun := "", cCCusto := ""
+	Private cDepto  := ""
+	Private cCodFun := "", cCBO    := ""
+	Private cNewTM0 := "", cTnotra := ""
+
+	Pergunte( cPerg, .F. )
+
+	Mv_par01 := c970Demp
+	Mv_par02 := c970Dfil
+	Mv_par03 := c970Dmat
+	Mv_par04 := 1
+	Mv_par05 := 1
+	Mv_par06 := 1
+	Mv_par07 := 1
+	Mv_par08 := 1
+	Mv_par09 := 1
+	Mv_par10 := 1
+	Mv_par11 := 1
+	Mv_par12 := 1
+	Mv_par13 := 1
+	Mv_par14 := 2
+	Mv_par15 := 1
+	Mv_par16 := 1
+	Mv_par17 := 1
+	Mv_par18 := 1
+	Mv_par19 := 1
+	Mv_par20 := 1
+
+	Processa( {|lEnd| PROCT970( .T. )}, STR0008 ) //"Processando Arquivo..."
+
+	cEmpAnt := aOldAmb[ 1 ]
+	cFilAnt := aOldAmb[ 2 ]
+	RestArea( Area )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fVeriImp
+Verifica se não há um impeditivo para a transferência antes da execução.
+@type Function
+
+@author Gabriel Sokacheski
+@since 09/08/2021
+
+/*/
+//-------------------------------------------------------------------
+Static Function fVeriImp()
+
+	Local bValRes := { || IIf( TC9->TC9_TIPRES == '2', CHKKEY970( 'SRA', 1, AllTrim( TC9->TC9_CODRES ) ), CHKKEY970( 'QAA', 1, AllTrim( TC9->TC9_CODRES ) ) ) }
+
+	local lErro := .F.
+
+	// Verifica os exames
+	If ( mv_par04 == 1 .Or. mv_par05 == 1 )
+
+		dbSelectArea( 'TM5' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TM5' ) + cNUMFIC )
+
+			While ( 'TM5' )->( !Eof() ) .And. xFilial( 'TM5' ) == TM5->TM5_FILIAL .And. TM5->TM5_NUMFIC == cNUMFIC
+
+				dbSelectArea( 'TM4' )
+				dbSetOrder( 01 )
+
+				If dbSeek( xFilial( 'TM4' ) + TM5->TM5_EXAME )
+
+					// Variável private utilizada em CHKKEY970()
+					cTipoExame := TM4->TM4_INDRES
+
+					If !Empty( TM5->TM5_DTRESU ) .And. mv_par04 = 2
+
+						( 'TM5' )->( Dbskip() )
+						Loop
+
+					EndIf
+
+					If Empty( TM5->TM5_DTRESU ) .And. mv_par05 = 2
+
+						( 'TM5' )->( Dbskip() )
+						Loop
+
+					EndIf
+
+					If !CHKKEY970( 'TM4', 1, TM5->TM5_EXAME )
+
+						( 'TM5' )->( Dbskip() )
+						Loop
+
+					EndIf
+
+				EndIf
+
+				( 'TM5' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica o atendimento de enfermagem
+	If mv_par19 == 1
+
+		dbSelectArea( 'TL5' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TL5' ) + cNUMFIC )
+
+			While ( 'TL5' )->( !Eof() ) .And. xFilial( 'TL5' ) == TL5->TL5_FILIAL .And. TL5->TL5_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMK', 1, TL5->TL5_CODUSU )
+
+					( 'TL5' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				If !CHKKEY970( 'TMS', 1, TL5->TL5_MOTIVO )
+
+					( 'TL5' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TL5' )->( Dbskip() )
+
+			End
+
+			// Caso haja atendimento, verifica os medicamentos também
+			dbSelectArea( 'TY3' )
+			dbSetOrder( 1 )
+
+			If dbSeek( xFilial( 'TY3' ) + cNUMFIC )
+
+				While ( 'TY3' )->( !Eof() ) .And. xFilial( 'TY3' ) == TY3->TY3_FILIAL .And. TY3->TY3_NUMFIC == cNUMFIC
+
+					If !CHKKEY970( 'TM1', 1, TY3->TY3_CODMED )
+
+						( 'TY3' )->( Dbskip() )
+						Loop
+
+					EndIf
+
+					( 'TY3' )->( Dbskip() )
+
+				End
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	// Verifica as vacinas do funcionário
+	If mv_par20 == 1
+
+		dbSelectArea( 'TL9' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TL9' ) + cNUMFIC )
+
+			While ( 'TL9' )->( !Eof() ) .And. xFilial( 'TL9' ) == TL9->TL9_FILIAL .And. TL9->TL9_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TL6', 1, TL9->TL9_VACINA )
+
+					( 'TL9' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TL9' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica as consultas
+	If mv_par17 == 1
+
+		dbSelectArea( 'TMJ' )
+		dbSetOrder( 2 )
+
+		If dbSeek( xFilial( 'TMJ' ) + cNUMFIC )
+
+			While ( 'TMJ' )->( !Eof() ) .And. xFilial( 'TMJ' ) == TMJ->TMJ_FILIAL .And. TMJ->TMJ_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMK', 1, TMJ->TMJ_CODUSU )
+
+					( 'TMJ' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMJ' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os acidentes
+	If mv_par16 == 1
+
+		dbSelectArea( 'TNC' )
+		dbSetOrder( 7 )
+
+		If dbSeek( xFilial( 'TNC' ) + cNUMFIC )
+
+			While ( 'TNC' )->( !Eof() ) .And. xFilial( 'TNC' ) == TNC->TNC_FILIAL .And. TNC->TNC_NUMFIC == cNUMFIC
+
+				lErro := .F.
+
+				If !Empty( TNC->TNC_TIPACI ) .And. !CHKKEY970( 'TNG', 1, TNC->TNC_TIPACI )
+
+					lErro := .T.
+
+				EndIf
+
+				If !Empty( TNC->TNC_CODOBJ ) .And. !CHKKEY970( 'TNH', 1, TNC->TNC_CODOBJ )
+
+					lErro := .T.
+
+				EndIf
+
+				If !Empty( TNC->TNC_CODPAR ) .And. !CHKKEY970( 'TOI', 1, TNC->TNC_CODPAR )
+
+					lErro := .T.
+
+				EndIf
+
+				If !Empty( TNC->TNC_CODLES ) .And. !CHKKEY970( 'TOJ', 1, TNC->TNC_CODLES )
+
+					lErro := .T.
+
+				EndIf
+
+				If !Empty( TNC->TNC_CID ) .And. !CHKKEY970( 'TMR', 1, TNC->TNC_CID )
+
+					lErro := .T.
+
+				EndIf
+
+				If lErro
+
+					( 'TNC' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				// Investigação
+				DbSelectArea( 'TNU' )
+				DbSetOrder( 1 )
+
+				If DbSeek( xFilial( 'TNU' ) + TNC->TNC_ACIDEN )
+
+					While ( 'TNU' )->( !Eof() ) .And. xFilial( 'TNU' ) == TNU->TNU_FILIAL .And. TNU->TNU_ACIDEN == TNC->TNC_ACIDEN
+
+						CHKKEY970( 'TNN', 1, TNU->TNU_MANDAT )
+
+						If !Empty( TNU->TNU_RESINV )
+							CHKKEY970( 'TMK', 1, TNU->TNU_RESINV )
+						EndIf
+
+						( 'TNU' )->( Dbskip() )
+
+					End
+
+				EndIf
+
+				// Ato inseguro ou condição insegura
+				DbSelectArea( 'TNZ' )
+				DbSetOrder( 1 )
+
+				If DbSeek( xFilial( 'TNZ' ) + TNC->TNC_ACIDEN )
+
+					While ( 'TNZ' )->( !Eof() ) .And. xFilial( 'TNZ' ) == TNZ->TNZ_FILIAL .And. TNZ->TNZ_ACIDEN == TNC->TNC_ACIDEN
+
+						CHKKEY970( 'TND', 1, TNZ->TNZ_CAUSA )
+
+						( 'TNZ' )->( Dbskip() )
+
+					End
+
+				EndIf
+
+				// Plano de ação vinculado ao acidente
+				DbSelectArea( 'TNT' )
+				DbSetOrder( 1 )
+
+				If DbSeek( xFilial( 'TNT' ) + TNC->TNC_ACIDEN )
+
+					While ( 'TNT' )->( !Eof() ) .And. xFilial( 'TNT' ) == TNT->TNT_FILIAL .And. TNT->TNT_ACIDEN == TNC->TNC_ACIDEN
+
+						CHKKEY970( 'TNN', 1, TNT->TNT_MANDAT )
+
+						DbSelectArea( 'TC9' )
+						DbSetOrder( 1 ) // TC9_FILIAL + TC9_CODPLA + TC9_TIPRES + TC9_CODRES
+
+						If DbSeek( xFilial( 'TC9' ) + TNT->TNT_CODPLA )
+							Eval( bValRes )
+						EndIf
+
+						( 'TNT' )->( Dbskip() )
+
+					End
+
+				EndIf
+
+				// Plano de ação vinculado ao mandato
+				DbSelectArea( 'TNU' )
+				DbSetOrder( 1 )
+
+				If DbSeek( xFilial( 'TNU' ) + TNC->TNC_ACIDEN )
+
+					While ( 'TNU' )->( !Eof() ) .And. xFilial( 'TNU' ) == TNU->TNU_FILIAL .And. TNU->TNU_ACIDEN == TNC->TNC_ACIDEN
+
+						CHKKEY970( 'TNN', 1, TNU->TNU_MANDAT )
+
+						DbSelectArea( 'TNV' )
+						DbSetOrder( 1 ) // TNV_FILIAL + TNV_MANDAT + TNV_CODPLA
+
+						If DbSeek( xFilial( 'TNV' ) + TNU->TNU_MANDAT )
+
+							While( 'TNV' )->( !Eof() ) .And. xFilial( 'TNV' ) == TNV->TNV_FILIAL .And. TNV->TNV_MANDAT == TNU->TNU_MANDAT
+
+								DbSelectArea( 'TC9' )
+								DbSetOrder( 1 ) // TC9_FILIAL + TC9_CODPLA + TC9_TIPRES + TC9_CODRES
+
+								If DbSeek( xFilial( 'TC9' ) + TNV->TNV_CODPLA )
+									Eval( bValRes )
+								EndIf
+
+								( 'TNV' )->( Dbskip() )
+
+							End
+
+						EndIf
+
+						( 'TNU' )->( Dbskip() )
+
+					End
+
+				EndIf
+
+				( 'TNC' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica as restrições
+	If mv_par06 == 1
+
+		dbSelectArea( 'TMF' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TMF' ) + cNUMFIC )
+
+			While ( 'TMF' )->( !Eof() ) .And. xFilial( 'TMF' ) == TMF->TMF_FILIAL .And. TMF->TMF_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TME', 1, TMF->TMF_RESTRI )
+
+					( 'TMF' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMF' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica as doenças
+	If mv_par07 == 1
+
+		dbSelectArea( 'TNA' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TNA' ) + cNUMFIC )
+
+			While ( 'TNA' )->( !Eof() ) .And. xFilial( 'TNA' ) == TNA->TNA_FILIAL .And. TNA->TNA_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMR', 1, TNA->TNA_CID )
+
+					( 'TNA' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TNA' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os diagnósticos
+	If mv_par08 == 1
+
+		dbSelectArea( 'TMT' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TMT' ) + cNUMFIC )
+
+			While ( 'TMT' )->( !Eof() ) .And. xFilial( 'TMT' ) == TMT->TMT_FILIAL .And. TMT->TMT_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMK', 1, TMT->TMT_CODUSU )
+
+					( 'TMT' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMT' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os medicamentos
+	If mv_par09 == 1
+
+		dbSelectArea( 'TM2' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TM2' ) + cNUMFIC )
+
+			While ( 'TM2' )->( !Eof() ) .And. xFilial( 'TM2' ) == TM2->TM2_FILIAL .And. TM2->TM2_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TM1', 1, TM2->TM2_CODMED )
+
+					( 'TM2' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TM2' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os questionários
+	If mv_par10 == 1
+
+		dbSelectArea( 'TMI' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TMI' ) + cNUMFIC )
+
+			While ( 'TMI' )->( !Eof() ) .And. xFilial( 'TMI' ) == TMI->TMI_FILIAL .And. TMI->TMI_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMH', 1, TMI->TMI_QUESTI, TMI->TMI_QUESTA )
+
+					( 'TMI' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMI' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os programas de saúde
+	If mv_par11 == 1
+
+		dbSelectArea( 'TMN' )
+		dbSetOrder( 2 )
+
+		If dbSeek( xFilial( 'TMN' ) + cNUMFIC )
+
+			While ( 'TMN' )->( !Eof() ) .And. xFilial( 'TMN' ) == TMN->TMN_FILIAL .And. TMN->TMN_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TMO', 1, TMN->TMN_CODPRO )
+
+					( 'TMN' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMN' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os atestados médicos
+	If mv_par12 == 1
+
+		dbSelectArea( 'TNY' )
+		dbSetOrder( 1 )
+
+		If dbSeek( xFilial( 'TNY' ) + cNUMFIC )
+
+			While ( 'TNY' )->( !Eof() ) .And. xFilial( 'TNY' ) == TNY->TNY_FILIAL .And. TNY->TNY_NUMFIC == cNUMFIC
+
+				If !CHKKEY970( 'TNP', 1, TNY->TNY_EMITEN )
+
+					( 'TNY' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TNY' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os ASOs
+	If mv_par13 == 1
+
+		dbSelectArea( 'TMY' )
+		dbSetOrder( 2 )
+
+		If dbSeek( xFilial( 'TMY' ) + cNUMFIC )
+
+			While ( 'TMY' )->( !Eof() ) .And. xFilial( 'TMY' ) == TMY->TMY_FILIAL .And. TMY->TMY_NUMFIC == cNUMFIC
+
+				If !ChkKey970( 'TMK', 1, TMY->TMY_CODUSU )
+
+					( 'TMY' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TMY' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+	// Verifica os EPIs
+	If mv_par15 == 1
+
+		dbSelectArea( 'TNF' )
+		dbSetOrder( 3 )
+
+		If dbSeek( xFilial( 'TNF' ) + cMATFUN )
+
+			While ( 'TNF' )->( !Eof() ) .And. xFilial( 'TNF' ) == TNF->TNF_FILIAL .And. TNF->TNF_MAT == cMATFUN
+
+				lErro := .F.
+
+				If !CHKKEY970( 'SA2', 1, TNF->TNF_FORNEC, TNF->TNF_LOJA )
+
+					lErro := .T.
+
+				EndIf
+
+				If !CHKKEY970( 'SB1', 1, TNF->TNF_CODEPI )
+
+					lErro := .T.
+
+				EndIf
+
+				If !ChkKey970( 'TN3', 1, TNF->TNF_FORNEC, TNF->TNF_LOJA, TNF->TNF_CODEPI, TNF->TNF_NUMCAP )
+
+					lErro := .T.
+
+				EndIf
+
+				If lErro
+
+					( 'TNF' )->( Dbskip() )
+					Loop
+
+				EndIf
+
+				( 'TNF' )->( Dbskip() )
+
+			End
+
+		EndIf
+
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fControle
+Monta o caminho de numeração do alias informado.
+@type Function
+
+@author Gabriel Sokacheski
+@since 21/09/2021
+
+@return cCaminho, Caractere, Caminho do controle de numeração de acordo
+com o X2_PATH.
+/*/
+//-------------------------------------------------------------------
+Static Function fControle( cAlias )
+
+	Local aArea := GetArea()
+	Local aTabela := { { cAlias, 01 } }
+
+	Local cPath := ''
+	Local cQuery := GetNextAlias()
+	Local cCaminho := ''
+
+	If MPDicInDB()
+
+		NGPrepTBL( aTabela, Mv_par01, Mv_par02 )
+
+		// Posiciona na filial destino
+		cFilAnt := Mv_par02
+		CEmpAnt := Mv_par01
+
+		// Busca o X2_PATH para montar o caminho do controle de numeração
+		BeginSQL Alias cQuery
+			SELECT
+				X2_PATH
+			FROM
+				%table:SX2%
+			WHERE
+				X2_CHAVE = %exp:cAlias%
+		EndSQL
+
+		While ( cQuery )->( !EoF() )
+
+			cPath := AllTrim( ( cQuery )->X2_PATH ) + cAlias
+
+			Exit
+
+		End
+
+		( cQuery )->( DbCloseArea() )
+
+		cCaminho := xFilial( cAlias, mv_par02 ) + cPath + Mv_par01 + '0' // Caminho final do controle de numeração
+
+		NGPrepTBL( aTabela, cSvEmpAnt, cSvFilAnt )
+
+		cFilAnt := cSvFilAnt
+		CEmpAnt := cSvEmpAnt
+
+	EndIf
+
+	RestArea( aArea )
+
+Return cCaminho
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fEpiGen
+Verifica se o EPI é genérico.
+
+@author Gabriel Sokacheski
+@since 04/08/2022
+
+@param cEpi, EPI
+
+@return lRet, Indica se o EPI é genérico e está cadastrado
+/*/
+//-------------------------------------------------------------------
+Static Function fEpiGen( cEpi )
+
+	Local aTabelas := { { 'TL0', 01 } }
+
+	Local lRet := .F.
+
+	NGPrepTBL( aTabelas, mv_par01, mv_par02 )
+
+	DbSelectArea( 'TL0' )
+	DbSetOrder( 2 )
+
+	If dbSeek( xFilial( 'TL0', mv_par02 ) + cEpi )
+
+		lRet := .T.
+
+	EndIf
+
+	NGPrepTBL( aTabelas, cSvEmpAnt, cSvFilAnt )
+
+
+Return lRet

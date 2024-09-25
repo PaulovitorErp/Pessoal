@@ -1,0 +1,243 @@
+#INCLUDE "Mntc260.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC260
+Grafico de Horas X Area de  Manutencao (Oficinas)
+@author Thiago Olis Machado
+@since 15/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC260()
+
+	//----------------------------------------------------------------
+	//| Variaveis utilizadas para qarametros!                        |
+	//| mv_par01     // Periodo Inicio                               |
+	//| mv_par02     // Periodo Fim                                  |
+	//| mv_par03     // De Tipo de Manutencao                        |
+	//| mv_par04     // Ate Tipo de Manutencao                       |
+	//| mv_par05     // De Area Manutencao                           |
+	//| mv_par06     // Ate Area de Manutencao                       |
+	//| mv_par07     // De Centro de Custo                           |
+	//| mv_par08     // Ate Centro de Custo                          |
+	//----------------------------------------------------------------
+
+	SetKey( VK_F9, { | | NGVersao( "MNTC260" , 2 ) } )
+
+	Private vVETHORAS := {}
+	//Tabela Temporária 
+	Private oTmpTbl  //Objeto Tabela Temporária 1
+	Private oTmpTbl2 //Objeto Tabela Temporiária 2
+	
+	Private cTRB	:= GetNextAlias()//Alias Tabela Temporária 1
+	Private cTRBV	:= GetNextAlias()//Alias Tabela Temporária 2
+
+	If Pergunte("MNT26G",.T.)
+		Processa({|lEnd| NG260GRA()})
+	EndIf
+
+Return Nil
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG260GRA
+Processa as O.S.  
+@author Thiago Olis Machado
+@since 15/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG260GRA()  
+
+	cCONDSTJ := 'STJ->TJ_SITUACA = "L" .And. STJ->TJ_TERMINO = "S" .And. STJ->TJ_TIPOOS = "B"'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_TIPO >= MV_PAR03 .And. STJ->TJ_TIPO <= MV_PAR04)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CODAREA >= MV_PAR05 .And. STJ->TJ_CODAREA <= MV_PAR06)'
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CCUSTO >= MV_PAR07 .And. STJ->TJ_CCUSTO <= MV_PAR08)'      
+
+	cCONDSTS := 'STS->TS_SITUACA = "L" .And. STS->TS_TERMINO = "S" .And. STS->TS_TIPOOS = "B"'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_TIPO >= MV_PAR03 .And. STS->TS_TIPO <= MV_PAR04)'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CODAREA >= MV_PAR05 .And. STS->TS_CODAREA <= MV_PAR06)' 
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_CCUSTO >= MV_PAR07 .And. STS->TS_CCUSTO <= MV_PAR08)' 
+
+	cCONDSTL := 'Alltrim(STL->TL_SEQRELA) <> "0" .And. STL->TL_TIPOREG = "M"'
+	cCONDSTT := 'Alltrim(STT->TT_SEQRELA) <> "0" .And. STT->TT_TIPOREG = "M"
+
+	aCampos  := {}
+		AAdd(aCAMPOS,{"TIPO"  ,"C",03,0})
+		AAdd(aCAMPOS,{"NOME"  ,"C",20,0})
+		AAdd(aCAMPOS,{"HORAS" ,"N",09,2})
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices 
+	oTmpTbl:AddIndex( "Ind01" , {"TIPO"} )
+	//Cria a tabela temporaria
+	oTmpTbl:Create()
+	
+	
+	//---------------------------------------------------------------------
+	//| Processa arquivo de O.S.                                          |
+	//---------------------------------------------------------------------
+	DbSelectArea("STL")
+	DbSetOrder(06)
+	DbSeek(xFilial("STL")+DtoS(MV_PAR01),.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STT")
+	DbSetOrder(05)
+	DbSeek(xFilial("STT")+DtoS(MV_PAR01),.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	DbSelectArea("STL")
+	ProcRegua(nReg)
+	While !Eof() .And. STL->TL_FILIAL  == xFilial("STL") .And.;
+	STL->TL_DTINICI <= MV_PAR02       
+
+		IncProc()
+		If &(cCONDSTL)
+
+			nDia  := day(MV_PAR01)
+			nMes  := Month(MV_PAR01) 
+			nMes1 := nMes + 4   
+			nAno  := year(MV_PAR01)
+			If nMes1 > 12
+				nMes1 := nMes1 -12
+				nAno  := nAno + 1
+			EndIf   
+			cDia := str(nDia)  
+			cMes := str(nMes1)
+			cAno  := str(nAno)
+			dData := cTod(cDia+cMes+cAno)
+
+			DbSelectArea("STJ") 
+			Dbsetorder(01)
+			If DbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+
+				If &(cCONDSTJ)
+
+					nHORAS := 0
+
+					If !(cTRB)->(DbSeek(STJ->TJ_TIPO))
+						(cTRB)->(DbAppend())
+						(cTRB)->TIPO  := STJ->TJ_TIPO
+						(cTRB)->NOME  := NGSEEK("STE",STJ->TJ_TIPO,1,"TE_NOME")
+					EndIf
+
+					vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+					STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+					STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+
+					(cTRB)->HORAS   := (cTRB)->HORAS + If(STL->TL_TIPOREG == "M",nQTDHORAS, 0.00)   //nHORAS
+				EndIf    
+			EndIf
+		EndIf   
+		DbSelectArea("STL")
+		DbSkip()
+	End
+
+	DbSelectArea("STT")
+	While !Eof() .And. STT->TT_FILIAL  == xFilial("STT")  .And. ;
+	STT->TT_DTINICI <= MV_PAR02       
+
+		IncProc() 
+		If &(cCONDSTT)
+
+			nDia  := day(MV_PAR01)
+			nMes  := Month(MV_PAR01) 
+			nMes1 := nMes + 4   
+			nAno  := year(MV_PAR01)
+			If nMes1 > 12
+				nMes1 := nMes1 -12
+				nAno  := nAno + 1
+			EndIf   
+			cDia  := str(nDia)  
+			cMes  := str(nMes1)
+			cAno  := str(nAno)
+			dData := cTod(cDia+cMes+cAno)
+
+			DbSelectArea("STS")   
+			DbSetOrder(01)
+			If DbSeek(xFilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+
+				If &(cCONDSTS)
+
+					nHORAS := 0
+
+					If !(cTRB)->(DbSeek(STS->TS_TIPO))
+						(cTRB)->(DbAppend())
+						(cTRB)->TIPO  := STS->TS_TIPO
+						(cTRB)->NOME  := NGSEEK("STE",STS->TS_TIPO,1,"TE_NOME")
+					EndIf
+
+					vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+					STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+					STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+
+					(cTRB)->HORAS := (cTRB)->HORAS + If(STT->TT_TIPOREG == "M",nQTDHORAS, 0.00)   //nHORAS
+				EndIf   
+			EndIf
+		EndIf   
+		DbSelectArea("STT")
+		DbSkip()
+	End
+
+	DbSelectArea("STT")
+	DbSetOrder(01)     
+	DbSelectArea("STL")
+	DbSetOrder(01)
+
+	//---------------------------------------------------------------------
+	//| Inicio da Impressao                                               |
+	//---------------------------------------------------------------------
+	DbSelectArea(cTRB)
+	DbGoTop()
+
+	If Reccount() == 0
+		Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico "###"ATENCAO"
+		oTmpTbl:Delete()//Deleta Tabela Temporaria 1
+		Return .T.
+	EndIf
+
+	aDBF3 := {{"CODIGO" , "C", 010,0} ,;
+			  {"NOMECOD", "C", 100,0},;
+			  {"VALOR1" , "N", 012,2}}
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Cria Indices
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbSelectArea(cTRB)
+	DbGoTop()    
+	While !Eof()
+
+		(cTRBV)->(DbAppend())	
+		(cTRBV)->CODIGO  := (cTRB)->TIPO
+		(cTRBV)->NOMECOD := (cTRB)->NOME
+		(cTRBV)->VALOR1  := NGRHODSEXN((cTRB)->HORAS,"D")//nHoras
+
+		DbselectArea(cTRB)
+		Dbskip()
+	End
+
+	cTITUD := STR0003 + DtoC(MV_PAR01) + STR0004 + DtoC(MV_PAR02)   //"Periodo de "###" Ate "
+
+	//----------------------------------------------------------------
+	//| Alteracao 17/08/2006                                         |
+	//| Ricardo Dal Ponte                                            |
+	//----------------------------------------------------------------
+	// Incluso o parametro "4", para gerar o grafico com padrao pizza 
+	vCRIGTXT := NGGRAFICO(" "+STR0008," " ," ",STR0005+" "+cTITUD," ",{"Tipo Manutenção"},"A",(cTRBV),,"4")
+
+	oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+
+	oTmpTbl:Delete()//Deleta Tabela Temporária 1
+
+
+Return .T.

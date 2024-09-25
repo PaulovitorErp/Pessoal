@@ -1,0 +1,1028 @@
+#INCLUDE "Mdta525.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA525()
+Cadastro de Calendário de Vacinação
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+@sample  MDTA525()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA525()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	Private aRotina := MenuDef()
+	Private cCadastro
+	Private aCHKDEL := {}, bNGGRAVA
+
+	aCHKDEL := {{"TL7->TL7_VACINA","TL9", 3} }
+
+	If FindFunction("MDTRESTRI") .AND. !MDTRESTRI(cPrograma)
+
+		NGRETURNPRM(aNGBEGINPRM)
+		Return .F.
+	Endif
+
+	If lSigaMdtps
+
+		cCadastro := OemtoAnsi(STR0020)  //"Clientes"
+
+		DbSelectArea("SA1")
+		DbSetOrder(1)
+		mBrowse( 6, 1,22,75,"SA1")
+
+	Else
+
+
+		cCadastro := OemtoAnsi(STR0006)  //"Cadastro de Calendário de Vacinação"
+
+		dbSelectArea( "TL7" )
+		dbSetOrder( 1 )
+
+		mBrowse( 6, 1, 22, 75, "TL7" )
+
+	Endif
+
+	NGRETURNPRM(aNGBEGINPRM)
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525Cal( cAlias, nReg, nOpcx )
+Programa de inclusão, alteração e exclusão
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   16/10/2006
+
+@sample  MDT525Cal( TL8, 1, 1 )
+@param cAlias, Caracter, alias do arquivo
+@param nReg, Numérico, número do arquivo
+@param nOpcx, Numérico, opção que foi selecionada no menu
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525Cal( cAlias, nReg, nOpcx )
+
+	Local nOpca := 0
+	Local i
+	Local oPanelPai, oPanelTop //Objetos para construção da dialog
+	Local oDlg, oMenu
+	Local aNao      := { "TL8_VACINA", "TL8_NOMVAC", "TL8_IDADEI", "TL8_CLIENT", "TL8_LOJA" }
+	Local cCampo    := ''
+	Local cUsado    := ''
+	Local cNivCpo   := ''
+	Local aTamCpo   := {}
+	Local nCps		:= 0
+	Local cContx	:= ''
+	Local cTipo     := ''
+	Local nIndic    := 0
+	Local cSeek     := ''
+	Local cCond     := ''
+
+	Private cSeekTL8  := ''
+	Private aAreaTL7 := TL7->( GetArea() )
+	Private Inclui := .F.
+
+	If nOpcx == 2 // visualizar
+		M->TL7_FILIAL := TL7->TL7_FILIAL
+		M->TL7_VACINA := TL7->TL7_VACINA
+		M->TL7_IDADEI := TL7->TL7_IDADEI
+		M->TL7_IDADEF := TL7->TL7_IDADEF
+		M->TL7_DOSMAX := TL7->TL7_DOSMAX
+	Elseif nOpcx == 3  //Inclusao
+		Inclui := .T.
+		M->TL7_FILIAL := xFilial("TL7")
+		M->TL7_VACINA := Space(10)
+		M->TL7_IDADEI := Space(3)
+		M->TL7_IDADEF := Space(3)
+		M->TL7_DOSMAX := 0
+	Elseif (nOpcx == 4) .OR. (nOpcx == 5)  //Alteracao ou Exclusao
+		M->TL7_FILIAL := TL7->TL7_FILIAL
+		M->TL7_VACINA := TL7->TL7_VACINA
+		M->TL7_IDADEI := TL7->TL7_IDADEI
+		M->TL7_IDADEF := TL7->TL7_IDADEF
+		M->TL7_DOSMAX := TL7->TL7_DOSMAX
+	Endif
+
+	If lSigaMdtps
+		M->TL7_CLIENT := SA1->A1_COD
+		M->TL7_LOJA := SA1->A1_LOJA
+
+		nIndic  := 4
+		cSeek := cCliMdtps + M->TL7_VACINA + M->TL7_IDADEI
+		cSeekTL8 := xFilial("TL8") + cCliMdtps + M->TL7_VACINA + M->TL7_IDADEI
+		cCond := 'TL8->TL8_FILIAL+TL8->TL8_CLIENT+TL8->TL8_LOJA+TL8->TL8_VACINA+TL8->TL8_IDADEI == "' + xFilial("TL8") + cSeek + '"'
+	Else
+		nIndic  := 1
+		cSeek :=  M->TL7_VACINA + M->TL7_IDADEI
+		cSeekTL8 := xFilial("TL8") + M->TL7_VACINA + M->TL7_IDADEI
+		cCond := 'TL8->TL8_FILIAL+TL8->TL8_VACINA+TL8->TL8_IDADEI == "' + xFilial("TL8") + cSeek + '"'
+	Endif
+
+	//Monta a entrada de dados do arquivo
+	Private aTELA[0][0],aGETS[0],aHeader[0],nUsado:=0
+	bCampo := {|nCPO| Field(nCPO) }
+
+	//Monta o aHeader e o aCols
+	FillGetDados( nOpcx, "TL8", nIndic, cSeek, {||}, {||.T.}, aNao, , , , { | | NGMontaaCols( "TL8", cSeek, cCond, , nIndic ) } )
+
+	aHeader[1][1] := STR0018 //"Dose    "
+
+	If Len(aCols) == 0
+		aCols := BlankGetD(aHeader)
+	Endif
+
+	Private nDOSEID := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_DOSEID"})
+	Private nDESCRI := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_DESCRI"})
+	Private nREPETI := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_REPETI"})
+	Private nPERIOD := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_PERIOD"})
+	Private nUNIDA1 := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_UNIDA1"})
+	Private nINIDOS := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_INIDOS"})
+	Private nUNIDA2 := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TL8_UNIDA2"})
+
+	M->TL7_NOMVAC := NGSeek("TL6",M->TL7_VACINA,1,"TL6->TL6_NOMVAC")
+
+
+	DEFINE MSDIALOG oDlg TITLE cCadastro From 9,0 To 27,86 OF oMainWnd
+
+		oDlg:lMaximized := .T.
+
+		//Painel onde sera feita a disposicao da tela
+		oPanelPai := TPanel():New(0, 0, Nil, oDlg, Nil, .T., .F., Nil, Nil, 0, 60, .T., .F. )
+			oPanelPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPanelTop := TPanel():New(0, 0, Nil, oPanelPai, Nil, .T., .F., Nil, Nil, 0, 60, .T., .F. )
+					oPanelTop:Align := CONTROL_ALIGN_TOP
+
+				@ 007,006	SAY OemToAnsi(STR0007) Of oPanelTop Pixel //"Cód. Vacina"
+				@ 005,040	MSGET M->TL7_VACINA SIZE 50,10 PICTURE "@!" VALID NaoVazio() .AND. MDT525Vac() F3 "TL6" WHEN (nOpcx == 3) Of oPanelTop Pixel HASBUTTON
+				@ 007,095	SAY OemToAnsi(STR0008) Of oPanelTop Pixel //"Descrição"
+				@ 005,126	MSGET M->TL7_NOMVAC SIZE 120,10 WHEN .F. Of oPanelTop Pixel
+
+				@ 025,006	SAY OemToAnsi(STR0009) Of oPanelTop Pixel //"De Idade"
+				@ 023,040	MSGET M->TL7_IDADEI SIZE 15,10 Picture "@E 999" Valid MDT525Ida() WHEN (nOpcx == 3) .OR. (nOpcx == 4) Of oPanelTop Pixel
+				@ 025,095	SAY OemToAnsi(STR0010) Of oPanelTop Pixel //"Até Idade"
+				@ 023,126	MSGET M->TL7_IDADEF SIZE 15,10 Picture "@E 999" Valid NaoVazio() .AND. MDT525Age() WHEN (nOpcx == 3) .OR.(nOpcx == 4) Of oPanelTop Pixel
+
+				@ 043,006   SAY OemToAnsi(STR0011) Of oPanelTop Pixel //"Doses Max."
+				@ 040,040  	MSGET M->TL7_DOSMAX SIZE 15,10 Picture "@E 999" WHEN (nOpcx == 3) .OR. (nOpcx == 4) Of oPanelTop Pixel
+
+
+			//-------------------------------
+			//	Monta GetDados
+			//-------------------------------
+			oGet := MSGetDados():New(68,5,132,335,nOpcx,"NG525LinOk","NG525TudOk","",.T.,,,,3000,,,,,oPanelPai)
+				oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+			NgPopUp(asMenu,@oMenu)
+			oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{||nOpca:=1,If(oGet:TudoOk() .And. If(nOpcx == 5, NGCHKDEL("TL9"), .T.),oDlg:End(),nOpca := 0)},{||oDlg:End(),nOpca := 0})
+
+	If nOpca == 1
+		Begin Transaction
+			lGravaOk := NG525GRAV( nOpcx )
+			If lGravaOk
+				EvalTrigger() //Processa Gatilhos
+			EndIf
+		End Transaction
+	EndIf
+
+	RestArea( aAreaTL7 )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG525GRAV( nOpcx )
+Gravação dos Dados
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  NG525GRAV( 1 )
+@param nOpcx, Numérico, opção que foi selecionada no menu
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG525GRAV( nOpcx )
+
+Local nX
+Local nY
+Local nMaxArray
+Local x
+Local y
+Local aBACK := aCLONE( aCols )
+Local lIncTL8
+
+aCOLS := {}
+aEVAL(aBACK, {|x| If( !Empty(x[1]),  AAdd(aCOLS,x), NIL) })
+nMaxArray := Len(aCols)
+
+If nMaxArray <= 0
+   Return .F.
+EndIf
+
+If lSigaMdtps
+
+	If nOpcx == 5  //Exclusao
+		dbSelectArea( "TL8" )
+		dbSetOrder( 4 )
+		for nX := 1 To Len(aCols)
+			If dbSeek( cSeekTL8 + aCols[nX][nDOSEID] )
+				RecLock( "TL8", .F., .T. )
+				dbDelete()
+				MsUnlock( "TL8" )
+			Endif
+		Next nX
+		dbSelectArea( "TL7" )
+		dbSetOrder( 4 )
+		If dbSeek( xFilial("TL7") + cCliMdtps + M->TL7_VACINA + M->TL7_IDADEI )
+			RecLock( "TL7", .F., .T. )
+			dbDelete()
+			MsUnlock( "TL7" )
+		Endif
+		Return .T.
+	Endif
+
+	For nX = 1 to nMaxArray
+
+		If aCols[nX][Len(aCols[nX])] //Se o registro foi deletado
+			dbSelectArea( "TL8" )
+			dbSetOrder( 4 )
+			If dbSeek( cSeekTL8 + aCols[nX][nDOSEID] )
+	          	RecLock( "TL8", .F., .T. )
+	          	dbDelete()
+	          	MsUnlock( "TL8" )
+	       	EndIf
+	       	dbSelectArea( "TL8" )
+	       	Loop
+		EndIf
+
+	    If !empty( aCols[nX][nDOSEID] )
+
+			lIncTL8 := .F.
+	       	dbSelectArea( "TL8" )
+	       	dbSetOrder( 4 )
+			If dbSeek( cSeekTL8 + aCols[nX][nDOSEID] )
+	        	lIncTL8 := .F.
+	        	RecLock("TL8",.F.)
+	       	Else
+	          	lIncTL8 := .T.
+	          	RecLock("TL8",.T.)
+	       	EndIf
+
+	       	TL8->TL8_FILIAL := xFilial('TL8')
+	       	TL8->TL8_VACINA := M->TL7_VACINA
+	       	TL8->TL8_IDADEI := M->TL7_IDADEI
+	       	TL8->TL8_CLIENT := SA1->A1_COD
+			TL8->TL8_LOJA   := SA1->A1_LOJA
+
+	       	dbSelectArea( "TL8" )
+		   	dbSetOrder( 4 )
+
+		   	FOR nY := 1 TO FCount()
+				If(;
+					FieldName(nY) == "TL8_FILIAL" .OR.;
+					FieldName(nY) == "TL8_VACINA" .OR.;
+					FieldName(nY) == "TL8_NOMVAC" .OR.;
+					FieldName(nY) == "TL8_IDADEI" .OR.;
+					FieldName(nY) == "TL8_CLIENT" .OR.;
+					FieldName(nY) == "TL8_LOJA"   .OR.;
+					aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == FieldName(nY) }) < 1 ;
+				  )
+	      			Loop
+	           	EndIf
+		       	x   := "m->" + FieldName(nY)
+		       	&x. := aCols[nX][aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == FieldName(nY) })]
+		       	y   := "TL8->" + FieldName(nY)
+		       	&y := &x
+		   	Next nY
+
+	  	   	MsUnlock( "TL8" )
+
+	    EndIf
+
+	Next nX
+
+	If nOpcx == 3  //Inclusao
+
+		dbSelectArea("TL7")
+		RecLock( "TL7", .T. )
+		TL7->TL7_FILIAL := xFilial("TL7")
+		TL7->TL7_VACINA := M->TL7_VACINA
+		TL7->TL7_IDADEI := M->TL7_IDADEI
+		TL7->TL7_IDADEF := M->TL7_IDADEF
+		TL7->TL7_DOSMAX := M->TL7_DOSMAX
+		TL7->TL7_CLIENT := SA1->A1_COD
+		TL7->TL7_LOJA   := SA1->A1_LOJA
+		MsUnlock( "TL7" )
+
+	Elseif nOpcx == 4  //Alteracao
+
+
+		If (M->TL7_VACINA != TL7->TL7_VACINA) .OR. (M->TL7_IDADEI != TL7->TL7_IDADEI) //Se os registros da chave unica foram alterados
+
+			RestArea( aAreaTL7 )
+			dbSelectArea( "TL8" )
+			dbSetOrder( 4 )
+
+			For nX := 1 To Len(aCols)
+				If dbSeek( xFilial("TL8") + cCliMdtps + TL7->TL7_VACINA + TL7->TL7_IDADEI + aCols[nX][nDOSEID] )
+					RecLock( "TL8", .F., .T. )
+					dbDelete()
+					MsUnlock( "TL8" )
+				Endif
+			Next nX
+
+		Else
+
+			dbSelectArea( "TL8" )
+			dbSetOrder( 4 )
+			dbSeek( cSeekTL8 )
+
+			While !EoF() .AND. &(cCond)
+
+				nY := 0
+
+				For nX := 1 to Len(aCols)
+					If ( TL8_DOSEID == aCols[nX][nDOSEID] )
+						nY++
+					EndIf
+				Next nX
+
+				If nY == 0
+					RecLock( "TL8", .F., .T. )
+					dbDelete()
+					MsUnlock( "TL8" )
+				EndIf
+
+				dbSkip()
+			End
+
+		Endif
+
+		dbSelectArea( "TL7" )
+		RecLock( "TL7", .F. )
+		TL7->TL7_FILIAL := xFilial("TL7")
+		TL7->TL7_VACINA := M->TL7_VACINA
+		TL7->TL7_IDADEI := M->TL7_IDADEI
+		TL7->TL7_IDADEF := M->TL7_IDADEF
+		TL7->TL7_DOSMAX := M->TL7_DOSMAX
+		TL7->TL7_CLIENT := SA1->A1_COD
+		TL7->TL7_LOJA   := SA1->A1_LOJA
+		MsUnlock( "TL7" )
+
+	Endif
+
+Else
+
+	If nOpcx == 5  //Exclusao
+		dbSelectArea( "TL8" )
+		dbSetOrder( 1 )
+		for nX := 1 To Len(aCols)
+			If dbSeek( xFilial("TL8") + M->TL7_VACINA + M->TL7_IDADEI + aCols[nX][nDOSEID] )
+				RecLock( "TL8", .F., .T. )
+				dbDelete()
+				MsUnlock( "TL8" )
+			Endif
+		Next nX
+		dbSelectArea( "TL7" )
+		If dbSeek( xFilial("TL7") + M->TL7_VACINA + M->TL7_IDADEI )
+			RecLock( "TL7", .F., .T. )
+			dbDelete()
+			MsUnlock( "TL7" )
+		Endif
+		Return .T.
+	Endif
+
+
+	For nX = 1 to nMaxArray
+
+		If aCols[nX][Len(aCols[nX])] //Se o registro foi deletado
+			dbSelectArea( "TL8" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial("TL8") + M->TL7_VACINA + M->TL7_IDADEI + aCols[nX][nDOSEID] )
+	          	RecLock( "TL8", .F., .T. )
+	          	dbDelete()
+	          	MsUnlock( "TL8" )
+	       	EndIf
+	       	dbSelectArea( "TL8" )
+	       	Loop
+		EndIf
+
+	    If !empty( aCols[nX][nDOSEID] )
+
+			lIncTL8 := .F.
+	       	dbSelectArea( "TL8" )
+	       	dbSetOrder( 1 )
+			If dbSeek( xFilial("TL8") + M->TL7_VACINA + M->TL7_IDADEI + aCols[nX][nDOSEID] )
+	        	lIncTL8 := .F.
+	        	RecLock("TL8",.F.)
+	       	Else
+	          	lIncTL8 := .T.
+	          	RecLock("TL8",.T.)
+	       	EndIf
+
+
+	       	TL8->TL8_FILIAL := xFilial('TL8')
+	       	TL8->TL8_VACINA := M->TL7_VACINA
+	       	TL8->TL8_IDADEI := M->TL7_IDADEI
+
+	       	dbSelectArea( "TL8" )
+		   	dbSetOrder( 1 )
+
+		   	FOR nY := 1 TO FCount()
+				If(;
+					FieldName(nY) == "TL8_FILIAL" .OR.;
+					FieldName(nY) == "TL8_VACINA" .OR.;
+					FieldName(nY) == "TL8_NOMVAC" .OR.;
+					FieldName(nY) == "TL8_IDADEI" .OR.;
+					aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == FieldName(nY) }) < 1 ;
+				  )
+	      			Loop
+	           	EndIf
+		       	x   := "m->" + FieldName(nY)
+		       	&x. := aCols[nX][aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == FieldName(nY) })]
+		       	y   := "TL8->" + FieldName(nY)
+		       	&y := &x
+		   	Next nY
+
+	  	   	MsUnlock( "TL8" )
+
+	    EndIf
+
+	Next nX
+
+	If nOpcx == 3  //Inclusao
+
+
+		dbSelectArea("TL7")
+		RecLock( "TL7", .T. )
+		TL7->TL7_FILIAL := xFilial("TL7")
+		TL7->TL7_VACINA := M->TL7_VACINA
+		TL7->TL7_IDADEI := M->TL7_IDADEI
+		TL7->TL7_IDADEF := M->TL7_IDADEF
+		TL7->TL7_DOSMAX := M->TL7_DOSMAX
+		MsUnlock( "TL7" )
+
+	Elseif nOpcx == 4  //Alteracao
+
+
+
+		If (M->TL7_VACINA != TL7->TL7_VACINA) .OR. (M->TL7_IDADEI != TL7->TL7_IDADEI) //Se os registros da chave unica foram alterados
+
+			RestArea( aAreaTL7 )
+			dbSelectArea( "TL8" )
+			dbSetOrder( 1 )
+
+			For nX := 1 To Len(aCols)
+				If dbSeek( xFilial("TL8") + TL7->TL7_VACINA + TL7->TL7_IDADEI + aCols[nX][nDOSEID] )
+					RecLock( "TL8", .F., .T. )
+					dbDelete()
+					MsUnlock( "TL8" )
+				Endif
+			Next nX
+
+		Else
+
+			dbSelectArea( "TL8" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial("TL8") + M->TL7_VACINA + M->TL7_IDADEI )
+
+			While !EoF() 								.AND.;
+				  xFilial("TL8") == TL8->TL8_FILIAL		.AND.;
+				  M->TL7_VACINA == TL8->TL8_VACINA		.AND.;
+				  M->TL7_IDADEI == TL8->TL8_IDADEI
+
+				nY := 0
+
+				For nX := 1 to Len(aCols)
+					If ( TL8_DOSEID == aCols[nX][nDOSEID] )
+						nY++
+					EndIf
+				Next nX
+
+				If nY == 0
+					RecLock( "TL8", .F., .T. )
+					dbDelete()
+					MsUnlock( "TL8" )
+				EndIf
+
+				dbSkip()
+			End
+
+		Endif
+
+
+		dbSelectArea( "TL7" )
+		RecLock( "TL7", .F. )
+		TL7->TL7_FILIAL := xFilial("TL7")
+		TL7->TL7_VACINA := M->TL7_VACINA
+		TL7->TL7_IDADEI := M->TL7_IDADEI
+		TL7->TL7_IDADEF := M->TL7_IDADEF
+		TL7->TL7_DOSMAX := M->TL7_DOSMAX
+		MsUnlock( "TL7" )
+
+	Endif
+
+Endif
+
+Return .T.
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG525LinOk(o)
+Critica se a linha digitada está ok
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  NG525LinOk(o)
+@param o, Objeto a ser verificado
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG525LinOk(o)
+
+Local yy:=0
+Local nPosInDo := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_INIDOS"})
+Local nPosUni2 := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_UNIDA2"})
+
+If !acols[n][len(aCols[n])]
+	If Empty(aCOLS[n][nDOSEID]) .Or. Empty(aCols[n][nDESCRI]) //verifica se os campos não estão vazio
+		yy++//adiciona 1 na variavel yy, o que faz cair ShowHelpDlg.
+	Endif
+Endif
+
+If aCols[n][nREPETI] == "1" //Sim
+    If Empty( aCols[n][nPERIOD] ) .OR. Empty( aCols[n][nUNIDA1] )
+		MsgStop(;
+			STR0012 +CHR(13)+CHR(10)+ ;  //'Como foi informado que a dose deve ser repetida, os campos'
+			STR0013 ;  //'"Periodicidade" e "Unidade" devem ser informados.'
+			   )
+		Return .F.
+	Endif
+EndIf
+
+If !Empty( aCols[n][nINIDOS] ) .AND. Empty( aCols[n][nUNIDA2] )
+	MsgStop(;
+			STR0015+aHeader[nPosInDo][1]+STR0031 +CHR(13)+CHR(10)+ ;  //"Como o campo "##" foi preenchido,"
+			STR0016+aHeader[nPosUni2][1]+STR0032 ;  //"o campo "##" deve ser informado."
+		   )
+	Return .F.
+EndIf
+
+If yy > 0
+	ShowHelpDlg(STR0023,{ STR0024 },1,{ STR0025 },2)
+	Return .F.
+EndIf
+
+PutFileInEof( "TL8" )
+
+Return .T.
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG525TudOk()
+Critica se a nota está ok
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  NG525TudOk()
+
+@return  MDT525Age()
+/*/
+//-------------------------------------------------------------------
+Function NG525TudOk()
+
+Local nPosId   := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_DOSEID"})
+Local nPosRp   := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_REPETI"})
+Local nPosInDo := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_INIDOS"})
+Local nPosUni2 := aScan(aHEADER, { |x| Trim( Upper(x[2]) ) == "TL8_UNIDA2"})
+Local nX
+Local aValidos := {}
+Local aDeletados := {}
+Local yy := 0
+
+aSort(aCols,,,{|x,y| x[nPosId]+(If(x[Len(x)]," ","Z")) < y[nPosId]+(If(y[Len(y)]," ","Z")) })
+
+For nX := 1 To Len(aCols)
+	If !aCols[nX,Len(aCols[nX])]
+		aADD(aValidos,aCols[nX])
+	Else
+		aADD(aDeletados,aCols[nX])
+	Endif
+Next nX
+
+For nX := 1 To Len(aValidos)
+
+	//Quando nao for primeira dose e os campos de Inicio apos vazios, nao prosseguir
+	If nX != 1
+		If Empty(aValidos[nX,nPosInDo]) .or. Empty(aValidos[nX,nPosUni2])
+			MsgInfo( STR0021+aHEADER[nPosInDo][1]+STR0029+aHEADER[nPosUni2][1]+STR0030 )//"Os campos "##" e "##são obrigatórios a partir da segunda dose."
+			Return .f.
+		Endif
+	Endif
+
+	// Se nao for a ultima dose
+	If nX != Len(aValidos)
+		// Se for repeticao e nao for ultima dose, nao prosseguir
+		If aValidos[nX,nPosRp] == "1"
+			MsgInfo(STR0022)  //"Somente na última dose pode ser informado 'Sim' para o campo 'Repetição'."
+			Return .f.
+		Endif
+	Endif
+Next nX
+//Verifica se a dose que foi deletada esta vinculado ao funcionario
+For nX := 1 To Len(aDeletados)
+	If fChkDose( aDeletados[nX][nPosId] )
+		ShowHelpDlg(STR0023,{ STR0026 },1,{ STR0027 },2)
+		Return .F.
+	EndIf
+Next nX
+ //valida se tiver só um registro e o mesmo for excluido.
+	If Len(aCOLS) >= 1
+		For  nX := 1 To Len(aCols)
+			If !Empty(aCols[nX][nPosId]) .And. (aCOLS[nX][Len(aCOLS[nX])])
+ 				yy++
+ 			Endif
+ 		Next nX
+ 		If yy == Len(aCOLS) .or. Len(aValidos) == 0
+			ShowHelpDlg(STR0023,{ STR0024 },1,{ STR0025 },2)
+			Return .F.
+		EndIf
+ 	Endif
+ Return MDT525Age()
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525Age()
+Valida o campo Até Idade
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  MDT525Age()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525Age()
+
+If Val(M->TL7_IDADEF) < Val(M->TL7_IDADEI)
+	MsgStop(STR0014)  //'O campo "Até Idade" deve conter um valor maior ou igual que o campo "De Idade".'
+	Return .F.
+Endif
+
+If Val(M->TL7_IDADEF) > 150
+	msgStop(STR0017) //"A idade deve estar entre 0 e 150 anos."
+	Return .F.
+Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525Vac()
+Valida o campo Vacina
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  MDT525Vac()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525Vac()
+
+If !ExistCPO("TL6",M->TL7_VACINA)
+	Return .F.
+Endif
+
+M->TL7_NOMVAC := NGSeek("TL6",M->TL7_VACINA,1,"TL6->TL6_NOMVAC")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525Ida()
+Valida o campo Idade Início
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  MDT525Ida()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525Ida()
+
+If lSigaMdtps
+
+	If Inclui
+		If !ExistChav( "TL7", cCliMdtps + M->TL7_VACINA + M->TL7_IDADEI, 4 )
+			Return .F.
+		Endif
+	Else
+		If (M->TL7_VACINA != TL7->TL7_VACINA) .OR. (M->TL7_IDADEI != TL7->TL7_IDADEI)
+			If !ExistChav( "TL7", cCliMdtps + M->TL7_VACINA + M->TL7_IDADEI, 4 )
+				Return .F.
+			Endif
+		Endif
+	Endif
+
+Else
+
+	If Inclui
+		If !ExistChav( "TL7", M->TL7_VACINA + M->TL7_IDADEI )
+			Return .F.
+		Endif
+	Else
+		If (M->TL7_VACINA != TL7->TL7_VACINA) .OR. (M->TL7_IDADEI != TL7->TL7_IDADEI)
+			If !ExistChav( "TL7", M->TL7_VACINA + M->TL7_IDADEI )
+				Return .F.
+			Endif
+		Endif
+	Endif
+
+Endif
+
+If Val(M->TL7_IDADEF) > 150
+	msgStop(STR0017) //"A idade deve estar entre 0 e 150 anos."
+	Return .F.
+Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525VLID()
+Valida o campo de Dose
+
+@type	 Function
+@author  Andre E. Perez Alvarez
+@since   20/11/2006
+
+@sample  MDT525Ida()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525VLID()
+Local nDOSEID := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TL8_DOSEID" })
+Local xx := 0, nX
+
+M->TL8_DOSEID := Strzero(Val(M->TL8_DOSEID),2)
+
+For nX := 1 to Len(aCOLS)
+	If nX <> n .and. M->TL8_DOSEID == aCols[nX][nDOSEID] .and. !aCols[nX,Len(aCols[nX])]
+		xx++
+	EndIf
+Next
+
+If xx > 0
+   Help(" ",1,"JAEXISTINF")
+   Return .F.
+EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TL8FilSxb()
+Filtro da consulta padrão (F3) TL8 (Dose da Vacina)
+
+@type Function
+@author  Denis Hyroshi de Souza
+@since   20/11/2006
+@sample  TL8FilSxb()
+
+@return  Lógico, sempre falso
+/*/
+//-------------------------------------------------------------------
+Function TL8FilSxb()
+
+Local aArea := GetArea()
+Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+
+If M->TL9_VACINA <> TL8->TL8_VACINA
+	Return .f.
+Endif
+
+If lSigaMdtps
+
+	If TL8->(TL8_CLIENT+TL8_LOJA) <> cCliMdtps
+		Return .F.
+	Endif
+
+	dbSelectArea("TM0")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TM0")+M->TL9_NUMFIC)
+		dbSelectArea("TL7")
+		dbSetOrder(4)
+		If dbSeek(xFilial("TL7")+cCliMdtps+M->TL9_VACINA+TL8->TL8_IDADEI)
+			nIdadeFun := Year(dDataBase) - Year(TM0->TM0_DTNASC)
+			If SubStr(DTOS(dDataBase),5,4) < SubStr(DTOS(TM0->TM0_DTNASC),5,4)
+				nIdadeFun := nIdadeFun - 1 // Dimunui 1 ano se ainda nao fez aniversario no ano corrente
+			Endif
+			If nIdadeFun >= Val(TL7->TL7_IDADEI) .and. nIdadeFun <= Val(TL7->TL7_IDADEF)
+				RestArea(aArea)
+				Return .t.
+			Endif
+		Endif
+	Endif
+
+Else
+
+	dbSelectArea("TM0")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TM0")+M->TL9_NUMFIC)
+		dbSelectArea("TL7")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TL7")+M->TL9_VACINA+TL8->TL8_IDADEI)
+			nIdadeFun := Year(dDataBase) - Year(TM0->TM0_DTNASC)
+			If SubStr(DTOS(dDataBase),5,4) < SubStr(DTOS(TM0->TM0_DTNASC),5,4)
+				nIdadeFun := nIdadeFun - 1 // Dimunui 1 ano se ainda nao fez aniversario no ano corrente
+			Endif
+			If nIdadeFun >= Val(TL7->TL7_IDADEI) .and. nIdadeFun <= Val(TL7->TL7_IDADEF)
+				RestArea(aArea)
+				Return .t.
+			Endif
+		Endif
+	Endif
+
+Endif
+
+RestArea(aArea)
+Return .f.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525TL7()
+Monta um browse com os calendários de vacinação do cliente
+
+@type Function
+@author  Andre Perez Alvarez
+@since   24/09/2007
+@sample  MDT525TL7()
+
+@return  Lógico, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT525TL7()
+
+Local aArea	:= GetArea()
+Local oldROTINA := aCLONE(aROTINA)
+Local oldCad := cCadastro
+cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+
+aRotina :=	{ { STR0001, "AxPesqui" , 0 , 1},;  //"Pesquisar"
+              { STR0002, "MDT525Cal" , 0 , 2},;  //"Visualizar"
+              { STR0003, "MDT525Cal", 0 , 3},;  //"Incluir"
+              { STR0004, "MDT525Cal", 0 , 4},;  //"Alterar"
+              { STR0005, "MDT525Cal", 0 , 5} }  //"Excluir"
+
+
+Private cCadastro := OemtoAnsi(STR0006)  //"Cadastro de Calendário de Vacinação"
+Private aCHKDEL := {}, bNGGRAVA
+
+dbSelectArea( "TL7" )
+Set Filter To TL7->(TL7_CLIENT+TL7_LOJA) == cCliMdtps
+dbSetOrder( 4 )
+
+mBrowse( 6, 1, 22, 75, "TL7" )
+
+dbSelectArea( "TL7" )
+Set Filter To
+
+aROTINA := aCLONE(oldROTINA)
+RestArea(aArea)
+cCadastro := oldCad
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Vitor Emanuel Batista
+@since 11/07/2008
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+Local aRotina
+
+
+If lSigaMdtps
+	aRotina := { { STR0001,   "AxPesqui"  , 0 , 1},; //"Pesquisar"
+	             { STR0002,   "MDT525Cal"   , 0 , 2},; //"Visualizar"
+	             { STR0019,   "MDT525TL7" , 0 , 4} } //"Calendários"
+Else
+	aRotina :=	{ { STR0001, "AxPesqui" , 0 , 1},;  //"Pesquisar"
+	              { STR0002, "MDT525Cal" , 0 , 2},;  //"Visualizar"
+	              { STR0003, "MDT525Cal", 0 , 3},;  //"Incluir"
+	              { STR0004, "MDT525Cal", 0 , 4},;  //"Alterar"
+	              { STR0005, "MDT525Cal", 0 , 5} }  //"Excluir"
+Endif
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fChkDose
+Verifica se a dose que foi deletada está vinculada ao funcionario
+
+@type Static Function
+@author  Guilherme Freudenburg
+@since   09/01/13
+@param   cCodDose, caracter, é o código da dose
+@sample  fChkDose(.T.)
+
+
+@return  lRet, Lógico, retorna se há vinculo com o funcionário
+/*/
+//-------------------------------------------------------------------
+Static Function fChkDose( cCodDose )
+	Local aAreaTL7	:= GetArea()
+	Local lRet		:= .F.
+
+	dbSelectArea( "TL9" )
+	dbSetOrder( 3 ) //TL9_FILIAL+TL9_VACINA+DTOS(TL9_DTPREV)
+	dbSeek( xFilial("TL9") + TL7->TL7_VACINA )
+
+	While TL9->(!Eof()) .And. TL9->TL9_FILIAL == xFilial("TL9") .And. TL9->TL9_VACINA == TL7->TL7_VACINA
+		If TL9->TL9_DOSE == cCodDose
+			lRet := .T.
+			Return lRet
+		EndIf
+		TL9->(dbSkip())
+	End
+
+	RestArea(aAreaTL7)
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT525WHEN()
+Se a dose está vinculada a um funcionário (TL9->TL9_DOSE), trava o campo não permitindo a sua alteração
+
+@type    Function
+@author  Guilherme Freudenburg
+@since   16/09/2013
+@param   nCampo, numérico, informa de qual campo está vindo a chamada
+@sample  MDT525WHEN()
+
+@return  lRet, retorna se trava ou não o campo
+/*/
+//-------------------------------------------------------------------
+
+Function MDT525WHEN( nCampo )
+
+	Local nDoseID 	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TL8_DOSEID" })
+	Local lRet			:= .T.
+	Local aArea		:= GetArea()
+	Local aAreaTL9	:= TL9->( GetArea() )
+
+	If nCampo == 1//TL8_DOSEID
+		dbSelectArea( "TL9" )
+		dbSetOrder( 3 )
+		dbSeek( xFilial( "TL9" ) + M->TL7_VACINA )
+		While TL9->( !Eof() ) .And. xFilial( "TL9" ) == TL9->TL9_FILIAL .And. ;
+				TL9->TL9_VACINA == M->TL7_VACINA
+			If aCols[ n , nDoseID ] == TL9->TL9_DOSE
+				lRet := .F.//Trocado para .F. pois deve fechar o campo
+				Exit
+			Endif
+			TL9->( dbSkip() )
+		End
+	EndIf
+
+	RestArea( aAreaTL9 )
+	RestArea( aArea )
+
+Return lRet

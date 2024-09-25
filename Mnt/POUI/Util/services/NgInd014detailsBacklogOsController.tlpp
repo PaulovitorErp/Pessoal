@@ -1,0 +1,205 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+
+Namespace TotvsDevelopers.Demo.Controllers
+
+Using Namespace TotvsDevelopers.Demo.Services
+
+Class NgInd014detailsBacklogOsController From NgBaseController
+    Private Data oService
+
+    Public Method New() Constructor
+
+    @Get("/api/v1/detailsBacklogOs")
+    Public Method Get()
+
+
+EndClass
+
+Method New() Class NgInd014detailsBacklogOsController
+    _Super:New()
+Return
+
+Method Get() Class NgInd014detailsBacklogOsController
+
+    Local oJson      := JsonObject():New()
+    Local cDataBase  := Upper( TcGetDb() )
+    Local aParams    := {}
+    Local cJson      := '{"items": [{'
+    Local nCount     := 1
+    Local cAliasQry  := GetNextAlias()
+    Local cQuery     := '%'
+    Local cQuerySTJ  := '%'
+    Local cQueryST9  := '%'
+    Local cDeBem     := ''
+    Local cAteBem    := ''
+    Local cDeCcusto  := ''
+    Local cAteCcusto := ''
+    Local cDeCentra  := ''
+    Local cAteCentra := ''
+    Local cAnoMes    := ''
+    Local nTamBem    := FwTamSX3( 'T9_CODBEM' )[ 1 ]
+    Local nTamCC     := FwTamSX3( 'T9_CCUSTO' )[ 1 ]
+    Local nTamCT     := FwTamSX3( 'T9_CENTRAB' )[ 1 ]
+
+    oJson:FromJson( oRest:GetQueryRequest()['value'] )
+
+    // Pega os parametros recebidos do front
+    If ValType( oJson:GetJsonObject( 'deBem' ) ) == 'U'
+      cDeBem  := nTamBem
+    Else
+      cDeBem  := PadR( oJson:GetJsonObject( 'deBem' ), nTamBem )
+    EndIf
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateBem' ) )
+      cAteBem := PadR( oJson:GetJsonObject( 'ateBem' ), nTamBem, 'Z' )
+    Else
+      cAteBem := PadR( oJson:GetJsonObject( 'ateBem' ), nTamBem )
+    EndIf
+
+    If ValType( oJson:GetJsonObject( 'deCcusto' ) ) == 'U'
+      cDeCcusto := nTamCC
+    Else
+      cDeCcusto := PadR( oJson:GetJsonObject( 'deCcusto' ), nTamCC )
+    EndIf
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateCcusto' ) )
+      cAteCcusto := PadR( oJson:GetJsonObject( 'ateCcusto' ), nTamCC, 'Z' )
+    Else
+      cAteCcusto := PadR( oJson:GetJsonObject( 'ateCcusto' ), nTamCC )
+    EndIf
+
+    If ValType( oJson:GetJsonObject( 'deCentra' ) ) == 'U'
+      cDeCentra := nTamCT
+    Else
+      cDeCentra := PadR( oJson:GetJsonObject( 'deCentra' ), nTamCT )
+    EndIf
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateCentra' ) )
+      cAteCentra := PadR( oJson:GetJsonObject( 'ateCentra' ), nTamCT, 'Z' )
+    Else
+      cAteCentra := PadR( oJson:GetJsonObject( 'ateCentra' ), nTamCT )
+    EndIf
+
+    cAnoMes     := fValData( oJson:GetJsonObject( 'monthYear' ) )
+
+    // Adiciona os valores na query
+    cQuerySTJ += ' TJ.TJ_DTMPINI BETWEEN ' + ValToSQL( cAnoMes + '01' ) + ' AND ' + ValToSQL( cAnoMes + '31' )
+    cQuerySTJ += " AND TJ.D_E_L_E_T_ = ' ' %"
+
+    cQueryST9 += ' T9.T9_CODBEM BETWEEN '      + ValToSQL( cDeBem )    + ' AND ' + ValToSQL( cAteBem )
+    cQueryST9 += ' AND T9.T9_CCUSTO BETWEEN '  + ValToSQL( cDeCcusto ) + ' AND ' + ValToSQL( cAteCcusto )
+    cQueryST9 += ' AND T9.T9_CENTRAB BETWEEN ' + ValToSQL( cDeCentra ) + ' AND ' + ValToSQL( cAteCentra )
+    cQueryST9 += " AND T9.D_E_L_E_T_ = ' ' %"
+
+    // Tratamento para diferentes bancos
+    If cDataBase == "ORACLE"
+      cQuery += " NVL( SUM( CASE WHEN TL.TL_SEQRELA = 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoPrevisto,"
+      cQuery += " NVL( SUM( CASE WHEN TL.TL_SEQRELA > 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoRealizado %"
+    ElseIf cDataBase == "POSTGRES"
+      cQuery += " COALESCE( SUM( CASE WHEN TL.TL_SEQRELA = 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoPrevisto, "
+      cQuery += " COALESCE( SUM( CASE WHEN TL.TL_SEQRELA > 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoRealizado %"
+    Else
+      cQuery += " IsNull( SUM( CASE WHEN TL.TL_SEQRELA = 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoPrevisto,"
+      cQuery += " IsNull( SUM( CASE WHEN TL.TL_SEQRELA > 0 THEN TL.TL_CUSTO ELSE 0 END ), 0 ) AS custoRealizado %"
+    EndIf
+
+    BeginSQL alias cAliasQry
+      SELECT TJ.TJ_ORDEM,
+             TJ.TJ_PLANO,
+             T9.T9_NOME,
+             TJ.TJ_SERVICO,
+             TJ.TJ_DTMPINI,
+             %exp:cQuery%
+      FROM %table:ST9% T9
+      INNER JOIN %table:STJ% TJ ON
+            TJ.TJ_FILIAL = %xFilial:STJ%
+        AND TJ.TJ_CODBEM = T9.T9_CODBEM
+        AND %exp:cQuerySTJ%
+      LEFT JOIN %table:STL% TL ON
+            TL.TL_FILIAL = %xFilial:STL% AND TJ.TJ_ORDEM = TL.TL_ORDEM AND TL.D_E_L_E_T_ = ' '
+      WHERE T9.T9_FILIAL = %xFilial:ST9%
+        AND %exp:cQueryST9%
+        GROUP BY TJ.TJ_ORDEM, TJ.TJ_PLANO, T9.T9_NOME, TJ.TJ_SERVICO, TJ.TJ_DTMPINI
+    EndSQL
+
+    While (cAliasQry)->( !Eof() )
+
+      // Tratamento para cenários onde possuir + de um registro
+      If nCount > 1
+        cJson += ', { '
+      EndIf
+
+      cJson += '"order": "' + (cAliasQry)->TJ_ORDEM + '"'
+      cJson += ', "plan": "' + (cAliasQry)->TJ_PLANO + '"'
+      cJson += ', "equipment": "' + (cAliasQry)->T9_NOME + '"'
+      cJson += ', "service": "' +  (cAliasQry)->TJ_SERVICO + '"'
+      cJson += ', "excpectedDate": "' + cValtoChar( StoD( (cAliasQry)->TJ_DTMPINI ) ) + '"'
+      cJson += ', "expectedCost": ' + cValtoChar( (cAliasQry)->custoPrevisto )
+      cJson += ', "realizedCost": ' + cValtoChar( (cAliasQry)->custoRealizado )
+      cJson += ' } '
+
+      (cAliasQry)->( dbSkip() )
+      nCount ++
+
+    End
+
+    cJson += ']}'
+
+    (cAliasQry)->( dbCloseArea() )
+
+    oRest:SetResponse( cJson )
+
+    FwFreeArray( aParams )
+
+Return
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fValData
+Valida Mês selecionado e troca para valor numerico correspondente
+
+@type   Function
+
+@author Eduardo Mussi
+@since  30/08/2023
+@param  cMesAno, caracter, Mes e ano da coluna selecionada no gráfico
+
+@return caracter, retorna ano + o mês em numero ( 202308 )
+/*/
+//-------------------------------------------------------------------
+Static Function fValData( cMesAno )
+
+  Local cMes := Upper( SubStr( cMesAno, 1, 3 ) )
+  Local cAno := SubStr( cMesAno, 5, 4 )
+
+  Do Case
+
+    Case cMes == 'JAN'
+      cMes := '01'
+    Case cMes == 'FEV'
+      cMes := '02'
+    Case cMes == 'MAR'
+      cMes := '03'
+    Case cMes == 'ABR'
+      cMes := '04'
+    Case cMes == 'MAI'
+      cMes := '05'
+    Case cMes == 'JUN'
+      cMes := '06'
+    Case cMes == 'JUL'
+      cMes := '07'
+    Case cMes == 'AGO'
+      cMes := '08'
+    Case cMes == 'SET'
+      cMes := '09'
+    Case cMes == 'OUT'
+      cMes := '10'
+    Case cMes == 'NOV'
+      cMes := '11'
+    Case cMes == 'DEZ'
+      cMes := '12'
+
+  EndCase
+
+return cAno + cMes

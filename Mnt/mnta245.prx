@@ -1,0 +1,1096 @@
+#INCLUDE "MNTA245.ch"
+#INCLUDE "PROTHEUS.CH"
+Static __cArqTab
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA245
+Programa para importar dados do bandag para atualizar custoº±±
+do pneu para o bem 
+
+@author  Elisangela Costa
+@since   19/09/06
+@version P11P12
+/*/
+//-------------------------------------------------------------------
+Function MNTA245()
+
+	__cArqTab			:= cArqTab //Inicializa Variavel Estatica
+	Private lCORRET 	:= .T. //Indica que o servico e do tipo corretivo
+	Private nHdlArq
+	Private aVETINR		:= {}
+	Private lARQVAZ		:= .F.
+	cArqTab				:= MNT245ARQ(cArqTab)
+	Private nTamTable	:= Len(cArqTab)
+	Private cPerg		:= PADR("MNT245",Len(Posicione("SX1", 1, "MNT245", "X1_GRUPO")))
+	Private cServBDG	:= ''
+
+	Private oTmp2451
+	Private oTmp2452
+	Private oTmp2453
+
+	Private cTRBIN		:= GetNextAlias()
+	Private cTRBDIM		:= GetNextAlias()
+	Private cTRBRES		:= GetNextAlias()
+	/*
+	|--------------------------------------------------------------|
+	| Variaveis utilizadas para parametros!                        |
+	| mv_par01     // Servico da O.s ## SE PARAMETRO NAO EXISTIR   |
+	| mv_par01     // Produto de Custeio                           |
+	| mv_par02     // Nome do Arquivo                              |
+	| mv_par03     // Caminho                                      |
+	|--------------------------------------------------------------|
+	*/
+
+	If !Pergunte(cPerg,.T.)
+		Return .T.
+	Endif
+
+	cServBDG := mv_par01
+	xm_par01 := mv_par02
+	xm_par02 := mv_par03
+	xm_par03 := mv_par04
+	
+	//Verifica se o arquivo digitado pelo usuario existe no caminho especificado
+	If !MNTA245AR()
+		Return .T.
+	EndIf
+
+	Processa({ || MNT245IMPD()})
+
+	cArqTab := __cArqTab  //Devolve o valor original da cArqTab utilizada por xFilial() por Variavel Estatica
+
+	//Verifica se o txt esta vazio
+	If lARQVAZ
+		fClose(nhdlArq)
+		MSGINFO(STR0005+Alltrim(xm_par02)+" "+STR0006,STR0007) //"Nao foi possivel realizar a importacao, o arquivo "###"nao contem dados."###"NAO CONFORMIDADE"
+		Return .T.
+	EndIf
+
+	fClose(nhdlArq)
+	dbSelectArea(cTRBIN)
+	dbGotop()
+	If Reccount() > 0
+		If MSGYESNO(STR0008+CHR(13); //"Deseja imprimir as inconsistencias encontradas durante o processo"
+		+STR0009,STR0010) //"de importacao ?"###"ATENCAO"
+			MNTA245IMP()
+		EndIf
+		//Deleta o arquivo temporario fisicamente
+		oTmp2451:Delete()
+	Else
+		oTmp2451:Delete()
+	EndIf
+
+	dbSelectArea(cTRBRES)
+	dbGotop()
+	If Reccount() > 0
+		If MSGYESNO(STR0011,STR0010) //"Importacao realizada com sucesso. Deseja imprimir o resultado da importacao?"###"ATENCAO"
+			M245IMPRES()
+		EndIf
+		oTmp2453:Delete()
+	Else
+		oTmp2453:Delete()
+	EndIf
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³MNT245IMPDºAutor  ³ Elisangela Costa   º Data ³  19/09/06   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Faz a leitura do arquivo .txt, consiste os dados e importa  º±±
+±±º          ³para o SIGAMNT                                              º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³MNTA245                                                     º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNT245IMPD()
+
+	Local cArq1     := Alltrim(xm_par03)+Alltrim(xm_par02)
+	Local cBARRAS   := If(isSRVunix(),"/","\"), cBARRAD := If(isSRVunix(),"//","\\") //Verifica o sistemas operacional para tratar das barras (Linux = //, Windows = \\)
+	Local cROOTPATH := Alltrim(GetSrvProfString("RootPath",cBARRAS))
+	Local cSTARPATH := AllTrim(GetSrvProfString("StartPath",cBARRAS))
+	Local cDIREXETH := cROOTPATH+cSTARPATH
+	Local cROOTPAT2 := If(Substr(cROOTPATH,Len(cROOTPATH),1) <> cBARRAS,;
+	cROOTPATH+cBARRAS,cROOTPATH)
+	Local i := 0
+	Local nRegSM0
+	Private cEmpVeic, cFilVeic, dDataEven, cCodVeic, nValProd
+	Private aVETINR := {}
+
+	//Tabela que grava inconsistencias
+	aDBFR2451 := {{"LINHA" ,"C",05,0},;
+	{"DESCR"  ,"C",95,0},;
+	{"CONTEU","C",25,0}}
+
+	vINDR2451  := {"LINHA"}
+
+	oTmp2451 := FWTemporaryTable():New(cTRBIN, aDBFR2451)
+	oTmp2451:AddIndex( "Ind01" , vINDR2451 )
+	oTmp2451:Create()
+
+	//Tabela que grava as informacoes para importacao
+	aDBFR2452 := {{"EMPRESA" ,"C",02,0},;
+	{"FILIALV" ,"C",FwSizeFilial(),0},;
+	{"VEICULO" ,"C",16,0},;
+	{"DATEVE"  ,"D",08,0},;
+	{"CUSTEV"  ,"N",09,2},;
+	{"LINHA"   ,"C",05,0}}
+
+	vINDR2452 := {"EMPRESA", "FILIALV", "VEICULO"}
+
+	oTmp2452 := FWTemporaryTable():New(cTRBDIM, aDBFR2452)
+	oTmp2452:AddIndex( "Ind01" , vINDR2452 )
+	oTmp2452:Create()
+
+	//Tabela que grava as O.s geradas para cada linha do .txt
+	aDBFR2453 := {{"LINHA"   ,"C",05,0},;
+	{"DESCR"    ,"C",70,0},;
+	{"EMPRFIL" ,"C",30,0}}
+
+	vINDR2453  := {"LINHA"}
+
+	oTmp2453 := FWTemporaryTable():New(cTRBRES, aDBFR2453)
+	oTmp2453:AddIndex( "Ind01" , vINDR2453)
+	oTmp2453:Create()
+
+	cDIREXETH := Strtran(cDIREXETH,cBARRAD,cBARRAS)
+	cROOTPAT2 := If(Substr(cROOTPAT2,Len(cROOTPAT2),1) <> cBARRAS,;
+	cROOTPAT2+cBARRAS,cROOTPAT2)
+	cSTARPATH := If(Substr(cSTARPATH,Len(cSTARPATH),1) <> cBARRAS,;
+	cSTARPATH+cBARRAS,cSTARPATH)
+	cDIREXETH := If(Substr(cDIREXETH,Len(cDIREXETH),1) <> cBARRAS,;
+	cDIREXETH+cBARRAS,cDIREXETH)
+
+	cDIRARQA  := cROOTPAT2+cSTARPATH
+	cDIRARQA  := Strtran(cDIRARQA,cBARRAD,cBARRAS)
+
+	//Faz a copia do arquivo especificado no caminho para dentro do STARPATH do protheus
+	__CopyFile(cArq1,cDIRARQA+Alltrim(xm_par02))
+
+	//Abre o arquivo txt dentro do STARTPATH
+	nHdlArq := FOPEN(Alltrim(xm_par02),0)
+	fSeek(nHdlArq,0,2)
+
+	cString := MEMOREAD(Alltrim(xm_par02))
+	nNumLinhas := MLCOUNT(cString,79)
+
+	If nNumLinhas = 0
+		//Deleta o arquivo temporario fisicamente
+		oTmp2451:Delete()
+		oTmp2452:Delete()
+		oTmp2453:Delete()
+		lARQVAZ := .T.
+		Return .T.
+	EndIf
+
+	//Guarda o Recno da empresa e filial corrente
+	dbSelectArea("SM0")
+	nRegSM0  := Recno()
+	cEMPR245 := cEmpAnt
+	cFIL245  := cFilAnt
+
+	//Inicia a leitura do arquivo
+	ProcRegua(nNumlinhas)
+	For I := 1 To nNumLinhas
+
+		IncProc()
+
+		//Separa os campos
+		cEmpVeic  := Space(Len(SM0->M0_CODIGO))  //Codigo da empresa do veiculo
+		cFilVeic  := Space(Len(SM0->M0_CODFIL))  //codigo da filial do veiculo
+		dDataEven := CTOD("  /  /  ")             //Data do evento
+		cCodVeic  := Space(Len(ST9->T9_CODBEM))  //Codigo do Veiculo
+		nValProd  := 0                            //Valor do custo do pneu
+
+		TEXLINHA := MEMOLINE(cString,,I)
+		SEPCAM245()
+
+		lOk := .T.
+		If Empty(cEmpVeic)
+			MNTA245TRB(i,STR0012) //"Codigo da empresa do veiculo nao informado"
+			lOk := .F.
+		Endif
+
+		If Empty(cFilVeic)
+			MNTA245TRB(i,STR0013) //"Filial da empresa do veiculo nao informado"
+			lOk := .F.
+		Endif
+
+		If Empty(dDataEven)
+			MNTA245TRB(i,STR0014) //"Data do evento do custo do pneu nao informado"
+			lOk := .F.
+		Endif
+
+		If Empty(cCodVeic)
+			MNTA245TRB(i,STR0015) //"TL_CODIGO do veiculo nao informado"
+			lOk := .F.
+		Endif
+
+		If Empty(nValProd)
+			MNTA245TRB(i,STR0016) //"Valor do evento nao informado"
+			lOk := .F.
+		Endif
+
+		If lOk
+			If !M245LOCEMP(cEmpVeic,cFilVeic)
+				MNTA245TRB(i,STR0017,STR0018+cEmpVeic+STR0019+ cFilVeic) //"Empresa + Filial inexistente do veiculo" #"Empresa "#" + Filial "
+			Else
+				dbSelectArea(cTRBDIM)
+				(cTRBDIM)->(DbAppend())
+				(cTRBDIM)->EMPRESA := cEmpVeic
+				(cTRBDIM)->FILIALV := cFilVeic
+				(cTRBDIM)->VEICULO := cCodVeic
+				(cTRBDIM)->DATEVE  := dDataEven
+				(cTRBDIM)->CUSTEV  := nValProd
+				(cTRBDIM)->LINHA   := Str(I,5)
+			EndIf
+		EndIf
+	Next I
+
+	//Verifica se ha dados para importar
+	dbSelectArea(cTRBDIM)
+	dbGotop()
+	If Reccount() = 0
+
+		//Deleta o arquivo temporario fisicamente
+		oTmp2452:Delete()
+
+		dbSelectArea("SM0")
+		SM0->(DbGoTo(nRegSM0))
+
+		MsgInfo(STR0020,STR0010)  //"Nao ha dados para importar, todos os dados estao inconsistentes." # "ATENCAO"
+		Return .T.
+	EndIf
+
+	//Faz a leitura do arquivo temporario para consistir o bem, produto e servico existente
+	//na empresa e filial do veiculo
+	dbSelectArea(cTRBDIM)
+	dbGotop()
+	ProcRegua(LastRec())
+	While !Eof()
+
+		cEmpVeic := (cTRBDIM)->EMPRESA
+
+		MNT245ABTA("ST9",cEmpVeic) //Bens
+		MNT245ABTA("ST4",cEmpVeic) //Servicos
+		MNT245ABTA("SB1",cEmpVeic) //Produto
+		MNT245ABTA("STE",cEmpVeic) //Tipo de Manutencao
+		MNT245ABTA("STD",cEmpVeic) //Area da Manutencao
+
+		dbSelectArea(cTRBDIM)
+		While !Eof() .And. (cTRBDIM)->EMPRESA = cEmpVeic
+
+			cFilVeic := (cTRBDIM)->FILIALV
+
+			dbSelectArea(cTRBDIM)
+			While !Eof() .And. (cTRBDIM)->EMPRESA = cEmpVeic .And. (cTRBDIM)->FILIALV = cFilVeic
+
+				IncProc()
+				lOK := .T.
+
+				//Consiste o codigo do bem existente na filial do veiculo
+				dbSelectArea("ST9")
+				dbSetOrder(01)
+				If !dbSeek(xFilial("ST9",cFilVeic)+(cTRBDIM)->VEICULO)
+					MNTA245TRB(Val((cTRBDIM)->LINHA),STR0022+cEmpVeic+STR0019+cFilVeic,(cTRBDIM)->VEICULO) //"Codigo do veiculo inexistente na empresa "#" + filial "
+					lOK := .F.
+				EndIf
+
+				//Consiste o codigo do produto informado no parametro existente na filial do veiculo
+				dbSelectArea("SB1")
+				dbSetOrder(01)
+				If !dbSeek(xFilial("SB1",cFilVeic)+xm_par01)
+					MNTA245TRB(Val((cTRBDIM)->LINHA),STR0023+cEmpVeic+STR0019+cFilVeic,xm_par01) //"Codigo do produto de custeio inexistente na empresa " #" + filial "
+					lOK := .F.
+				EndIf
+
+				//Consiste o codigo servico informado no parametro existente na filial do veiculo
+				dbSelectArea("ST4")
+				dbSetOrder(01)
+				If !dbSeek(xFilial("ST4",cFilVeic)+cServBDG)
+					MNTA245TRB(Val((cTRBDIM)->LINHA),STR0024+cEmpVeic+STR0019+cFilVeic,cServBDG) //"Codigo do servico de custeio inexistente na empresa " #" + filial "
+					lOK := .F.
+				Else
+					//Consiste o tipo do servico
+					dbSelectArea("STE")
+					dbSetOrder(01)
+					If !dbSeek(xFilial("STE",cFilVeic)+ST4->T4_TIPOMAN)
+						MNTA245TRB(Val((cTRBDIM)->LINHA),STR0025+cEmpVeic+STR0019+cFilVeic,ST4->T4_TIPOMAN) //"Tipo da manutencao do servico inexistente na empresa "# " + filial "
+						lOK := .F.
+					Else
+						If STE->TE_CARACTE != "C"
+							MNTA245TRB(Val((cTRBDIM)->LINHA),STR0026+cEmpVeic+STR0019+cFilVeic+STR0027,cServBDG) //"O servico na empresa "#" + filial " #" nao e do tipo corretivo."
+							lOK := .F.
+						EndIf
+					EndIf
+
+					dbSelectArea("STD")
+					dbSetOrder(01)
+					If !dbSeek(xFilial("STD",cFilVeic)+ST4->T4_CODAREA)
+						MNTA245TRB(Val((cTRBDIM)->LINHA),STR0028+cEmpVeic+STR0019+cFilVeic,ST4->T4_CODAREA) //"Codigo da area do servico inexistente na empresa "#" + filial "
+						lOK := .F.
+					EndIf
+
+				EndIf
+
+				//Deleta o registro de custeio se foi encontrado inconsistencia
+				If !lOK
+					dbselectarea(cTRBDIM)
+					dbDelete()
+				EndIf
+
+				dbSelectArea(cTRBDIM)
+				dbSkip()
+			End
+		End
+	End
+
+	dbSelectArea(cTRBDIM)
+	dbGotop()
+	If Reccount() = 0
+
+		//Deleta o arquivo temporario fisicamente
+		oTmp2452:Delete()
+
+		//Faz novamente a abertura das tabelas para a empresa corrente
+		MNT245ABTA("ST9",cEMPR245)
+		MNT245ABTA("ST4",cEMPR245)
+		MNT245ABTA("SB1",cEMPR245)
+		MNT245ABTA("STE",cEMPR245)
+		MNT245ABTA("STD",cEMPR245)
+
+		dbSelectArea("SM0")
+		SM0->(DbGoTo(nRegSM0))
+
+		MsgInfo(STR0029,STR0010)  //"Nao ha dados para importar, todos os dados estao inconsistentes." #"ATENCAO"
+		Return .T.
+
+	EndIf
+
+	dbSelectArea(cTRBIN)
+	dbGotop()
+	If Reccount() > 0
+		If !MSGYESNO(STR0030+CHR(13); //"Foi encontrado inconsistencias durante o processo de verificacao dos dados"
+		+STR0031+Alltrim(xm_par02)+STR0032+CHR(13);  //"contidos no " #". Deseja prosseguir o processo de importacao"
+		+STR0033,STR0010) //"mesmo assim ?" #"ATENCAO"
+
+			//Deleta o arquivo temporario fisicamente
+			oTmp2452:Delete()
+
+			//Faz novamente a abertura das tabelas para a empresa corrente
+			MNT245ABTA("ST9",cEMPR245)
+			MNT245ABTA("ST4",cEMPR245)
+			MNT245ABTA("SB1",cEMPR245)
+			MNT245ABTA("STE",cEMPR245)
+			MNT245ABTA("STD",cEMPR245)
+
+			dbSelectArea("SM0")
+			SM0->(DbGoTo(nRegSM0))
+			Return .T.
+		EndIf
+	EndIf
+
+	//Inicia o processo de leitura do arquivo temporario para gerar as Ordem de Servico
+	cPlano245  = Replicate("0",Len(STJ->TJ_PLANO))
+	dbSelectArea(cTRBDIM)
+	dbGotop()
+	ProcRegua(LastRec())
+	While !Eof()
+
+		cEmpVeic := (cTRBDIM)->EMPRESA
+
+		//Faz abertura das tabelas de dados da empresa do veiculo
+		MNT245ABTA("ST9",cEmpVeic)
+		MNT245ABTA("ST4",cEmpVeic)
+		MNT245ABTA("SB1",cEmpVeic)
+		MNT245ABTA("STJ",cEmpVeic)
+		MNT245ABTA("STL",cEmpVeic)
+
+		lSEQSTJ := If(NGVerify("STJ"),.T.,.F.)
+		lSEQSTL := If(NGVerify("STJ"),.T.,.F.)
+
+		dbSelectArea(cTRBDIM)
+		While !Eof() .And. (cTRBDIM)->EMPRESA = cEmpVeic
+
+			cFilVeic := (cTRBDIM)->FILIALV
+
+			cPathSTJ := Alltrim(x2Path("STJ"))
+			cFilSxe  := xFilial("STJ",cFilVeic)+Substr(cPathSTJ,1,len(cPathSTJ)-3)+cEmpVeic+"0"
+
+			dbSelectArea("ST4")
+			dbSetOrder(01)
+			dbSeek(xFilial("ST4",cFilVeic)+cServBDG)
+			cArea245  := ST4->T4_CODAREA
+			cTipoM245 := ST4->T4_TIPOMAN
+
+			dbSelectArea(cTRBDIM)
+			While !Eof() .And. (cTRBDIM)->EMPRESA = cEmpVeic .And. (cTRBDIM)->FILIALV = cFilVeic
+
+				cCodVeic := (cTRBDIM)->VEICULO
+
+				dbSelectArea("ST9")
+				dbSetOrder(01)
+				dbSeek(xFilial("ST9",cFilVeic)+cCodVeic)
+				cCusto245 := ST9->T9_CCUSTO
+				cCTrab245 := ST9->T9_CENTRAB
+				cPrio245  := ST9->T9_PRIORID
+
+				dbSelectArea("SB1")
+				dbSetOrder(01)
+				dbSeek(xFilial("SB1",cFilVeic)+xm_par01)
+				cLocP245 := SB1->B1_LOCPAD
+				cUnid245 := SB1->B1_UM
+
+				//Gera a Ordem de Servico
+				cNumOrdem245 := GetSxeNum("STJ","TJ_ORDEM",cFilSxe)
+				ConfirmSx8()
+
+				//Tratamento para evitar duplicação de número de O.S. em base
+				DbSelectArea("STJ")
+				DbSetOrder(1)
+				If DbSeek(xFilial("STJ") + cNumOrdem245)
+					cNumOrdem245 := GETSXENUM("STJ","TJ_ORDEM",cFilSxe)
+					ConfirmSx8()
+				EndIf
+
+				DbSelectArea("STJ")
+				STJ->(RecLock("STJ",.T.))
+				STJ->TJ_FILIAL  := xFilial("STJ",cFilVeic)
+				STJ->TJ_ORDEM   := cNumOrdem245
+				STJ->TJ_PLANO   := cPlano245
+				STJ->TJ_TIPOOS  := "B"
+				STJ->TJ_CODBEM  := cCodVeic
+				STJ->TJ_SERVICO := cServBDG
+				STJ->TJ_SEQRELA := '000'
+				If !lSEQSTJ
+
+					STJ->TJ_SEQUENC := 0
+				
+				EndIf
+				STJ->TJ_TIPO    := cTipoM245
+				STJ->TJ_CODAREA := cArea245
+				STJ->TJ_CCUSTO  := cCusto245
+				STJ->TJ_USUARIO := "BANDAG"
+				STJ->TJ_PRIORID := cPrio245
+				STJ->TJ_CENTRAB := cCTrab245
+				STJ->TJ_LUBRIFI := "N"
+				STJ->(MsUnlock())
+
+				nSeq245   := 1
+				nCustoPro := 0
+				dMenoDtEv := (cTRBDIM)->DATEVE
+
+				dbSelectArea(cTRBDIM)
+				While !Eof() .And. (cTRBDIM)->EMPRESA = cEmpVeic .And. (cTRBDIM)->FILIALV = cFilVeic;
+				.And. (cTRBDIM)->VEICULO = cCodVeic
+
+					IncProc()
+					dbSelectArea("STL")
+					STL->(RecLock("STL",.T.))
+					STL->TL_FILIAL  := xFilial("STL",cFilVeic)
+					STL->TL_ORDEM   := cNumOrdem245
+					STL->TL_PLANO   := cPlano245
+					If lSEQSTL
+						STL->TL_SEQRELA := Alltrim(Str(nSeq245,3))
+					Else
+						STL->TL_SEQUENC := nSeq245
+					EndIf
+					STL->TL_TAREFA  := "0"
+					STL->TL_TIPOREG := "P"
+					STL->TL_CODIGO  := xm_par01
+					STL->TL_USACALE := "N"
+					STL->TL_QUANTID := 1
+					STL->TL_UNIDADE := cUnid245
+					STL->TL_CUSTO   := (cTRBDIM)->CUSTEV
+					STL->TL_DESTINO := "A"
+					STL->TL_DTINICI := (cTRBDIM)->DATEVE
+					STL->TL_HOINICI := "08:00"
+					STL->TL_DTFIM   := (cTRBDIM)->DATEVE
+					STL->TL_HOFIM   := "08:00"
+					STL->TL_REPFIM  := "S"
+					STL->TL_LOCAL   := cLocP245
+					STL->TL_GARANTI := "N"
+					STL->(MsUnlock())
+
+					dMenoDtEv := MIN(dMenoDtEv,(cTRBDIM)->DATEVE)
+
+					//Grava resultado da Importacao
+					M245TRBRES(Val((cTRBDIM)->LINHA),STR0045+Alltrim(cNumOrdem245),cEmpVeic+"\"+cFilVeic) // "Gravado custo do pneu para a ordem de servico "
+
+					nSeq245   += 1
+					nCustoPro += (cTRBDIM)->CUSTEV
+
+					dbSelectArea(cTRBDIM)
+					dbSkip()
+				End
+				//Atualiza dados da ordem de servico
+				dbSelectArea("STJ")
+				STJ->(RecLock("STJ",.F.))
+				STJ->TJ_DTORIGI := dMenoDtEv
+				STJ->TJ_DTMPINI := dMenoDtEv
+				STJ->TJ_HOMPINI := "08:00"
+				STJ->TJ_DTMPFIM := dMenoDtEv
+				STJ->TJ_HOMPFIM := "08:00"
+				STJ->TJ_DTMRINI := dMenoDtEv
+				STJ->TJ_HOMRINI := "08:00"
+				STJ->TJ_DTMRFIM := dMenoDtEv
+				STJ->TJ_HOMRFIM := "08:00"
+				STJ->TJ_SITUACA := "L"
+				STJ->TJ_TERMINO := "S"
+				STJ->TJ_TIPORET := "S"
+				STJ->TJ_CUSTMAA := nCustoPro
+				STJ->(MsUnlock())
+
+				//-------------------------------------
+				//INTEGRACAO POR MENSAGEM UNICA
+				//-------------------------------------
+				If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+					NGMUMntOrd(STJ->(RecNo()),3)
+				EndIf
+
+				dbSelectArea(cTRBDIM)
+			End
+		End
+	End
+
+	//Deleta o arquivo temporario fisicamente
+	oTmp2452:Delete()
+
+	//Reabre as tabelas de dados novamente na empresa corrente
+	MNT245ABTA("ST9",cEMPR245)
+	MNT245ABTA("ST4",cEMPR245)
+	MNT245ABTA("SB1",cEMPR245)
+	MNT245ABTA("STE",cEMPR245)
+	MNT245ABTA("STD",cEMPR245)
+	MNT245ABTA("STJ",cEMPR245)
+	MNT245ABTA("STL",cEMPR245)
+
+	dbSelectArea("SM0")
+	SM0->(DbGoTo(nRegSM0))
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA245AR
+validação do arquivo .TXT
+
+@author  Elisangela Costa
+@since   19/09/06
+@version P11/P12
+@return  Lógico, define se encontrou o arquivo.
+/*/
+//-------------------------------------------------------------------
+Static Function MNTA245AR()
+	Local cArq1    := Alltrim(xm_par03)+Alltrim(xm_par02)
+	If !File(cArq1)
+		Help(" ",1,"NAOEXISARQ")
+		Return .f.
+	EndIf
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³SEPCAM245 ³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Separa os campo da linha do arquivo *.TXT                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNT245IMPD                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function SEPCAM245()
+
+	Local lSair := .F.
+	Local cCampo245 := " "
+	Local nInd := 1 , ix
+
+	For ix := 1 To 9
+
+		cCampo245 := " "
+		lSair     := .F.
+		While !lSair .And. nInd < len(TEXLINHA)
+
+			If Substr(TEXLINHA,nInd,1) <> ','
+				cCampo245 := cCampo245 + substr(TEXLINHA,nInd,1)
+			Else
+				nInd := nInd + 1
+				lSair := .T.
+				Exit
+			Endif
+			nInd := nInd + 1
+		End
+
+		If ix == 1
+			cEmpVeic := StrTran(cCampo245,"'"," ")
+			cEmpVeic := Alltrim(cEmpVeic)
+			cEmpVeic := cEmpVeic+Replicate(" ",Len(SM0->M0_CODIGO)- Len(cEmpVeic))
+
+		ElseIf ix == 2
+			cFilVeic := StrTran(cCampo245,"'"," ")
+			cFilVeic := Alltrim(cFilVeic)
+			cFilVeic := cFilVeic+Replicate(" ",Len(SM0->M0_CODFIL)- Len(cFilVeic))
+
+		ElseIf ix == 6
+			dDataEven := StrTran(cCampo245,"'"," ")
+			dDataEven := Alltrim(dDataEven)
+
+			dDataEven := CTOD(dDataEven)
+
+		ElseIf ix == 7
+			cCodVeic  := StrTran(cCampo245,"'"," ")
+			cCodVeic  := Alltrim(cCodVeic)
+			cCodVeic  := cCodVeic+Replicate(" ",Len(ST9->T9_CODBEM)- Len(cCodVeic))
+
+		ElseIf ix == 9
+			nValProd  := StrTran(cCampo245,"'"," ")
+			nValProd  := Val(Alltrim(nValProd))
+		EndIf
+
+	Next ix
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT245CKSE³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Cosiste o parametro de servico                              ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT245CKSE(cSERVICO)
+
+	If !ST4->(DbSeek(xFilial("ST4") + cSERVICO))
+		Help(" ",1,"SERVICONAOEXIST")
+		Return .f.
+	EndIf
+
+	If !STE->(DbSeek(xFilial('STE') + ST4->T4_TIPOMAN))
+		Help(" ",1,"TIPONAOEXIST")
+		Return .f.
+	EndIf
+
+	If STE->TE_CARACTE != "C"
+		Help(" ",1,"SERVNAOCORRET")
+		Return .f.
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTA245TRB³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Grava dados no arquivo temporario                           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTA245TRB(nitem,cdes,nConteu)
+
+	dbSelectArea(cTRBIN)
+	(cTRBIN)->(DbAppend())
+	(cTRBIN)->LINHA  := str(nitem,5)
+	(cTRBIN)->DESCR   := cdes
+	(cTRBIN)->CONTEU := nConteu
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNTA245IMP³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Relatorio de impressao de inconsistencias                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA245IMP()
+
+	cString  := "ST9"
+	cdesc1   := STR0034 //"Relatorio de inconsistencias encontradas durante o processo de"
+	cdesc2   := STR0035 //"importacao dos registros de custos dos pneus dos veiculos"
+	cdesc3   := STR0036 //"do Bandag para o SIGAMNT."
+	wnrel    := "MNTA2451"
+	aReturn  := {STR0037,1,STR0038, 1, 2, 1, "",1 } //"Zebrado" # "Administracao"
+	nLastKey := 0
+	Tamanho  := "M"
+	nomeprog := "MNTA245"
+	Titulo   := STR0039+" "+Alltrim(xm_par02) //"Inconsistencias Encontradas na Importacao"
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey == 27
+		Set Filter To
+		Return
+	Endif
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| MNTA245IT(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA245IT ³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Chamada do Relat¢rio                                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245IMP                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTA245IT()
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Define Variaveis                                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	cRodaTxt := ""
+	nCntImpr := 0
+	nAtual   := 0
+	contador := 0
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Variaveis para controle do cursor de progressao do relatorio ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	nTotRegs := 0
+	nMult    := 1
+	nPosAnt  := 4
+	nPosAtu  := 4
+	nPosCnt  := 0
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Contadores de linha e pagina                                 ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	li := 80
+	m_pag := 1
+	lEnd := .f.
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Monta os Cabecalhos                                          ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	CABEC1 := STR0040 //"Linha    Mensagem                                                                                        Conteudo"
+	CABEC2 := " "
+	ntipo  := 0
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Verifica se deve comprimir ou nao                            ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	/*/
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         0         1         2
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	*************************************************************************************************************************************
+	xxxxx.:   xx
+	xxx/xxxxxxx/xxxxx                     Inconsistencias Encontrados na Importacao                                       xxxxx: xx/xx/xx
+	xxxx...: xx:xx:xx                                                                                                    xxxxxx: xx/xx/xx
+	*************************************************************************************************************************************
+	Linha    Mensagem                                                                                          Conteudo
+	*************************************************************************************************************************************
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxx
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxx
+	*/
+
+	dbSelectArea(cTRBIN)
+	dbGoTop()
+	SetRegua(LastRec())
+	while !Eof()
+
+		IncRegua()
+		NgSomali(58)
+		@li,000 Psay (cTRBIN)->LINHA
+		@li,009 Psay (cTRBIN)->DESCR
+		@li,105 Psay (cTRBIN)->CONTEU
+		dbSelectArea(cTRBIN)
+		Dbskip()
+	End
+	RetIndex("ST9")
+	Set Filter To
+	Set device to Screen
+	If aReturn[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+Return NIL
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³M245LOCEMP³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Consiste se a empresa + filial existe no Sigamat            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cEmpSM0 = Codigo da empresa do veiculo                      ³±±
+±±³          ³cFilSM0 = Codigo da filial do veiculo                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNT245IMPD                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function M245LOCEMP(cEmpSM0,cFilSM0)
+	Local lAchouEmp := .F.
+
+	dbSelectArea("SM0")
+	If dbSeek(cEmpSM0+cFilSM0)
+		lAchouEmp := .T.
+	EndIf
+Return lAchouEmp
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT245OPEN³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Faz a abertura da tabela para a empresa do veiculo          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cAlias245 = Codigo da empresa do veiculo                    ³±±
+±±³          ³nIndice   = Codigo da filial do veiculo                     ³±±
+±±³          ³MvEmpresa = Codigo da filial do veiculo                     ³±±
+±±³          ³cMd       = Codigo da filial do veiculo                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNT245IMPD                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function MNT245OPEN(cAlias245,nIndice,MvEmpresa,cMd)
+	Local nAT := 0
+	default nIndice := 1
+	default cAlias245 := Alias()
+	default MvEmpresa := cEmpAnt
+	default cMd := If(FindFunction("FWModeAccess"),FWModeAccess(Alias()),If(Empty(xFilial(Alias())),"C","E"))
+
+	UniqueKey( NIL , cAlias245, .T. )
+	EmpOpenFile(cAlias245,cAlias245,nIndice,.t.,MvEmpresa,@cMd)
+	nAT := AT(cAlias245,cArqTab)
+	If nAT > 0
+		cArqTab := Subs(cArqTab,1,nAT+2)+cMd+Subs(cArqTab,nAT+4)
+	EndIf
+
+	cArqTab := Subs(cArqTab,1,nTamTable)
+Return .t.
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT245ARQ ³ Autor ³Elisangela Costa       ³ Data ³ 22/09/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Abre arquivos que nao foram inicializados                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNT245IMPD                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+/*/
+Static Function MNT245ARQ(cArq245)
+	Local cFileJob := Alltrim(cArq245)
+	Local nAT,cMd, nFor
+	Local aFileJob := {"ST9","ST4","SB1","STE","STJ","STL"}
+
+	For nFor := 1 to Len(aFileJob)
+
+		cMd := If(FindFunction("FWModeAccess"),FWModeAccess(aFileJob[nFor]),If(Empty(xFilial(aFileJob[nFor])),"C","E"))
+
+		nAT := AT(aFileJob[nFor],cFileJob)
+		IF nAT <= 0
+			cFileJob += aFileJob[nFor]+cMd+"/"
+		EndIF
+
+	Next nFor
+
+Return cFileJob
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT245ABTA³ Autor ³Elisangela Costa       ³ Data ³ 22/09/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Faz abertura da tabela na empresa do veiculo                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cAlias245 = Nome da tabela a ser aberta para a empresa      ³±±
+±±³          ³cEmpre245 = Codigo da empresa do veiculo                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+/*/
+Static Function MNT245ABTA(cAlias245,cEmpre245)
+
+	cModo := If(FindFunction("FWModeAccess"),FWModeAccess(cAlias245),If(Empty(xFilial(cAlias245)),"C","E"))
+	MNT245OPEN(cAlias245,1,cEmpre245,@cModo)
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³M245TRBRES³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Grava informacoes dos registros importados no arq. temp.    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function M245TRBRES(nitem,cdes,nConteu)
+
+	dbSelectArea(cTRBRES)
+	(cTRBRES)->(DbAppend())
+	(cTRBRES)->LINHA   := str(nitem,5)
+	(cTRBRES)->DESCR    := cdes
+	(cTRBRES)->EMPRFIL := nConteu
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³M245IMPRES³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Relatorio de impressao de inconsistencias                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA245                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function M245IMPRES()
+
+	cString  := "ST9"
+	cdesc1   := STR0041 //"Relatorio dos dados importados do arquivo informado"
+	cdesc2   := STR0042 //"no parametro."
+	cdesc3   := " "
+	wnrel    := "MNTA2452"
+	aReturn  := {STR0037,1,STR0038, 1, 2, 1, "",1 } //"Zebrado"# "Administracao"
+	nLastKey := 0
+	Tamanho  := "M"
+	nomeprog := "MNTA245"
+	Titulo   := STR0043+" "+Alltrim(xm_par02) //"Resultado da Importacao"
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey == 27
+		Set Filter To
+		Return
+	Endif
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| M245IRES(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³M245IRES  ³ Autor ³ Elisangela Costa      ³ Data ³19/09/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Chamada do Relat¢rio                                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³M245IMPRES                                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function M245IRES()
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Define Variaveis                                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	cRodaTxt := ""
+	nCntImpr := 0
+	nAtual   := 0
+	contador := 0
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Variaveis para controle do cursor de progressao do relatorio ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	nTotRegs := 0
+	nMult    := 1
+	nPosAnt  := 4
+	nPosAtu  := 4
+	nPosCnt  := 0
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Contadores de linha e pagina                                 ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	li := 80
+	m_pag := 1
+	lEnd := .f.
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Monta os Cabecalhos                                          ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	CABEC1 := STR0044 //"Linha    Mensagem                                                                 Empresa\Filial"
+	CABEC2 := " "
+	ntipo  := 0
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Verifica se deve comprimir ou nao                            ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	/*/
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         0         1         2
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	*************************************************************************************************************************************
+	xxxxx.:   xx
+	xxx/xxxxxxx/xxxxx                     Erros Encontrados na Importacao                                                 xxxxx: xx/xx/xx
+	xxxx...: xx:xx:xx                                                                                                    xxxxxx: xx/xx/xx
+	*************************************************************************************************************************************
+	Linha    Mensagem                                                                 Empresa\Filial"
+	*************************************************************************************************************************************
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xx\xx
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xx\xx
+	*/
+
+	dbSelectArea(cTRBRES)
+	dbGoTop()
+	SetRegua(LastRec())
+	while !Eof()
+
+		IncRegua()
+		NgSomali(58)
+		@li,000 Psay (cTRBRES)->LINHA
+		@li,009 Psay (cTRBRES)->DESCR
+		@li,082 Psay (cTRBRES)->EMPRFIL
+		dbSelectArea(cTRBRES)
+		Dbskip()
+	End
+	RetIndex("ST9")
+	Set Filter To
+	Set device to Screen
+	If aReturn[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+Return .T.

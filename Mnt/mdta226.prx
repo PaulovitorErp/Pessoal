@@ -1,0 +1,696 @@
+#INCLUDE "Protheus.ch"
+#INCLUDE "COLORS.CH"
+#INCLUDE "MDTA226.ch"
+  
+#DEFINE _nVERSAO 2 //Versao do fonte
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226CAD
+Programa de  Registro dos Planos Emergenciais nos Laudos.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/  
+//---------------------------------------------------------------------
+Function MDTA226()   
+ 
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³ Armazena variaveis p/ devolucao (NGRIGHTCLICK) 						  ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+PRIVATE aRotina := MenuDef(lSigaMdtPS)
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³ Define o cabecalho da tela de atualizacoes                   ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+PRIVATE cCadastro  := STR0001 //"Laudos x Requisitos"
+PRIVATE aCHKDEL := {}, bNGGRAVA
+Private cPrograma := "MDTA226"  
+Private cCliMdtPs
+
+If !NGCADICBASE("TJA_LAUDO","A","TJA",.F.)
+	If !NGINCOMPDIC(If (lSigaMdtPS,"UPDMDTPS","UPDMDT59"))
+		Return .F.
+	Endif
+Endif 
+
+//Se for prestador de serviço
+If lSigaMdtPS
+	DbSelectArea("SA1")
+	DbSetOrder(1)    
+	mBrowse( 6, 1,22,75,"SA1")
+Else
+	MDT226CAD()
+Endif
+
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³ Devolve variaveis armazenadas (NGRIGHTCLICK) 					  	  ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transa‡„o a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Array com opcoes da rotina. 
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef(lPres)
+Local aRotina
+Default lPres := .F.
+
+If lPres
+	aRotina :=	{ { STR0002, "AxPesqui"  , 0 , 1},;  //"Pesquisar"
+                  { STR0003, "NGCAD01"   , 0 , 2},;  //"Visualizar"
+                  { STR0004, "MDT226CAD" , 0 , 4} }  //"Laudo"
+Else
+	aRotina :=  { { STR0002, "AxPesqui"  , 0 , 1},;   //"Pesquisar"
+                  { STR0003, "NGCAD01"   , 0 , 2},;   //"Visualizar"
+                  { STR0005, "MDT226RE"  , 0 , 4, 3} } //"Requisitos"
+Endif
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226CAD
+Monta um browse dos laudos.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDT226CAD()
+
+Local aArea := GetArea()
+Local cOldCad := cCadastro
+
+aRotina := MenuDef()
+
+DbSelectArea("TO0")
+//Se for prestador de serviço faz filtro de laudos por cliente
+If lSigaMdtPS
+	Set Filter To TO0->TO0_CLIENT+TO0->TO0_LOJA == SA1->A1_COD+SA1->A1_LOJA
+	cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+Endif
+DbSetOrder(1)
+
+mBrowse( 6, 1,22,75,"TO0")
+
+RestArea(aArea)
+cCadastro := cOldCad
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226RE
+Monta um browse dos Planos.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDT226RE( cAlias , nReg, nOpcx )
+//Objetos de Tela
+Local oDlgRE, oPnlRE, oPnlTOT
+Local oGetRE
+Local oMenu
+
+//Variaveis de inicializacao de GetDados
+Local aNoFields := {}
+Local nInd
+Local cKeyGet
+Local cWhileGet
+
+//Variaveis de tela
+Local aInfo, aPosObj
+Local aSize := MsAdvSize(,.f.,430), aObjects := {}
+
+//Variaveis de GetDados
+Local lAltProg := If(INCLUI .Or. ALTERA, .T.,.F.)
+Private aCols := {}, aHeader := {}
+
+aRotSetOpc( "TJA" , 1 , 4 )
+
+//Inicializa variaveis de Tela
+Aadd(aObjects,{050,050,.t.,.t.})
+Aadd(aObjects,{100,100,.t.,.t.})
+aInfo   := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+// Monta a GetDados dos Requisitos Legais
+aAdd(aNoFields,"TJA_LAUDO")
+aAdd(aNoFields,"TJA_FILIAL")
+nInd		:= 1
+cKeyGet 	:= "TO0->TO0_LAUDO"
+cWhileGet 	:= "TJA->TJA_FILIAL == '"+xFilial("TJA")+"' .AND. TJA->TJA_LAUDO == '"+TO0->TO0_LAUDO+"'"
+
+//Monta aCols e aHeader de TJA
+dbSelectArea("TJA")
+dbSetOrder(nInd)
+FillGetDados( nOpcx, "TJA", 1, cKeyGet, {|| }, {|| .T.},aNoFields,,,,;
+					{|| NGMontaAcols("TJA",&cKeyGet,cWhileGet)})
+If Empty(aCols)
+	aCols := BLANKGETD(aHeader)
+Endif
+
+nOpca := 0
+
+DEFINE MSDIALOG oDlgRE TITLE STR0001 From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd PIXEL   //"Laudo x Requisitos"
+
+	oPnlTOT := TPanel():New( , , , oDlgRE , , , , , , , , .F. , .F. )
+		oPnlTOT:Align := CONTROL_ALIGN_ALLCLIENT   
+
+	oPnlRE := TPanel():New(0, 0, Nil, oPnlTOT, Nil, .T., .F., Nil, Nil, 0, 60, .T., .F. )
+		oPnlRE:Align := CONTROL_ALIGN_TOP
+        
+        TSay():New( 6 , 7 ,{| | OemtoAnsi(STR0006) },oPnlRE,,,.F.,.F.,.F.,.T.,CLR_BLACK,CLR_WHITE,020,008)//"Laudo"
+		TGet():New( 5 , 27,{|u| If( PCount() > 0 , TO0->TO0_LAUDO := u , TO0->TO0_LAUDO )},oPnlRE,40,10,"@!",;
+						,CLR_BLACK,CLR_WHITE,,,,.T.,"",,{|| .F. },.F.,.F.,,.F.,.F.,,,,,,.T.)
+		
+		TSay():New( 6 , 84 ,{| | OemtoAnsi(STR0007) },oPnlRE,,,.F.,.F.,.F.,.T.,CLR_BLACK,CLR_WHITE,020,008)//"Nome Laudo"
+		TGet():New( 5 , 104,{|u| If( PCount() > 0 , TO0->TO0_NOME := u , TO0->TO0_NOME )},oPnlRE,150,10,"@!",;
+						,CLR_BLACK,CLR_WHITE,,,,.T.,"",,{|| .F. },.F.,.F.,,.F.,.F.,,,,,,.T.)
+	    
+		TButton():New( 30 , 5 , "&"+STR0005, oPnlRE, {|| MDT226BU(@oGetRE) } , 49 , 12 ,, /*oFont*/,,.T.,,,,/* bWhen*/,,)//Requisitos	
+	
+		PutFileInEof("TJA")
+		oGetRE := MsNewGetDados():New(0,0,200,210,IIF(!lAltProg,0,GD_INSERT+GD_UPDATE+GD_DELETE),;
+ 								{|| MDT226Lin("TJA",,@oGetRE)},{|| MDT226Lin("TJA",.T.,@oGetRE)},/*cIniCpos*/,/*aAlterGDa*/,;
+   								/*nFreeze*/,/*nMax*/,/*cFieldOk */,/*cSuperDel*/,/*cDelOk */,oPnlTOT,aHeader,aCols)
+
+		oGetRE:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	NGPOPUP(asMenu,@oMenu,oPnlRE)
+	oPnlRE:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPnlRE)}
+	aSort(oGetRE:aCOLS,,,{ |x, y| x[1] < y[1] }) //Ordena por Requisitos
+	
+ACTIVATE MSDIALOG oDlgRE ON INIT EnchoiceBar(oDlgRE,{|| nOpca:=1,If(MDT226TOk(@oGetRE), oDlgRE:End(), nOpca := 0)},{|| oDlgRE:End(),nOpca := 0})
+
+If nOpca == 1
+	fGravaRE(@oGetRE)//Grava Requisitos Legais
+Endif
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226CPY
+Mostra um markbrowse com todos os Requisitos Legais
+para poder seleciona-los de uma so vez.(Baseado na funcao MDT230BU)
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MDT226BU( oGetRE )
+Local aArea := GetArea()
+//Variaveis para montar TRB
+Local aDBF,aTRBRE
+//Variaveis de Tela      
+Local oDlgReq,oFont
+Local oMARKFReq
+Local oPnlMSG, oPnlMark, oPnlTOT, oPnl
+//  
+Local bOkReq	 := {|| nOpcao := 1,oDlgReq:End()}
+Local bCancelReq := {|| nOpcao := 0,oDlgReq:End()}
+Local nOpcao
+Local lInverte, lRet 
+Local cAliasTRB := GetNextAlias()
+Local aDescIdx	:= {}
+Local cPesquisar:=Space( 200 )   
+
+Private cMarca := GetMark()     
+Private OldCols := aCLONE(aCols)   
+Private aCbxPesq //ComboBox com indices de pesquisa
+Private cCbxPesq   := ""
+Private oCbxPesq //ComboBox de Pesquisa
+lInverte:= .f.
+
+//Valores e Caracteristicas da TRB
+aDBF := {}
+AADD(aDBF,{ "TRB_OK"      , "C" ,02      , 0 })
+AADD(aDBF,{ "TRB_CODLEG"  , "C" ,TamSX3("TJA_CODLEG")[1], 0 })
+AADD(aDBF,{ "TRB_EMENTA"  , "C" ,TamSX3("TJA_EMENTA")[1], 0 })
+
+aTRBRE := {}  
+AADD(aTRBRE,{ "TRB_OK"    ,NIL," "	  	,})
+AADD(aTRBRE,{ "TRB_CODLEG",NIL,STR0020,})  //"Cod. Requisito"
+AADD(aTRBRE,{ "TRB_EMENTA",NIL,STR0021	,}) //"Tema da Lei"
+
+//Cria TRB
+oTempTRB := FWTemporaryTable():New( cAliasTRB, aDBF )
+oTempTRB:AddIndex( "1", {"TRB_CODLEG"} )
+oTempTRB:AddIndex( "2", {"TRB_EMENTA"} )
+oTempTRB:AddIndex( "3", {"TRB_OK"} )
+oTempTRB:Create()
+
+dbSelectArea("TA0")
+
+Processa({|lEnd| fBuscaReq( cAliasTRB , oGetRE )},STR0010,STR0011)//"Buscando Requisitos..."//"Espere"
+Dbselectarea(cAliasTRB)
+Dbgotop()
+
+If (cAliasTRB)->(Reccount()) <= 0
+	oTempTRB:Delete()
+	RestArea(aArea)
+	lRefresh := .t.
+	Msgstop(STR0012,STR0013)  //"Não existem Requisitos cadastrados" //"ATENÇÃO" 
+	Return .t.
+Endif 
+
+nOpcao := 0
+
+DEFINE MSDIALOG oDlgReq TITLE OemToAnsi(STR0005) From 64,160 To 580,730 OF oMainWnd Pixel  //"Requisitos"
+				
+		oPnlTOT := TPanel():New( , , , oDlgReq , , , , , , , , .F. , .F. )//Painel Principal
+			oPnlTOT:Align := CONTROL_ALIGN_ALLCLIENT  
+		
+		oPnl 		:= TPanel():New( 01 , 01 , , oPnlTOT , , , , CLR_BLACK , CLR_WHITE , 0 , 55 , .T. , .F. )//Painel do texto superior
+			oPnl:Align	:= CONTROL_ALIGN_TOP 
+		
+		@ 8,9.6 TO 45,280 OF oPnl PIXEL
+		TSay():New(19,12,{|| OemtoAnsi(STR0014) },oPnl,,,.F.,.F.,.F.,.T.,CLR_BLACK,CLR_WHITE,200,010)//"Estes são os planos cadastrados no sistema."
+		TSay():New(29,12,{|| OemtoAnsi(STR0015) },oPnl,,,.F.,.F.,.F.,.T.,CLR_BLACK,CLR_WHITE,200,010)//"Selecione aqueles que foram avaliados no laudo."
+
+		//--- PESQUISAR
+		//Define as opcoes de Pesquisa  
+		aCbxPesq := aClone( aDescIdx )     
+		aAdd( aCbxPesq , STR0016 ) //"Código+Descrição"
+		aAdd( aCbxPesq , STR0017 ) //"Descrição+Código"  
+		aAdd( aCbxPesq , STR0018 ) //"Marcados"
+		cCbxPesq := aCbxPesq[ 1 ]  
+ 	
+	oPnlMSG := TPanel():New(0, 0, Nil, oPnlTOT, Nil, .T., .F., Nil, Nil, 0, 50, .T., .F. )//Painel dos botões de pesquisa
+		oPnlMSG:Align := CONTROL_ALIGN_TOP
+	
+	oCbxPesq := TComboBox():New( 010 , 002 , { | u | If( PCount() > 0 , cCbxPesq := u , cCbxPesq ) } , ;  
+	aCbxPesq , 200 , 08 , oPnlMSG , , { | | } ;
+	, , , , .T. , , , , , , , , , "cCbxPesq" )    
+	oCbxPesq:bChange := { | | fIndexSet( cAliasTRB , aCbxPesq , @cPesquisar , oMARKFReq ) }
+	
+	oPesquisar := TGet():New( 025 , 002 , { | u | If( PCount() > 0 , cPesquisar := u , cPesquisar ) } , oPnlMSG , 200 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+	.F. , , .T. /*lPixel*/ , , .F. , { | | .T. }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "cPesquisar" , , , , .F. /*lHasButton*/ )
+	 				
+	oBtnPesq := TButton():New( 010 , 220 , STR0002 , oPnlMSG , { | | fTRBPes( cAliasTRB , oMARKFReq , cPesquisar) } , ;//"Pesquisar" //"Pesquisar"
+	60 , 10 , , , .F. , .T. , .F. , , .F. , , , .F. ) 
+
+	oPnlMark := TPanel():New(0, 0, Nil, oPnlTOT, Nil, .T., .F., Nil, Nil, 0, 120, .T., .F. )//Painel do Mark 
+		oPnlMark:Align := CONTROL_ALIGN_TOP
+
+	oMARKFReq := MsSelect():NEW(cAliasTRB,"TRB_OK",,aTRBRE,@lINVERTE,@cMARCA,{100,5,264,281},,,oPnlMark) 
+		oMARKFReq:oBROWSE:lHASMARK		:= .T.
+		oMARKFReq:oBROWSE:lCANALLMARK	:= .T.    
+		oMARKFReq:oBROWSE:bALLMARK		:= {|| MDTA226INV(cMarca,cAliasTRB) }//Funcao inverte marcadores
+		oMARKFReq:oBROWSE:ALIGN			:= CONTROL_ALIGN_ALLCLIENT
+
+EnchoiceBar(oDlgReq,bOkReq,bCancelReq)   
+
+ACTIVATE MSDIALOG oDlgReq CENTERED    
+
+lRet := ( nOpcao == 1 )  
+
+If lRet
+	MDT226CPY(@oGetRE,cAliasTRB)//Funcao para copiar planos a GetDados
+Endif
+
+oTempTRB:Delete() 
+
+RestArea(aArea)
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226CPY
+Copia os planos selecionados no markbrowse para a GetDados.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MDT226CPY(oGetRE,cAliasTRB)
+Local nCols, nPosCod
+Local aColsOk := aClone(oGetRE:aCols)
+Local aHeadOk := aClone(oGetRE:aHeader)
+Local aColsTp := BLANKGETD(aHeadOk)
+
+nPosCod := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TJA_CODLEG"})
+nPosDes := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TJA_EMENTA"})
+
+For nCols := Len(aColsOk) To 1 Step -1 //Deleta do aColsOk os registros - não marcados; não estiver encontrado
+	dbSelectArea(cAliasTRB)
+	dbSetOrder(1)
+	If !dbSeek(aColsOK[nCols,nPosCod]) .OR. Empty((cAliasTRB)->TRB_OK)
+		aDel(aColsOk,nCols)
+		aSize(aColsOk,Len(aColsOk)-1)
+	EndIf
+Next nCols
+
+dbSelectArea(cAliasTRB)
+dbGoTop()
+While (cAliasTRB)->(!Eof())
+	If !Empty((cAliasTRB)->TRB_OK) .AND. aScan( aColsOk , {|x| x[nPosCod] == (cAliasTRB)->TRB_CODLEG } ) == 0
+		aAdd(aColsOk,aClone(aColsTp[1]))
+		aColsOk[Len(aColsOk),nPosCod] := (cAliasTRB)->TRB_CODLEG
+		aColsOk[Len(aColsOk),nPosDes] := (cAliasTRB)->TRB_EMENTA
+	EndIf
+	(cAliasTRB)->(dbSkip())
+End
+
+If Len(aColsOK) <= 0
+	aColsOK := aClone(aColsTp)
+EndIf
+
+aSort(aColsOK,,,{ |x, y| x[1] < y[1] }) //Ordena por plano
+oGetRE:aCols := aClone(aColsOK)
+oGetRE:oBrowse:Refresh()
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA226INV
+Inverte a marcacao do browse.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MDTA226INV(cMarca,cAliasTRB)
+Local aArea := GetArea()
+
+dbSelectArea(cAliasTRB)
+dbGoTop()
+While !(cAliasTRB)->(Eof())
+	(cAliasTRB)->TRB_OK := IF(Empty((cAliasTRB)->TRB_OK),cMARCA," ")
+	(cAliasTRB)->(dbskip())
+End
+
+RestArea(aArea)
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravaRE
+Funcao para gravar dados da MsNewGetDados,
+Plano Emergenciais na TJA
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fGravaRE( oObjeto )
+
+Local aArea := GetArea()
+Local i, j, ny, nPosCod
+Local nOrd, cKey, cWhile 
+Local aColsOk := aClone(oObjeto:aCols)
+Local aHeadOk := aClone(oObjeto:aHeader)
+
+nPosCod := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TJA_CODLEG"})
+nOrd 	:= 1
+cKey 	:= xFilial("TJA")+TO0->TO0_LAUDO
+cWhile  := "xFilial('TJA')+TO0->TO0_LAUDO == TJA->TJA_FILIAL+TJA->TJA_LAUDO"
+
+If Len(aColsOK) > 0
+	//Coloca os deletados por primeiro
+	aSORT(aColsOK,,, { |x, y| x[Len(aColsOK[1])] .and. !y[Len(aColsOK[1])] } )
+	
+	For i:=1 to Len(aColsOK)
+		If !aColsOK[i][Len(aColsOK[i])] .and. !Empty(aColsOK[i][nPosCod])
+			dbSelectArea("TJA")
+			dbSetOrder(nOrd)
+			If dbSeek(cKey+aColsOK[i][nPosCod])
+				RecLock("TJA",.F.)
+			Else
+				RecLock("TJA",.T.)
+			Endif
+			For j:=1 to FCount()
+				If "_FILIAL"$Upper(FieldName(j))
+					FieldPut(j, xFilial("TJA"))
+				ElseIf "_LAUDO"$Upper(FieldName(j))
+					FieldPut(j, TO0->TO0_LAUDO)
+				ElseIf "_CLIENT"$Upper(FieldName(j))
+					FieldPut(j, SA1->A1_COD)
+				ElseIf "_LOJA"$Upper(FieldName(j))
+					FieldPut(j, SA1->A1_LOJA)
+				ElseIf (nPos := aScan(aHeadOk, {|x| Trim(Upper(x[2])) == Trim(Upper(FieldName(j))) }) ) > 0
+					FieldPut(j, aColsOK[i,nPos])
+				Endif
+			Next j
+			MsUnlock("TJA")
+		Elseif !Empty(aColsOK[i][nPosCod])
+			dbSelectArea("TJA")
+			dbSetOrder(nOrd)
+			If dbSeek(cKey+aColsOK[i][nPosCod])
+				RecLock("TJA",.F.)
+				dbDelete()
+				MsUnlock("TJA")
+			Endif
+		Endif
+	Next i
+Endif
+ 
+dbSelectArea("TJA")
+dbSetOrder(nOrd)
+dbSeek(cKey)
+While !Eof() .and. &(cWhile)
+	If aScan( aColsOK,{|x| x[nPosCod] == TJA->TJA_CODLEG .AND. !x[Len(x)]}) == 0
+		RecLock("TJA",.f.)
+		DbDelete()
+		MsUnLock("TJA")
+	Endif
+	dbSelectArea("TJA")
+	dbSkip()
+End
+RestArea(aArea)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226Lin
+Valida linhas do MsNewGetDados dos Planos Emergenciais.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDT226Lin(cAlias,lFim,oObjeto)
+Local nX
+Local aColsOk := {}, aHeadOk := {}
+Local nPosCod := 1, nAt := 1
+Local nCols, nHead
+Default lFim := .F.
+
+aColsOk := aClone(oObjeto:aCols)
+aHeadOk := aClone(oObjeto:aHeader)
+nAt     := oObjeto:nAt
+
+If cAlias == "TJA"
+	nPosCod := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TJA_CODLEG"})
+	If lFim
+		If Len(aColsOk) == 1 .AND. Empty(aColsOk[1][nPosCod])
+			Return .T.
+		EndIf
+	EndIf
+EndIf
+
+//Percorre aCols
+For nX:= 1 to Len(aColsOk)
+	If !aColsOk[nX][Len(aColsOk[nX])]
+		If lFim .or. nX == nAt
+			//VerIfica se os campos obrigatórios estão preenchidos
+			If Empty(aColsOk[nX][nPosCod])
+				//Mostra mensagem de Help
+				Help(1," ","OBRIGAT2",,aHeadOk[nPosCod][1],3,0)
+				Return .F.
+			Endif
+		Endif
+		//Verifica se é somente LinhaOk
+		If nX <> nAt .and. !aColsOk[nAt][Len(aColsOk[nAt])]
+			If aColsOk[nX][nPosCod] == aColsOk[nAt][nPosCod]
+				Help(" ",1,"JAEXISTINF",,aHeadOk[nPosCod][1])
+				Return .F.
+			Endif
+		Endif
+	Endif
+Next nX
+
+PutFileInEof("TJA")
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT226TOk
+Função para verificar toda a MsNewGetdados.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDT226TOk(oObjeto)
+
+If !MDT226Lin("TJA",.T.,@oObjeto)
+	Return .F.
+Endif
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaReq
+Funcao para retornar todos os Requisitos.
+
+@author Guilherme Benkendorf
+@since 31/01/13
+@version MP10/11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaReq( cAliasTRB , oGetRE )
+Local nPosCod := 1
+Local aArea   := GetArea()
+Local aColsOK := aClone(oGetRE:aCols)
+Local aHeadOk := aClone(oGetRE:aHeader)
+
+nPosCod := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TJA_CODLEG"})
+
+dbSelectArea("TA0")
+dbSetOrder(1)
+If dbSeek(xFilial("TA0"))
+	While TA0->(!Eof()) .AND. TA0->TA0_FILIAL == xFilial("TA0")
+		RecLock(cAliasTRB,.T.)
+		(cAliasTRB)->TRB_OK     := If( aScan( aColsOk , {|x| x[nPosCod] == TA0->TA0_CODLEG } ) > 0, cMarca , " " )
+		(cAliasTRB)->TRB_CODLEG := TA0->TA0_CODLEG
+		(cAliasTRB)->TRB_EMENTA := TA0->TA0_EMENTA
+		(cAliasTRB)->(MsUnLock())		
+		TA0->(dbSkip())
+	End
+EndIf
+
+RestArea(aArea)
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTRBPes
+Funcao de Pesquisar no Browse.
+
+@samples fTRBPes()
+
+@return Sempre verdadeiro
+
+@param cAliasTRB1	- Alias do MarkBrowse ( Obrigatório )
+@param oMark 		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fTRBPes(cAliasTRB , oMark , cPesquisar )
+ 
+	Local nRecNoAtu := 1//Variavel para salvar o recno
+	Local lRet		:= .T.
+	
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+	
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( cPesquisar ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		ApMsgInfo( STR0023 , STR0022 ) //"Valor não encontrado."###"Atenção"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf 
+    
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh(.T.)
+	
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIndexSet
+Seta o indice para pesquisa.
+
+@return
+
+@param cAliasTRB	- Alias do TRB ( Obrigatório )
+@param aCbxPesq	- Indices de pesquisa do markbrowse. ( Obrigatório )
+@param cPesquisar	- Valor da Pesquisa ( Obrigatório )
+@param oMark		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fIndexSet( cAliasTRB , aCbxPesq , cPesquisar , oMark )
+	
+	Local nIndice := fIndComb( aCbxPesq ) // Retorna numero do indice selecionado
+
+	// Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB ) 
+	dbSetOrder( nIndice ) 
+	dbGoTop()
+
+	// Se o indice selecionado for o ultimo [Marcados] 
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) // Limpa campo de pesquisa
+		oPesquisar:Disable()              // Desabilita campo de pesquisa
+		oBtnPesq:Disable()              // Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus()     // Define foco no markbrowse
+	Else
+		oPesquisar:Enable()               // Habilita campo de pesquisa
+		oBtnPesq:Enable()               // Habilita botao de pesquisa
+		oBtnPesq:SetFocus()             // Define foco no campo de pesquisa
+	Endif
+
+	oMark:oBrowse:Refresh()
+	
+Return 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIndComb
+Retorna o indice, em numero, do item selecionado no combobox 
+   
+@return nIndice - Retorna o valor do Indice
+
+@param aIndMrk - Indices de pesquisa do markbrowse. ( Obrigatório )
+
+@author Guilherme Freudenburg
+@since 05/03/2014
+/*/
+//---------------------------------------------------------------------
+Static Function fIndComb( aIndMrk )   
+
+	Local nIndice := aScan( aIndMrk , { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0022 ,	{ STR0024 } , 1 , ; //"Atenção"###"Índice não encontrado."
+									{ STR0025 } , 1 ) //"Contate o administrador do sistema."
+		nIndice := 1 
+	Endif
+
+Return nIndice

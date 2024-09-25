@@ -1,0 +1,244 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "APWEBSRV.CH"
+#INCLUDE "XMLXFUN.CH"
+#INCLUDE "tbiconn.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} WSINTRMMNT
+WebService de Integração RM X MNT
+
+@author NG - Maicon André Pinheiro.
+@since 03/02/2016
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+WsService WSINTRMMNT  Description "WebService de Integração RM X MNT" NAMESPACE "http://localhost:85/WSINTRMMNT.apw"
+
+	WSDATA cXml		     AS STRING
+	WSDATA cXmlRet 	     AS STRING
+
+	WSMETHOD RetTurno Description "Retorna o XML com os turnos detalhados."
+
+EndWsService
+//-------------------------------------------------------------------
+/*/{Protheus.doc} RetTurno
+Método de Sincronizacao entre os WebServices
+@param  cXml
+@return lRet - Lógico de validação dos parametros
+@author NG - Maicon André Pinheiro
+@since 04/02/2016
+@version P11
+/*/
+//-------------------------------------------------------------------
+ WSMETHOD RetTurno WSRECEIVE cXml WSSEND cXmlRet WsService WSINTRMMNT
+
+    Local nQtdCalen  := 0
+    Local aListCalen := {}
+    Local cError     := ""
+    Local cWarning   := ""
+    Local cEmpresa   := "" //Empresa
+    Local cFilEmp    := "" //Filial
+    Local cCodCal    := "" //Código Calendário
+	Local cEmpOri    := ""
+	Local cFilOri    := ""
+    Local lTrocaEmp  := .F.
+
+    Private oXml     := Nil
+
+    //Gera o Objeto XML
+    oXml := XmlParser( ::cXml, "_", @cError, @cWarning )
+    If (oXml == Nil)
+    	SetSoapFault("Falha ao gerar Objeto XML : "+cError+" / "+cWarning,"Verifique o XML enviado.")
+    	Return .F.
+    EndIf
+
+	//Verifica se a tag Calendario é um objeto (se repete apenas uma vez), caso seja, irá transformá-la em Array
+	If ValType(oXml:_ROOT:_LISTACALENDARIO:_CALENDARIO) == "O"
+		XmlNode2Arr(oXml:_ROOT:_LISTACALENDARIO:_CALENDARIO, "_CALENDARIO")
+	EndIf
+
+	//Recupera o Array do calendário.
+	aListCalen := aClone(oXml:_ROOT:_LISTACALENDARIO:_CALENDARIO)
+
+	//Gera o Xml com as informações fixa do cabeçalho.
+    ::cXmlRet  := fGeraXmlCR('1')
+
+	For nQtdCalen := 1 To Len(aListCalen)
+
+	    cEmpresa := aListCalen[nQtdCalen]:_EMPRESA:TEXT //Recupera o Texto com a informação da Empresa.
+	    cFilEmp  := PadR(aListCalen[nQtdCalen]:_FILIAL:TEXT,FWSizeFilial()) //Recupera o Texto com a informação da Filial.
+	    cCodCal  := aListCalen[nQtdCalen]:_CODIGO:TEXT  //Recupera o Texto com a informação da Código do calendário.
+
+		//se nao houver empresa aberta .Or. se a empresa aberta é diferente da emprsa enviada no XML
+		If Type("cEmpAnt") == "U"
+			//nao consome licenças
+			RPCSetType(3)
+
+			//Abre empresa/filial/modulo/arquivos
+			RPCSetEnv(cEmpresa,cFilEmp,"","","MNT","",{"SH7"})
+		EndIf
+
+		If cEmpAnt <> cEmpresa .Or. cFilAnt <> cFilEmp
+			cEmpOri   := cEmpAnt
+			cFilOri   := cFilAnt
+			NGPrepTBL({{"SH7",1}},cEmpresa,cFilEmp)
+			lTrocaEmp := .T.
+		EndIf
+
+	    //Verifica se foi enviado valor na tag <codigo>, caso não tenha sido enviado, irá gerar o XML com todas os turnos da Filial enviada.
+	    If Empty(cCodCal)
+			dbSelectArea("SH7")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SH7"))
+				While !Eof () .And. xFilial("SH7") == SH7->H7_FILIAL
+					::cXmlRet += fGeraXml(cEmpresa,SH7->H7_FILIAL,SH7->H7_CODIGO,SH7->H7_DESCRI)
+					dbSkip()
+				End
+			EndIf
+	    Else
+			dbSelectArea("SH7")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SH7")+cCodCal)
+				If xFilial("SH7") == SH7->H7_FILIAL .And. cCodCal == SH7->H7_CODIGO
+					::cXmlRet += fGeraXml(cEmpresa,cFilEmp,SH7->H7_CODIGO,SH7->H7_DESCRI)
+				Else
+					::cXmlRet += fGeraXml(cEmpresa,cFilEmp,cCodCal,'')
+				EndIf
+			EndIf
+		EndIf
+	Next
+
+	//Gera o Xml com as informações fixa do rodapé.
+	::cXmlRet += fGeraXmlCR('2')
+
+	If lTrocaEmp
+		NGPrepTBL({{"SH7",1}},cEmpOri,cFilOri)
+	EndIf
+
+ Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fGeraXmlCR
+Função para geração do cabeçalho e Rodapé do Xml
+
+@param   cTipo
+			1 = Cabeçalho
+			2 = Rodapé
+@author  Maicon André Pinheiro
+@since   04/02/2016
+@return  String
+/*/
+//-------------------------------------------------------------------
+ Static Function fGeraXmlCR(cTipo)
+
+	If cTipo == '1'
+
+		cScript := '<?xml version="1.0" encoding="UTF-8"?>'
+	    cScript += "<Root>"
+
+	Else
+
+    	cScript = "</Root>"
+
+    EndIf
+
+ Return cScript
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fGeraXml
+Função com as regras da geração do XML
+
+@param   cEmpresa   - Empresa
+		 cEmpFilial - Filial
+		 cCodCalend - Código do Calendário
+		 cDescCalen - Descrição do Calendário
+@author  Maicon André Pinheiro
+@since   03/02/2016
+@return  String
+/*/
+//-------------------------------------------------------------------
+ Static Function fGeraXml(cEmpresa,cEmpFilial,cCodCalend,cDescCalen)
+
+    Local cScript    := ""
+    Local nQtdDias
+    Local nQtdDiaSem
+    Local nArrIniFim := 2 //No Array calendario, o segundo indice possui as datas de Inicio e Fim do turno.
+    Local nArrInicio := 1 //No Array calendario, o terceiro indice indica a hora inicio/fim do turno, onde 1 é o inicio.
+    Local nArrFim    := 2 //No Array calendario, o terceiro indice indica a hora inicio/fim do turno, onde 2 é o fim.
+
+	aCalenda := NGCALENDAH(cCodCalend)
+
+	cScript += "        <Calendario>"
+	cScript += "            <Empresa>"   + cEmpresa            + "</Empresa>"
+	cScript += "            <Filial>"    + cEmpFilial          + "</Filial>"
+	cScript += "            <Codigo>"    + cCodCalend          + "</Codigo>"
+	cScript += "            <Descricao>" + Alltrim(cDescCalen) + "</Descricao>"
+	If Len(aCalenda) > 0
+		//Faz o for pra cada dia da semana conforme retorno da NGCALENDAH
+		cScript += "            <ListaPeriodo>"
+		For nQtdDias := 1 To 7
+			//Verificação do segundo indice do aCalenda, se ele for maior que 0,
+			//sigfica que possui turno para o dia da semana do nQtdDias.
+			If Len(aCalenda[nQtdDias][nArrIniFim]) > 0
+				For nQtdDiaSem := 1 To Len(aCalenda[nQtdDias][nArrIniFim])
+
+					//Correção de horario do turno.
+					If aCalenda[nQtdDias][nArrIniFim][nQtdDiaSem][nArrFim] == '24:00'
+						aCalenda[nQtdDias][nArrIniFim][nQtdDiaSem][nArrFim] := '23:59'
+					EndIf
+
+		        	cScript += "                <Periodo>"
+					cScript += "                    <DiaSemana>" + fRetSemExt(nQtdDias)                                   + "</DiaSemana>"
+					cScript += "                    <Inicio>"    + aCalenda[nQtdDias][nArrIniFim][nQtdDiaSem][nArrInicio] + "</Inicio>" // Inicio
+					cScript += "                    <Fim>"       + aCalenda[nQtdDias][nArrIniFim][nQtdDiaSem][nArrFim]    + "</Fim>"    // Fim
+					cScript += "                </Periodo>"
+				Next
+			EndIf
+		Next
+		cScript += "            </ListaPeriodo>"
+	Else
+    	cScript += "            <Excecao>Nao existe turno para esse codigo</Excecao>"
+	EndIf
+
+	cScript += "        </Calendario>"
+
+ Return cScript
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} fRetSemExt
+Função para retorna por extenção o dia da semana, com base no parametro.
+
+@param   nDia - Numero do dia da Semana
+@author  Maicon André Pinheiro
+@since   03/02/2016
+@return  String
+/*/
+//----------------------------------------------------------------------
+ Static Function fRetSemExt(nDia)
+
+ 	cDia := ""
+
+	Do Case
+		Case nDia == 1
+			cDia := "Domingo"
+
+		Case nDia == 2
+			cDia := "Segunda"
+
+		Case nDia == 3
+			cDia := "Terca"
+
+		Case nDia == 4
+			cDia := "Quarta"
+
+		Case nDia == 5
+			cDia := "Quinta"
+
+		Case nDia == 6
+			cDia := "Sexta"
+
+		Case nDia == 7
+			cDia := "Sabado"
+	EndCase
+
+ Return cDia

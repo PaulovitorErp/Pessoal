@@ -1,0 +1,1129 @@
+#include "MDTA001.ch"
+#include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA001
+Realiza a geração de fichas médicas
+
+@type    function
+@author  Inacio Luiz Kolling - Refeito por: Jackson Machado
+@since   --/--/---- - Refeito em: 09/01/2014
+@sample  MDTA001()
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function MDTA001()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( )
+
+	Private nSizeFil := If( FindFunction( "FWSizeFilial" ) , FwSizeFilial() , Len( SRA->RA_FILIAL ) )
+	Private nTa1	:= If( ( TAMSX3( "A1_COD" )[ 1 ] ) < 1 , 6 , ( TAMSX3( "A1_COD" )[ 1 ] ) )
+	Private nTa1L	:= If( ( TAMSX3( "A1_LOJA" )[ 1 ] ) < 1 , 2 , ( TAMSX3( "A1_LOJA" )[ 1 ] ) )
+	Private cPerg	:= PadR( "MDT001" , 10 )
+	Private cCadastro := OemToAnsi( STR0001 ) //"Ficha Medicas"
+	Private cFilSel := "" //Indica filial escolhida na consulta padrão personalizada criada para ler o SigaMat
+	Private cIniFile := GetAdv97()
+
+	//Variaveis usadas na validcao - PS
+	Private lVdeCli   := .F.
+	Private lVateCli  := .F.
+	Private lVdeLojC  := .F.
+	Private lVateLoC  := .F.
+	Private lCliVazio := .T.
+	Private lAteCliZ  := .T.
+	Private cDeCli    := " "
+	Private cDeCliL   := " "
+	Private cAteCli   := " "
+	Private cAteCliL  := " "
+
+	// Variáveis utilizadas na consulta F3 de Filiais
+	Private cMntGenFun	:= "NGSXBSM0()"
+	Private cMntGenRet	:= "NGSXBSM0Ret()"
+
+	Private lSigaMdtPS := AllTrim( SuperGetMv( "MV_MDTPS" , .F. , "N" ) ) == "S"
+
+	//Se via schedule
+	If IsBlind()
+		GMDTA001( .T. )//Processa geração
+	Else
+
+		If FindFunction( "MDTRESTRI" ) .AND. MDTRESTRI( cPrograma )
+
+			SetKey( VK_F12 , { | | Pergunte( cPerg , .T. ) } )
+
+			If Pergunte( cPerg , .T. )
+				Processa( { | lEnd | GMDTA001() } )
+			endif
+
+			Set Key VK_F12  To
+		Endif
+
+	EndIf
+
+	// Recupera a Ordem Original do arquivo principal
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 1 )
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT01FILVL
+Verifica a existencia da Filial (Validação de Dicionário SX1)
+
+@type    function
+@author  Denis Hyroshi de Souza - Refeito por: Jackson Machado
+@since   18/02/2003 - Refeito em: 09/01/2014
+@sample  MDT01FILVL( '01' , '02' , .F. )
+
+@param  Mv_parDe, Caracteree, Valor da Pergunta 'De Filial ?'
+@param  Mv_parAte, Caracteree, Valor da Pergunta 'Até Filial ?'
+@param  lValDeAte, Logico, Indica se a validação trata-se da Pergunta 'De Filial?' (.T.) ou da pergunta 'Até Filial ?' (.F.)
+
+@return lRet, Logico, Retorna verdadeiro quando filial informada for valida
+/*/
+//-------------------------------------------------------------------
+Function MDT01FILVL( Mv_parDe , Mv_parAte , lValDeAte )
+
+	Local lRet := .T.
+
+	If !lValDeAte
+		//Valida De Filial
+		If !Empty( Mv_parDe )
+			IF !( lRet := SM0->( dbSeek( cEmpAnt + Mv_parDe ) ) )
+				MsgStop( STR0009 , STR0010 )//"Este código de filial não existe."###"ATENÇÃO"
+			Endif
+			If lRet .And. Mv_parAte < Mv_parDe
+				Mv_parAte := Mv_parDe
+			Endif
+		Endif
+	Else
+		//Valida Ate Filial
+		If Mv_parAte <> "99" .And. Mv_parAte <> "ZZ"
+			IF !( lRet := SM0->( dbSeek( cEmpAnt + Mv_parAte ) ) )
+				MsgStop( STR0009 , STR0010 ) //"Este código de filial não existe."###"ATENÇÃO"
+			Endif
+			If lRet .And. Mv_parAte < Mv_parDe
+				MsgStop( STR0011 , STR0010 )//"O campo Até Filial não pode ser menor do que De Filial."###"ATENÇÃO"
+				lRet := .F.
+			Endif
+		Endif
+	Endif
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT001VLD
+Função para validação dos parâmetros de SX1
+
+@type    function
+@author  Guilherme Freudenburg
+@since   12/09/2013
+@sample  MDT001VLD(1)
+@param   nParam - Indica o parâmetro a ser validado (1 - De Categoria,
+2 - Ate Categoria)
+
+@return  lRet, Lógico, Retorna verdadeiro caso parâmetro esteja correto
+/*/
+//-------------------------------------------------------------------
+Function MDT001VLD( nParam )
+
+	Local lRet := .T.
+
+	Default nParam := 0
+
+	If nParam == 1//MV_PAR03
+		If !Empty( Mv_par03 )
+			If !ExistCPO( "SX5" , "28" + Mv_par03 )
+				lRet := .F.
+			EndIf
+			If lRet .And. !Empty( mv_par04 ) .And. Mv_par03 > Mv_par04
+				ShowHelpDlg( STR0028 , ;
+								{ STR0029 } , 1 , ;
+								{ STR0030 } , 2 )
+				lRet := .F.
+			EndIf
+		EndIf
+	ElseIf nParam == 2//MV_PAR04
+		If Mv_par04 <> Replicate( "Z" , Len( Mv_par04 ) )
+			If !ExistCPO( "SX5" , "28" + Mv_par04 )
+				lRet := .F.
+			EndIf
+			If lRet .And. Mv_par03 > Mv_par04
+				ShowHelpDlg( STR0028 , ;
+								{ STR0029 } , 1 , ;
+								{ STR0031 } , 2 )
+				lRet := .F.
+			EndIf
+			If lRet .And. Empty(Mv_par04)
+				Mv_par04 :=Replicate( "Z" , Len( Mv_par04 ) )
+			Endif
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GMDTA001
+Processa e gera ficha médica
+
+@type    function
+@author  Inacio Luiz Kolling - Refeito por: Jackson Machado
+@since   10/01/2000 - Refeito em: 09/01/2014
+@sample  GMDTA001( '01' , '02' , .F. )
+@param   lSchedule Logico Indica se geração é feita por Schedule
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function GMDTA001( lSchedule )
+
+	//Variaveis de controle
+	Local nTamSRA		:= TAMSX3( "RA_MAT" )[ 1 ]
+	Local cTmpFicha	    := ""
+	Local cSangue    	:= "", cFatorRh := "", cFuma := "", cDoador := ""//Definições de Relação de Campo
+	Local cFilOld_ 	    := cFilAnt
+	Local lVariasMat 	:= .F.
+	Local lNewArea 	    := .F.
+	Local lRetorno 	    := .F.
+	Local lTM0Depto     := NGCADICBASE ( "TM0_DEPTO" , "A" , "TM0" , .F. )
+	Local aOldAreaSRA	:= {}
+	Local aReadmitidos  := {}
+	Local aAreaXXX
+
+	//Tratativa da execução do Block de Código
+	Local lRetBlock     := .T.
+	Local cRetBlock     := ""
+	Local aRetBlock	    := {}
+
+	//Variaveis dos TRB's
+	Local cTRBSRA       := GetNextAlias()
+	Local cTRBSRB       := GetNextAlias()
+	Local oTempSRA
+	Local oTempSRB
+
+	//Variaveis de Definição (Troca Padrão x PS)
+	Local nIdxSRA       := 1//RA_FILIAL+RA_MAT
+	Local cSeekSRA      := "mv_par06"
+	Local cWhlSRA       := "SRA->RA_FILIAL >= mv_par06 .and. SRA->RA_FILIAL <= mv_par07"
+	Local cFilSRB       := "xFilial( 'SRB' , SRA->RA_FILIAL )"
+	Local lExiBl0011    := ExistBlock( "MDTA0011" )
+
+	Private cFILMAT_    := ""
+	Private lMV_NGMDTPS := AllTrim( SuperGetMv( "MV_NGMDTPS" , .F. , "N" ) ) == "S"//Verifica parâmetro específico
+	Private lGrava      := .F.
+
+	//Realiza tratativa das variavies para PS
+	If lSigaMdtPs
+		nIdxSRA := 2//RA_FILIAL+RA_CC+RA_MAT
+		cSeekSRA := "xFilial('SRA') + mv_par06+mv_par07"
+		cWhlSRA := "SRA->RA_FILIAL+SubStr(SRA->RA_CC,1,nTa1+nTa1L) >= xFilial('SRA') + mv_par06+mv_par07 .AND. SRA->RA_FILIAL+SubStr(SRA->RA_CC,1,nTa1+nTa1L) <= xFilial('SRA') + mv_par08+mv_par09"
+		cFilSRB := "xFilial('SRB')"
+	EndIf
+
+	//Define ambiente como inclusão
+	Inclui := .T.
+	Altera := .F.
+
+	//Verifica X3_RELACAO dos campos
+	cSangue  := If( ExistIni( "TM0_SANGUE" ), InitPad( GetSx3Cache( "TM0_SANGUE", 'X3_RELACAO')  ) , "" )
+	cFatorRh := If( ExistIni( "TM0_FATORH" ), InitPad( GetSx3Cache( "TM0_FATORH", 'X3_RELACAO')  ) , "" )
+	cFuma    := If( ExistIni( "TM0_FUMA"   ), InitPad( GetSx3Cache( "TM0_FUMA"  , 'X3_RELACAO')  ) , "" )
+	cDoador  := If( ExistIni( "TM0_DOADOR" ), InitPad( GetSx3Cache( "TM0_DOADOR", 'X3_RELACAO')  ) , "" )
+
+	//Campos TRB para Gerar Log
+	aDBFSRA := {	{ "FILIAL"	, "C" , nSizeFil, 0 } , ;
+					{ "MAT"		, "C" , nTamSRA	, 0 } , ;
+					{ "NOMEFUN"	, "C" , 40		, 0 } , ;
+					{ "GEROU"	, "C" , 03		, 0 } , ;
+					{ "FICHA"	, "C" , 09		, 0 } , ;
+					{ "OBS"		, "C" , 80		, 0 } , ;
+					{ "PDEP"	, "N" , 03		, 0 } }
+
+	aDBFSRB := {	{ "MAT"		, "C" , nTamSRA	, 0 } , ;
+					{ "CODEP"	, "C" , 09		, 0 } , ;
+					{ "NOMEDEP"	, "C" , 40		, 0 } , ;
+					{ "GEROU"	, "C" , 03		, 0 } , ;
+					{ "FICHA"	, "C" , 09		, 0 } , ;
+					{ "OBS"		, "C" , 80		, 0 } }
+
+	oTempSRA := FWTemporaryTable():New( cTRBSRA, aDBFSRA )
+	oTempSRA:AddIndex( "1", {"FICHA","OBS"} )
+	oTempSRA:AddIndex( "2", {"PDEP","OBS","FICHA"} )
+	oTempSRA:Create()
+
+	oTempSRB := FWTemporaryTable():New( cTRBSRB, aDBFSRB )
+	oTempSRB:AddIndex( "1", {"MAT","CODEP"} )
+	oTempSRB:Create()
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( nIdxSRA )
+	dbSeek( &( cSeekSRA ) , .T. )
+
+	ProcRegua( LastRec() )
+
+	While !Eof() .AND. &( cWhlSRA )
+
+		IncProc()
+
+		If SRA->RA_SITFOLH == "D"
+			aAreaXXX := GetArea()
+
+			If !fDemitido( SRA->RA_CIC , SRA->RA_FILIAL , SRA->RA_MAT , SRA->RA_DEMISSA )
+				dbSelectArea( "SRA" )
+				dbSkip()
+				Loop
+			Elseif MV_PAR02 <> 2
+				DbSelectArea( "TM0" )
+				dbSetOrder( 11 )
+				cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+
+				fGrvTRB( cTRBSRB , STR0021 , STR0018 , cTmpFicha, , cTRBSRA )//"Não"##"Funcionário está demitido"
+
+				dbSelectArea( "SRA" )
+				dbSkip()
+				Loop
+			EndIf
+
+			RestArea( aAreaXXX )
+		Endif
+
+		If ( ( SRA->RA_CATFUNC > mv_par04 ) .Or. ( SRA->RA_CATFUNC < mv_par03 ) ) .And. ;
+				If( lSigaMdtPs , !Empty( SRA->RA_CATFUNC ) , .T. )
+
+			dbSelectArea( "TM0" )
+			dbSetOrder( 11 )
+			cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+			fGrvTRB( cTRBSRB , STR0021 , STR0019 , cTmpFicha, , cTRBSRA )//"Não"##"Funcionário não pertence às categorias funcionais selecionadas"
+			dbSelectArea( "SRA" )
+			dbSkip()
+			Loop
+		EndIf
+
+		If lExiBl0011
+			aRetBlock := aClone( ExecBlock( "MDTA0011" , .F. , .F. ) )
+			If ValType( aRetBlock ) <> "A" .Or. Len( aRetBlock ) < 2 .Or. ;
+				ValType( aRetBlock[ 1 ] ) <> "L" .Or. ValType( aRetBlock[ 2 ] ) <> "C"
+				lRetBlock := .F.
+				cRetBlock := "Erro no Ponto de Entrada MDTA0011"
+			Else
+				lRetBlock := aRetBlock[ 1 ]
+				cRetBlock := aRetBlock[ 2 ]
+			EndIf
+
+			If lRetBlock
+				dbSelectArea( "TM0" )
+				dbSetOrder( 11 )
+				cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+				fGrvTRB( cTRBSRB , STR0021 , cRetBlock , cTmpFicha, , cTRBSRA )//"Não"##"Funcionário não pertence às categorias funcionais selecionadas"
+				dbSelectArea( "SRA" )
+				dbSkip()
+				Loop
+			EndIf
+		EndIf
+
+		// Se nao existe Ficha Medica com esta Matricula
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If !dbSeek( SRA->RA_FILIAL + SRA->RA_MAT )
+
+			If !Empty( SRA->RA_CIC )
+
+				//Se Ficha nova p. funcionario readmitido ja foi gerada, nao gera novamente
+				If aScan( aReadmitidos , { | x | x[ 1 ] == SRA->RA_CIC } ) == 1
+					fGrvTRB( cTRBSRB , STR0021 , STR0015, , ,cTRBSRA )//"Não"##"Funcionario ja possui ficha medica"
+					dbSelectArea( "SRA" )
+					dbSkip()
+					Loop
+				EndIf
+
+				// Verifica se o funcionario foi readmitido ou nao (isso implica em varias
+				// matriculas com o mesmo CPF
+				aOldAreaSRA := SRA->( GetArea() )
+				lVariasMat := MDTVarMat( SRA->RA_CIC , aOldAreaSRA )
+
+				If lVariasMat
+					If mv_par05 == 2 //Ficha nova p. readmitido = NAO
+						lRetorno := .F.
+						//Verifica se ja existe Ficha Medica com o CPF atual. Se ja existe, atualiza ela
+						lRetorno := MDTCHKCPF( SRA->RA_CIC )
+						If lRetorno
+							dbSelectArea( "SRA" )
+							RestArea( aOldAreaSRA )
+							dbSelectArea( "TM0" )
+							dbSetOrder( 11 )
+							cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+							fGrvTRB( cTRBSRB , STR0021 , STR0017 , cTmpFicha, , cTRBSRA )//"Não"##"Ficha medica foi atualizada"
+							SRA->(dbSkip())
+							Loop
+						Endif
+						lNewArea := .T.
+					Else
+						dbSelectArea( "SRA" )
+						RestArea( aOldAreaSRA )
+					Endif
+				Else
+					dbSelectArea( "SRA" )
+					RestArea( aOldAreaSRA )
+					lRetorno := .F.
+
+					//Verifica se ja existe Ficha Medica com o CPF atual. Se ja existe, atualiza ela
+					lRetorno := MDTCHKCPF( SRA->RA_CIC )
+					If lRetorno
+						dbSelectArea( "TM0" )
+						dbSetOrder( 11 )
+						cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+						fGrvTRB( cTRBSRB , STR0021 , STR0017, cTmpFicha, , cTRBSRA )//"Não"##"Ficha medica foi atualizada"
+					Endif
+				EndIf
+			Endif
+
+			// Cria uma nova Ficha Medica
+			If !lRetorno
+				If !lSigaMdtPS//Atribuições com Filiais apenas quando Padrão
+					cFilAnt := If( !Empty( SRA->RA_FILIAL ) , SRA->RA_FILIAL , cFilAnt )
+				EndIf
+				cNUMFIC := GETSXENUM( "TM0" , "TM0_NUMFIC" )
+				ConfirmSX8()
+
+				dbSelectArea( "TM0" )
+				RecLock( "TM0" , .T. )
+				If TM0->( FieldPos( "TM0_EMPFUN" ) ) > 0
+					TM0->TM0_EMPFUN := cEmpAnt
+				Endif
+				TM0->TM0_FILIAL	:= xFilial( "TM0" , SRA->RA_FILIAL )
+				TM0->TM0_FILFUN	:= SRA->RA_FILIAL
+				TM0->TM0_NUMFIC	:= cNUMFIC
+				TM0->TM0_DTIMPL	:= SRA->RA_ADMISSA
+				TM0->TM0_NOMFIC	:= SRA->RA_NOME
+				TM0->TM0_SANGUE	:= cSangue
+				TM0->TM0_FATORH	:= cFatorRH
+				TM0->TM0_DOADOR	:= cDoador
+				TM0->TM0_MAT	:= SRA->RA_MAT
+				TM0->TM0_DTNASC	:= SRA->RA_NASC
+				TM0->TM0_RG		:= SRA->RA_RG
+				TM0->TM0_CPF	:= SRA->RA_CIC
+				TM0->TM0_CODFUN	:= SRA->RA_CODFUNC
+				If TM0->( FieldPos( "TM0_CODPOS" ) ) > 0
+					TM0->TM0_CODPOS := SRA->RA_POSTO
+				Endif
+				If TM0->( FieldPos( "TM0_TIPDEF" ) ) > 0
+					TM0->TM0_TIPDEF	:= SRA->RA_TPDEFFI //Portador de Deficiencia
+				Endif
+				TM0->TM0_CC	:= SRA->RA_CC
+				If lTM0Depto
+					TM0->TM0_DEPTO	:= SRA->RA_DEPTO
+				EndIf
+
+				If lMV_NGMDTPS .or. lSigaMdtPS
+					TM0->TM0_CLIENT	:= Substr( SRA->RA_CC , 1 , nTa1 )
+					TM0->TM0_LOJA	:= Substr( SRA->RA_CC , nTa1 + 1 , nTa1L )
+				EndIf
+
+				If SRA->RA_SEXO == "M"
+					TM0->TM0_SEXO	:= "1"
+				ElseIf SRA->RA_SEXO == "F"
+					TM0->TM0_SEXO	:= "2"
+				ElseIf !Empty( SRA->RA_SEXO ) .And. ( SRA->RA_SEXO == "1" .Or. SRA->RA_SEXO == "2" )
+					TM0->TM0_SEXO	:= SRA->RA_SEXO
+				Endif
+				TM0->TM0_FUMA	:= cFuma
+				TM0->TM0_ESTCIV	:= SRA->RA_ESTCIVI
+				TM0->TM0_NUMCP	:= SRA->RA_NUMCP
+				TM0->TM0_SERCP	:= SRA->RA_SERCP
+				TM0->TM0_UFCP	:= SRA->RA_UFCP
+				If TM0->( FieldPos("TM0_CTPCD") ) > 0
+					TM0->TM0_CTPCD  := SRA->RA_CTPCD
+				EndIf
+				TM0->( MsUnLock() )
+
+				If !lSigaMdtPS//Atribuições com Filiais apenas quando Padrão
+					cFilAnt := cFilOld_
+					cFILMAT_ := TM0_FILFUN+TM0_MAT
+				EndIf
+				fGrvTRB( cTRBSRB , STR0020 , STR0014, , , cTRBSRA )//"Sim"##"Nova ficha medica foi gerada"
+			EndIf
+		Else
+			cFILMAT_ := TM0_FILFUN + TM0_MAT
+			fGrvTRB( cTRBSRB , STR0021 , STR0015, , , cTRBSRA)//"Não"##"Funcionario ja possui ficha medica"
+		Endif
+
+
+		If MV_PAR01 == 2
+			dbSelectArea( "SRB" )
+			dbSetOrder( 1 )
+			dbSeek( &( cFilSRB ) + SRA->RA_MAT )
+			while !Eof() .And. ;
+					SRB->RB_FILIAL == &( cFilSRB ) .And. ;
+					SRB->RB_MAT == SRA->RA_MAT
+
+				dbSelectArea( "TM0" )
+				dbSetOrder( 3 )
+				If !dbSeek( SRA->RA_FILIAL + SRB->RB_MAT + SRB->RB_COD )
+
+					lGrava := .T.
+					dbSelectArea( "TM0" )
+					dbSetOrder( 3 )
+					If dbSeek( cFilMAT_ + SRB->RB_COD )
+						lGrava := .F.
+						RecLock( "TM0" , .F. )
+						If TM0->( FieldPos( "TM0_EMPFUN" ) ) > 0
+							TM0->TM0_EMPFUN	:= cEmpAnt
+						Endif
+						TM0->TM0_FILFUN	:= SRA->RA_FILIAL
+						TM0->TM0_DTIMPL	:= SRA->RA_ADMISSA
+						If SRB->RB_DTNASC > SRA->RA_ADMISSA
+							TM0->TM0_DTIMPL	:= SRB->RB_DTNASC
+						Endif
+						TM0->TM0_NOMFIC	:= SRB->RB_NOME
+						TM0->TM0_SANGUE	:= cSangue
+						TM0->TM0_FATORH	:= cFatorRH
+						TM0->TM0_DOADOR	:= cDoador
+						TM0->TM0_MAT		:= SRB->RB_MAT
+						TM0->TM0_NUMDEP	:= SRB->RB_COD
+						TM0->TM0_DTNASC	:= SRB->RB_DTNASC
+						If SRB->RB_SEXO == "M"
+							TM0->TM0_SEXO	:= "1"
+						ElseIf SRB->RB_SEXO == "F"
+							TM0->TM0_SEXO	:= "2"
+						ElseIf !Empty( SRB->RB_SEXO ) .And. ( SRB->RB_SEXO == "1" .Or. SRB->RB_SEXO == "2" )
+							TM0->TM0_SEXO	:= SRB->RB_SEXO
+						Endif
+						TM0->TM0_FUMA		:= cFuma
+						TM0->TM0_CC		:= SRA->RA_CC
+						If lTM0Depto
+							TM0->TM0_DEPTO	:= SRA->RA_DEPTO
+						EndIf
+						If NGCADICBASE( "RB_CIC" , "A" , "SRB" , .F. )
+							TM0->TM0_CPF	:= SRB->RB_CIC
+						Endif
+						TM0->( MsUnLock() )
+					Endif
+
+					If lGrava
+						If !lSigaMdtPS//Atribuições com Filiais apenas quando Padrão
+							cFilAnt := If( !Empty( SRA->RA_FILIAL ) , SRA->RA_FILIAL , cFilAnt )
+						EndIf
+
+						cNUMFIC := GETSXENUM( "TM0" , "TM0_NUMFIC" )
+						ConfirmSX8()
+						dbSelectArea( "TM0" )
+						RecLock( "TM0" , .T. )
+						If TM0->( FieldPos( "TM0_EMPFUN" ) ) > 0
+							TM0->TM0_EMPFUN	:= cEmpAnt
+						Endif
+						TM0->TM0_FILIAL	:= If( lSigaMdtPs , xFilial( "TM0" ) , xFilial( "TM0" , SRA->RA_FILIAL ) )
+						TM0->TM0_FILFUN	:= SRA->RA_FILIAL
+						TM0->TM0_NUMFIC	:= cNUMFIC
+						TM0->TM0_DTIMPL	:= SRA->RA_ADMISSA
+						If SRB->RB_DTNASC > SRA->RA_ADMISSA
+							TM0->TM0_DTIMPL	:= SRB->RB_DTNASC
+						Endif
+						TM0->TM0_NOMFIC	:= SRB->RB_NOME
+						TM0->TM0_SANGUE	:= cSangue
+						TM0->TM0_FATORH	:= cFatorRH
+						TM0->TM0_DOADOR	:= cDoador
+						TM0->TM0_MAT		:= SRB->RB_MAT
+						TM0->TM0_NUMDEP	:= SRB->RB_COD
+						TM0->TM0_DTNASC	:= SRB->RB_DTNASC
+						If SRB->RB_SEXO == "M"
+							TM0->TM0_SEXO	:= "1"
+						ElseIf SRB->RB_SEXO == "F"
+							TM0->TM0_SEXO	:= "2"
+						ElseIf !Empty( SRB->RB_SEXO ) .And. ( SRB->RB_SEXO == "1" .Or. SRB->RB_SEXO == "2" )
+							TM0->TM0_SEXO	:= SRB->RB_SEXO
+						Endif
+						TM0->TM0_FUMA		:= cFuma
+						TM0->TM0_CC		:= SRA->RA_CC
+						If lTM0Depto
+							TM0->TM0_DEPTO	:= SRA->RA_DEPTO
+						EndIf
+						If NGCADICBASE( "RB_CIC" , "A" , "SRB" , .F. )
+							TM0->TM0_CPF	:= SRB->RB_CIC
+						Endif
+						TM0->( MsUnLock() )
+
+						If !lSigaMdtPS//Atribuições com Filiais apenas quando Padrão
+							cFilAnt := cFilOld_
+						EndIf
+
+						fGrvTRB( cTRBSRB , STR0021 , STR0014 , , .T. , cTRBSRA )//"Sim"##"Nova ficha medica foi gerada"
+
+					Else
+						dbSelectArea( cTRBSRB )
+						dbSelectArea( "TM0" )
+						dbSetOrder( 11 )
+						cTmpFicha := If( dbSeek( xFilial( "TM0" ) + SRA->RA_MAT ) , TM0->TM0_NUMFIC , "" )
+
+						fGrvTRB( cTRBSRB , STR0021 , STR0017 , cTmpFicha , .T. , cTRBSRA )//"Sim"##"Ficha médica foi atualizada"
+
+					Endif
+				Else
+
+					fGrvTRB( cTRBSRB , STR0021 , STR0016 , , .T. , cTRBSRA )//"Sim"##"Dependente ja possui ficha medica"
+
+				EndIf
+
+				dbSelectArea( "SRB" )
+				dbSkip()
+			End
+
+		Endif
+
+		dbSelectArea( "SRA" )
+		If lNewArea
+			RestArea( aOldAreaSRA )
+			lNewArea := .F.
+		EndIf
+
+		dbSkip()
+	End
+
+	If !lSchedule
+		If lSigaMdtPs
+			If MV_PAR10 == 1
+				ImpLog( cTRBSRA , cTRBSRB )
+			EndIf
+		Else
+			If MV_PAR08 == 1
+				ImpLog( cTRBSRA , cTRBSRB )
+			EndIf
+		EndIf
+	Else
+		If lSigaMdtPs
+			If MV_PAR10 == 1
+				fGeraTxt( cTRBSRA , cTRBSRB )
+			EndIf
+		Else
+			If MV_PAR08 == 1
+				fGeraTxt( cTRBSRA , cTRBSRB )
+			EndIf
+		EndIf
+	EndIf
+
+	oTempSRA:Delete()
+	oTempSRB:Delete()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGrvTRB
+Realiza a gravação do TRB
+
+@type    function
+@author  Jackson Machado
+@since   12/02/2015
+@sample  MDTCHKCPF( 'TRB' , 'Não' , 'Funcionário já possui ficha médica' )
+
+@param   cAliTRB Caractere Alias principal do TRB (Obrigatorio)
+@param   cGerou Caractere Mensagem para o campo GEROU do TRB (Obrigatorio)
+@param   cObs Caractere Observação para o campo OBS do TRB (Obrigatorio)
+@param   cFicha Caractere Ficha Médica temporária
+@param   lSRB Logico Indica se esta gravando pela SRB
+@param   cTRBSRA Caractere Alias do TRB da SRA
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fGrvTRB( cAliTRB , cGerou , cObs , cFicha , lSRB , cTRBSRA )
+
+	Default cFicha	:= TM0->TM0_NUMFIC
+	Default lSRB		:= .F.
+	Default cTRBSRA	:= ""
+
+	If lSRB
+		dbSelectArea( cTRBSRA )
+		RecLock( cTRBSRA , .F. )
+		( cTRBSRA )->PDEP  := ( cTRBSRA )->PDEP + 1
+		( cTRBSRA )->( MsUnLock() )
+
+		dbSelectArea( cAliTRB )
+		RecLock( cAliTRB , .T. )
+		( cAliTRB )->MAT		:= SRB->RB_MAT
+		( cAliTRB )->CODEP	:= SRB->RB_COD
+		( cAliTRB )->NOMEDEP	:= SRB->RB_NOME
+		( cAliTRB )->GEROU	:= cGerou
+		( cAliTRB )->FICHA	:= cFicha
+		( cAliTRB )->OBS		:= cObs
+		( cAliTRB )->( MsUnLock() )
+	Else
+		dbSelectArea( cTRBSRA )
+		RecLock( cTRBSRA , .T. )
+		( cTRBSRA )->FILIAL	:= SRA->RA_FILIAL
+		( cTRBSRA )->MAT		:= SRA->RA_MAT
+		( cTRBSRA )->NOMEFUN	:= SRA->RA_NOME
+		( cTRBSRA )->GEROU	:= cGerou
+		( cTRBSRA )->FICHA	:= cFicha
+		( cTRBSRA )->OBS		:= cObs
+		( cTRBSRA )->PDEP		:= 0
+		( cTRBSRA )->( MsUnLock() )
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTCHKCPF
+Atualiza Ficha Medica com novos dados do Funcionario
+
+@type    function
+@author  Denis Hyroshi de Souza - Refeito por: Jackson Machado
+@since   13/02/2003 - Refeito em: 12/01/2014
+@sample  MDTCHKCPF( '000.000.000-00' )
+
+@param   cRA_CPF, Caractere, C.P.F. a ser localizado
+
+@return  lRet, Logico, Retorna verdadeiro quando realiza atualização de
+ficha médica
+/*/
+//-------------------------------------------------------------------
+Static Function MDTCHKCPF( cRA_CPF )
+
+	Local lRet := .F.
+	Local aAreaTM0 := TM0->( GetArea() )
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 10 ) //CPF
+	If dbSeek( xFilial( "TM0" , SRA->RA_FILIAL) + cRA_CPF )
+		lRet := .T.
+	Endif
+
+	If ( lRet ) .AND. ( SRA->RA_ADMISSA >= TM0->TM0_DTIMPL )
+		cFILMAT_ := TM0_FILFUN+TM0_MAT
+		RecLock( "TM0" , .F. )
+		If TM0->( FieldPos( "TM0_EMPFUN" ) ) > 0
+			TM0->TM0_EMPFUN	:= cEmpAnt
+		Endif
+		TM0->TM0_FILFUN	:= SRA->RA_FILIAL
+		TM0->TM0_NOMFIC	:= SRA->RA_NOME
+		TM0->TM0_MAT	:= SRA->RA_MAT
+		TM0->TM0_CODFUN	:= SRA->RA_CODFUNC
+		If TM0->( FieldPos( "TM0_CODPOS" ) ) > 0
+			TM0->TM0_CODPOS	:= SRA->RA_POSTO
+		Endif
+		TM0->TM0_CC	:= SRA->RA_CC
+		If NGCADICBASE( "TM0_DEPTO" , "A" , "TM0" , .F. )
+			TM0->TM0_DEPTO	:= SRA->RA_DEPTO
+		EndIf
+	    If lMV_NGMDTPS .Or. lSigaMdtPS
+			TM0->TM0_CLIENT	:= Substr( SRA->RA_CC , 1 , nTa1 )
+			TM0->TM0_LOJA	:= Substr( SRA->RA_CC , nTa1 + 1 , nTa1L )
+		EndIf
+		TM0->TM0_DTIMPL	:= SRA->RA_ADMISSA
+		TM0->TM0_DTNASC	:= SRA->RA_NASC
+		TM0->TM0_RG		:= SRA->RA_RG
+		If SRA->RA_SEXO == "M"
+			TM0->TM0_SEXO	:= "1"
+		ElseIf SRA->RA_SEXO == "F"
+			TM0->TM0_SEXO	:= "2"
+		ElseIf !Empty( SRA->RA_SEXO ) .And. ( SRA->RA_SEXO == "1" .Or. SRA->RA_SEXO == "2" )
+			TM0->TM0_SEXO	:= SRA->RA_SEXO
+		Endif
+		TM0->TM0_ESTCIV	:= SRA->RA_ESTCIVI
+		TM0->TM0_NUMCP	:= SRA->RA_NUMCP
+		TM0->TM0_SERCP	:= SRA->RA_SERCP
+		TM0->TM0_UFCP	:= SRA->RA_UFCP
+		If TM0->( FieldPos("TM0_CTPCD") ) > 0
+			TM0->TM0_CTPCD  := SRA->RA_CTPCD
+		EndIf
+		TM0->TM0_NUMDEP	:= Space( Len( TM0->TM0_NUMDEP ) )
+		TM0->( MsUnLock() )
+	Endif
+
+	RestArea( aAreaTM0 )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTVarMat
+Verifica se um funcionario foi readmitido.
+Funcionario readmitido implica em uma matricula com situacao de demitido
+e outra com situacao normal, ambas com o mesmo CPF.
+
+@type    function
+@author  Andre E. Perez Alvarez - Refeito por: Jackson Machado
+@since   14/06/2006 - Refeito em: 12/01/2014
+@sample  MDTCHKCPF( '000.000.000-00' , {} )
+
+@param   cRA_CPF, Caractere, C.P.F. a ser localizado
+@param   aOldAreaSRA, Array, Area atual de trabalho da SRA
+
+@return  lRet Logico Retorna verdadeiro quando funcionário for readmitido
+/*/
+//-------------------------------------------------------------------
+Static Function MDTVarMat( cRA_CPF , aOldAreaSRA )
+
+	Local lRet			:= .F.
+	Local lDemitido	:= .F.
+	Local lAdmitido	:= .F.
+	Local dAdmiss		:= StoD("")
+	Local dDemiss		:= StoD("")
+	Local cFilTmp		:= xFilial( "SRA" , SRA->RA_FILIAL )
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 05 )  //RA_FILIAL + RA_CIC
+	dbSeek( cFilTmp + cRA_CPF )
+	While !Eof() .And. ( cFilTmp == SRA->RA_FILIAL ) .And. ( cRA_CPF == SRA->RA_CIC )
+
+		If SRA->RA_SITFOLH != "D"
+			lAdmitido	:= .T.
+			If Empty( dAdmiss ) .or. SRA->RA_ADMISSA < dAdmiss
+				dAdmiss	:= SRA->RA_ADMISSA
+			Endif
+		ElseIf ( SRA->RA_SITFOLH == 'D' ) .Or. !Empty( SRA->RA_DEMISSA )
+			lDemitido	:= .T.
+			If Empty( dDemiss ) .or. SRA->RA_DEMISSA > dDemiss
+				dDemiss	:= SRA->RA_DEMISSA
+			Endif
+		EndIf
+
+		dbSkip()
+	End
+
+	RestArea( aOldAreaSRA )
+
+	If ( lDemitido ) .And. ( lAdmitido ) .And. ( dAdmiss > dDemiss )
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If !dbSeek( SRA->RA_FILIAL + SRA->RA_MAT )
+			lRet := .T.
+		Endif
+		dbSelectArea( "SRA" )
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetIndTM0
+Retorna numero do indice da TM0 com chave no cpo matricula
+
+@type    function
+@author  Denis Hyroshi de Souza - Refeito por: Jackson Machado
+@since   17/05/2007 - Refeito em: 12/01/2014
+@sample  GetIndTM0()
+
+@return  Array, bidimensional contendo o índice e a chave de filial
+de busca
+/*/
+//-------------------------------------------------------------------
+Function GetIndTM0()
+
+	Local nOrdTM0	:= 3
+	Local cFilTM0	:= xFilial( "TM0" )
+
+Return { nOrdTM0 , cFilTM0 }
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ImpLog
+Impressao do Log
+
+@type    function
+@author  Pedro Cardoso Furst - Refeito por: Jackson Machado
+@since   08/09/2011 - Refeito em: 12/01/2014
+@sample  ImpLog( 'TRB' , 'TRB1' )
+
+@param   cTRBSRA, Caractere, Alias da tabela temporária da SRA
+@param   cTRBSRB, Caractere, Alias da tabela temporária da SRB
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function ImpLog( cTRBSRA , cTRBSRB )
+
+	Local wnrel
+	Local cDesc1		:= STR0026
+	Local cDesc2		:= " "
+	Local cDesc3		:= " "
+	Local cString		:= "SRA"
+	Private titulo	:= STR0026
+	Private cabec1
+	Private nomeprog	:= "MDTA001"
+	Private tamanho	:= "G"
+	Private nTipo		:= 0
+
+	PRIVATE aReturn  := { STR0039 , 1 , STR0040 , 1 , 2 , 1 , "" , 1 }   //"Zebrado"###"Administracao"
+
+	wnrel := "MDTA001"
+	wnrel := SetPrint( cString , wnrel , cPerg , titulo , cDesc1 , cDesc2 , cDesc3 , .F. , "" )
+
+	If nLastKey == 27
+		Set Filter to
+		Return
+	Endif
+
+	nTipo := If( aReturn[ 4 ] == 1 , 15 , 18 )
+	SetDefault( aReturn , cString )
+	If nLastKey == 27
+		Set Filter to
+		Return
+	Endif
+
+	RptStatus( { | lEnd | LogInc( @lEnd , wnRel , cString , tamanho , NomeProg , cTRBSRA , cTRBSRB ) } , titulo )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ImpLog
+Incrementa Linha e Controla Salto de Pagina
+
+@type    function
+@author  Pedro Cardoso Furst - Refeito por: Jackson Machado
+@since   08/09/2011 - Refeito em: 12/01/2014
+@sample  SomaLinha()
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function SomaLinha()
+
+	Li++
+	If Li > 58
+	  	Cabec( titulo , cabec1 , cabec2 , nomeprog , tamanho , nTipo )
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LogInc
+Impressão Log de Inclusao
+
+@type    function
+@author  Pedro Cardoso Furst - Refeito por: Jackson Machado
+@since   08/09/2011 - Refeito em: 12/01/2014
+@sample  LogInc( @lEnd, 'MDTA001', 'Relatório ASO', 'M', 'MDTA001',
+				'TRB1', 'TRB2' )
+
+@param   lEnd, Caractere,  Indica o fim da impressão
+@param   wnRel, Caractere, Arquivo de saida do relatorio
+@param   titulo, Caractere, Título do Relatório
+@param   tamanho, Caractere, Tamanho do Relatório
+@param   NomeProg, Caractere, Nome do programa
+@param   cTRBSRA, Caractere, Alias da tabela temporária da SRA
+@param   cTRBSRB, Caractere, Alias da tabela temporária da SRB
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function LogInc( lEnd , wnRel , titulo , tamanho , NomeProg , cTRBSRA , cTRBSRB )
+
+	Local cRodaTxt	:= "" //Variavel para controle do Relatorio
+	Local nCntImpr	:= 0 //Variavel para controle do Relatorio
+
+	Private li			:= 80, m_pag := 1
+
+	cabec1	:=  STR0023//"Filial   Mat.    Nome Funcionário                          Gerou Ficha?    Ficha Médica      Observação"
+	cabec2	:=  STR0024//"  Cod. Depen.      Nome Dependente                           Gerou Ficha?    Ficha Médica      Observação "
+	/*
+	____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	          1         2         3         4         5         6         7         8         9       100       110       120       130       140       150       160       170       180       190       200       210       220
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	cabec1
+	Filial   Mat.    Nome Funcionario                          Gerou Ficha?    Ficha Medica      Observacao
+	123456   123456  1234567890123456789012345678901234567890  123             123456789         1234567890123456789012345678901234567890
+	____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	cabec2
+	  Cod. Depen.      Nome Dependente                           Gerou Ficha?    Ficha Médica      Observacao
+			123456789    1234567890123456789012345678901234567890  123             123456789         1234567890123456789012345678901234567890
+	____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	*/
+
+	SomaLinha()
+	dbSelectArea( cTRBSRA )
+	dbGoTop()
+	dbSelectArea( cTRBSRB )
+	dbGoTop()
+
+	dbSelectArea( cTRBSRA )
+	dbSetOrder( 2 )   //  (PDEP + OBS + FICHA)
+	dbGoTop()
+	While ( cTRBSRA )->( !Eof() )
+		@ Li , 000 PSay ( cTRBSRA )->FILIAL Picture "@!"// Filial
+		@ Li , 009 PSay ( cTRBSRA )->MAT Picture "@!"// Matricula Funcionario
+		@ Li , 017 PSay AllTrim( ( cTRBSRA )->NOMEFUN ) Picture "@!"// Nome
+		@ Li , 059 PSay ( cTRBSRA )->GEROU// Gerou ficha?
+		@ Li , 075 PSay ( cTRBSRA )->FICHA Picture "@!"// Ficha Medica
+		@ Li , 093 PSay ( cTRBSRA )->OBS// Observacao
+		SomaLinha()
+
+	   dbSelectArea( cTRBSRB )
+	   dbSetOrder( 1 ) // (MAT + CODEP)
+	   If dbSeek( ( cTRBSRA )->MAT )
+	   	While ( cTRBSRB )->( !Eof() ) .And. ( cTRBSRA )->MAT == ( cTRBSRB )->MAT
+				@ Li,002 Psay ( cTRBSRB )->CODEP Picture "@!"// Codigo dependente
+				@ Li,019 Psay AllTrim( ( cTRBSRB )->NOMEDEP ) Picture "@!"// Nome dependente
+				@ Li,061 Psay ( cTRBSRB )->GEROU// Gerou ficha?
+				@ Li,077 Psay ( cTRBSRB )->FICHA Picture "@!"// Ficha Medica
+				@ Li,095 Psay ( cTRBSRB )->OBS// Observacao
+			   SomaLinha()
+			   dbSelectArea( cTRBSRB )
+			   dbSkip()
+			 End
+			 SomaLinha()
+		Endif
+		dbSelectArea( cTRBSRA )
+		dbSkip()
+	End
+
+	Set Filter To
+
+	Roda( nCntImpr , cRodaTxt , tamanho )
+	Set Device to Screen
+
+	If aReturn[ 5 ] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool( wnrel )
+	Endif
+
+	MS_FLUSH()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fDemitido
+Verifica se o funcionario foi readmitido
+
+@type    function
+@author  Pedro Carodoso - Refeito por: Jackson Machado
+@since   11/01/2011 - Refeito em: 12/01/2014
+@sample  fCriaSX1( '0981987978', 'D Mg 01', '001', 20181223 )
+
+@param   cCPF, Caractere, C.P.F. a ser validado
+@param   cFil, Caractere, Filial a ser considerada para validação do funcionário
+@param   cMat, Caractere, Matrícula validada do funcionário
+@param   dDtDemiss, Data, Data de demissão do funcionário
+
+@return lRet, Lógico, Retorna verdadeiro quando funcionário foi readmitido
+/*/
+//-------------------------------------------------------------------
+Static Function fDemitido( cCPF , cFil , cMat , dDtDemiss )
+
+	Local lRet		:= .T.
+	Local aArea	:= GetArea()
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 5 )
+	If dbSeek( cFil + cCPF )
+		While SRA->( !Eof() ) .and. SRA->RA_CIC == cCPF
+			If SRA->RA_SITFOLH <> "D" .And. SRA->RA_MAT <> cMat .And. Empty( SRA->RA_DEMISSA )
+				lRet	:= .F.
+				Exit
+			Elseif SRA->RA_SITFOLH == "D" .And. SRA->RA_MAT <> cMat .And. SRA->RA_DEMISSA > dDtDemiss
+				lRet	:= .F.
+			Endif
+			dbSkip()
+		End
+	Endif
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGeraTxt
+Gera arquivo TXT com os registros processados
+
+@type    function
+@author  Jackson Machado
+@since   12/01/2014
+@sample  fGeraTxt( 'TRB' , 'TRB1' )
+@param   cTRBSRA, Caractere, Alias da tabela temporária da SRA
+@param   cTRBSRB, Caractere, Alias da tabela temporária da SRB
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fGeraTxt( cTRBSRA , cTRBSRB )
+
+	Local nHld
+	Local cStartPath		:= GetSrvProfString("Startpath","")
+	Local cFile			:= cStartPath + If( Right( cStartPath , 1 ) == "\", "", "\" ) + "MDTA001"+ DtoS( Date() ) + Time() +".txt"
+	Local cabec1			:=  STR0023//"Filial   Mat.    Nome Funcionário                          Gerou Ficha?    Ficha Médica      Observação"
+	Local cabec2			:=  STR0024//"  Cod. Depen.      Nome Dependente                           Gerou Ficha?    Ficha Médica      Observação "
+
+	//Retira os dois pontos do Time para criação do arquivo
+	cFile := StrTran( cFile , ":" , "" )
+
+	If File( cFile )
+		FErase( cFile )
+	EndIf
+
+	nHld := fCreate( cFile )
+
+	If nHld < 0
+		cEcho := MsgUserLog( STR0041 , STR0042 ) //"Erro de Criacao"###"Não foi possível criar o arquivo."
+	Else
+		FWrite( nHld , cabec1 + CRLF )
+		FWrite( nHld , cabec2 + CRLF )
+
+		dbSelectArea( cTRBSRA )
+		dbGoTop()
+		dbSelectArea( cTRBSRB )
+		dbGoTop()
+
+		dbSelectArea( cTRBSRA )
+		dbSetOrder( 2 )   //  (PDEP + OBS + FICHA)
+		dbGoTop()
+		While ( cTRBSRA )->( !Eof() )
+			FWrite( nHld , 	PadR( ( cTRBSRA )->FILIAL , 9 ) + ;
+								Padr( ( cTRBSRA )->MAT , 8 ) + ;
+								Padr( ( cTRBSRA )->NOMEFUN , 42 ) + ;
+								Padr( ( cTRBSRA )->GEROU , 16 ) + ;
+								Padr( ( cTRBSRA )->FICHA , 18 ) + ;
+								( cTRBSRA )->OBS +;
+								 CRLF )
+		   dbSelectArea( cTRBSRB )
+		   dbSetOrder( 1 ) // (MAT + CODEP)
+		   If dbSeek( ( cTRBSRA )->MAT )
+		   	While ( cTRBSRB )->( !Eof() ) .And. ( cTRBSRA )->MAT == ( cTRBSRB )->MAT
+		   			FWrite( nHld , 	Space( 2 ) + PadR( ( cTRBSRB )->CODEP , 17 ) + ;
+										Padr( ( cTRBSRB )->NOMEDEP , 42 ) + ;
+										Padr( ( cTRBSRB )->GEROU , 16 ) + ;
+										Padr( ( cTRBSRB )->FICHA , 18 ) + ;
+										( cTRBSRB )->OBS +;
+								 		CRLF )
+				   dbSelectArea( cTRBSRB )
+				   dbSkip()
+				 End
+			Endif
+			dbSelectArea( cTRBSRA )
+			dbSkip()
+		End
+
+		fClose( nHld )
+
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SchedDef
+Execução de Parâmetros na Definição do Schedule
+
+@type    function
+@author  Jackson Machado
+@since   12/01/2014
+@sample  SchedDef()
+
+@return  aParam, Array, Contém as definições de parâmetros
+/*/
+//-------------------------------------------------------------------
+Static Function SchedDef()
+
+	Local aOrd		:= {}
+	Local aParam 	:= {}
+	Local cPerg	:= PadR( "MDT001" , 10 )
+
+	aParam := { 	"P" , ;
+					cPerg , ;
+					"TM0" , ;
+					aOrd , ;
+					STR0026 }
+Return aParam

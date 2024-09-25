@@ -1,0 +1,516 @@
+#INCLUDE "MNTC810.ch"
+#include "protheus.ch"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC810
+Consulta de cadastro de negociacoes   
+@author Heverson Vitoreti 
+@since 12/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC810()     
+
+	//+-----------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  |
+	//+-----------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+	
+	Local oTempTable
+	Local aPesq := {}
+	
+	Private aRotina := MenuDef()   
+
+	Private cCadastro  := OemtoAnsi(STR0004)  // //"Consulta de negociações de Postos"
+
+	Private cPerg    := "MNC810    "
+	Private aPerg :={}
+
+	Private cTRBB := GetNextAlias()
+
+	aPos1      := {15,1,95,315 }
+
+	aDBFB := {}
+	Aadd(aDBFB,{"CODPOS" ,"C", TAMSX3("A2_COD")[1],0})
+		Aadd(aDBFB,{"LOJA"   ,"C", 04, 0})
+		Aadd(aDBFB,{"CNPJ"   ,"C", 14, 0})
+		Aadd(aDBFB,{"NFAN"   ,"C", 30, 0})
+		Aadd(aDBFB,{"DATAN"  ,"D", 08, 0})
+		Aadd(aDBFB,{"NOMCOM" ,"C", 20, 0})
+	Aadd(aDBFB,{"PRENEG" ,"N", TAMSX3("TQH_PRENEG")[1]/*9*/,TAMSX3("TQH_PRENEG")[2]/*3*/})
+		Aadd(aDBFB,{"DESCON" ,"N", 09, 6})
+		Aadd(aDBFB,{"PRAZO"  ,"N", 03, 0})
+		Aadd(aDBFB,{"DIANF"  ,"N", 02, 0})
+		Aadd(aDBFB,{"DIAFT"  ,"N", 02, 0})
+
+	//Instancia classe FWTemporaryTable 
+	oTempTable := FWTemporaryTable():New( cTRBB, aDBFB )
+	//Cria indices 
+	oTempTable:AddIndex( "Ind01" , {"CODPOS","DATAN"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	aTRBB := {{STR0014,"DATAN" ,"D", 08,0,"@ 99/99/9999" },;   //"Data"
+		 	  {STR0029,"CODPOS","C", TAMSX3("TQF_CODIGO")[1],0,"@!" },;   //"Codigo"
+		   	  {STR0034,"LOJA"  ,"C", 04,0,"@!" },;   //"Loja"
+			  {STR0027,"CNPJ"  ,"C", 14,0,"@R 99.999.999/9999-99" },;   //"CNPJ"
+			  {STR0028,"NFAN"  ,"C", 30,0,"@!" },;   //"Nome Fantasia"
+			  {STR0015,"NOMCOM","C", 20,0,"@!" },;   //"Tipo Combust."
+			  {STR0016,"PRENEG","N", TAMSX3("TQH_PRENEG")[1]/*9*/,TAMSX3("TQH_PRENEG")[2]/*3*/,;
+			  '@E 99,999.'+Replicate('9',TAMSX3("TQH_PRENEG")[2]) },;   //"Preco Negoc."
+			  {STR0017,"DESCON","N", 09,6,"@E 99.999999" },;   //"% Desc."
+			  {STR0018,"PRAZO" ,"N", 03,0,"@ 999" },;   //"Prazo Pgto."
+			  {STR0019,"DIANF" ,"N", 02,0,"@ 99"  },;   //"Dias Env. NF"
+			  {STR0020,"DIAFT" ,"N", 02,0,"@ 99"  }}    //"Dias Fat."
+
+	If pergunte(cPerg,.T.)
+		Processa({ |lEnd| MNC810INI()}, STR0021)
+		DbSelectarea(cTRBB)
+		DbGotop()     
+		
+		//Cria Array para montar a chave de pesquisa
+		aAdd( aPesq , { STR0029 + " + " + STR0014,{{"","C" , 255 , 0 ,"","@!"}} } )
+		
+		oBrowse:= FWMBrowse():New()
+		oBrowse:SetDescription(cCadastro)
+		oBrowse:SetTemporary(.T.)
+		oBrowse:SetAlias(cTRBB)
+		oBrowse:SetFields(aTRBB)
+		oBrowse:SetSeek(.T.,aPesq)
+		oBrowse:Activate()
+	EndIf
+
+	oTempTable:Delete()
+
+	DbSelectArea("TQG")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQG"))  
+
+	//+-----------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                          |
+	//+-----------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC810INI
+Monta o arquivo temporario inicial mostrado no browse 
+@author Heverson Vitoreti 
+@since 12/01/06
+@version undefined
+@type function
+@obs uso MNTC810
+/*/
+//---------------------------------------------------------------------
+Function MNC810INI()
+
+	Local nDESCON := 0
+	Local nPRENEG := 0
+	Local dDATAN
+	local cCombus := "   "
+
+	private cHora
+	private dDataTQH
+	private dDataTQG
+
+
+	DbselectArea("TQG")
+	DbSetorder(01)
+	Dbseek(xFilial("TQG"))
+	ProcRegua(LastRec())
+	Do While !EoF() .and. xFilial("TQG") == TQG->TQG_FILIAL
+
+		IncProc()
+		If TQG->TQG_DTNEG < Mv_Par01 .or. TQG->TQG_DTNEG > Mv_par02
+			DbSelectArea("TQG")
+			DbSkip()
+			Loop
+		EndIf  
+
+		If !Empty(Mv_Par03)  	
+			If Mv_Par03 <> TQG->TQG_CODPOS
+				DbSelectArea("TQG")
+				DbSkip()
+				Loop
+			EndIf
+		EndIf
+		If !Empty(Mv_Par04)  	
+			If Mv_Par04 <> TQG->TQG_LOJA
+				DbSelectArea("TQG")
+				DbSkip()
+				Loop
+			EndIf
+		EndIf
+
+
+		If !Empty(Mv_par07)
+			DbSelectArea("TQM")
+			DbSetOrder(1)
+			If DbSeek(xFilial("TQM")+Mv_Par07)   
+				If Mv_Par07 <> TQM->TQM_CODCOM
+					DbSelectArea("TQG")
+					DbSkip()
+					Loop
+				EndIf                                 
+			EndIf
+		EndIf
+
+		DbSelectArea("TQF")
+		DbSetOrder(1)
+		If DbSeek(xFilial("TQF")+TQG->TQG_CODPOS+TQG->TQG_LOJA)
+			If TQF->TQF_ATIVO <> Str(Mv_Par08,1)
+				DbSelectArea("TQG")
+				DbSkip()
+				Loop
+			EndIf
+		Else
+			DbSelectArea("TQG")
+			DbSkip()
+			Loop
+		EndIf
+
+		If !Empty(Mv_Par06)
+			If Mv_Par06 <> TQF->TQF_CNPJ
+				DbSelectArea("TQG")
+				DbSkip()
+				Loop
+			endif
+		endif
+
+		If !Empty(Mv_Par05)
+			If Mv_Par05 <> TQF->TQF_NREDUZ
+				DbSelectArea("TQG")
+				DbSkip()
+				Loop
+			endif
+		endif
+
+		nDESCON := 0
+		nPRENEG := 0              
+		dDATAN  := CtoD("  /  /  ")
+		dDataTQG := TQG->TQG_DTNEG
+		lGetIn := .f.
+
+		DbSelectArea("TQG")   
+		nRecno := Recno()
+		cPosto  := TQG->TQG_CODPOS   
+		cLoja   := TQG->TQG_LOJA
+		DbSkip()
+
+		Do While !Eof() .and. xFilial("TQG")  == TQG->TQG_FILIAL .and.;
+		TQG->TQG_CODPOS == cPosto .and.;
+		TQG->TQG_LOJA   == cLoja
+
+			dDataTQG := TQG->TQG_DTNEG
+			DbSkip()	
+		EndDo
+
+		DbGoTo(nRecno)
+
+		DbSelectArea("TQH")
+		DbSetOrder(01)
+		DbSeek(xFilial("TQH")+TQG->TQG_CODPOS+TQG->TQG_LOJA)
+		Do While !Eof() .and. xFilial("TQH")  == TQH->TQH_FILIAL .and.;
+		TQH->TQH_CODPOS == TQG->TQG_CODPOS .and.;
+		TQH->TQH_LOJA   == TQG->TQG_LOJA
+			If !Empty(Mv_Par07)
+				If TQH->TQH_CODCOM <> Mv_Par07
+					DbSelectArea("TQH")
+					DbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			dDataTQH := TQH->TQH_DTNEG
+			If TQH->TQH_DTNEG <= dDataTQG .or. (TQH->TQH_DTNEG >= dDataTQG .and. dDataTQG == TQG->TQG_DTNEG)
+				//	  		If TQG->TQG_DTNEG <= dDataTQH	         
+				If TQG->TQG_DTNEG >= dDataTQH	         
+					nDESCON := TQH->TQH_DESCON
+					nPRENEG := TQH->TQH_PRENEG
+					cCombus := TQH->TQH_CODCOM
+					lGetIn  := .t.
+				EndIf
+			EndIf
+
+			DbSelectArea("TQH")
+			DbSkip()
+			Loop
+		Enddo
+
+		DbSelectArea("TQF")
+		DbSetOrder(01)
+		DbSeek(xFilial("TQF")+TQG->TQG_CODPOS+TQG->TQG_LOJA)
+
+		If lGetIn                                            
+			RecLock((cTRBB),.t.)
+			(cTRBB)->CNPJ := TQF->TQF_CNPJ
+			(cTRBB)->LOJA := TQF->TQF_LOJA
+			(cTRBB)->NFAN := TQF->TQF_NREDUZ  			
+
+			If !Empty(Mv_Par07)
+				DbSelectArea("TQM")
+				DbSetOrder(01)
+				IF DbSeek(xFilial("TQM")+Mv_Par07)
+					(cTRBB)->NOMCOM := TQM->TQM_NOMCOM
+				EndIf			           
+			Else
+				DbSelectArea("TQM")
+				DbSetOrder(01)
+				IF DbSeek(xFilial("TQM")+cCombus)
+					(cTRBB)->NOMCOM := TQM->TQM_NOMCOM
+				EndIf			           
+			EndIf
+
+			(cTRBB)->CODPOS := TQG->TQG_CODPOS
+			(cTRBB)->PRAZO  := TQG->TQG_PRAZO
+			(cTRBB)->DIANF  := TQG->TQG_DIALIM
+			(cTRBB)->DIAFT  := TQG->TQG_DIAFAT
+			(cTRBB)->DESCON := nDESCON
+			(cTRBB)->PRENEG := nPRENEG
+			(cTRBB)->DATAN  := TQG->TQG_DTNEG
+
+			MsUnLock(cTRBB)
+		EndIf 
+
+		DbselectArea("TQG")
+		DbSkip()
+	END
+	DbSelectArea(cTRBB)
+	DbGoTop()
+	If Reccount() = 0
+		MsgInfo(STR0030,STR0031)  //"Não existem dados para consulta."###"ATENÇÃO"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC810PA
+Reprocessa o browse de acordo com os parametros  
+@author Heverson Vitoreti
+@since 12/01/06
+@version undefined
+@type function
+@obs Uso MNTC810
+/*/
+//---------------------------------------------------------------------
+Function MNC810PA()
+
+	If !Pergunte(cPerg,.T.)
+		Return
+	EndIf 
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNC810INI() }, STR0021)  //"Aguarde ..Processando Arquivo de Postos"
+	DbSelectArea(cTRBB)
+	DbGoTop()
+
+Return .T. 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC810VI
+Visualiza consulta 
+@author Heverson Vitoreti 
+@since 12/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC810VI()
+
+	DbSelectArea("TQG")
+	DbSetOrder(01)
+	DbSeek(xFilial("TQG")+(cTRBB)->CODPOS)
+	NGCAD01("TQG",Recno(),1)
+
+	DbSelectArea(cTRBB)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC810LO
+Visualiza consulta  
+@author Heverson Vitoreti
+@since 12/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC810LO()
+	Local cPosto
+
+	cPosto := Mv_Par03
+
+	If Empty(mv_par03)
+		Return .t.
+	Else
+		If !ExistCpo('TQF',Mv_par03)
+			Return .f.
+		EndIf
+	EndIf
+
+	DbSelectArea("TQF")
+	DbSetOrder(1)
+	If DbSeek(xFilial("TQF")+cPosto)
+		MV_PAR04 := TQF->TQF_LOJA           
+	Endif
+
+Return .t. 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNC810VAL
+Visualiza consulta  
+@author Soraia de Carvalho
+@since 22/03/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNC810VAL()
+
+	If !Empty(MV_PAR03)
+		DbSelectArea("TQF")
+		DbSetOrder(1)
+		If DbSeek(xFilial("TQF")+Mv_Par03)
+			Mv_Par05 := SPACE(40) 
+			Mv_Par06 := SPACE(14)
+		EndIf
+	EndIf      
+
+Return .T. 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT810LOJA
+Valida o parametro de Loja   
+@author Elisangela Costa
+@since 06/01/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT810LOJA()
+
+	If !Empty(MV_PAR04) .And. Empty(MV_PAR03)
+		MsgStop(STR0032) //"Informe o Codigo do Posto"
+		Return .F.             
+	EndIf   
+	If !Empty(MV_PAR04) .And. !Empty(MV_PAR03) 
+		If !ExistCpo("TQF",MV_PAR03+MV_PAR04)
+			Return .F.
+		Else
+			DbSelectArea("TQF")
+			DbSetOrder(1)
+			If DbSeek(xFilial("TQF")+MV_PAR03+MV_PAR04)
+				MV_PAR05 := TQF->TQF_NREDUZ
+				MV_PAR06 := TQF->TQF_CNPJ
+			EndIf 
+		EndIf	
+	EndIf   
+
+Return .T. 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT810DT
+Valida o parametro ate data   
+@author Soraia de Carvalho
+@since 25/07/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT810DT()
+
+	If MV_PAR02 < MV_PAR01
+		MsgStop(STR0033)  //"Data final não pode ser inferior à data inicial!"
+		Return .F.  
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT810NR
+Valida o parametro Nome Fantasia 
+@author Evaldo Cevinscki Jr.
+@since 12/03/08
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT810NR()
+
+	If !Empty(MV_PAR05) 
+		DbSelectArea("TQF")
+		DbSetOrder(3)
+		If DbSeek(xFilial("TQF")+MV_PAR05)
+			MV_PAR03 := TQF->TQF_CODIGO
+			MV_PAR04 := TQF->TQF_LOJA
+			MV_PAR06 := TQF->TQF_CNPJ
+		Else
+			MsgStop(STR0035)  //"Nome Fantasia não encontrado."
+			Return .F.
+		EndIf 
+	EndIf	
+
+Return .T.   
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT810CN
+Valida o parametro CNPJ  
+@author Evaldo Cevinscki Jr.
+@since 12/03/08
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT810CN()
+
+	If !Cgc(Mv_Par06)
+		Return .F.
+	EndIf	
+
+	If !Empty(MV_PAR06) 
+		DbSelectArea("TQF")
+		DbSetOrder(2)
+		If DbSeek(xFilial("TQF")+MV_PAR06)
+			MV_PAR03 := TQF->TQF_CODIGO
+			MV_PAR04 := TQF->TQF_LOJA
+			MV_PAR05 := TQF->TQF_NREDUZ
+		EndIf 
+	EndIf	
+
+Return .T.   
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional
+@author Evaldo Cevinscki Jr.
+@since 12/03/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+	Local aRotina := {{STR0002 ,"MNC810VI" ,0,2},;   //"Visualizar"
+	{STR0003 ,"MNC810PA" ,0,3,0}}  					 //"Parametros"
+	
+	//+-------------------------------------------------------------------------------------+
+	//| Parametros do array aRotina:                              						    | 
+	//|           			1. Nome a aparecer no cabecalho                               	| 
+	//|          	        2. Nome da Rotina associada                                     | 
+	//|          		    3. Reservado                                                    | 
+	//|          		    4. Tipo de Transação a ser efetuada:                            | 
+	//|           					    1 - Pesquisa e Posiciona em um Banco de Dados       |   
+	//|           					    2 - Simplesmente Mostra os Campos                   |     
+	//|           					    3 - Inclui registros no Bancos de Dados             |     
+	//|         					    4 - Altera o registro corrente                      |    
+	//|         					    5 - Remove o registro corrente do Banco de Dados    |    
+	//|      	  	        5. Nivel de acesso                                              | 
+	//|         	 	    6. Habilita Menu Funcional                                      | 
+	//+-------------------------------------------------------------------------------------+
+Return aRotina

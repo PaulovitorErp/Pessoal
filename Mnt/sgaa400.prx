@@ -1,0 +1,1573 @@
+#INCLUDE "SGAA400.ch"
+#include "Protheus.ch"
+#include "Colors.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAA400
+Programa para responder as Medicoes
+
+	Tabelas
+	TCD - Monitoramentos
+	TCE - Monitoramento X Criterios
+	TCF - Monitoramento X Requisitos
+	TCH - Medicoes Executadas
+
+@return .T.
+
+@author Rafael Diogo Richter
+@since 06/03/2008
+/*/
+//---------------------------------------------------------------------
+Function SGAA400()
+
+	Local aNGBEGINPRM := NGBEGINPRM() // Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local nOpca := 0
+	Local aObrPanels := {}
+	Local lRet := .T.
+	Local i, nRow, bGetSet, bValid
+	Local cLaborat, lCont
+	Local nLargDlg
+	Local nInd
+
+	Local nFld
+	Local cFldTCH
+	Local cFldPro
+	Local cFldUso
+	Local aHeaderTCE, aHeaderTCH
+	Local aColsTCE, aColsTCH
+	Local aFldGet := { 	{ "TCH_FORNEC" , "" } , ;
+						{ "TCH_DTCOLE" , "SGA400DTHR(1)" }, ;
+						{ "TCH_HRCOLE" , "SGA400DTHR(2)" }, ;
+						{ "TCH_CODCRI" , "" }, ;
+						{ "TCH_DESCRI" , "" },;
+						{ "TCH_QUANTI" , "SGA400QTD()" }, ;
+						{ "TCH_UNIMED" , "" }, ;
+						{ "TCH_CODPLA" , "" }, ;
+						{ "TCH_DESPLA" , "" } }
+
+	Private aCriterios := { }
+	Private oDlgPar
+	Private cOrigem
+	Private cDeLab  := Space(Len(SA2->A2_COD))
+	Private cAteLab := Space(Len(SA2->A2_COD))
+	Private aAlterCols
+	Private lUpd
+	Private nUsado := 0
+	Private nSizeGet
+	Private nTamFornec := TAMSX3("A2_COD")[1]
+
+	Private aCols   := {}, aHeader := {}, aColsOld := {}
+	Private nTCHDTCOLE, nTCHHRCOLE, nTCHCODCRI, nTCHDESCRI, nTCHQUANTI, nTCHUNIMED, nTCHCODPLA, nTCHDESPLA, nTCHORIGEM, nTCHFORNEC, nTCHNOMLAB
+	Private lCodPla	 := NGCADICBASE( "TCH_CODPLA" , "A" , "TCH" , .F. )
+	Private aUsrFlds := {}
+
+	Private cPerg    := PADR( "SGA400", 10, " " )
+	Private aPerg    := {}
+ 	Private aVETINR  := {}
+	Private aRotina  := MenuDef()
+	Private aRegistros := {}
+	Private cMonitoramento := ""//Código do Monitoramento referente a analise
+	Private cAnalise := ""		//Código da Analise quando alteração
+	Private cMonitSXB := ""		//Variavel utilizada em consulta SXB
+
+	//Verica se o UPDSGA13 foi aplicado
+	If !SG390CHKDIC()
+		NGRETURNPRM(aNGBEGINPRM)
+		Return .T.
+	Endif
+
+	If !Pergunte(cPerg,.T.)
+		NGRETURNPRM(aNGBEGINPRM)
+	Return .F.
+	EndIf
+
+	nLargDlg := 440+(nTamFornec*11)
+
+	cAliasQry := GetNextAlias()
+	cQuery := "SELECT TCC.TCC_CODIGO, TCC.TCC_DESCRI "
+	cQuery += "FROM " + RetSqlName("TCC") + " TCC, " + RetSqlName("TCD") + " TCD, " + RetSqlName("TCE") + " TCE "
+	cQuery += "WHERE TCC.TCC_FILIAL = '" + xFilial("TCC") + "' AND TCD.TCD_FILIAL = '" + xFilial("TCD") + "' AND "
+	cQuery += "TCE.TCE_FILIAL = '" + xFilial("TCE") + "' AND "
+	cQuery += "TCC.TCC_CODIGO = TCE.TCE_CODCRI AND "
+	cQuery += "TCD.TCD_CODIGO = TCE.TCE_CODMON AND "
+	cQuery += "TCD.TCD_FONTE = '" + MV_PAR06 + "' AND TCD.TCD_GRUPO = '" + MV_PAR05 + "' AND "
+	cQuery += "TCC.D_E_L_E_T_ <> '*' AND TCD.D_E_L_E_T_ <> '*' AND TCE.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery(cQuery)
+	MPSysOpenQuery( cQuery , cAliasQry )
+	dbGoTop()
+
+	If !Eof() .AND. Empty(MV_PAR07)
+		Define Dialog oDlgPar From 5,5 To 347,nLargDlg TITLE STR0027 COLOR CLR_BLACK,CLR_WHITE Of oMainWnd Pixel //"Parâmetros"
+		oDlgPar:lEscClose := .F.
+
+			oPnlCabec := TPanel():New(0,0,,oDlgPar,,,,CLR_BLACK,CLR_WHITE,nLargDlg,11,.F.,.F.)
+				oPnlCabec:Align := CONTROL_ALIGN_TOP
+
+				TSay():New(3,007,{|| STR0028},oPnlCabec,,oDlgPar:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"Critério"
+				TSay():New(3,145,{|| STR0029},oPnlCabec,,oDlgPar:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"Origem"
+				TSay():New(3,200,{|| STR0030},oPnlCabec,,oDlgPar:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"Laboratório"
+
+			//Painel de Parametros
+			oPnlParam := TPanel():New(0,0,,oDlgPar,,,,CLR_BLACK,CLR_WHITE,nLargDlg,320,.F.,.F.)
+				oPnlParam:Align := CONTROL_ALIGN_ALLCLIENT
+				oPnlParam:CoorsUpdate()
+
+				oScrollPar := TScrollArea():New(oPnlParam,0,0,oPnlParam:nHeight,oPnlParam:nWidth,.T.,.T.,.F.)
+					oScrollPar:Align := CONTROL_ALIGN_ALLCLIENT
+					oScrollPar:CoorsUpdate()
+
+					oPnlRot := TPanel():New(0,0,,/*oPnlCabec*/oScrollPar,,,,,CLR_WHITE,oScrollPar/*oPnlCabec*/:nWidth/2,0,.F.,.F.)
+						oPnlRot:Align := CONTROL_ALIGN_TOP
+						oScrollPar:SetFrame(oPnlRot)
+						oPnlRot:CoorsUpdate()
+
+					oPnlRot1 := TPanel():New(1,1,,oPnlRot,,,,,CLR_WHITE,oScrollPar/*oPnlCabec*/:nWidth,oScrollPar/*oPnlCabec*/:nHeight,.F.,.F.)
+						oPnlRot1:Align := CONTROL_ALIGN_ALLCLIENT
+						oPnlRot1:CoorsUpdate()
+
+					//Painel para espaçamento
+					oPnlBlank := TPanel():New(0,0,,oPnlRot1,,,,CLR_BLACK,CLR_WHITE,nLargDlg,5,.F.,.F.)
+						oPnlBlank:Align := CONTROL_ALIGN_TOP
+
+					nRow := 8
+
+			lCont := 0
+			aCriterios := {}
+
+			dbSelectArea(cAliasQry)
+			dbGoTop()
+			While !Eof()
+				lCont++
+				//Cria painel
+				cPnl := "oPNL_"+(cAliasQry)->TCC_CODIGO
+				&(cPnl) := TPanel():New(1,1,,oPnlRot1,,,,CLR_BLACK,CLR_WHITE,nLargDlg,12,.F.,.F.)
+				&(cPnl):Align := CONTROL_ALIGN_TOP
+
+				//Adiciona no array de panels
+				aAdd(aObrPanels,&(cPnl))
+
+				//Cria Titulo
+				TSay():New(3,7,&("{|| '"+(cAliasQry)->TCC_DESCRI+"'}"),&(cPnl),,oDlgPar:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,,10)
+
+				nSizeGet := Len(SA2->A2_COD)*6
+
+				cLaborat := Space(Len(SA2->A2_COD))
+				cMonitoramento := SG400MONIT()//Função que retorna último monitoramento ativo de acordo com os parametros
+				dbSelectArea("TCE")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TCE")+cMonitoramento+(cAliasQry)->TCC_CODIGO) .AND. !Empty(TCE->TCE_CODLAB)
+					&('cGet'+AllTrim(Str(lCont))) := TCE->TCE_CODLAB
+					&('cCbx'+AllTrim(Str(lCont))) := '1'
+					aAdd(aCriterios,{(cAliasQry)->TCC_CODIGO,'1',TCE->TCE_CODLAB} )
+				Else
+					&('cGet'+AllTrim(Str(lCont))) := cLaborat
+					&('cCbx'+AllTrim(Str(lCont))) := '2'
+					aAdd(aCriterios,{(cAliasQry)->TCC_CODIGO,'2',''} )
+				EndIf
+
+				//Cria ComboBox
+				bGetSet := "{|u| If(PCount()>0,&('cCbx"+AllTrim(Str(lCont))+"'):=u,&('cCbx"+AllTrim(Str(lCont))+"'))}"
+				bValid  := "{|| SGA400VLD(&('cCbx"+AllTrim(Str(lCont))+"'),"+AllTrim(Str(lCont))+",'"+(cAliasQry)->TCC_CODIGO+"')}"
+				TComboBox():New(1,145,&(bGetSet),{ STR0031 , STR0045 },45,8,&(cPnl),,,&(bValid),,,.T.,,,,,,,,,) //"1=Laboratório"###"2=Proprio"
+
+				//Cria Get
+				bGetSet := "{|u| If(PCount()>0,&('cGet"+AllTrim(Str(lCont))+"'):=u,&('cGet"+AllTrim(Str(lCont))+"'))}"
+				bValid  := "{|| If(empty(&('cGet"+AllTrim(Str(lCont))+"')),.t.,ExistCpo('SA2',&('cGet"+AllTrim(Str(lCont))+"')))}"
+				bWhen   := "{|| If(cCbx"+AllTrim(Str(lCont))+"='1',.t.,.f.)}"
+				TGet():New(1,200,&(bGetSet),&(cPnl),nSizeGet,8,'@!',&(bValid),,,,,,.T.,"",,&(bWhen),.F.,.F.,,.F.,.F.,'SA2',,,,,.T.)
+
+				nRow += 12
+				NGDBSELSKIP(cAliasQry)
+			End
+			(cAliasQry)->(DbCloseArea())
+			If nRow*2 > oScrollPar:nHeight -66 //P.O.G. - estava deixando espaco em cinza na tela e criando rolagem horizontal
+				oPnlRot:nHeight := nRow*2//10
+			Else
+				oPnlRot:nHeight := oScrollPar:nHeight -66
+			EndIf
+			oPnlRot:Refresh()
+
+			//Botoes de Confirmar e Cancelar
+			oPnlBtn := TPanel():New(0,0,,oDlgPar,,,,CLR_BLACK,CLR_WHITE,nLargDlg,20,.F.,.F.)
+			oPnlBtn:Align := CONTROL_ALIGN_BOTTOM
+
+			oConfirm:= TButton():New(6,oPnlBtn:nWidth * .21/*140 + nTamFornec * 11*/-45,STR0032,oPnlBtn, {|| If(SGAVLDPAR(), (nOpca:=1, oDlgPar:End()),)}, 38, 12, ,,,.T.,,,,,,) //"Confirmar"
+			oCancel := TButton():New(6,oPnlBtn:nWidth * .21/*140 + nTamFornec * 11*/,STR0033,oPnlBtn, {|| (nOpca:=0, oDlgPar:End())}, 38, 12, ,,,.T.,,,,,,) //"Cancelar"
+			oCancel:lCanGotFocus := .F.
+
+		Activate Dialog oDlgPar On Init ((SetKey(K_CTRL_O,oConfirm:bAction)),(SetKey(K_CTRL_X,oCancel:bAction))) Centered
+
+		If nOpca == 0
+			Return .T.
+		EndIf
+
+	EndIf
+
+	// Montagem do aHeader e posicoes dos campos
+	aHeader := {}
+	aCols 	:= {}
+	aRotSetOpc( "TCH" , 0 , 3 )
+	FillGetDados(3,"TCH",,,,,,,,,,.T.,,,,,,,,.T.)
+	aHeaderTCH := aClone( aHeader )
+	FillGetDados(3,"TCE",,,,,,,,,,.T.,,,,,,,,.T.)
+	aHeaderTCE := aClone( aHeader )
+
+	aHeader := {}
+	aCols 	:= {}
+	For nFld := 1 To Len( aHeaderTCH )
+
+		cFldTCH := AllTrim( Upper( aHeaderTCH[ nFld, 2 ] ) )
+		cFldPro := Posicione("SX3",2,cFldTCH,"X3_PROPRI")
+		cFldUso := Posicione("SX3",2,cFldTCH,"X3_USADO")
+
+		If ( nPosFld := aScan( aFldGet , { | x | x[ 1 ] == cFldTCH } ) ) > 0 .Or. ;
+			( cFldPro == "U" .And. X3USO( cFldUso ) )
+			If cFldTCH == "TCH_FORNEC"
+				aAdd(aHeader, { Trim(STR0034) , "TCH_ORIGEM" , "" , 11 , 0 , "" ,Posicione("SX3",2,"TCH_FORNEC","X3_USADO"), "C" ,"TCH","V","",.F.,.F.} ) //"Responsável"
+				nUsado++
+				aAdd(aHeader , aClone( aHeaderTCH[ nFld ] ) ) //"Laboratório"
+				nUsado++
+				If ( nNomLab := aScan( aHeaderTCE , { | x | AllTrim( Upper( x[ 2 ] ) ) == "TCE_NOMLAB" } ) ) > 0
+					aAdd(aHeader , aClone( aHeaderTCE[ nNomLab ] ) ) //"Nome Laboratório"
+					nUsado++
+				EndIf
+			Else
+				aAdd(aHeader , aClone( aHeaderTCH[ nFld ] ) )
+				nUsado++
+				If nPosFld <> 0 .And. !Empty( aFldGet[ nPosFld, 2 ] )
+					aHeader[ Len( aHeader ) , 6 ] := aFldGet[ nPosFld, 2 ]
+				EndIf
+				If cFldPro == "U"
+					aAdd( aUsrFlds , cFldTCH )
+				EndIf
+			EndIf
+		EndIf
+	Next
+	nUsado++//Adiciona uma posicao a mais para ficar na ultima posicao
+
+	nTCHORIGEM := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_ORIGEM"})
+	nTCHFORNEC := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_FORNEC"})
+	nTCHNOMLAB := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCE_NOMLAB"})
+	nTCHDTCOLE := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_DTCOLE"})
+	nTCHHRCOLE := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_HRCOLE"})
+	nTCHCODCRI := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_CODCRI"})
+	nTCHDESCRI := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_DESCRI"})
+	nTCHQUANTI := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_QUANTI"})
+	nTCHUNIMED := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_UNIMED"})
+	If lCodPla
+		nTCHCODPLA := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_CODPLA"})
+		nTCHDESPLA := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == "TCH_DESPLA"})
+	EndIf
+
+	If lCodPla
+		aAlterCols := {"TCH_DTCOLE","TCH_HRCOLE","TCH_QUANTI","TCH_CODPLA"}
+	Else
+		aAlterCols := {"TCH_QUANTI"}
+	EndIf
+	If Len( aUsrFlds ) > 0
+		For nInd := 1 To Len( aUsrFlds )
+			aAdd( aAlterCols , aUsrFlds[ nInd ])
+		Next nInd
+	EndIf
+
+	Processa({ |lEnd| lRet := SG400Pro() }) // Montagem do aCols e montagem da tela
+
+	If lRet
+		If Len(aCols) == 0
+			MsgInfo(STR0018) //"Não existem critérios de avaliação a serem analisados."
+		Else
+			Processa({ |lEnd| SG400Screen() })
+		Endif
+	Endif
+
+	NGRETURNPRM(aNGBEGINPRM) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Sg400Pro
+Preenchimento do aCols
+
+@return .T.
+
+@author Rafael Diogo Richter
+@since 06/03/2008
+/*/
+//---------------------------------------------------------------------
+Function SG400Pro()
+
+	Local i    := 1
+	Local nPos := 0
+	Local nInd, nPosFld
+	aRegistros := {}//{TCH->TCH_ANALIS , TCH->TCH_MONIT, TCH->TCH_DTCOLE, TCH->TCH_HRCOLE, TCH->TCH_CODCRI, TCH->TCH_QUANTI, TCH->TCH_FONTE, TCH->TCH_GRUPO })
+	cMonitoramento := SG400MONIT()//Função que retorna último monitoramento ativo de acordo com os parametros
+
+	If !Empty(cMonitoramento)
+
+		dbSelectArea("TCD")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TCD")+cMonitoramento)
+			If TCD->TCD_DTINI > MV_PAR01
+				ShowHelpDlg(STR0019,{STR0020,STR0021 + DTOC(TCD->TCD_DTINI) + "."},2,;//"Atenção"#"O último monitoramento ativo começa apenas "#"em "
+								{STR0022 + DTOC(TCD->TCD_DTINI) +"."},1)//"Ajuste o parametro de ínicio para "
+				Return .F.
+			Endif
+			If Empty(TCD->TCD_DTINI) .OR. Empty(TCD->TCD_HRINI)
+				ShowHelpDlg(STR0019,{STR0023},1,;//"Atenção"#"Data e Hora não preenchidos."
+							{STR0024 + cMonitoramento + "."},1)//"Favor preencher a data e hora de ínicio do monitoramento "
+				Return .F.
+			Endif
+
+			dbSelectArea("TCE")
+			dbSetOrder(1)
+			dbSeek(xFilial("TCE")+cMonitoramento)
+			While !Eof() .And. TCE->TCE_CODMON == cMonitoramento
+				If Empty(TCE->TCE_TIPFRE) .Or. Empty(TCE->TCE_FREQUE)
+					ShowHelpDlg(STR0019,{STR0025},1,;//"Atenção"#"Frequência/tipo frequência não preenchidos."
+							{STR0026+cMonitoramento+"."},1)  //"Favor preencher frequência/tipo frequência dos critérios no monitoramento "
+					Return .F.
+				EndIf
+				TCE->(dbSkip())
+			EndDo
+
+			//Carrega tabela temporaria com registros das condicoes informadas no periodo
+			Processa({ |lEnd| aRegistros := SGA400ARR() })
+
+			dbSelectArea("TCE")
+			dbSetOrder(1)
+			dbSeek(xFilial("TCE")+cMonitoramento)
+			While !Eof() .And. TCE->TCE_CODMON == cMonitoramento
+				IncProc()
+
+				If TCE->TCE_CODCRI < MV_PAR03 .OR. TCE->TCE_CODCRI > MV_PAR04
+					dbSkip()
+					Loop
+				Endif
+				dData := TCD->TCD_DTINI
+				cHora := TCD->TCD_HRINI
+
+				If TCE->TCE_TIPFRE == "1" //Monitoramento Minuto a Minuto
+					nQtdHora := (HTOM( NTOH ( NGCALCH100( dData,cHora,mv_par02,"23:59" ) ) ) / TCE->TCE_FREQUE )
+					For i := 1 To Int(nQtdHora)+1
+						IncProc()
+						If i != 1
+							aDiaHora := Sg400DH(dData,cHora,TCE->TCE_FREQUE)
+							dData := aDiaHora[1]
+							cHora := aDiaHora[2]
+							If cHora == "24:00"
+								dData += 1
+								cHora := "00:00"
+							Endif
+						Endif
+						If dData >= mv_par01 .And. dData <= mv_par02
+							dbSelectArea("TCC")
+							dbSetOrder(1)
+							dbSeek(xFilial("TCC")+TCE->TCE_CODCRI)
+							SGA400Add({RetOrigem(TCE->TCE_CODCRI),RetLaborat(TCE->TCE_CODCRI,1),RetLaborat(TCE->TCE_CODCRI,2),;
+										dData, cHora, TCE->TCE_CODCRI, TCC->TCC_DESCRI, 0, TCC->TCC_UNIMED,If( lCodPla , Space(Len(TCH->TCH_CODPLA)) , ''),If(lCodPla,"",Nil),DTOS(dData)+TCE->TCE_CODCRI+cHora,.f.})
+						EndIf
+					Next
+
+				ElseIf TCE->TCE_TIPFRE == "2" //Monitoramento Hora a Hora
+					nQtdHora := (NGCALCH100(dData,cHora,mv_par02,"23:59") / TCE->TCE_FREQUE)
+
+					For i := 1 To Int(nQtdHora)+1
+						IncProc()
+						If i != 1
+							aDiaHora := Sg400DH(dData,cHora,TCE->TCE_FREQUE)
+							dData := aDiaHora[1]
+							cHora := aDiaHora[2]
+							If cHora == "24:00"
+								dData += 1
+								cHora := "00:00"
+							Endif
+						Endif
+						If dData >= mv_par01 .And. dData <= mv_par02
+							dbSelectArea("TCC")
+							dbSetOrder(1)
+							dbSeek(xFilial("TCC")+TCE->TCE_CODCRI)
+							SGA400Add({RetOrigem(TCE->TCE_CODCRI),RetLaborat(TCE->TCE_CODCRI,1),RetLaborat(TCE->TCE_CODCRI,2),;
+										dData, cHora, TCE->TCE_CODCRI, TCC->TCC_DESCRI, 0, TCC->TCC_UNIMED,If( lCodPla , Space(Len(TCH->TCH_CODPLA)) , ''),If(lCodPla,"",Nil),DTOS(dData)+TCE->TCE_CODCRI+cHora,.f.})
+						EndIf
+					Next
+
+				ElseIf TCE->TCE_TIPFRE == "3" //Monitoramento Dia a Dia
+					While dData <= mv_par02
+						IncProc()
+						If dData >= mv_par01
+							dbSelectArea("TCC")
+							dbSetOrder(1)
+							dbSeek(xFilial("TCC")+TCE->TCE_CODCRI)
+							SGA400Add({RetOrigem(TCE->TCE_CODCRI),RetLaborat(TCE->TCE_CODCRI,1),RetLaborat(TCE->TCE_CODCRI,2),;
+										dData, cHora, TCE->TCE_CODCRI, TCC->TCC_DESCRI, 0, TCC->TCC_UNIMED,If( lCodPla , Space(Len(TCH->TCH_CODPLA)) , ''),If(lCodPla,"",Nil),DTOS(dData)+TCE->TCE_CODCRI+cHora,.f.})
+						EndIf
+						dData := dData+TCE->TCE_FREQUE
+					End
+
+				Else //Monitoramento Mês a Mês
+					While dData <= mv_par02
+						nPos := aScan(aCols,{|x| YEAR(x[nTCHDTCOLE]) == YEAR(dData) .And. MONTH(x[nTCHDTCOLE]) == MONTH(dData) .And. x[nTCHCODCRI] == TCE->TCE_CODCRI })
+						If nPos == 0
+							IncProc()
+							If dData >= mv_par01 .And. dData <= mv_par02
+								dbSelectArea("TCC")
+								dbSetOrder(1)
+								dbSeek(xFilial("TCC")+TCE->TCE_CODCRI)
+								SGA400Add({RetOrigem(TCE->TCE_CODCRI),RetLaborat(TCE->TCE_CODCRI,1),RetLaborat(TCE->TCE_CODCRI,2),;
+											dData, cHora, TCE->TCE_CODCRI, TCC->TCC_DESCRI, 0, TCC->TCC_UNIMED,If( lCodPla , Space(Len(TCH->TCH_CODPLA)) , ''),If(lCodPla,"",Nil),DTOS(dData)+TCE->TCE_CODCRI+cHora,.f.})
+							EndIf
+						EndIf
+						dData := NGSomaMes(dData,TCE->TCE_FREQUE)
+					End
+				EndIf
+
+				//Procura no Array da com registros da TCH no período
+				dData := mv_par01
+				While dData <= mv_par02
+					If (nReg := aScan(aRegistros ,{|x| Trim(Upper(x[3]+x[5])) == Trim(Upper(DTOS(dData)+TCE->TCE_CODCRI)) })) > 0
+						Exit
+					Else
+						dData ++
+					Endif
+				End
+
+				If nReg > 0
+					i := nReg
+					dbSelectArea("TCC")
+					dbSetOrder(1)
+					dbSeek(xFilial("TCC")+TCE->TCE_CODCRI)
+					//Preenche acols com registros da TCH
+					While aRegistros[i][5] == TCE->TCE_CODCRI .and. aRegistros[i][3] <= DTOS(mv_par02)
+						//Verifica se está no Acols
+						If (nPos := aScan(aCols ,{|x| Trim(Upper(DTOS(x[nTCHDTCOLE])+x[nTCHHRCOLE]+x[nTCHCODCRI])) == Trim(Upper(aRegistros[i][3]+aRegistros[i][4]+TCE->TCE_CODCRI)) })) == 0
+							SGA400Add({aRegistros[i][9],aRegistros[i][10],aRegistros[i][11],;
+										STOD(aRegistros[i][3]), aRegistros[i][4], TCE->TCE_CODCRI, TCC->TCC_DESCRI, aRegistros[i][6], TCC->TCC_UNIMED,If(lCodPla,aRegistros[i][12],Nil),If(lCodPla,"",Nil),aRegistros[i][3]+TCE->TCE_CODCRI+aRegistros[i][4],.f.})
+						Else
+							If nTCHORIGEM > 0
+								aCols[nPos][nTCHORIGEM] := aRegistros[i][9]
+								aCols[nPos][nTCHFORNEC] := aRegistros[i][10]
+								aCols[nPos][nTCHNOMLAB] := aRegistros[i][11]
+							EndIf
+							aCols[nPos][nTCHDTCOLE] := STOD(aRegistros[i][3])
+							aCols[nPos][nTCHHRCOLE] := aRegistros[i][4]
+							aCols[nPos][nTCHCODCRI] := TCE->TCE_CODCRI
+							aCols[nPos][nTCHDESCRI] := TCC->TCC_DESCRI
+							aCols[nPos][nTCHQUANTI] := aRegistros[i][6]
+							aCols[nPos][nTCHUNIMED] := TCC->TCC_UNIMED
+							If lCodPla
+								aCols[nPos,nTCHCODPLA] := aRegistros[i][12]
+								aCols[nPos,nTCHDESPLA] := NGSeek( "TAA" , aRegistros[i][12] , 1 , "TAA_NOME" )
+							EndIf
+							aCols[nPos][nUsado] := aRegistros[i][3]+TCE->TCE_CODCRI+aRegistros[i][4]
+							If Len( aUsrFlds ) > 0 .And. !Empty( cAnalise )
+								dbSelectArea("TCH")
+								dbSetOrder( 1 )
+								If dbSeek(xFilial("TCH")+cAnalise+DTOS(aCols[nPos][nTCHDTCOLE])+aCols[nPos][nTCHHRCOLE]+aCols[nPos][nTCHCODCRI]+aCols[nPos][nTCHFORNEC])
+									For nInd := 1 To Len( aUsrFlds )
+										If ( nPosFld := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == aUsrFlds[ nInd ]}) ) > 0
+											aCols[ nPos , nPosFld ] := TCH->&( aUsrFlds[ nInd ] )
+										Endif
+									Next nInd
+								EndIf
+							EndIf
+						Endif
+						If i+1 > Len(aRegistros)
+							Exit
+						Else
+							i++
+						Endif
+					End
+				EndIf
+
+				dbSelectArea("TCE")
+				dbSkip()
+			End
+		EndIf
+
+		//Ordena por Data+Criterio+Hora
+		aCols := aSort(aCols,,,{ |x,y| x[nUsado] < y[nUsado] } )
+		aColsOld := aClone(aCols)
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Sg400DH
+Criacao de um vetor com as informacoes de data e hora de acordo com o valor
+do tipo de frequencia (TCE_TIPFRE)
+
+@param dData, Data - Data inicial do Monitoramento (TCD_DTINI)
+@param cHora, Caracter - Hora inicial do Monitoramento (TCD_HRINI)
+@param nFreq, Numerico - Tipo de frequencia (1-Minuto; 2-Hora; 3-Dia; 4-Mes)
+
+@return aDtHr, Array - Vetor contendo a data e hora
+
+@author Rafael Diogo Richter
+@since 06/03/2008
+/*/
+//---------------------------------------------------------------------
+Function Sg400DH(dData,cHora,nFreq)
+	Local aDtHr := {}
+	Local dDt := dData
+	Local cHr := cHora
+	Local nPos := 0, nHora := 0, nMinuto := 0
+	Local i
+
+	nPos    := At(":",cHora)
+	nHora   := Val(SubStr(cHora,1,(nPos-1)))
+	nMinuto := Val(SubStr(cHora,(nPos+1)))
+
+	If TCE->TCE_TIPFRE == "1"
+	nMinutos1 := HTOM(cHora)+nFreq
+
+		If nMinutos1 > 1440
+			dDt := dDt+1
+			cHr := MTOH(nMinutos1-1440)
+		Else
+			cHr := MTOH(HTOM(cHora)+nFreq)
+		Endif
+	Else
+		nHora += nFreq
+		nTotal := nFreq / 24
+
+		If Int(nTotal) <= 0
+			nTotal := 1
+			cHr := AllTrim(StrZero(nHora,2))+":"+AllTrim(StrZero(nMinuto,2))
+		EndIf
+
+		For i := 1 To Int(nTotal)
+			If nHora > 24
+				dDt := dDt+1
+				cHr := AllTrim(Str(nHora-24))+":"+AllTrim(StrZero(nMinuto,2))
+			EndIf
+		Next
+	Endif
+
+	cHr := If(Len(cHr)=4,'0'+cHr,cHr)
+
+	aDtHr := {dDt,cHr}
+
+Return aDtHr
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG400Screen
+Montagem da tela
+
+@author Rafael Diogo Richter
+@since 06/03/2008
+/*/
+//---------------------------------------------------------------------
+Function SG400Screen()
+	Local aButton := {}
+	Local bCampo
+	Local nOpca := 0
+	Local nI
+	Local oDlg, oEnchoice, oPnlBtn
+	Local nInd, nPosFld
+
+	Private oGet
+	Private aTela := {}, aGets := {}
+
+	Private aAC := {STR0009,STR0010}, aCRA:= {STR0010,STR0011,STR0009}  //"Abandona"###"Confirma"###"Confirma"###"Redigita"###"Abandona"
+	Private aSize := MsAdvSize(,.f.,430), aObjects := {}, aVarNao := {}
+	Private oMenu
+
+	lFIELD := (TYPE("aCHOICE") == "A")
+
+	Aadd(aObjects,{020,020,.T.,.T.}) // Indica dimensoes x e y e indica que redimensiona x e y e assume que retorno sera em linha final coluna final (.F.)
+	Aadd(aObjects,{200,400,.T.,.T.}) // Indica dimensoes x e y e indica que redimensiona x e y e assume que retorno sera em linha final coluna final (.F.)
+
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+	bCampo  := {|nCPO| Field(nCPO)}
+	dbSelectArea("TCH")
+	dbSetOrder(1)
+	FOR nI := 1 TO FCount()
+		M->&(EVAL(bCampo,nI)) := &(EVAL(bCampo,nI))
+		IF     ValType(M->&(EVAL(bCampo,nI))) == "C"
+				M->&(EVAL(bCampo,nI)) := SPACE(LEN(M->&(EVAL(bCampo,nI))))
+		ELSEIF ValType(M->&(EVAL(bCampo,nI))) == "N"
+				M->&(EVAL(bCampo,nI)) := 0
+		ELSEIF ValType(M->&(EVAL(bCampo,nI))) == "D"
+				M->&(EVAL(bCampo,nI)) := cTod("  /  /  ")
+		ELSEIF ValType(M->&(EVAL(bCampo,nI))) == "L"
+				M->&(EVAL(bCampo,nI)) := .F.
+		ELSEIF ValType(M->&(EVAL(bCampo,nI))) == "M"
+				M->&(EVAL(bCampo,nI)) := SPACE(50)
+		ENDIF
+	Next nI
+
+	//aVarNao := {'TCH_DTCOLE','TCH_HRCOLE','TCH_CODCRI','TCH_DESCRI','TCH_QUANTI','TCH_UNIMED','TCH_FORNEC','TCH_FONTE','TCH_GRUPO','TCH_STATUS'}
+	//aChoice  := NGCAMPNSX3("TCH",aVarNao)
+	aChoice := {'TCH_ANALIS','TCH_MONIT','NOUSER'}
+
+	DbSelectArea("TCH")
+	//Verifica se é nova analise ou alteração
+	If Empty(cAnalise)
+		M->TCH_ANALIS := GetSxeNum('TCH','TCH_ANALIS')
+	Else
+		M->TCH_ANALIS := cAnalise
+	Endif
+	M->TCH_MONIT := cMonitoramento
+
+	cMonitSXB := M->TCH_MONIT
+
+	Define MsDialog oDlg Title STR0012 From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel //"Apontamento das Medições Realizadas"
+
+	//Panel criado para correta disposicao da tela
+		oPnlPai := TPanel():New( , , , oDlg , , , , , , , , .F. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oEnchoice:= Msmget():New("TCH", 1, 3,,,,aChoice,{0,0,50,315},,3,,,,oPnlPai)
+				oEnchoice:oBox:Align := CONTROL_ALIGN_TOP
+
+			/*If NGCADICBASE("TCE_CODLAB","A","TCE",.F.)
+				//Cria o Botão para Inserção de Nova Linha
+				oPnlBtn := TPanel():New(0,0,,oDlg,,,,,,,15,.F.,.F.)
+				oPnlBtn:Align := CONTROL_ALIGN_TOP
+				TButton():New( 2 , 5 , "Inserir" , oPnlBtn , { | | fInsertLine() } , 49 , 12 , , , , .T. , , , , , , )
+			EndIf */
+
+			oGet := MSGetDados():New(aPosObj[2,1]+9,aPosObj[2,2],aPosObj[2,3],aPosObj[2,4],4,"SGA400LIOK()","SGA400LIOK(.T.)","",.T.,aAlterCols,,,Len(aCols),,,,,oPnlPai)
+				oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+			If Len(asMenu) > 0
+				NGPOPUP(asMenu,@oMenu)
+				oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+				oEnchoice:oBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg)}
+			Endif
+			If NGCADICBASE("TCE_CODLAB","A","TCE",.F.)
+				aAdd(aButton,{"FILTRO1" ,{||FiltraBrow()},STR0036,STR0037}) //"Filtra os dados"###"Filtro"
+				aAdd(aButton,{"FILTRO" ,{||LimpaFil()},STR0043,STR0044}) //"Limpar Filtro"###"Limpar Filt."
+				aAdd(aButton,{"BMPINCLUIR" ,{||fInsertLine()},STR0049,STR0050}) //"Limpar Filtro"###"Limpar Filt." //"Inserir Resultado"###"Inserir"
+			EndIf
+
+	Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{ || (nOpca:=1, If(SGA400LIOK(.T.),oDlg:End(),Nil)) },{||nOpca:=0,oDlg:End()},,aButton)
+
+	If nOpca == 1
+		//Grava os registros com quantidade informada
+		For nI := 1 to Len(aCols)
+			lFornec := IIF(!Empty(MV_PAR07),MV_PAR07,aCols[nI][nTCHFORNEC])
+			If NGCADICBASE("TCE_CODLAB","A","TCE",.F.)
+				lForneChav := lFornec
+			Else
+				lForneChav := ''
+			EndIf
+			If aCols[nI][nTCHQUANTI] != 0 .and. !aCols[nI][Len(aCols[nI])]
+				If Empty(cAnalise)
+					ConfirmSX8()
+				Endif
+				dbSelectArea("TCH")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TCH")+M->TCH_ANALIS+DTOS(aCols[nI][nTCHDTCOLE])+aCols[nI][nTCHHRCOLE]+aCols[nI][nTCHCODCRI]+lForneChav)
+					RecLock("TCH",.f.)
+				Else
+					RecLock("TCH",.t.)
+				Endif
+				TCH->TCH_FILIAL := xFilial("TCH")
+				TCH->TCH_ANALIS := M->TCH_ANALIS
+				TCH->TCH_MONIT  := M->TCH_MONIT
+				TCH->TCH_DTCOLE := aCols[nI][nTCHDTCOLE]
+				TCH->TCH_HRCOLE := aCols[nI][nTCHHRCOLE]
+				TCH->TCH_CODCRI := aCols[nI][nTCHCODCRI]
+				TCH->TCH_QUANTI := aCols[nI][nTCHQUANTI]
+				If lCodPla
+					TCH->TCH_CODPLA := aCols[nI][nTCHCODPLA]
+				EndIf
+				TCH->TCH_FORNEC := lFornec
+				TCH->TCH_FONTE  := MV_PAR06
+				TCH->TCH_GRUPO  := MV_PAR05
+				TCH->TCH_STATUS := "1"
+				For nInd := 1 To Len( aUsrFlds )
+					If ( nPosFld := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == aUsrFlds[ nInd ]}) ) > 0
+						TCH->&( aUsrFlds[ nInd ] ) := aCols[ nI , nPosFld ]
+					Endif
+				Next nInd
+				MsUnlock("TCH")
+			Else
+				dbSelectArea("TCH")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TCH")+M->TCH_ANALIS+DTOS(aCols[nI][nTCHDTCOLE])+aCols[nI][nTCHHRCOLE]+aCols[nI][nTCHCODCRI]+lForneChav)
+					RecLock("TCH",.f.)
+					dbDelete()
+					MsUnlock("TCH")
+				Endif
+			Endif
+		Next
+		dbSelectArea("TCD")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TCD")+cMonitoramento)
+			RecLock("TCD",.F.)
+			TCD->TCD_STATUS := "2"
+			MsUnlock("TCD")
+		Endif
+	Else
+		If Empty(cAnalise)
+			RollBackSX8()
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transacao a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Rafael Diogo Richter
+@since 13/03/2008
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+Local aRotina :=  { { STR0013,"AxPesqui",0,1},; 	//"Pesquisar"
+		            { STR0014,"NGCAD01" ,0,2},; 	//"Visualizar"
+		            { STR0015,"NGCAD01" ,0,3},; 	//"Incluir"
+		            { STR0016,"NGCAD01" ,0,4},; 	//"Alterar"
+		            { STR0017,"NGCAD01" ,0,5,3}} 	//"Excluir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400ARR
+Carrega Tabela temporaria com os registros das condicoes informadas no periodo
+
+@return aRegistros, Array - Registros das condicoes informadas no periodo
+
+@author Roger Rodrigues
+@since 11/11/2009
+/*/
+//---------------------------------------------------------------------
+Static Function SGA400ARR()
+	Local nI
+	Local aRegistros := {}
+
+	#IFDEF TOP
+		dbSelectArea("TCH")
+		cAliasQry := GetNextAlias()
+
+		cQuery := "SELECT TCH.TCH_ANALIS, TCH.TCH_MONIT, TCH.TCH_DTCOLE, TCH.TCH_HRCOLE, TCH.TCH_CODCRI, "
+		cQuery += "TCH.TCH_QUANTI, TCH.TCH_FONTE, TCH.TCH_GRUPO, TCH.TCH_FORNEC "
+		IF lCodPla
+			cQuery += ",TCH.TCH_CODPLA "
+		EndIf
+		cQuery += "FROM " + RetSqlName("TCH") + " TCH "
+		cQuery += "WHERE TCH.TCH_FILIAL = '" + xFilial("TCH") + "' AND TCH.TCH_FONTE = '" + MV_PAR06 + "' AND "
+		cQuery += "TCH.TCH_GRUPO = '" + MV_PAR05 + "' AND TCH.TCH_CODCRI >= '" + MV_PAR03 + "' AND "
+		cQuery += "TCH.TCH_CODCRI <= '" + MV_PAR04 + "' AND TCH.TCH_DTCOLE >= '" + DTOS(MV_PAR01) + "' AND "
+		cQuery += "TCH.TCH_DTCOLE <= '" + DTOS(MV_PAR02) + "' AND TCH.D_E_L_E_T_ <> '*' AND "
+		If !Empty(MV_PAR07)
+			cQuery += "TCH.TCH_FORNEC = '" + MV_PAR07 + "' AND "
+		Else
+			For nI := 1 to Len(aCriterios)
+				If nI == 1
+					cQuery += "("
+				EndIf
+				cQuery += "((TCH.TCH_CODCRI = '"+aCriterios[nI][1]+"') AND "
+				cQuery += " (TCH.TCH_FORNEC = '"+aCriterios[nI][3]+"'))"
+				If nI <> Len(aCriterios)
+					cQuery += " OR "
+				Else
+					cQuery += ") AND "
+				EndIf
+			Next
+		EndIf
+		cQuery += "TCH.TCH_STATUS = '1' AND TCH.TCH_MONIT = '" + cMonitoramento + "'"
+		cQuery := ChangeQuery(cQuery)
+
+		MPSysOpenQuery( cQuery , cAliasQry )
+
+		dbSelectArea(cAliasQry)
+		dbGoTop()
+		While !eof()
+			lAdiciona := .t.
+			//Adiciona registros já gravados no período
+			/*aADD(aRegistros, {(cAliasQry)->TCH_ANALIS , (cAliasQry)->TCH_MONIT, (cAliasQry)->TCH_DTCOLE, (cAliasQry)->TCH_HRCOLE, (cAliasQry)->TCH_CODCRI,;
+								(cAliasQry)->TCH_QUANTI, (cAliasQry)->TCH_FONTE, (cAliasQry)->TCH_GRUPO , If( lCodPla , (cAliasQry)->TCH_CODPLA , Nil ) })*/
+			//Adiciona registros já gravados no período
+			If Empty((cAliasQry)->TCH_FORNEC)
+				lOrigem := STR0038 //"Próprio"
+				lCodFor := ''
+				lDesFor := ''
+				If !Empty(MV_PAR07)
+					If MV_PAR07 <> (cAliasQry)->TCH_FORNEC
+						lAdiciona := .f.
+					EndIf
+				Else
+					nPOSCRITER := aSCAN(aCriterios,{|x| x[1] == (cAliasQry)->TCH_CODCRI})
+					If (nPOSCRITER > 0 .AND. !Empty(aCriterios[nPOSCRITER][3]) .AND. (aCriterios[nPOSCRITER][3] <> (cAliasQry)->TCH_FORNEC))
+						lAdiciona := .f.
+					EndIf
+				EndIf
+			Else
+				lOrigem := STR0030 //"Laboratório"
+				lCodFor := (cAliasQry)->TCH_FORNEC
+				lDesFor := NGSEEK("SA2",(cAliasQry)->TCH_FORNEC,1,"A2_NOME")
+			EndIf
+			If lAdiciona
+				If NGCADICBASE("TCE_CODLAB","A","TCE",.F.)
+					aADD(aRegistros, {(cAliasQry)->TCH_ANALIS , (cAliasQry)->TCH_MONIT, (cAliasQry)->TCH_DTCOLE, (cAliasQry)->TCH_HRCOLE, (cAliasQry)->TCH_CODCRI,;
+										(cAliasQry)->TCH_QUANTI, (cAliasQry)->TCH_FONTE, (cAliasQry)->TCH_GRUPO, lOrigem, lCodFor, lDesFor  , If( lCodPla , (cAliasQry)->TCH_CODPLA , Nil ) })
+				Else
+					aADD(aRegistros, {(cAliasQry)->TCH_ANALIS , (cAliasQry)->TCH_MONIT, (cAliasQry)->TCH_DTCOLE, (cAliasQry)->TCH_HRCOLE, (cAliasQry)->TCH_CODCRI,;
+										(cAliasQry)->TCH_QUANTI, (cAliasQry)->TCH_FONTE, (cAliasQry)->TCH_GRUPO  , If( lCodPla , (cAliasQry)->TCH_CODPLA , Nil ) })
+				EndIf
+			EndIf
+			cAnalise := (cAliasQry)->TCH_ANALIS
+			dbSelectArea(cAliasQry)
+			dbSkip()
+		End
+
+		dbSelectArea(cAliasQry)
+		dbCloseArea()
+	#ELSE
+		dbSelectArea("TCH")
+		dbSetOrder(1)
+		dbGoTop()
+		While !eof() .and. TCH->TCH_FILIAL == xFilial("TCH")
+			If TCH->TCH_GRUPO <> MV_PAR05 .OR. TCH->TCH_FONTE <> MV_PAR06 .OR. (TCH->TCH_DTCOLE < MV_PAR01 .OR. TCH->TCH_DTCOLE > MV_PAR02) .OR. ;
+				(TCH->TCH_CODCRI < MV_PAR03 .OR. TCH->TCH_CODCRI > MV_PAR04)  .OR. TCH->TCH_FORNEC <> MV_PAR07 .OR. TCH->TCH_STATUS <> '1' .OR. ;
+				TCH->TCH_MONIT <> cMonitoramento
+				dbSelectArea("TCH")
+				dbSkip()
+				Loop
+			Endif
+			If Empty(TCH->TCH_FORNEC)
+				lOrigem := STR0038 //"Próprio"
+				lCodFor := ''
+				lDesFor := ''
+			Else
+				lOrigem := STR0030 //"Laboratório"
+				lCodFor := TCH->TCH_FORNEC
+				lDesFor := NGSEEK("SA2",TCH->TCH_FORNEC,1,"A2_NOME")
+			EndIf
+			//Adiciona registros já gravados no período
+			aADD(aRegistros, {TCH->TCH_ANALIS , TCH->TCH_MONIT, TCH->TCH_DTCOLE, TCH->TCH_HRCOLE, TCH->TCH_CODCRI,;
+									TCH->TCH_QUANTI, TCH->TCH_FONTE, TCH->TCH_GRUPO, lOrigem, lCodFor, lDesFor , If( lCodPla , TCH->TCH_CODPLA , Nil ) })
+			cAnalise := TCH->TCH_ANALIS
+			dbSelectArea("TCH")
+			dbSkip()
+		End
+	#ENDIF
+
+	If Empty(cAnalise)//Se não encontrou registros no período busca na base
+		dbSelectArea("TCH")
+		dbSetOrder(3)
+		dbSeek(xFilial("TCH")+cMonitoramento+MV_PAR05+MV_PAR06+MV_PAR07)
+		While !eof() .and. xFilial("TCH")+cMonitoramento+MV_PAR05+MV_PAR06+MV_PAR07 == TCH->TCH_FILIAL+TCH->TCH_MONIT+TCH->TCH_GRUPO+TCH->TCH_FONTE+TCH->TCH_FORNEC
+			cAnalise := TCH->TCH_ANALIS
+			Exit
+		End
+	Endif
+	//Ordena array por CRITERIO+ANALISE+DT COLETA+HORA COLETA
+	aRegistros := aSort( aRegistros,,,{|x,y| x[5]+x[1]+x[3]+x[4] < y[5]+y[1]+y[3]+y[4]} )
+
+Return aRegistros
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG400MONIT
+Retorna último monitoramento ativo com fonte e grupo iguais aos informados.
+
+@return cMonit, Caracter - Codigo do ultimo monitoramente ativo
+
+@author Roger Rodrigues
+@since 23/11/2009
+/*/
+//---------------------------------------------------------------------
+Static Function SG400MONIT()
+
+	Local cMonit := ""
+
+	//Procura último monitoramento ativo com as caracteristicas do parametro
+	dbSelectArea("TCD")
+	dbSetOrder(2)
+	dbSeek(xFilial("TCD")+mv_par05+mv_par06)
+	While !eof() .and. xFilial("TCD")+mv_par05+mv_par06 == TCD->TCD_FILIAL+TCD->TCD_GRUPO+TCD->TCD_FONTE
+		If TCD->TCD_STATUS $ "1/2"
+			cMonit := TCD->TCD_CODIGO
+		Endif
+		dbSelectArea("TCD")
+		dbSkip()
+	End
+
+Return cMonit
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400Add
+Adiciona itens no aCols conforme posicoes do aHeader
+
+@param aInfo, Array - Vetor contendo informações a serem adicionadas ao aCols
+
+@author Felipe Nathan Welter
+@since 23/11/2009
+/*/
+//---------------------------------------------------------------------
+Static Function SGA400Add(aInfo)
+
+	Local nInd, nPosFld
+	Private lCodPla	 := NGCADICBASE( "TCH_CODPLA" , "A" , "TCH" , .F. )
+
+	//Adiciona item vazio no aCols
+	aAdd(aCols,Array(Len(aHeader)+2))
+
+	//ajusta posicoes do aCols
+	If nTCHNOMLAB > 0
+		aCols[Len(aCols),nTCHORIGEM] := aInfo[1]
+		aCols[Len(aCols),nTCHFORNEC] := aInfo[2]
+		aCols[Len(aCols),nTCHNOMLAB] := aInfo[3]
+	EndIf
+	aCols[Len(aCols),nTCHDTCOLE] := aInfo[4]
+	aCols[Len(aCols),nTCHHRCOLE] := aInfo[5]
+	aCols[Len(aCols),nTCHCODCRI] := aInfo[6]
+	aCols[Len(aCols),nTCHDESCRI] := aInfo[7]
+	aCols[Len(aCols),nTCHQUANTI] := aInfo[8]
+	aCols[Len(aCols),nTCHUNIMED] := aInfo[9]
+	If lCodPla
+		aCols[Len(aCols),nTCHCODPLA] := aInfo[10]
+		aCols[Len(aCols),nTCHDESPLA] := NGSeek( "TAA" , aInfo[10] , 1 , "TAA_NOME" )
+	EndIf
+	aCols[Len(aCols),nUsado] := aInfo[12]
+	aCols[Len(aCols),nUsado+1] := aInfo[13]
+
+	If Len( aUsrFlds ) > 0
+		dbSelectArea("TCH")
+		dbSetOrder( 1 )
+		If !Empty( cAnalise ) .And. dbSeek(xFilial("TCH")+cAnalise+DTOS(aCols[Len(aCols)][nTCHDTCOLE])+aCols[Len(aCols)][nTCHHRCOLE]+aCols[Len(aCols)][nTCHCODCRI]+aCols[Len(aCols)][nTCHFORNEC])
+			For nInd := 1 To Len( aUsrFlds )
+				If ( nPosFld := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == aUsrFlds[ nInd ]}) ) > 0
+					aCols[ Len(aCols) , nPosFld ] := TCH->&( aUsrFlds[ nInd ] )
+				Endif
+			Next nInd
+		Else
+			For nInd := 1 To Len( aUsrFlds )
+				If ( nPosFld := aSCAN(aHeader,{|x| TRIM(UPPER(x[2])) == aUsrFlds[ nInd ]}) ) > 0
+					If ExistIni(aUsrFlds[ nInd ])
+						aCols[ Len(aCols) , nPosFld ] := InitPad( Posicione( "SX3" , 2 , aUsrFlds[ nInd ] , "X3_RELACAO" ) )
+					Else
+						If aHeader[ nPosFld , 8 ] == "D"
+							aCols[ Len(aCols) , nPosFld ] := SToD( Space( aHeader[ nPosFld , 4 ] ) )
+						ElseIf aHeader[ nPosFld , 8 ] == "N"
+							aCols[ Len(aCols) , nPosFld ] := 0
+						ElseIf aHeader[ nPosFld , 8 ] == "L"
+							aCols[ Len(aCols) , nPosFld ] := .T.
+						ElseIf aHeader[ nPosFld , 8 ] == "M"
+							aCols[ Len(aCols) , nPosFld ] := Space( 50 )
+						Else
+							aCols[ Len(aCols) , nPosFld ] := Space( aHeader[ nPosFld , 4 ] )
+						EndIf
+					EndIf
+				Endif
+			Next nInd
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400VLD
+Valid do combobox "Origem", da tela de parametros
+
+@param cTipoLab, Caracter - Valor do campo Origem (1-Laboratorio; 2-Proprio)
+@param nNumCampo, Numerico - Numero para identificar o campo que receberá o valor
+@param cCriterio, Caracter - Codigo do criterio
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Function SGA400VLD(cTipoLab,nNumCampo,cCriterio)
+
+	If cTipoLab == '1'
+		cMonitoramento := SG400MONIT()//Função que retorna último monitoramento ativo de acordo com os parametros
+		dbSelectArea("TCE")
+		dbSetOrder(01)
+		If dbSeek(xFilial("TCE")+cMonitoramento+cCriterio)
+			&('cGet'+AllTrim(Str(nNumCampo))) := TCE->TCE_CODLAB
+		EndIf
+	Else
+		&('cGet'+AllTrim(Str(nNumCampo))) := Space(Len(SA2->A2_COD))
+	EndIf
+
+	nPOSCRITER := aSCAN(aCriterios,{|x| TRIM(UPPER(x[1])) == cCriterio})
+	aCriterios[nPOSCRITER][2] := cTipoLab
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400VLD
+Retorna a Origem do Criterio
+
+@param cCriterio, Caracter - Codigo do criterio
+
+@return STR0030, String - Uma string contendo a palavra "Laboratório"
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function RetOrigem(cCriterio)
+
+	nPOSCRITER := aSCAN(aCriterios,{|x| TRIM(UPPER(x[1])) == cCriterio})
+
+	If Empty(MV_PAR07)
+		Return IIF(aCriterios[nPOSCRITER][2]=='1',STR0030,STR0038)//"Laboratório"###"Próprio"
+	End
+
+Return STR0030 //"Laboratório"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400VLD
+Retorna o Laboratorio
+
+@param cCriterio, Caracter - Codigo do criterio
+@param nPar, Numerico - Define se retornara a Razao Social da tabela SA2 ou o valor do MV_PAR07
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function RetLaborat(cCriterio,nPar)
+
+	If Empty(MV_PAR07)
+		nPOSCRITER := aSCAN(aCriterios,{|x| TRIM(UPPER(x[1])) == cCriterio})
+		If nPOSCRITER > 0 .AND. aCriterios[nPOSCRITER][2] == '1'
+			If nPar == 1
+				Return aCriterios[nPOSCRITER][3]
+			Else
+				Return NGSEEK("SA2",aCriterios[nPOSCRITER][3],1,"A2_NOME")
+			EndIf
+		Else
+			Return ''
+		EndIf
+	Else
+		If nPar == 1
+			Return MV_PAR07
+		Else
+			Return NGSEEK("SA2",MV_PAR07,1,"A2_NOME")
+		EndIf
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAVLDPAR
+Valida os parametros digitados
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function SGAVLDPAR()
+
+	Local nI
+
+	For nI := 1 To Len(aCriterios)
+		If &('cCbx'+AllTrim(Str(nI)))	 == '1'
+		If Empty(&('cGet'+AllTrim(Str(nI))))
+			MsgStop(STR0039,STR0020) //"Os critérios com origem igual a 'Laboratório' deverão ser preenchidos com seus laboratórios!"###"Atenção"
+				Return .f.
+			Else
+				aCriterios[nI][3] := &('cGet'+AllTrim(Str(nI)))
+			EndIf
+		EndIf
+	Next
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} FiltraBrow
+Criação da tela de filtro
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function FiltraBrow()
+	Local nI, nOpca
+	Local oDlgSga400, oPnlCabec
+	Local aColsAnt := aClone(aCols)
+	Local cFoco := ''
+
+	nOpca := 0
+
+	Define MsDialog oDlgSga400 From 200,120 To 320,500 Title OemToAnsi(STR0037) Pixel //"Filtro"
+		oPnlCabec := TPanel():New(0,0,,oDlgSga400,,,,CLR_BLACK,CLR_WHITE,oDlgSga400:nHeight,oDlgSga400:nWidth,.F.,.F.)
+		oPnlCabec:Align := CONTROL_ALIGN_TOP
+
+		TSay():New(10,3,{|| STR0040},oPnlCabec,,oDlgSga400:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"Origem:"
+		TComboBox():New(08,48,{|u| If(PCount() > 0, cOrigem := u,cOrigem)},{ STR0031 , STR0045 },55,08,oPnlCabec,,,{|| VldOrigem()},,,.T.,,,,,,,,,) //"1=Laboratório"###"2=Proprio"
+
+		TSay():New(22,3,{|| STR0041},oPnlCabec,,oDlgSga400:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"De Laboratório:"
+		TGet():New(20,48,{|u| If(PCount() > 0, cDeLab := u,cDeLab)},oPnlCabec,nSizeGet,8,'@!',{|| If(Empty(cDeLab),.t.,ExistCpo('SA2',cDeLab))},,,,,,.T.,,,{|| cOrigem == '1' },.F.,.F.,,.F.,.F.,'SA2',,,,,.T.)
+
+		TSay():New(34,3,{|| STR0042},oPnlCabec,,oDlgSga400:oFont,,,,.T.,CLR_BLACK,CLR_WHITE,200,20) //"Até: Laboratório:"
+		TGet():New(32,48,{|u| If(PCount() > 0, cAteLab := u,cAteLab)},oPnlCabec,nSizeGet,8,'@!',{|| If(AteCodigo('SA2',cDeLab,cAteLab,6),.t.,.f.)},,,,,,.T.,,,{|| cOrigem == '1' },.F.,.F.,,.F.,.F.,'SA2',,,,,.T.)
+		TGet():New(100,48,{|u| If(PCount() > 0, cFoco := u,cFoco)},oPnlCabec,nSizeGet,8,'@!',{|| },,,,,,.T.,,,{|| .t. },.F.,.F.,,.F.,.F.,'SA2',,,,,.T.)
+
+	Activate MsDialog oDlgSga400 On Init EnchoiceBar(oDlgSga400,{ || IF(VldFiltro(),(nOpca := 1,oDlgSga400:End()),nOpca := 0)},{||oDlgSga400:End()}) CENTERED
+
+	If nOpca == 0
+		aCols := aClone(aColsAnt)
+	EndIf
+	oGet:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} VldOrigem
+Valid do campo "Origem" na tela de Filtro (FiltraBrow())
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function VldOrigem()
+
+	If cOrigem == '2'
+		cDeLab  := Space(Len(SA2->A2_COD))
+		cAteLab := Space(Len(SA2->A2_COD))
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} VldFiltro
+Bloco de codigo executada na confirmacao da tela de Filtro (FiltraBrow())
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function VldFiltro()
+	Local nI
+
+	aCols := {}
+	For nI := 1 To Len(aColsOld)
+		If cOrigem = '2'
+			If aColsOld[nI][nTCHORIGEM] == STR0038 .Or. aColsOld[nI][nTCHORIGEM] == STR0048 //"Próprio"//Verificado strings com e sem acentuacao
+				aAdd(aCols,aColsOld[nI])
+			EndIf
+		Else
+			If aColsOld[nI][nTCHFORNEC] >= cDeLab .AND. aColsOld[nI][nTCHFORNEC] <= cAteLab
+				aAdd(aCols,aColsOld[nI])
+			EndIf
+		EndIf
+	Next
+
+	If Len(aCols) == 0
+		MsgInfo(STR0018) //"Não existem critérios de avaliação a serem analisados."
+		Return .F.
+	EndIf
+
+	n := 1
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400QTD
+Valid do campo Quantidade na tela de Apontamento das Medicoes Realizadas (SG400Screen())
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Function SGA400QTD()
+	Local nPos
+	nPos := aScan(aColsOld ,{|x| Trim(Upper(x[nTCHCODCRI]+DTOS(x[nTCHDTCOLE])+x[nTCHHRCOLE])) == Trim(Upper(aCols[n][nTCHCODCRI]+DTOS(aCols[n][nTCHDTCOLE])+aCols[n][nTCHHRCOLE])) })
+
+	aColsOld[nPos][nTCHQUANTI] := M->TCH_QUANTI
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA400QTD
+Limpa a tela de Filtro (FiltraBrow())
+
+@author Marcos Wagner Junior
+@since 11/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function LimpaFil()
+
+	aCols := aColsOld
+	oGet:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGA400LIOK
+LinhaOk
+
+@return Nil
+
+@sample
+SGA400LIOK()
+
+@author Jackson Machado
+@since 18/01/2013
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Function SGA400LIOK( lFim )
+	Local f
+	Local aColsOk := {}, aHeadOk := {}
+	Local nMax := 0
+	Local nMin := 0
+	Local nPosDat := 1, nPosHor := 2, nPosCri := 3, nPosPla := 7, nPosQtd := 5, nAt := 1
+
+	Default lFim := .F.
+
+	aColsOk := aClone(aCols)
+	aHeadOk := aClone(aHeader)
+	nAt 	:= n
+	nPosDat := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TCH_DTCOLE"})
+	nPosHor := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TCH_HRCOLE"})
+	nPosCri := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TCH_CODCRI"})
+	nPosQtd := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TCH_QUANTI"})
+	nPosPla := aScan( aHeadOk,{|x| Trim(Upper(x[2])) == "TCH_CODPLA"})
+
+	//Percorre aCols
+	For f:= 1 to Len(aColsOk)
+		If !aColsOk[f][Len(aColsOk[f])]
+			nMax := NGSEEK( "TCE" , M->TCH_MONIT + aColsOk[f][nPosCri] , 1 , "TCE_LIMMAX" )
+			nMin := NGSEEK( "TCE" , M->TCH_MONIT + aColsOk[f][nPosCri] , 1 , "TCE_LIMMIN" )
+			If lFim .or. f == nAt
+				//VerIfica se os campos obrigatórios estão preenchidos
+				If Empty(aColsOk[f][nPosDat])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeadOk[nPosDat][1],3,0)
+					Return .F.
+				ElseIf Empty(aColsOk[f][nPosHor])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeadOk[nPosHor][1],3,0)
+					Return .F.
+				ElseIf Empty(aColsOk[f][nPosCri])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeadOk[nPosCri][1],3,0)
+					Return .F.
+				ElseIf nPosPla > 0 .And. Empty(aColsOk[f][nPosPla]) .And. ;
+						( nMax < aColsOk[f][nPosQtd] .Or. nMin > aColsOk[f][nPosQtd] ) .And. aColsOk[f][nPosQtd] <> 0
+					ShowHelpDlg( STR0019 , { STR0046 } , 2 ,;//"O critério avaliado necessita de um plano de ação pois ultrapassou os limites estipulados." //"ATENÇÃO"
+								 { STR0047 } , 2 )//"Informe um plano de ação."
+					Return .F.
+				Endif
+			Endif
+			//Verifica se é somente LinhaOk
+			If f <> nAt .and. !aColsOk[nAt][Len(aColsOk[nAt])]
+				If aColsOk[f][nPosDat] == aColsOk[nAt][nPosDat] .and. aColsOk[f][nPosHor] == aColsOk[nAt][nPosHor] .And. ;
+						aColsOk[f][nPosCri] == aColsOk[nAt][nPosCri]
+					Help(" ",1,"JAEXISTINF",,aHeadOk[nPosDat][1] + "+" + aHeadOk[nPosHor][1] + "+" + aHeadOk[nPosCri][1])
+					Return .F.
+				Endif
+			Endif
+		Endif
+	Next f
+
+	PutFileInEof("TCH")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGA400SXB
+Funcao de Filtro do TCCMON
+
+@return Nil
+
+@sample
+SGA400SXB()
+
+@author Jackson Machado
+@since 18/01/2013
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Function SGA400SXB()
+
+	Local lRet := .T.
+	Local aArea := GetArea()
+
+	lRet := NGIFDBSEEK( "TCE" , cMonitSXB + TCC->TCC_CODIGO , 1 )
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SG400VaSX1
+Funcao de Validação do SX1 de cPerg SG400
+
+@return Nil
+
+@sample
+SG400VaSX1("01")
+
+@author Guilherme Benkendorf
+@since 08/10/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Function SG400VaSX1(cOrdem)
+	Local lRet := .T.
+
+	Do Case
+		Case cOrdem == "02"
+			lRet := VALDATA( Mv_Par01 , Mv_Par02 , 'DATAINVALI' )
+
+	End Case
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fInsertLine
+Insere uma linha para medições emergentes
+
+@return Nil
+
+@sample
+fInsertLine()
+
+@author Jackson Machado
+@since 05/12/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Static Function fInsertLine()
+
+    Local cInex
+	Local oDlgInsert
+	Local lOk			:= .F.
+	Local nTamFornec	:= TAMSX3( "A2_COD" )[ 1 ]
+	Local nTamCrite		:= TAMSX3( "TCC_CODIGO" )[ 1 ]
+	Local nLargDlg		:= 440 +( nTamFornec * 11 )
+	Local cValGet		:= Space( nTamFornec )
+	Local cValCri		:= Space( nTamCrite )
+	Local cNomCri		:= Space( 40 )
+	Local cCbxVal		:= Space( 1 )
+	Local cHora			:= Time()
+	Local dData			:= dDataBase
+	Local cFornec		:= ""
+	Local cNomFor		:= ""
+	Private cCriBkp		:= Space( nTamCrite )
+
+	If !Empty( MV_PAR07 )
+		cCbxVal := "1"
+		cValGet := MV_PAR07
+	EndIf
+
+	Define Dialog oDlgInsert From 5,5 To 150,nLargDlg TITLE STR0060 Of oMainWnd Pixel //"Novo resultado"
+
+		oDlgInsert:lEscClose := .F.
+
+		//Panel criado para correta disposicao da tela
+		oPnlPai := TPanel():New( , , , oDlgInsert , , , , , , , , .F. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//Cria os valores descritivos
+			TSay():New( 3 , 007 , { | | STR0028 } , oPnlPai , , , , , , .T. , CLR_HBLUE , , 200 , 20 ) //"Critério"
+			TSay():New( 3 , 145 , { | | STR0029 } , oPnlPai , , , , , , .T. , CLR_HBLUE , , 200 , 20 ) //"Origem"
+			TSay():New( 3 , 200 , { | | STR0030 } , oPnlPai , , , , , , .T. , CLR_HBLUE , , 200 , 20 ) //"Laboratório"
+
+			//Cria os campos para seleção
+			TGet():New( 25 , 007 , { | u | If( PCount() > 0 , cValCri := u , cValCri ) },;
+						oPnlPai , nTamCrite * 6 , 8 , PesqPict( "TCC" , "TCC_CODIGO" ) , ;
+						{ | | fVldInsert( .F. , 1 , @cValCri , @cCbxVal , @cValGet ) .And. fPreDescri( cValCri , @cNomCri ) },;
+						, , , , , .T. , "" , , , .F. , .F. , , .F. , .F. , "TCC" , , , , , .T. )
+
+			TGet():New( 25 , 045 , { | u | If( PCount() > 0 , cNomCri := u , cNomCri ) },;
+						oPnlPai , 80 , 8 , PesqPict( "TCC" , "TCC_DESCRI" ) , , ;
+						, , , , , .T. , "" , , { | | .F. }, .F. , .F. , , .F. , .F. , , , , , , .T. )
+
+			TComboBox():New( 25 , 145 , {|u| If( PCount() > 0 , cCbxVal := u , cCbxVal ) } , { STR0031 , STR0045 } , ;//"1=Laboratório"###"2=Proprio"
+								45 , 8 , oPnlPai , , { | | fChangeCombo( cValCri , cCbxVal , @cValGet ) } , { | | fVldInsert( .F. , 2 , @cValCri , @cCbxVal , @cValGet ) } , ;
+								, , .T. , , , , { | | !Empty( cValCri ) .And. Empty( MV_PAR07 ) } , , , , , )
+
+			TGet():New( 25 , 200 , {|u| If( PCount() > 0 , cValGet := u , cValGet ) },;
+						oPnlPai , nTamFornec * 6 , 8 , PesqPict( "SA2" , "A2_COD" ) , ;
+						{ | | fVldInsert( .F. , 3 , @cValCri , @cCbxVal , @cValGet ) },;
+						, , , , , .T. , "" , , { | | cCbxVal == "1" .And. !Empty( cValCri ) .And. Empty( MV_PAR07 ) } , .F. , .F. , , .F. , .F. , "SA2" , , , , , .T. )
+
+			//P.O.G. - Criado para retirar o foco de campo
+			TGet():New( -1 , -1 , { | u | If( PCount() > 0 , cInex := u , cInex ) },;
+						oPnlPai , 0 , 0 , "@!" , ,;
+						, , , , , .T. , "" , , , .F. , .F. , , .F. , .F. , , , , , , .T. )
+
+	Activate Dialog oDlgInsert On Init EnchoiceBar( oDlgInsert , ;
+													{ | | If( fVldInsert( .T. , 0 , cValCri , cCbxVal , cValGet ),( lOk := .T. , oDlgInsert:End() ) , lOk := .F. ) } ,;
+													{ | | oDlgInsert:End() } ) Centered
+
+	If lOk
+		cHora := Time()
+		dData := dDataBase
+		If !Empty( MV_PAR07 )
+			cFornec := MV_PAR07
+			cNomFor := NGSEEK( "SA2" , MV_PAR07 , 1 , "A2_NOME" )
+		Else
+			If cCbxVal == "1"
+				cFornec := cValGet
+				cNomFor := NGSEEK( "SA2" , cValGet , 1 , "A2_NOME" )
+			EndIf
+		EndIf
+		dbSelectArea( "TCC" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TCC" ) + cValCri )
+		SGA400Add( { If( cCbxVal == "1" , STR0030 , STR0038 ) , cFornec , cNomFor , ;
+											dData , cHora , cValCri , TCC->TCC_DESCRI , 0 , TCC->TCC_UNIMED , ;
+											If( lCodPla , Space( Len( TCH->TCH_CODPLA ) ) , "" ) , If( lCodPla , "" , Nil ) , DTOS( dData ) + cValCri + cHora , .F. } )
+
+		aAdd( aColsOld , aClone( aCols[ Len( aCols ) ] ) )
+
+		oGet:oBrowse:Refresh()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fVldInsert
+Valida informações imputadas
+
+@return Lógico - Retorna verdadeiro se valores corretos
+
+@sample
+fVldInsert( .F. , 1 , '000001' , '1' , '00001')
+
+@author Jackson Machado
+@since 05/12/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Static Function fVldInsert( lTudoOK , nVal , cValCri , cCbxVal , cValGet )
+
+	Local lRet := .T.
+
+	If lTudoOk
+		If Empty(cValCri) .Or. Empty(cCbxVal) .Or. ( cCbxVal == "1" .And. Empty(cValGet) )
+			HELP( "" , 1 , "OBRIGAT" )
+			lRet := .F.
+		EndIf
+	Else
+		If nVal == 1
+			If ( lRet := ExistCpo( "TCC" , cValCri ) )
+				lRet := TCE->( dbSeek( xFilial( "TCE" ) + cMonitSXB + cValCri ) )
+				If !lRet
+					ShowHelpDlg( STR0019 , { STR0061 } , 2 , { STR0062 } , 2 ) //"ATENÇÃO"###"Critério não faz parte do monitoramento."###"Informe outro critério."
+				Else
+				 	If cCriBkp <> cValCri .And. Empty( MV_PAR07 )
+						If !Empty( TCE->TCE_CODLAB )
+							cValGet := TCE->TCE_CODLAB
+							cCbxVal := "1"
+						Else
+							cValGet := Space( Len( TCE->TCE_CODLAB ) )
+							cCbxVal := "2"
+						EndIf
+				 	EndIf
+				EndIf
+			EndIf
+		ElseIf nVal == 2
+			If cCbxVal == "2"
+				cValGet := Space( Len( TCE->TCE_CODLAB ) )
+			EndIf
+		ElseIf nVal == 3
+			lRet := If( Empty( cValGet ) , .T. , ExistCpo( "SA2" , cValGet ) )
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fPreDescri
+Gatilha a descrição
+
+@return Lógico - Sempre verdadeiro
+
+@param cCriterio	- Critério a ser localizado
+@param cNome		- Variavel a ser alimentada
+
+@sample fPreDescri( '000001' , '' )
+
+@author Jackson Machado
+@since 05/12/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Static Function fPreDescri( cCriterio , cNome )
+
+	cNome := Posicione( "TCC" , 1 , xFilial( "TCC" ) + cCriterio , "TCC_DESCRI" )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fChangeCombo
+Chamada na troca do combo
+
+@return Lógico - Retorna sempre verdadeiro
+
+@param cValCri	- Valor do Critério a ser considerado
+@param cCombo	- Valor do Combo a ser considerado
+@param cLabor	- Variavel a ser alimentada
+
+@sample fChangeCombo( '000001' , '1' , '' )
+
+@author Jackson Machado
+@since 05/12/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Static Function fChangeCombo( cValCri , cCombo , cLabor )
+
+	If Empty( MV_PAR07 ) .And. cCombo == "1"
+		If TCE->( dbSeek( xFilial( "TCE" ) + cMonitSXB + cValCri ) ) .AND. !Empty( TCE->TCE_CODLAB )
+			cLabor := TCE->TCE_CODLAB
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGA400DTHR
+Atualiza data e hora no array de antigas
+
+@return Lógico - Retorna sempre verdadeiro
+
+@param nCampo	- Campo a ser alterado
+
+@sample SGA400DTHR(1)
+
+@author Jackson Machado
+@since 05/12/13
+@version 1.0
+//---------------------------------------------------------------------
+*/
+Function SGA400DTHR( nCampo )
+
+	Local nPosCampo
+	Local xValor
+
+	If nCampo == 1
+		nPosCampo	:= nTCHDTCOLE
+		xValor		:= M->TCH_DTCOLE
+	Else
+		nPosCampo	:= nTCHHRCOLE
+		xValor		:= M->TCH_HRCOLE
+	EndIf
+
+	nPos := aScan(aColsOld ,{ |x| Trim(Upper(x[nTCHCODCRI]+DTOS(x[nTCHDTCOLE])+x[nTCHHRCOLE])) == Trim(Upper(aCols[n][nTCHCODCRI]+DTOS(aCols[n][nTCHDTCOLE])+aCols[n][nTCHHRCOLE])) })
+
+	aColsOld[ nPos , nPosCampo ] := xValor
+
+Return .T.

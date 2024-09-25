@@ -1,0 +1,652 @@
+#INCLUDE "SGAR180.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR180
+Relatório de Resíduos
+
+
+@author Thiago Henrique dos Santos
+@since 24/01/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+
+Function SGAR180()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oReport
+	Local aArea := GetArea()
+	Private cPERG := "SGR180"
+	Private lok := .T.
+
+	oReport := ReportDef()
+
+	If lOk
+		oReport:PrintDialog()
+	Endif
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+	RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Constrói o objeto instância da Classe TReport
+
+
+@author Thiago Henrique dos Santos
+@since 24/01/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ReportDef()
+	Local oReport
+	Local  oFont
+	LOCAL nTAMDSCDE,nTAMB1
+
+	oReport := TReport():New("SGAR180",OemToAnsi(STR0022),cPERG,{|oReport| ReportPrint(oReport)},STR0023) //"Relatório de Resíduos" ###"O relatório apresentará uma listagem dos resíduos gerados e suas tranferências (destinações) no período."
+
+	If !Pergunte(oReport:uParam)
+		lOk := .F.
+		return oReport
+	Endif
+
+	oReport:SetLandScape(.T.)
+	oReport:setTotalInLine(.F.)
+	oReport:DisableOrientation()
+
+	//oReport:SetBorder(5)
+	/// LCS.07/02/2013.COMPENSA O AUMENTO DO TAMANHO DO CODIGO DO PRODUTO NA DESCRICAO DO TIPO DE DESTINACAO
+	nTCOD := TAMSX3("B1_COD")[1]
+	nTDSC := TAMSX3("TB6_DESCRI")[1]
+	If nTCOD > 15
+		nTDSC := nTDSC-(nTCOD-15)
+	EndIf
+
+	oReport:cFontBody := 'Courier New'
+	oReport:nFontBody := 6
+	oReport:nDevice := 2
+	oReport:nEnvironment := 2
+	oReport:oPage:SetPaperSize(9) // FOLHA A4
+
+	oSec:= TRSection():New(oReport,STR0022,{"TB0","TDI","TBA"},/*aOrdem*/)//"Relatório de Resíduos Por Período"
+
+	TRCell():New(oSec,"DATA"  		,	,STR0024	,,30,,) //"Data
+	TRCell():New(oSec,"B1_COD"  	,  	,STR0025  ,X3Picture("B1_COD")  	,nTCOD+42,,) //"Resíduo"
+	TRCell():New(oSec,"B1_DESC" 	,  	,STR0026  ,X3Picture("B1_DESC") 	,TamSx3("B1_DESC")[1]+58,,) //"Descrição"
+	TRCell():New(oSec,"QUANT"   	,  	,STR0027  ,"@E 999,999,999.99"  	,TamSx3("TB0_QTDE")[1]+32,,) //"Qtd. Gerada"
+	TRCell():New(oSec,"B1_UM" 		,	,STR0028  ,X3Picture("AH_UMRES")	,TamSx3("AH_UMRES")[1]+32,,) //"Unid. Medida
+	TRCell():New(oSec,"QTDDES"    	,  	,STR0029  ,"@E 999,999,999.99"    	,TamSx3("TB0_QTDE")[1]+32,,) //"Qtd. Destinada"
+	TRCell():New(oSec,"UMDES"     	,	,STR0028  ,X3Picture("AH_UMRES")  	,TamSx3("AH_UMRES")[1]+32,,) //"Unid. Medida
+	TRCell():New(oSec,"TIPO"      	,	,STR0030  ,X3Picture("TB6_DESCRI")	,nTDSC+58,,) //"Tipo Destinação"
+	TRCell():New(oSec,"TB5_CODIGO"	,	,STR0037  ,X3Picture("TB5_CODIGO")	,TamSx3("TB5_CODIGO")[1]+34,,) //"Destinatário"
+	TRCell():New(oSec,"A2_NOME"		,	,STR0038  ,X3Picture("A2_NOME")   	,TamSx3("A2_NOME")[1]+50,,) //"Nome"
+	TRCell():New(oSec,"MTR"      	,	,STR0039  ,"@!"                   	,52,,) //"MTR"
+	TRCell():New(oSec,"DTRANS"  	,	,"Transf." ,,30,,) //"Data
+
+	oSec:Cell("QUANT"):SetHeaderAlign("CENTER")
+	oSec:Cell("QUANT"):SetAlign(2)
+	oSec:Cell("QTDDES"):SetHeaderAlign("CENTER")
+	oSec:Cell("QTDDES"):SetAlign(2)
+	oSec:Cell("B1_UM"):SetHeaderAlign("CENTER")
+	oSec:Cell("B1_UM"):SetAlign(2)
+	oSec:Cell("UMDES"):SetHeaderAlign("CENTER")
+	oSec:Cell("UMDES"):SetAlign(2)
+
+Return oReport
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Emissão do relatório
+
+
+@param oReport - Objeto instância da classe TReport
+@param oFont  - Fonte para totalizador
+
+@author Thiago Henrique dos Santos
+@since 28/01/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oReport)
+
+	Local aDBF	:= {}
+	Local nRow     := 0
+	Local nPage    := 0
+	Local nI := 0
+	Local bAgrup
+	Local cDesRes := ""
+	Local lInit := .F.
+	Local xm_par1 := "RE"
+	Local xm_par2 := "1"
+	Local xm_par3 := "2"
+	Local cQrySub := If( "MSSQL" $ Upper( TCGetDB() ) , "SUBSTRING" , "SUBSTR" )
+	Local cDtOco  := "TB0.TB0_DATA"
+	Local cDtTrans:= "TBA.TBA_DTTRAN"
+	Local cDtMTR  := "TDI.TDI_DTCOMP"
+
+	//Variaveis de controle de registro
+	Local cDataGer
+	Local cCodRes
+	Local cDesRes
+	Local cUniMed
+	Local nQtdOcorr
+
+	//Chaves de Impressão
+	Local cChvRes := ""
+
+	Private cUM := ""
+	Private oSec	:= oReport:Section(1)
+	Private nTotDes	:= 0
+	Private nTotRes	:= 0
+	Private cCodRes	:= ""
+	Private cCodDes	:= ""
+	Private dData	:= CtoD ("  /  /  ")
+	Private aDest	:= {} //cod nome MTR quant
+	Private nAltPag	:= oReport:PageHeight() - 50
+	Private cAliasOco	:= GetNextAlias() //TRB utilizada para as Ocorrências.
+	Private cAliasDest	:= GetNextAlias() //TRB utilizada para as Transferências.
+
+	oFont := TFont():New(oReport:cFontBody,,-(oReport:nFontBody + 2),.T. ,.T.)
+
+	If MV_PAR09 == 2
+		cDtOco  := cQrySub + "(" + cDtOco + ",1,6)"
+		cDtTrans:= cQrySub + "(" + cDtTrans + ",1,6)"
+		cDtMTR  := cQrySub + "(" + cDtMTR + ",1,6)"
+	ElseIf MV_PAR09 == 3
+		cDtOco  := cQrySub + "(" + cDtOco + ",1,4)"
+		cDtTrans:= cQrySub + "(" + cDtTrans + ",1,4)"
+		cDtMTR  := cQrySub + "(" + cDtMTR + ",1,4)"
+	EndIf
+
+	//---------------------------
+	// Query OCORRENCIAS
+	//---------------------------
+	cQryOco := "SELECT "+cDtOco+" DATAGER, SB1.B1_COD CODRES, SB1.B1_DESC DESRES, TB0.TB0_UNIMED UNIMED, SB1.B1_UM UM, SUM(TB0.TB0_QTDE) QTDOCORR "
+	cQryOco += "FROM " + RetSqlName("TB0") + " TB0 "
+	cQryOco += 	"INNER JOIN " + RetSqlName("SB1") + " SB1 ON "
+	cQryOco += 		"SB1.B1_FILIAL = " + ValToSQL( xFilial( "SB1" ) )
+	cQryOco += 		" AND SB1.B1_COD = TB0.TB0_CODRES AND SB1.B1_TIPO = " + ValToSQL( xm_par1 )
+	cQryOco += 		" AND SB1.D_E_L_E_T_ <> '*' "
+	cQryOco += "WHERE "
+	cQryOco += 		"TB0.TB0_FILIAL = " + ValToSQL( xFilial( "TB0" ) )
+	cQryOco += 		" AND TB0.TB0_DATA BETWEEN " + ValToSQL( DtoS( MV_PAR01 ) ) + " AND " + ValToSQL( DtoS( MV_PAR02 ) )
+	cQryOco += 		" AND TB0.TB0_CODRES BETWEEN " + ValToSQL( MV_PAR03 ) + " AND " + ValToSQL( MV_PAR04 )
+	cQryOco += 		" AND TB0.D_E_L_E_T_ <> '*' "
+	cQryOco += "GROUP BY TB0.TB0_DATA, SB1.B1_COD, SB1.B1_DESC, TB0.TB0_UNIMED, SB1.B1_UM "
+	cQryOco += "ORDER BY TB0.TB0_DATA ASC, SB1.B1_COD ASC"
+	cQryOco := ChangeQuery( cQryOco )
+	//MPSysOpenQuery( cQryOco , cAliasOco )
+	aAdd( aDBF , { "DATAGER"	, "C" , 08 							, 0 } )
+	aAdd( aDBF , { "CODRES"		, "C" , TAMSX3( "B1_COD" )[1] 		, 0 } )
+	aAdd( aDBF , { "DESRES"		, "C" , TAMSX3( "B1_DESC" )[1] 		, 0 } )
+	aAdd( aDBF , { "UNIMED"		, "C" , TAMSX3( "TB0_UNIMED" )[1]	, 0 } )
+	aAdd( aDBF , { "UM"			, "C" , TAMSX3( "B1_UM" )[1] 		, 0 } )
+	aAdd( aDBF , { "QTDOCORR"	, "N" , 15 							, 2 } )
+	aAdd( aDBF , { "DTDEST" 	, "C" , 08 							, 0 } )
+	aAdd( aDBF , { "CODREC"		, "C" , TAMSX3( "TBA_CODREC" )[1]	, 0 } )
+	aAdd( aDBF , { "NOMFOR"		, "C" , TAMSX3( "A2_NOME" )[1]		, 0 } )
+	aAdd( aDBF , { "NOMCLI"		, "C" , TAMSX3( "A1_NOME" )[1]		, 0 } )
+	aAdd( aDBF , { "NUMMTR"		, "C" , TAMSX3( "TBA_NUMMTR" )[1]	, 0 } )
+	aAdd( aDBF , { "CODTIP"		, "C" , TAMSX3( "TBA_CODTIP" )[1]	, 0 } )
+	aAdd( aDBF , { "DESCRI"		, "C" , TAMSX3( "TB6_DESCRI" )[1]	, 0 } )
+	aAdd( aDBF , { "QTDSAI"		, "N" , 15 							, 2 } )
+
+	oTRBOco := FwTemporaryTable():New( cAliasOco , aDBF )
+	OTRBOco:AddIndex( "Index1" , { "DATAGER" , "CODRES" } )
+	oTRBOco:Create()
+	SqlToTrb( cQryOco , aDBF , cAliasOco )
+
+	//---------------------------
+	// Query TRANSFERENCIAS e MANIFESTOS DE TRANSPORTE
+	//---------------------------
+	cQryDest := "SELECT * FROM ( "
+	//SubQuery
+	//-----------------------------------------------------------------------------------------------------
+	//TRANSFERENCIAS
+	cQryDest += "SELECT " + cDtTrans + " AS DTDEST, TBA.TBA_CODRES AS CODRES, TBA.TBA_CODREC AS CODREC , SB1.B1_UM AS UNIDAD, SA2.A2_NOME AS NOMFOR,"
+	cQryDest += " SA1.A1_NOME AS NOMCLI, TBA.TBA_NUMMTR AS NUMMTR, TBA.TBA_CODTIP AS CODTIP, TB6.TB6_DESCRI AS DESCRI, SUM(TBA.TBA_QTDSAI) AS QTDSAI "
+	cQryDest += "FROM " + RetSqlName("TBA") + " TBA "
+	cQryDest += 	"INNER JOIN " + RetSqlName("SB1") + " SB1 ON "
+	cQryDest += 		"SB1.B1_FILIAL = " + ValToSQL( xFilial( "SB1" ) )
+	cQryDest += 		" AND SB1.B1_COD = TBA.TBA_CODRES AND SB1.B1_TIPO = " + ValToSQL( xm_par1 )
+	cQryDest += 		" AND SB1.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"INNER JOIN " + RetSqlName("TB5") + " TB5 ON "
+	cQryDest += 		"TB5.TB5_FILIAL = " + ValToSQL( xFilial( "TB5" ) )
+	cQryDest += 		" AND TB5.TB5_CODIGO = TBA.TBA_CODREC "
+	cQryDest += 		" AND TB5.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("SA2") + " SA2 ON "
+	cQryDest += 		"SA2.A2_FILIAL = " + ValToSQL( xFilial( "SA2" ) )
+	cQryDest += 		" AND SA2.A2_COD = TB5.TB5_FORNEC AND SA2.A2_LOJA = TB5.TB5_LOJA "
+	cQryDest += 		" AND SA2.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("SA1") + " SA1 ON "
+	cQryDest += 		"SA1.A1_FILIAL = " + ValToSQL( xFilial( "SA1" ) )
+	cQryDest += 		" AND SA1.A1_COD = TB5.TB5_FORNEC AND SA1.A1_LOJA = TB5.TB5_LOJA "
+	cQryDest += 		" AND SA1.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("TB6") + " TB6 ON "
+	cQryDest += 		"TB6.TB6_FILIAL = " + ValToSQL( xFilial( "TB6" ) )
+	cQryDest += 		" AND TB6.TB6_CODTIP = TBA.TBA_CODTIP AND TB6.TB6_TIPO = TBA.TBA_TIPDES "
+	cQryDest += 		" AND TB6.D_E_L_E_T_ <> '*' "
+	cQryDest += "WHERE "
+	cQryDest += 		"TBA.TBA_FILIAL = " + ValToSQL( xFilial( "TBA" ) )
+	cQryDest += 		" AND TBA.TBA_DTTRAN BETWEEN " + ValToSQL( DtoS( MV_PAR01 ) ) + " AND " + ValToSQL( DtoS( MV_PAR02 ) )
+	cQryDest += 		" AND TBA.TBA_CODRES BETWEEN " + ValToSQL( MV_PAR03 ) + " AND " + ValToSQL( MV_PAR04 )
+	cQryDest += 		" AND TBA.TBA_CODTIP BETWEEN " + ValToSQL( MV_PAR05 ) + " AND " + ValToSQL( MV_PAR06 )
+	cQryDest += 		" AND TBA.TBA_CODREC BETWEEN " + ValToSQL( MV_PAR07 ) + " AND " + ValToSQL( MV_PAR08 )
+	cQryDest += 		" AND TBA.D_E_L_E_T_ <> '*' "
+	cQryDest += "GROUP BY TBA.TBA_DTTRAN, TBA.TBA_CODRES, TBA.TBA_CODREC, SB1.B1_UM, SA2.A2_NOME, SA1.A1_NOME, TBA.TBA_NUMMTR, TBA.TBA_CODTIP, TB6.TB6_DESCRI "
+	cQryDest += " UNION"
+	//MANIFESTOS DE TRANSPORTE
+	cQryDest += "SELECT " + cDtMTR + " AS DTDEST, TDI.TDI_CODRES AS CODRES, TDI.TDI_CODREC AS CODREC , TDI.TDI_UNIDAD AS UNIDAD, SA2.A2_NOME AS NOMFOR,"
+	cQryDest += " SA1.A1_NOME AS NOMCLI, TDI.TDI_NUMMTR AS NUMMTR, TDI.TDI_CODTIP AS CODTIP, TB6.TB6_DESCRI AS DESCRI, SUM(TDI.TDI_PESOTO) AS QTDSAI "
+	cQryDest += "FROM " + RetSqlName("TDI") + " TDI "
+	cQryDest += 	"INNER JOIN " + RetSqlName("SB1") + " SB1 ON "
+	cQryDest += 		"SB1.B1_FILIAL = " + ValToSQL( xFilial( "SB1" ) )
+	cQryDest += 		" AND SB1.B1_COD = TDI.TDI_CODRES AND SB1.B1_TIPO = " + ValToSQL( xm_par1 )
+	cQryDest += 		" AND SB1.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"INNER JOIN " + RetSqlName("TB5") + " TB5 ON "
+	cQryDest += 		"TB5.TB5_FILIAL = " + ValToSQL( xFilial( "TB5" ) )
+	cQryDest += 		" AND TB5.TB5_CODIGO = TDI.TDI_CODREC "
+	cQryDest += 		" AND TB5.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("SA2") + " SA2 ON "
+	cQryDest += 		"SA2.A2_FILIAL = " + ValToSQL( xFilial( "SA2" ) )
+	cQryDest += 		" AND SA2.A2_COD = TB5.TB5_FORNEC AND SA2.A2_LOJA = TB5.TB5_LOJA "
+	cQryDest += 		" AND TB5.TB5_TPRECE = " + ValToSQL( xm_par2 )
+	cQryDest += 		" AND SA2.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("SA1") + " SA1 ON "
+	cQryDest += 		"SA1.A1_FILIAL = " + ValToSQL( xFilial( "SA1" ) )
+	cQryDest += 		" AND SA1.A1_COD = TB5.TB5_FORNEC AND SA1.A1_LOJA = TB5.TB5_LOJA "
+	cQryDest += 		" AND TB5.TB5_TPRECE = " + ValToSQL( xm_par3 )
+	cQryDest += 		" AND SA1.D_E_L_E_T_ <> '*' "
+	cQryDest += 	"LEFT JOIN " + RetSqlName("TB6") + " TB6 ON "
+	cQryDest += 		"TB6.TB6_FILIAL = " + ValToSQL( xFilial( "TB6" ) )
+	cQryDest += 		" AND TB6.TB6_CODTIP = TDI.TDI_CODTIP AND TB6.TB6_TIPO = TDI.TDI_TIPDES "
+	cQryDest += 		" AND TB6.D_E_L_E_T_ <> '*' "
+	cQryDest += "WHERE "
+	cQryDest += 		"TDI.TDI_FILIAL = " + ValToSQL( xFilial( "TDI" ) )
+	cQryDest += 		" AND TDI.TDI_DTCOMP BETWEEN " + ValToSQL( DtoS( MV_PAR01 ) ) + " AND " + ValToSQL( DtoS( MV_PAR02 ) )
+	cQryDest += 		" AND TDI.TDI_CODRES BETWEEN " + ValToSQL( MV_PAR03 ) + " AND " + ValToSQL( MV_PAR04 )
+	cQryDest += 		" AND TDI.TDI_CODTIP BETWEEN " + ValToSQL( MV_PAR05 ) + " AND " + ValToSQL( MV_PAR06 )
+	cQryDest += 		" AND TDI.TDI_CODREC BETWEEN " + ValToSQL( MV_PAR07 ) + " AND " + ValToSQL( MV_PAR08 )
+	cQryDest += 		" AND TDI.D_E_L_E_T_ <> '*' "
+	cQryDest += "GROUP BY TDI.TDI_DTCOMP, TDI.TDI_CODRES, TDI.TDI_CODREC, TDI.TDI_UNIDAD, SA2.A2_NOME, SA1.A1_NOME, TDI.TDI_NUMMTR, TDI.TDI_CODTIP, TB6.TB6_DESCRI "
+	cQryDest += " ) TBL"
+	cQryDest += "ORDER BY DTDEST ASC, CODRES ASC, CODREC ASC, NUMMTR, CODTIP ASC"
+	//-----------------------------------------------------------------------------------------------------
+	cQryDest := ChangeQuery( cQryDest )
+	MPSysOpenQuery( cQryDest , cAliasDest )
+
+	//Posiciona no 1º registro
+	DbSelectArea( cAliasDest )
+	( cAliasDest )->( DbGoTop() )
+	While ( cAliasDest )->( !EoF() )
+
+		//Zera variaveis
+		cDataGer 	:= ""
+		cCodRes 	:= ""
+		cDesRes 	:= ""
+		cUniMed 	:= ""
+		cUM 		:= ""
+		nQtdOcorr	:= 0
+
+		dbSelectArea( cAliasOco )
+		dbSetOrder( 1 )
+		If dbSeek( ( cAliasDest )->DTDEST + ( cAliasDest )->CODRES )
+			If !Empty( ( cAliasOco )->NUMMTR )
+				cDataGer 	:= ( cAliasOco )->DATAGER
+				cCodRes 	:= ( cAliasOco )->CODRES
+				cDesRes 	:= ( cAliasOco )->DESRES
+				cUniMed 	:= ( cAliasOco )->UNIMED
+				cUM 		:= ( cAliasOco )->UM
+				nQtdOcorr	:= ( cAliasOco )->QTDOCORR
+
+				RecLock( cAliasOco , .T. )
+				( cAliasOco )->DATAGER 	:= cDataGer
+				( cAliasOco )->CODRES 	:= cCodRes
+				( cAliasOco )->DESRES 	:= cDesRes
+				( cAliasOco )->UNIMED 	:= cUniMed
+				( cAliasOco )->UM		:= cUM
+				( cAliasOco )->QTDOCORR	:= nQtdOcorr
+			Else
+				RecLock( cAliasOco , .F. )
+			EndIf
+			( cAliasOco )->DTDEST := ( cAliasDest )->DTDEST
+			( cAliasOco )->CODREC := ( cAliasDest )->CODREC
+			( cAliasOco )->NOMFOR := ( cAliasDest )->NOMFOR
+			( cAliasOco )->NOMCLI := ( cAliasDest )->NOMCLI
+			( cAliasOco )->NUMMTR := ( cAliasDest )->NUMMTR
+			( cAliasOco )->CODTIP := ( cAliasDest )->CODTIP
+			( cAliasOco )->DESCRI := ( cAliasDest )->DESCRI
+			( cAliasOco )->QTDSAI := ( cAliasDest )->QTDSAI
+			( cAliasOco )->( MsUnLock() )
+		Else
+			RecLock( cAliasOco , .T. )
+			( cAliasOco )->DATAGER 	:= ( cAliasDest )->DTDEST
+			( cAliasOco )->CODRES 	:= ( cAliasDest )->CODRES
+			( cAliasOco )->DESRES 	:= NGSEEK( "SB1" , ( cAliasDest )->CODRES , 1 , "B1_DESC" )
+			( cAliasOco )->UNIMED 	:= ( cAliasDest )->UNIDAD
+			( cAliasOco )->UM		:= NGSEEK( "SB1" , ( cAliasDest )->CODRES , 1 , "B1_UM" )
+			( cAliasOco )->QTDOCORR	:= 0
+			( cAliasOco )->DTDEST 	:= ( cAliasDest )->DTDEST
+			( cAliasOco )->CODREC 	:= ( cAliasDest )->CODREC
+			( cAliasOco )->NOMFOR 	:= ( cAliasDest )->NOMFOR
+			( cAliasOco )->NOMCLI 	:= ( cAliasDest )->NOMCLI
+			( cAliasOco )->NUMMTR 	:= ( cAliasDest )->NUMMTR
+			( cAliasOco )->CODTIP 	:= ( cAliasDest )->CODTIP
+			( cAliasOco )->DESCRI 	:= ( cAliasDest )->DESCRI
+			( cAliasOco )->QTDSAI 	:= ( cAliasDest )->QTDSAI
+			( cAliasOco )->( MsUnLock() )
+		EndIf
+		( cAliasDest )->( dbSkip() )
+	End
+
+	//Posiciona no 1º registro
+	DbSelectArea(cAliasOco)
+	(cAliasOco)->(DbGoTop())
+	//Verifica se possui ocorrencias
+	If ( cAliasOco )->( RecCount() ) == 0
+		( cAliasDest )->( DbCloseArea() )
+		oTRBOco:Delete()
+		Return
+	Endif
+
+	//Inicio da Seção
+	oSec:Init()
+	nPage := 0
+	oReport:SetMeter( ( cAliasOco )->( RecCount() ) ) //Define o total da regua
+	cCodRes := ""
+	DbSelectArea( cAliasOco )
+	( cAliasOco )->( DbGoTop() )
+	While ( cAliasOco )->( !Eof() ) .AND. !oReport:Cancel()
+
+		oReport:IncMeter()  //Incrementa régua
+
+		If oReport:Page() >  nPage
+			If lInit
+				DrawPage(@oReport,@nPage,@oSec,@nRow)
+			Endif
+		Endif
+		lInit := .T.
+
+		If !Empty( cCodRes ) .And. cChvRes <> ( cAliasOco)->DATAGER + ( cAliasOco )->CODRES
+			oReport:SkipLine()
+			SGAR180TOT( oReport )
+			//Zera as variaveis para o proximo residuo
+			nTotRes := 0
+			nTotDes := 0
+			cCodRes := ""
+		EndIf
+
+		//Realiza impressão dos valores
+		//--------------------------------------------------------------------------
+		//Verifica se ñ é primeiro registro e se data é igual
+		If cChvRes <> ( cAliasOco)->DATAGER + ( cAliasOco )->CODRES
+			cChvRes := ( cAliasOco)->DATAGER + ( cAliasOco )->CODRES
+			cCodRes := ( cAliasOco )->CODRES //Código do Residuo
+			If MV_PAR09 == 1
+				oSec:Cell( "DATA" ):SetValue ( Alltrim( DtoC( Stod( ( cAliasOco)->DATAGER ) ) ) )
+			ElseIf MV_PAR09 == 2
+				cDataRec := AllTrim( SubStr( ( cAliasOco )->DATAGER, 5 ) ) + "/" +  AllTrim( SubStr( ( cAliasOco )->DATAGER, 1, 4 ) )
+				oSec:Cell( "DATA" ):SetValue ( cDataRec )
+			Else
+				oSec:Cell( "DATA" ):SetValue ( AllTrim( ( cAliasOco )->DATAGER ) )
+			EndIf
+			oSec:Cell( "B1_COD" ):SetValue( ( cAliasOco )->CODRES ) //Residuo
+			oSec:Cell("B1_DESC"):SetValue( ( cAliasOco )->DESRES  ) //Descrição do Residuo
+			oSec:Cell("B1_DESC"):SetAlign( 1 ) //A esquerda
+			oSec:Cell("QUANT"):SetValue( ( cAliasOco )->QTDOCORR ) //Gerado
+			oSec:Cell("B1_UM"):SetValue( ( cAliasOco )->UM ) //Un. Medida do Gerado
+
+			//Total do residuo
+			nTotRes := nTotRes + ( cAliasOco )->QTDOCORR
+		Else
+			oSec:Cell( "DATA" ):SetValue ( "" )
+			oSec:Cell( "B1_COD" ):SetValue( "" )
+			oSec:Cell("B1_DESC"):SetValue( ""  )
+			oSec:Cell("QUANT"):SetValue( 0 )
+			oSec:Cell("B1_UM"):SetValue( "" )
+		EndIf
+		oSec:Cell("QTDDES"):SetValue( ( cAliasOco )->QTDSAI ) //Quantidade de Saida
+		oSec:Cell("UMDES"):SetValue(( cAliasOco )->UNIMED ) //Un. Medida de Saida
+		oSec:Cell("TIPO"):SetValue( ( cAliasOco )->DESCRI ) //Tipo Destinação
+		oSec:Cell("TB5_CODIGO"):SetValue( ( cAliasOco )->CODREC ) //Destinario
+		oSec:Cell("A2_NOME"):SetValue( ( cAliasOco )->NOMFOR ) //Nome Destinario
+		oSec:Cell("MTR"):SetValue( ( cAliasOco )->NUMMTR  )
+		//verifica se possui transferencia
+		aAreaTBA := GetArea()
+			DbSelectArea( "TBA" )
+			DbSetOrder( 1 ) //TBA_FILIAL+TBA_CODRES+DTOS(TBA_DTTRAN)+TBA_HRTRAN
+			If DbSeek( xFilial( "TBA" ) + ( cAliasOco )->CODRES  )
+				oSec:Cell("DTRANS"):SetValue( DtoC( TBA->TBA_DTTRAN ) )
+			Else
+				oSec:Cell("DTRANS"):SetValue( "" )
+			EndIf
+		RestArea( aAreaTBA )
+		//--------------------------------------------------------------------------
+
+		//Realiza soma dos residuos
+		//-----------------------------------------------
+		//Total Destinado
+		nTotDes := nTotDes + ( cAliasOco )->QTDSAI
+		//Unidade de medida
+		cUM := ( cAliasOco )->UM
+		//-----------------------------------------------
+
+		oSec:PrintLine()
+		nRow := oReport:Row()
+		( cAliasOco )->( DbSkip() )
+	EndDo
+
+	If !Empty( cCodRes ) .And. cChvRes <> ( cAliasOco)->DATAGER + ( cAliasOco )->CODRES
+		oReport:SkipLine()
+		SGAR180TOT( oReport )
+	EndIf
+	DbSelectArea( cAliasOco )
+	( cAliasDest )->( DbCloseArea() )
+	oTRBOco:Delete()
+
+	DrawPage(@oReport,@nPage,@oSec,@nRow)
+	oSec:Finish()
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DrawPage
+Desenha o layout da página de impressão
+
+@param oReport - Objeto relatório, instância da classe TReport
+@param nPage   - Página Anterior
+@param oSec    - Seção do relatório, instância da classe TRSection
+@param nRow    - Ultima linha impressa
+
+
+@author Thiago Henrique dos Santos
+@since 30/01/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+
+Static Function DrawPage(oReport,nPage,oSec,nRow)
+
+	oReport:Box(oReport:nHeaderDiff,oSec:Cell("DATA"):Col()-1,nAltPag,oSec:Cell("DTRANS"):Col()+ oSec:Cell("DTRANS"):GetWidth())
+	nPage := oReport:Page()
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("B1_COD"):Col()-5,nAltPag,oSec:Cell("B1_COD"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("B1_DESC"):Col()-5,nAltPag,oSec:Cell("B1_DESC"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("QUANT"):Col()-5,nAltPag,oSec:Cell("QUANT"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("B1_UM"):Col()-5,nAltPag,oSec:Cell("B1_UM"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("QTDDES"):Col()-5,nAltPag,oSec:Cell("QTDDES"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("UMDES"):Col()-5,nAltPag,oSec:Cell("UMDES"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("TIPO"):Col()-5,nAltPag,oSec:Cell("TIPO"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("TB5_CODIGO"):Col()-5,nAltPag,oSec:Cell("TB5_CODIGO"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("A2_NOME"):Col()-5,nAltPag,oSec:Cell("A2_NOME"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("MTR"):Col()-5,nAltPag,oSec:Cell("MTR"):Col()-5)
+	oReport:Line(oReport:nHeaderDiff,oSec:Cell("DTRANS"):Col()-5,nAltPag,oSec:Cell("DTRANS"):Col()-5)
+	nRow := oReport:nHeaderDiff
+	If nPage > 1
+		If MV_PAR09 == 1
+			oSec:Cell("DATA"):SetValue (Alltrim(DtoC(dData)))
+		ElseIf MV_PAR09 == 2
+			oSec:Cell("DATA"):SetValue ( SubStr(Alltrim(cMonth(dData)),1,3)+"/"+Substr(Alltrim(Str(Year(dData))),3,2) )
+		Else
+			oSec:Cell("DATA"):SetValue ( Alltrim(Str(Year(dData))) )
+		EndIf
+	EndIf
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR180PER
+Valida os campos de pergunta para o relatório
+
+@param nParam  - Número do parâmetro (MV)
+
+@author Thiago Henrique dos Santos
+@since 30/01/2012
+@version P10
+@return lRet - Lógico, .T. se valido, .F. caso contrário
+/*/
+//---------------------------------------------------------------------
+Function SGAR180PER(nParam)
+	Local lRet := .F.
+	Local lExist := .T.
+
+	If nParam == 1
+
+		lRet := !Empty(mv_par01) .AND. IIF(!Empty(mv_par02),mv_par02 >= mv_par01,.T.)
+		If !lRet
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 2
+
+		lRet := mv_par02 >= mv_par01
+		If !lRet
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 3
+
+		lExist := IIf(empty(mv_par03),.t.,ExistCpo('TAX',mv_par03))
+		lRet := lExist .AND. IIF(!Empty(mv_par04),mv_par04 >= mv_par03,.T.)
+
+		If !lRet .AND. lExist
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 4
+
+		//lRet := AteCodigo('TAX',mv_par03,mv_par04,tamsx3("TAX_CODRES")[1])
+		lRet := mv_par04 >= mv_par03
+
+		If lRet
+			DbSelectArea("TAX")
+			TAX->(DbSetOrder(1))
+
+			lRet := TAX->(DbSeek(xFilial("TAX")+mv_par04)) .OR. mv_par04 == Replicate("Z",TamSx3("TAX_CODRES")[1])
+		Endif
+
+		If !lRet
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 5
+
+		lExist := IIf(empty(mv_par05),.t.,ExistCpo('TB7',mv_par05,2))
+		lRet := lExist .AND. IIF(!Empty(mv_par06),mv_par06 >= mv_par05,.T.)
+
+		If !lRet .AND. lExist
+
+			Help( " ",1, 'SGAR18001')
+
+		Endif
+
+	ElseIf nParam == 6
+
+		//lRet := AteCodigo('TB7',mv_par05,mv_par06,TamSx3("TB7_CODTIP")[1])
+
+		lRet := mv_par06 >= mv_par05
+
+		If lRet
+			DbSelectArea("TB7")
+			TB7->(DbSetOrder(2))
+
+			lRet := TB7->(DbSeek(xFilial("TB7")+mv_par06)) .OR. mv_par06 == Replicate("Z",TamSx3("TB7_CODTIP")[1])
+		Endif
+
+		If !lRet
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 7
+
+		lExist := IIf(empty(mv_par07),.t.,ExistCpo('TB5',mv_par07))
+		lRet := lExist .AND. IIF(!Empty(mv_par08),mv_par08 >= mv_par07,.T.)
+
+		If !lRet .AND. lExist
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	ElseIf nParam == 8
+
+		//lRet := AteCodigo('TB5',mv_par07,mv_par08,TamSx3("TB5_FORNEC")[1])
+
+		lRet := mv_par08 >= mv_par07
+
+		If lRet
+			DbSelectArea("TB5")
+			TB5->(DbSetOrder(1))
+
+			lRet := TB5->(DbSeek(xFilial("TB5")+mv_par08)) .OR. mv_par08 == Replicate("Z",TamSx3("TB5_FORNEC")[1])
+		Endif
+
+		If !lRet
+			Help( " ",1, 'SGAR18001')
+		Endif
+
+	Endif
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR180TOT
+Função para realizar a soma dos totais do residuo
+
+@param  oReport, objeto, Objeto para impressão
+@author Jean Pytter da Costa
+@since 22/03/2017
+
+@return
+/*/
+//---------------------------------------------------------------------
+Function SGAR180TOT( oReport )
+
+	//FECHAMENTO DO RESÍDUO
+	oSec:Cell("DATA"):SetValue ("")
+	oSec:Cell("B1_COD"):SetValue("")
+	oSec:Cell("B1_DESC"):SetValue("Total do Resíduo")
+	oSec:Cell("B1_DESC"):SetAlign(1) //A direita
+	oSec:Cell("QUANT"):SetValue( nTotRes )
+	oSec:Cell("B1_UM"):SetValue( cUM )
+
+	oSec:Cell("QTDDES"):SetValue( nTotDes )
+	oSec:Cell("UMDES"):SetValue( cUM )
+	oSec:Cell("TIPO"):SetValue("")
+	If nTotDes > 0
+		oSec:Cell("A2_NOME"):SetValue("Saldo: " + Transform( nTotRes - nTotDes, "@E 999,999.99" ) + " " + cUM )
+		oSec:Cell("TB5_CODIGO"):SetValue("")
+	Else
+		oSec:Cell("TB5_CODIGO"):SetValue("")
+		oSec:Cell("A2_NOME"):SetValue("")
+	Endif
+	oSec:Cell("MTR"):SetValue("")
+	oSec:Cell("DTRANS"):SetValue( "" )
+	oSec:PrintLine()
+
+	oReport:SkipLine()
+	oReport:Line(oReport:Row(),oSec:Cell("DATA"):Col(),oReport:Row(),oSec:Cell("DTRANS"):Col()+ oSec:Cell("DTRANS"):GetWidth())
+	oReport:SkipLine()
+
+Return

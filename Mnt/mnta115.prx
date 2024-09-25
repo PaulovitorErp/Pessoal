@@ -1,0 +1,556 @@
+#INCLUDE "MNTA115.ch"
+#INCLUDE "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA115
+Gera o cadastro de bens ( ST9...) a partir do ativo fixo ( SN1...)
+@author Thiago Olis Machado
+@since 09/07/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA115()
+
+    Local aNGBEGINPRM := NGBEGINPRM()
+    Local oPanel, oGrupo, oFamPa
+    Local nOpcx := 0, nG, nX
+    Local oFont, aDBF
+    Local lInverte := .F.
+
+    Private aAtvNmrcdo := {}
+    Private cMarca     := GetMark()
+    Private APOS1,CSAVEMENUH,AFGRUPO,NREC,NOPCAO,RETOR,NCODBEM,CCOR, aAtvNBem := {}
+
+    Private cAliasTRB1  := GetNextAlias()//Alias Tab. 1
+    Private cTRB		:= GetNextAlias()//Alias Tab. 2
+    Private oTmpTbl1 //Obj. Tabela Temporária 1
+    Private oTmpTbl2 //Obj. Tabela Temporária 2
+
+    nGrupo := space(04)
+    nFamPa := space(06)
+    opcon  := 0
+
+    DEFINE MSDIALOG oDlg1 TITLE OemToAnsi(STR0004) from 0,0 To 190,325 of oMainwnd Pixel //"Gera Bens apartir do Ativo Fixo"
+
+    oDlg1:lEscClose := .F.
+
+    oPanel := TPanel():New(0,0,,oDlg1,,,,,,0,0,.F.,.F.)
+    oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+    @ 15.5,027  Say OemToAnsi( STR0002 ) Of oPanel Pixel //"Grupo do Ativo Fixo ?
+    @ 16  ,100  MsGet oGrupo Var nGrupo Picture "@!" Size 35,08 F3 "SNG" Valid naovazio() .And. NG115VGRU(nGrupo) Of oPanel Pixel HASBUTTON
+
+    @ 33.5,027  Say OemToAnsi(STR0003) Of oPanel Pixel //"Familia Padrao ?"
+    @ 32  ,100  MsGet oFamPa Var nFamPa Picture "@!" Size 35,08 F3 "ST6" Valid naovazio() .And. famid08(nFamPa) Of oPanel Pixel HASBUTTON
+
+    oGrupo:bHelp := {|| ShowHelpCpo( STR0012,;     // "Grupo de Bens"
+                        {STR0013},2,; // "Grupo de Bens, do Ativo Fixo, a ser considerado na geração."
+                        {},2)}
+
+    oFamPa:bHelp := {|| ShowHelpCpo( STR0014,;     // "Família do Bem"
+                        {STR0015},2,; // "Família do Bem a ser relacionada aos bens gerados."
+                        {},2)}
+
+    ACTIVATE MSDIALOG oDlg1 ON INIT EnchoiceBar(oDlg1,{|| opcon := 1, oDlg1:End() },{|| oDlg1:End() }) CENTERED
+
+    If opcon == 1
+        AFGRUPO := nGrupo
+        Processa({|lEnd| PSN1PROC()})
+        dbSelectArea(cTRB)
+        dbGoTop()
+
+        If Reccount() > 0
+            If !MsgYesNo (STR0005) //"Foram encontrados erros na importacao... Deseja Imprimir?"
+                	oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+                Return
+            Endif
+            mnta115imp()
+
+        Elseif Len( aAtvNBem ) > 0
+
+
+            aDBF := { {"OK"    , "C", 02, 0},;
+                      {"CODATV", "C", 14, 0},;
+                      {"DESCRI", "C", 40, 0} }
+
+            // Campos para o MarkBrowse.
+            aCampos :={ {"OK",     Nil, " "},;
+                        {"CODATV", Nil, "Cód. Ativo" },;
+                        {"DESCRI", Nil, "Desc. Ativo"}}
+
+			//Instancia classe FWTemporaryTable
+			oTmpTbl1 := FWTemporaryTable():New( cAliasTRB1, aDBF )
+			//Cria indices
+			oTmpTbl1:AddIndex( "Ind01" ,{"CODATV"})
+			oTmpTbl1:AddIndex( "Ind02" ,{"DESCRI"})
+			//Cria a tabela temporaria
+			oTmpTbl1:Create()
+
+            For nG := 1 To Len( aAtvNBEM )
+                RecLock( cAliasTRB1, .T. )
+                ( cAliasTRB1 )->OK := cMarca
+                ( cAliasTRB1 )->CODATV := aAtvNBEM[ nG ][ 1 ]
+                ( cAliasTRB1 )->DESCRI := aAtvNBEM[ nG ][ 4 ]
+                MsUnLock( cAliasTRB1 )
+            Next nG
+
+            Define FONT oFont NAME "Arial" Size 07,17
+
+            Define msDialog oDlg Title STR0018 + nGrupo + STR0019 + nFamPa + "."  From 000,000 To 489,888 Pixel // "Ativos ainda não importados do Grupo: " # " e Família Pad.: "
+            oGRHNPNL := TPanel():New(0,0,,oDlg,,.T.,,,,0,0,.T.,.F.)
+            oGRHNPNL:Align := CONTROL_ALIGN_ALLCLIENT
+            @ 010,002 Say STR0020 Font oFont Size 55,10 Of oGRHNPNL Pixel // "Lista de Ativos ainda não importados"
+            @ 025,002 Say STR0021 Of oGRHNPNL Pixel // "Clique duas vezes sobre um ativo para marcar/desmarcar o mesmo."
+
+            oMark := MsSelect():New( cAliasTRB1, "OK",, aCampos, @lInverte, @cMarca, {035,000,216,446},,, oGRHNPNL )
+            oMark:oBrowse:lHasMark = .T.
+            oMark:oBrowse:lCanAllMark := .T.
+            oMark:oBrowse:bAllMark := { || M330MarkAll() }
+
+            dbSelectArea( cAliasTRB1 )
+            dbGoTop()
+
+            Activate MsDialog oDlg ON INIT EnchoiceBar( oDlg,{|| ( nOpcx := 1 ),oDlg:End() },{ || ( nOpcx := 0 ), oDlg:End() } ) Center
+            Do Case
+                Case nOpcx == 1
+                    dbSelectArea( cAliasTRB1 )
+                    dbGoTop()
+                    While !EoF()
+                        // Se o ativo estiver desmarcado adiciona no array aAtvNmrcdo.
+                        If ( cAliasTRB1 )->OK == Space( 2 )
+                            aAdd( aAtvNmrcdo, ( cAliasTRB1 )->CODATV )
+                            dbSelectArea( cAliasTRB1 )
+                            dbSkip()
+                            Loop
+                        EndIf
+
+                        dbSelectArea( cAliasTRB1 )
+                        dbSkip()
+                    EndDo
+
+                    // Verifica se ainda possui algum ativo no array.
+                    If Len( aAtvNBEM ) > 0
+                        // Função que preenche ST9 e STB...
+                        LOADST9STB( aAtvNBEM )
+                    EndIf
+
+                    // Caso o usuário cancele a tela, sai da rotina.
+                OtherWise
+                    Return
+            End Case
+        Else
+            // Se não tiver nenhuma inconsistência, ou ativo para importar, mostra
+            // a mensagem e sai da rotina
+            MsgAlert( STR0016 + nGrupo +; // "Não há informações a serem exibidas ou Ativos a serem importados para o Grupo :"
+                      STR0017 + nFamPa + "." ) // " e para a família: "
+
+            Return
+        EndIf
+        oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+    Endif
+
+    If Type("oTmpTbl1") == "O"
+    	oTmpTbl1:Delete()//Deleta Tabela Temporária 1
+    EndIf
+
+    dbSelectArea("ST9")
+
+    NGRETURNPRM(aNGBEGINPRM)
+
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PSN1PROC
+Processa o SN1 e alimenta os arquivo (ST9 e STB)
+@author Inacio Luiz Kolling
+@since 09/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function PSN1PROC()
+
+    Local cCusBem := ''
+
+    aCampos := {}
+	    aAdd(aCAMPOS,{"BEM"   , "C", 14, 0})
+	    aAdd(aCAMPOS,{"FAMIPA", "C", 06, 0})
+	    aAdd(aCAMPOS,{"DESCRI", "C", 70, 0})
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2:= FWTemporaryTable():New( cTRB, aCampos )
+	//Adiciona os Indices
+	oTmpTbl2:AddIndex( "Ind01" , {"BEM","FAMIPA","DESCRI"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+    ProcRegua(0) // Tratamento para ativação de regua sem definição de termino
+
+    dbSelectArea("SN1")
+    dbSetOrder(1)
+    dbSeek(xFilial("SN1"))
+    While !Eof() .And. SN1->N1_FILIAL == xFilial("SN1")
+
+        If SN1->N1_GRUPO == AFGRUPO .And. Empty(SN1->N1_BAIXA) //Não realiza cadastros de ativo baixado
+            ncodbem := SN1->N1_CBASE
+            dbSelectArea("TP9")
+            Dbsetorder(1)
+            If Dbseek(xfilial("TP9")+nFamPa) //mv_par2
+                dbSelectArea("ST9")
+                Dbsetorder(1)
+                If Dbseek( xfilial( "ST9" ) + SN1->N1_CBASE )
+                    dbSelectArea( "SN1" )
+                    dbSkip()
+                    Loop
+                EndIf
+
+                If NGIFdbSeek("SN3",SN1->N1_CBASE+ SN1->N1_ITEM,1)
+                	cCusBem := SN3->N3_CUSTBEM
+                Else
+                	cCusBem := TP9->TP9_CCUSTO
+                EndIf
+
+                Do Case
+                Case Empty( cCusBem )
+                    mnta115trb( ncodbem, nFamPa, STR0006 ) //"Centro de Custo da Familia Padrao nao Existe no Cadastro Bem Padrao"
+                Case Empty( TP9->TP9_CALEND )
+                    mnta115trb( ncodbem, nFamPa, STR0007 ) //"Calendario da Familia Padrao nao Existe no Cadastro Bem Padrao"
+                EndCase
+                aAdd( aAtvNBem, { SN1->N1_CBASE + SN1->N1_ITEM, nFamPa, SN1->N1_AQUISIC, SN1->N1_DESCRIC,;
+                    SN1->N1_CHAPA, SN1->N1_FORNEC, SN1->N1_LOJA, SN1->N1_LOCAL,;
+                    cCusBem, TP9->TP9_CALEND, TP9->TP9_CENTRA,;
+                    TP9->TP9_FABRIC, TP9->TP9_MODELO, TP9->TP9_SERIE,;
+                    TP9->TP9_PRIORI, TP9->TP9_CODEST, TP9->TP9_DESCRI,;
+                    TP9->TP9_CUSTOH, TP9->TP9_FILIAL, TP9->TP9_CODFAM, TP9->TP9_TIPMOD } )
+            EndIf
+        EndIf
+
+        dbSelectArea("SN1")
+        dbSkip()
+    EndDo
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} mnta115trb
+Grava o arquivo temporario
+@author Inacio Luiz Kolling
+@since 09/08/01
+@version undefined
+@param nbem, numeric
+@param nfami, numeric
+@param cdes, characters
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function mnta115trb(nbem,nfami,cdes)
+
+    dbSelectArea(cTRB)
+    (cTRB)->(DbAppend())
+    (cTRB)->BEM    := nbem
+    (cTRB)->FAMIPA := nfami
+    (cTRB)->DESCRI := cdes
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA115IMP
+Grava o arquivo temporario
+@author Inacio Luiz Kolling
+@since 09/08/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA115IMP()
+
+    cString  := "SN1"
+    cdesc1   := STR0008 //"Geracao de Erros encontrados durante a importacao de bens para a tabela ST9"
+    cdesc2   := " "
+    cdesc3   := " "
+    wnrel    := "MNTA115"
+    aReturn  := {"Zebrado",1,STR0008, 1, 2, 1, "",1 } //"Administracao"
+    nLastKey := 0
+    Tamanho  := "M"
+    nomeprog := "MNTA115"
+    Titulo   := STR0009 //"Erros Encontrados na Importacao de Bens"
+
+    //---------------------------------------------------------------------
+    //| Envia controle para a funcao SETPRINT                         	  |
+    //---------------------------------------------------------------------
+    wnrel := SetPrint(cString, wnrel,, titulo, cDesc1, cDesc2, cDesc3, .F., "")
+
+    If nLastKey == 27
+        Set Filter To
+        Return
+    Endif
+
+    SetDefault(aReturn,cString)
+
+    If nLastKey == 27
+        Set Filter To
+        Return
+    Endif
+
+    RptStatus({|lEnd| MNTA115ATF(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA115ATF
+Chamada do Relatório
+@author Elisangela Costa
+@since 08/02/02
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA115ATF
+
+    //---------------------------------------------------------------------
+    //| Define Variaveis                                             	  |
+    //---------------------------------------------------------------------
+    cRodaTxt := ""
+    nCntImpr := 0
+    nTotRegs := 0
+    li       := 80
+    m_pag    := 1
+
+    CABEC1 := STR0010 //"Ativo           Fam.Padrao   Mensagem"//STR0010
+    CABEC2 := " "
+    nTipo  := IIF(aReturn[4]==1,15,18)
+
+    //---------------------------------------------------------------------
+    //| Monta os Cabecalhos                                               |
+    //---------------------------------------------------------------------
+
+    /*/
+    1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         0         1         2
+    01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+    *************************************************************************************************************************************
+    xxxxx.:   xx
+    xxx/xxxxxxx/xxxxx                     Erros Encontrados na Importacao de Bens                                         xxxxx: xx/xx/xx
+    xxxx...: xx:xx:xx                                                                                                    xxxxxx: xx/xx/xx
+    *************************************************************************************************************************************
+    Ativo           Fam.Padrao   Mensagem
+    *************************************************************************************************************************************
+    xxxxxxxxxxxxxx  xxxxxx       xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    xxxxxxxxxxxxxx  xxxxxx       xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    */
+
+    dbSelectArea(cTRB)
+    nRECNO := Recno()
+    dbGoTop()
+    SetRegua(LastRec())
+    While !Eof()
+        IncRegua()
+        NGSOMALI(58)
+        @li,000 PSAY (cTRB)->BEM
+        @li,016 PSAY (cTRB)->FAMIPA
+        @li,029 PSAY (cTRB)->DESCRI
+        dbSelectArea(cTRB)
+        dbSkip()
+    End
+
+    //---------------------------------------------------------------------
+    //|Apaga arquivo de Trabalho                                  		 |
+    //---------------------------------------------------------------------
+    dbSelectArea(cTRB)
+    dbGoTo(nRECNO)
+
+
+    //---------------------------------------------------------------------
+    //| Devolve a condicao original do arquivo principam             	  |
+    //---------------------------------------------------------------------
+    RetIndex("SN1")
+
+    Set Filter To
+    Set device to Screen
+
+    If aReturn[5] == 1
+        Set Printer To
+        dbCommitAll()
+        OurSpool(wnrel)
+    Endif
+
+    MS_FLUSH()
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG115VGRU
+Valida o grupo de campos do ativo fixo
+@author Elisangela Costa
+@since 25/05/04
+@version undefined
+@param nGrupo, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG115VGRU(nGrupo)
+
+    If !ExistCpo("SNG", nGrupo)
+        Return .F.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} LOADST9STB
+Carrega ST9 e STB com os ativos que foram marcados no MarkBrowse.
+
+@param Array com as informações que irão preencher
+		a ST9 e STB
+@author Pablo Servin
+@since 01/07/2014
+@version MP11
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function LOADST9STB( aAtvNBEM )
+
+	Local nG			:= 0
+	Local nCpo			:= 0
+	Local cRelacaoSt9	:= ""
+	Local aArea			:= Nil
+	Local lMNTA1151		:= ExistBlock("MNTA1151")
+
+	SetInclui()
+
+	For nG := 1 To Len( aAtvNBEM )
+		If aScan(aAtvNmrcdo, {|x| x == aAtvNBEM[ nG ][ 1 ] } ) > 0
+			Loop
+		EndIf
+		recLock( "ST9", .T. )
+		For nCpo := 1 To ST9->(fCount())
+			Do Case
+				Case "_FILIAL" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, xFilial("ST9"))
+				Case "_CODBEM" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][1])
+				Case "_CODIMOB" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][1])
+				Case "_CATBEM"  $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, "1")
+				Case "_CODFAMI" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, nFamPa)
+				Case "_DTCOMPR" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][3])
+				Case "_NOME" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][4])
+				Case "_CHAPA" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][5])
+				Case "_FORNECE" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][6])
+				Case "_LOJA" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][7])
+				Case "_LOCAL" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][8])
+				Case "_CCUSTO" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][9])
+				Case "_CALENDA" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][10])
+				Case "_CENTRAB" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][11])
+				Case "_FABRICA" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][12])
+				Case "_MODELO" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][13])
+				Case "_SERIE" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][14])
+				Case "_PRIORID" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][15])
+				Case "_CODESTO" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][16])
+				Case "_TEMCONT" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, "N")
+				Case "_DESCRIC" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][17])
+				Case "_CUSTOHO" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][18])
+				Case "_PADRAO" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, "S")
+				Case "_MOVIBEM" $ Upper(FieldName(nCpo))
+					FieldPut(nCpo, "S")
+				Case "_TIPMOD" 	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, aAtvNBEM[nG][21])
+				Case "_LIMICON"	$ Upper(FieldName(nCpo))
+					FieldPut(nCpo, 0)
+				OtherWise
+
+					cRelacaoSt9 := Posicione("SX3",2,ST9->(FieldName(nCpo)),"X3_RELACAO")
+					If !Empty(cRelacaoSt9)
+						xRelac := Trim(cRelacaoSt9)
+						dbSelectArea("ST9")
+						FieldPut(nCpo, &(xRelac))
+					EndIf
+					dbSelectArea("ST9")
+			EndCase
+
+		Next nCpo
+		msUnLock()
+
+		//Ponto de Entrada MNTA1151 que permite customizar dados da ST9
+		If lMNTA1151
+			ExecBlock("MNTA1151",.F.,.F.,{aAtvNBEM})
+		EndIf
+
+		dbSelectArea( "TPB" )
+		dbSetOrder( 01 )
+		If Dbseek( xfilial( "TPB" ) + nFamPa )
+			While !Eof() .And. TPB->TPB_FILIAL == aAtvNBEM[nG][19] .And.;
+					TPB->TPB_CODFAM == TP9->TP9_CODFAM
+
+				dbSelectArea('STB')
+				RecLock('STB',.T.)
+				STB->TB_FILIAL	:= xfilial('STB')
+				STB->TB_CODBEM	:= aAtvNBEM[nG][1]
+				STB->TB_CARACTE	:= TPB->TPB_CARACT
+				STB->TB_DETALHE	:= TPB->TPB_DETALH
+				STB->TB_UNIDADE	:= TPB->TPB_UNIDAD
+				STB->TB_CONDOP	:= '1'
+				STB->TB_INFO02	:= TPB->TPB_INFO02
+
+				MSUNLOCK()
+
+				dbSelectArea('TPB')
+				dbSkip()
+			EndDo
+		EndIf
+
+		aArea := GetArea()
+		// Atualiza campo N1_CODBEM para criar relação entre SN1 e ST9
+		dbSelectArea( "SN1" )
+		dbSetOrder( 01 )
+		If Dbseek( xfilial( "SN1" ) + aAtvNBem[nG, 1] )
+
+			RecLock('SN1',.F.)
+			SN1->N1_CODBEM	:= aAtvNBem[nG, 1]
+			MsUnLock()
+
+		EndIf
+		RestArea( aArea )
+
+	Next nG
+
+Return .T.
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} M330MarkAll
+Marca/Desmarca todos os registros da tela do MarkBrowse
+
+@author Pablo Servin
+@since 24/02/2014
+@version MP11
+@return Nil
+/*/
+//----------------------------------------------------------------------
+Static Function M330MarkAll()
+
+	NGSETIFARQUI( cAliasTRB1 )
+	While !Eof()
+	   RecLock( cAliasTRB1, .F. )
+	   ( cAliasTRB1 )->OK := IIf( IsMark( 'OK' , cMarca ), "  " , cMarca )
+	   MsUnLock( cAliasTRB1 )
+	   dbSkip()
+	EndDo
+	NGSETIFARQUI( cAliasTRB1 )
+
+Return Nil

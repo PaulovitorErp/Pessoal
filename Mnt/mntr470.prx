@@ -1,0 +1,562 @@
+#INCLUDE "Mntr470.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MNTR470  ³ Autor ³ Inacio Luiz Kolling   ³ Data ³20/02/2001³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Custo das O.S. de Reforma                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Function MNTR470()
+
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+	
+	Local cString    := "SI3"
+	Local cdesc1     := STR0001 //"Relatorio de Custos dos Ordem de Servico de Reforma."
+	Local cdesc2     := STR0002 //"E permitido selecionar tipo de informacao a ser"
+	Local cdesc3     := STR0003 //"apresentada, atraves dos parametros do relatorio."
+	Local wnrel      := "MNTR470"
+
+	Private vVETHORAS := {}
+	Private aReturn  := { STR0004, 1,STR0005, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := STR0006 //"Relatorio de Custos Das Ordem de Servico de Reforma"
+	Private Tamanho  := "G"
+	Private nomeprog := "MNTR470"
+	//----------------------------------------------------------------
+	//| Variaveis utilizadas para qarametros!                        |
+	//| mv_par01     // De Ordem de Reforma                          |
+	//| mv_par02     // Ate Ordem de Reforma                         |
+	//| mv_par03     // Tipo de Custo (Standard/Medio )              |
+	//| mv_par04     // Tipo Relatorio ( Resumido/Detalhado )        |
+	//----------------------------------------------------------------
+	Private cPerg := "MNT47R"
+
+	//SetKey( VK_F9, { | | NGVersao( "MNTR470" , 2 ) } )
+
+	pergunte(cPerg,.F.)
+
+	//Envia controle para a funcao SETPRINT                        ³
+	wnrel:=SetPrint(cString,wnrel,cPerg,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27                                               
+		Set Filter To
+		Return
+	Endif
+
+	SetDefault(aReturn,cString)
+
+	If MV_PAR04 == 1
+		Titulo := Titulo + STR0041 //' ( RESUMIDO )'
+	Else
+		Titulo := Titulo + STR0042 //' ( DETALHADO )'
+	Endif
+
+	RptStatus({|lEnd| R470Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+	
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return NIL
+
+//-----------------------------------------------------------------
+/*/{Protheus.doc} R470Imp
+Chamada do Relat¢rio
+
+@author Inacio Luiz Kolling
+@since 20/02/2001
+@version undefined
+@param lEnd, logical,
+@param wnRel 
+@param titulo
+@param tamanho
+@type function
+/*/
+//-----------------------------------------------------------------
+Static Function R470Imp(lEnd,wnRel,titulo,tamanho)
+
+	//---------------------------------------------------------------
+	//| Define Variaveis                                            |
+	//---------------------------------------------------------------
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local nTamPro	  := TamSX3("TL_CODIGO")[1] - 15
+	Local oTempTable		//Tabela Temporaria
+	
+	//---------------------------------------------------------------
+	//| Contadores de linha e pagina                                |
+	//---------------------------------------------------------------
+	Private li := 80 ,m_pag := 1
+
+	//---------------------------------------------------------------
+	//| Variaveis locais exclusivas deste programa                  |
+	//---------------------------------------------------------------
+	Private CABEC2 := " "
+	Private ntipo  := 0
+	
+	Private cTRB := GetNextAlias()
+
+	ccBEC := STR0015 //"O.S. Pai Ordem  Bem              Nome do Bem                    Servivo Nome Servico"
+
+	CABEC1 := If(MV_PAR04 = 1,ccBEC+SPAC(19)+STR0016,ccBEC)
+
+	//MV_PAR03 := If(MV_PAR03 = 1,2,1)
+	
+	//---------------------------------------------------------------
+	//| Verifica se deve comprimir ou nao                           |
+	//---------------------------------------------------------------
+	nTipo  := IIF(aReturn[4]==1,15,18)
+	
+	//---------------------------------------------------------------
+	//| Monta os Cabecalhos                                         |
+	//---------------------------------------------------------------
+	/*
+	RESUMIDO
+	O.S. Pai Ordem  Bem              Nome do Bem                    Servivo Nome Servico                    Cust Previsto  Cust Realizad
+	XXXXXX   XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  99.999.999,99  99.999.999,99
+	XXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  99.999.999,99  99.999.999,99
+	-------------  -------------
+	Total da O.S. de Reforma XXXXXX     99.999.999,99  99.999.999,99
+
+	Total da Geral    99.999.999,99  99.999.999,99
+	DETALHADO
+	---------------------------------------- I N S U M O S -------------------------------------------
+	Tipo Insumo          Nome Insumo                    REC QUANTIDADE UND Dt.Inic. H.In. Dt. Fim  H.Fim  Cust Previsto  Cust Realizad
+	ferr XXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX 999 999.999,99 XXX 99/99/99 99:99 99/99/99 99:99  99.999.999,99  99.999.999,99
+
+	Total da O.S. de Reforma XXXXXX     99.999.999,99  99.999.999,99
+
+	Total da Geral    99.999.999,99  99.999.999,99
+	*/
+
+	aCampos  := {}
+		aAdd(aCAMPOS,{"ORDEPAI"  ,"C",06,0})
+		aAdd(aCAMPOS,{"ORDEFIL"  ,"C",06,0})
+		aAdd(aCAMPOS,{"PLANO"    ,"C",06,0})
+		aAdd(aCAMPOS,{"CODBEM"   ,"C",16,0})
+		aAdd(aCAMPOS,{"SERVICO"  ,"C",06,0})
+		aAdd(aCAMPOS,{"VALORPRE" ,"N",12,2})
+		aAdd(aCAMPOS,{"VALORREA" ,"N",12,2})
+		aAdd(aCAMPOS,{"ARQUIVO"  ,"C",03,0})
+		
+	//Intancia classe FWTemporaryTable
+	oTempTable  := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"ORDEPAI","ORDEFIL"}  )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+	
+	DbSelectArea("STJ")
+	DbSetOrder(11)
+	DbSeek(xFilial("STJ")+MV_PAR01,.t.)
+	SetRegua(LastRec())
+	While !Eof() .And. STJ->TJ_FILIAL == xFilial("STJ") .And. ;
+	STJ->TJ_ORDEPAI <= MV_PAR02
+
+		IncRegua()
+
+		If STJ->TJ_SITUACA != "L" .OR. EMPTY(STJ->TJ_ORDEPAI);
+		.Or. stj->tj_tipoos <> "B"
+			DbSelectArea("STJ")
+			DbSkip()
+			Loop
+		EndIf
+
+		DbSelectArea("STL")
+		DbSetOrder(01)
+		DbSeek( xFilial("STL") + STJ->TJ_ORDEM + STJ->TJ_PLANO)
+		While !Eof() .And. STL->TL_FILIAL == xFILIAL("STL")     .And. ;
+		STL->TL_ORDEM  == STJ->TJ_ORDEM .And. STL->TL_PLANO  == STJ->TJ_PLANO
+
+			If MV_PAR03 = 1 //STANDARD 
+				aVETCUST := NGCUSTSTAN(STL->TL_CODIGO,STL->TL_TIPOREG)
+				nVCUSTO  := aVETCUST[1] //Custo standard 
+
+				vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+				STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+				STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+				nQTDHORAS := vVETHORAS[1]
+
+				nVCUSTO  := nVCUSTO * nQTDHORAS
+			Else
+				nVCUSTO  := STL->TL_CUSTO
+			EndIf                 
+
+			R470GRATRB(STJ->TJ_ORDEPAI,STJ->TJ_ORDEM,STJ->TJ_PLANO,STJ->TJ_CODBEM,;
+			STJ->TJ_SERVICO,"STJ",STL->TL_SEQRELA,nVCUSTO)
+
+			DbSelectArea("STL")
+			DbSKip()
+		End
+		DbSelectArea("STJ")
+		DbSKip()
+	End
+
+	DbSelectArea("STS")
+	DbSetOrder(6)
+	DbSeek(xFilial("STS")+MV_PAR01,.t.)
+	SetRegua(LastRec())
+	While !Eof() .And. STS->TS_FILIAL == xFilial("STS") .And. ;
+	STS->TS_ORDEPAI <= MV_PAR02
+
+		IncRegua()
+
+		If STS->TS_SITUACA != "L" .OR. EMPTY(STS->TS_ORDEPAI);
+		.Or. sts->ts_tipoos <> "B"
+			DbSelectArea("STS")
+			dbSkip()
+			Loop
+		EndIf
+
+		DbSelectArea("STT")
+		DbSetOrder(01)
+		DbSeek( xFilial("STT") + STS->TS_ORDEM + STS->TS_PLANO)
+		While !Eof() .And. STT->TT_FILIAL == xFILIAL("STT") .And. ;
+		STT->TT_ORDEM  == STS->TS_ORDEM  .And. STT->TT_PLANO  == STS->TS_PLANO
+
+			If MV_PAR03 = 1 //STANDARD 
+				aVETCUST := NGCUSTSTAN(STT->TT_CODIGO,STT->TT_TIPOREG)
+				nVCUSTO  := aVETCUST[1] //Custo standard 
+
+				vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+				STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+				STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+				nQTDHORAS := vVETHORAS[1]
+
+				nVCUSTO  := nVCUSTO * nQTDHORAS
+			Else
+				nVCUSTO  := STT->TT_CUSTO 
+			EndIf                      
+
+			R470GRATRB(STS->TS_ORDEPAI,STS->TS_ORDEM,STS->TS_PLANO,STS->TS_CODBEM,;
+			STS->TS_SERVICO,"STS",STT->TT_SEQRELA,nVCUSTO)
+
+			DbSelectArea("STT")
+			DbSKip()
+
+		End
+
+		DbSelectArea("STS")
+		DbSKip()
+	End
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+
+	nTOTGPRE := 0.00
+	nTOTGREA := 0.00
+	While !Eof()
+
+		cORDEPAI := (cTRB)->ORDEPAI
+		lPRIM    := .T.
+
+		nTOTPPRE := 0.00
+		nTOTPREA := 0.00
+
+
+		While !Eof() .and. (cTRB)->ORDEPAI == cORDEPAI
+
+			NGSOMALI(58)
+			If lPRIM
+				@ Li,000 Psay (cTRB)->ORDEPAI Picture "@!"
+				lPRIM := .F.
+			Endif
+
+			@ Li,009 Psay (cTRB)->ORDEFIL Picture "@!"
+
+			DbSelectArea("ST9")
+			DbSetOrder(1)
+			DbSeek(xFilial("ST9") + (cTRB)->CODBEM)
+			@ Li,016 Psay (cTRB)->CODBEM  Picture "@!"
+			@ Li,033 Psay Substr(ST9->T9_NOME,1,30)
+
+			DbSelectArea("ST4")
+			DbSetOrder(1)
+			DbSeek(xFilial("ST4") + (cTRB)->SERVICO)
+			@ Li,064 Psay (cTRB)->SERVICO Picture "@!"
+			@ Li,072 Psay Substr(ST4->T4_NOME,1,30)
+
+			If MV_PAR04 == 1  // RESUMIDO
+				@ Li,104 Psay (cTRB)->VALORPRE Picture "@E 99,999,999.99"
+				@ Li,121 Psay (cTRB)->VALORREA Picture "@E 99,999,999.99"
+				nTOTPPRE := nTOTPPRE + (cTRB)->VALORPRE
+				nTOTPREA := nTOTPREA + (cTRB)->VALORREA
+
+			Else
+				// DETALHADO
+
+				If (cTRB)->ARQUIVO == "STJ"
+					DbSelectArea("STL")
+					DbSetOrder(01)
+					If DbSeek( xFilial("STL") + (cTRB)->ORDEFIL + (cTRB)->PLANO)
+
+						nSTLPRE := 0.00
+						nSTLREA := 0.00
+
+						NGSOMALI(58)
+						NGSOMALI(58)
+						@ Li,003 Psay  Replicate("-",1+nTamPro)+STR0017//"--------------------------------------------------------------------- I N S U M O S -------------------------------------------------------------------"
+						NGSOMALI(58)
+						NGSOMALI(58)
+						@ Li,002 Psay  STR0043+Space(nTamPro)+STR0044+If(TamSX3("TL_CODIGO")[1]>15,STR0045,STR0046) //"Tipo Insumo          "###"Nome Insumo          Qntd. Recurso Quantidade Unidade Dt.Inic.   Hora Inicio   Dt. Fim   Hora Fim  Custo Previsto  "###"Cust Realizado"###"Cust Realizad"
+
+						While !Eof() .And. STL->TL_FILIAL == xFILIAL("STL") .And. ;
+						STL->TL_ORDEM  == (cTRB)->ORDEFIL .And. STL->TL_PLANO  == (cTRB)->PLANO
+
+							If MV_PAR03 = 1 //STANDARD 
+								aVETCUST := NGCUSTSTAN(STL->TL_CODIGO,STL->TL_TIPOREG)
+								nVCUSTO  := aVETCUST[1] //Custo standard 
+
+								vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+								STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+								STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+								nQTDHORAS := vVETHORAS[1]
+								nVCUSTO  := nVCUSTO * nQTDHORAS
+							Else
+								nVCUSTO  := STL->TL_CUSTO
+							EndIf                        
+
+							NGSOMALI(58)
+
+							cTIPNOM := NGNOMINSUM(STL->TL_TIPOREG,STL->TL_CODIGO,30)
+
+							cTIPO := Substr(cTIPNOM[1][1],1,3)
+							cNOME := cTIPNOM[1][2]
+
+							vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+							STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+							STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+							nQTDHORAS := vVETHORAS[1]
+
+							@ Li,002 Psay cTIPO   Picture "@!"
+							@ Li,007 Psay STL->TL_CODIGO  Picture "@!"
+							@ Li,023+nTamPro Psay cNOME           Picture "@!"
+							@ Li,054+nTamPro Psay STL->TL_QUANREC Picture "999"
+							If STL->TL_TIPOREG <> "P"
+								@ Li,058+nTamPro Psay NGRHODSEXN(nQTDHORAS,"D") Picture "@E 999,999.99"
+							Else
+								@ Li,058+nTamPro Psay nQTDHORAS Picture "@E 999,999.99"
+							EndIf    
+							@ Li,070+nTamPro Psay STL->TL_UNIDADE Picture "@!"
+							@ Li,079+nTamPro Psay STL->TL_DTINICI Picture "99/99/9999"
+							@ Li,096+nTamPro Psay STL->TL_HOINICI Picture "99:99"
+							@ Li,104+nTamPro Psay STL->TL_DTFIM   Picture "99/99/9999"
+							@ Li,117+nTamPro Psay STL->TL_HOFIM   Picture "99:99"
+
+							nCUSTOPRE := 0.00
+							nCUSTOREA := 0.00
+							If Alltrim(STL->TL_SEQRELA) = "0"
+								nSTLPRE   := nSTLPRE + nVCUSTO
+								nCUSTOPRE := nVCUSTO
+							Else
+								nSTLREA   := nSTLREA + nVCUSTO
+								nCUSTOREA := nVCUSTO
+							EndIf
+
+							@ Li,125+nTamPro Psay nCUSTOPRE       Picture "@E 99,999,999.99" //Custo previsto
+							@ Li,142+nTamPro Psay nCUSTOREA       Picture "@E 99,999,999.99" //Custo realizado
+
+							DbSelectArea("STL")
+							DbSKip()
+
+						End
+
+						NGSOMALI(58)
+						@ Li,072+nTamPro Psay STR0019+(cTRB)->ORDEFIL //"Total da O.S. de Reforma "
+						@ Li,125+nTamPro Psay "-------------    -------------"
+						NGSOMALI(58)
+						@ Li,125+nTamPro Psay nSTLPRE      Picture "@E 99,999,999.99"
+						@ Li,142+nTamPro Psay nSTLREA      Picture "@E 99,999,999.99"
+
+						NGSOMALI(58)
+
+						nTOTPPRE := nTOTPPRE + nSTLPRE
+						nTOTPREA := nTOTPREA + nSTLREA
+
+
+					Endif
+
+				Else
+					DbSelectArea("STT")
+					DbSetOrder(01)
+					If DbSeek( xFilial("STT") + (cTRB)->ORDEFIL + (cTRB)->PLANO)
+
+						nSTTPRE := 0.00
+						nSTTREA := 0.00
+
+						NGSOMALI(58)
+						NGSOMALI(58)
+						@ Li,003 Psay  Replicate("-",1+nTamPro)+STR0017//"--------------------------------------------------------------------- I N S U M O S -------------------------------------------------------------------"
+						NGSOMALI(58)
+						NGSOMALI(58)
+						@ Li,002 Psay  STR0043+Space(nTamPro)+STR0047 //"Nome Insumo          Qntd. Recurso Quantidade Unidade Dt.Inic.   Hora Inicio   Dt. Fim   Hora Fim  Custo Previsto  Custo Realizado" 
+
+						While !Eof() .And. STT->TT_FILIAL == xFILIAL("STT")    .And. ;
+						STT->TT_ORDEM  == (cTRB)->ORDEFIL  .And. STT->TT_PLANO  == (cTRB)->PLANO
+
+							If MV_PAR03 = 1 //STANDARD 
+								aVETCUST := NGCUSTSTAN(STT->TT_CODIGO,STT->TT_TIPOREG)
+								nVCUSTO  := aVETCUST[1] //Custo standard 
+
+								vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+								STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+								STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+								nQTDHORAS := vVETHORAS[1]
+
+								nVCUSTO  := nVCUSTO * nQTDHORAS
+							Else
+								nVCUSTO  := STT->TT_CUSTO
+							EndIf                           
+
+							NGSOMALI(58)
+
+							cTIPNOM := NGNOMINSUM(STT->TT_TIPOREG,STT->TT_CODIGO,30)
+
+							cTIPO := SUBSTR(cTIPNOM[1][1],1,3)
+							cNOME := cTIPNOM[1][2]
+
+							vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+							STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+							STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+							nQTDHORAS := vVETHORAS[1]
+
+							@ Li,002 Psay cTIPO           Picture "@!"
+							@ Li,007 Psay STT->TT_CODIGO  Picture "@!"
+							@ Li,023+nTamPro Psay cNOME           Picture "@!"
+							@ Li,054+nTamPro Psay STT->TT_QUANREC Picture "999" //Qnt. Recurso 
+							If STT->TT_TIPOREG <> "P"
+								@ Li,058+nTamPro Psay NGRHODSEXN(nQTDHORAS,"D") Picture "@E 999,999.99"
+							Else
+								@ Li,058+nTamPro Psay nQTDHORAS Picture "@E 999,999.99"
+							EndIf    
+							@ Li,070+nTamPro Psay STT->TT_UNIDADE Picture "@!"
+							@ Li,079+nTamPro Psay STT->TT_DTINICI Picture "99/99/9999"
+							@ Li,096+nTamPro Psay STT->TT_HOINICI Picture "99:99"
+							@ Li,104+nTamPro Psay STT->TT_DTFIM   Picture "99/99/9999"
+							@ Li,117+nTamPro Psay STT->TT_HOFIM   Picture "99:99"
+
+							nCUSTOPRE := 0.00
+							nCUSTOREA := 0.00
+							If Alltrim(STT->TT_SEQRELA) = "0"
+								nSTTPRE   := nSTTPRE + nVCUSTO
+								nCUSTOPRE := nVCUSTO
+							Else
+								nSTTREA   := nSTTREA + nVCUSTO
+								nCUSTOREA := nVCUSTO
+							Endif
+
+							@ Li,125+nTamPro Psay nCUSTOPRE       Picture "@E 99,999,999.99"
+							@ Li,142+nTamPro Psay nCUSTOREA       Picture "@E 99,999,999.99"
+
+							DbSelectArea("STT")
+							DbSKip()
+
+						End
+
+						NGSOMALI(58)
+						@ Li,125+nTamPro Psay "-------------    -------------"
+						NGSOMALI(58)
+						@ Li,125+nTamPro Psay nSTLPRE      Picture "@E 99,999,999.99"
+						@ Li,142+nTamPro Psay nSTLREA      Picture "@E 99,999,999.99"
+
+						NGSOMALI(58)
+						nTOTPPRE := nTOTPPRE + nSTTPRE
+						nTOTPREA := nTOTPREA + nSTTREA
+
+					EndIf
+				EndIf
+			EndIf
+			DbSelectArea(cTRB)
+			DbSkip()
+		End
+
+		NGSOMALI(58)
+
+		If MV_PAR04 == 1   //Resumido
+			@ Li,104+nTamPro Psay "-------------    -------------"
+			@ Li,051+nTamPro Psay STR0020+cORDEPAI //"Total da O.S. de Reforma Pai "
+			NGSOMALI(58)
+			@ Li,104+nTamPro Psay nTOTPPRE Picture "@E 99,999,999.99"  
+			@ Li,121+nTamPro Psay nTOTPREA Picture "@E 99,999,999.99"
+		Else           //Detalhado
+			@ Li,073+nTamPro Psay STR0020+cORDEPAI //"Total da O.S. de Reforma Pai "
+			NGSOMALI(58)
+			@ Li,125+nTamPro Psay nTOTPPRE Picture "@E 99,999,999.99"
+			@ Li,142+nTamPro Psay nTOTPREA Picture "@E 99,999,999.99"
+		EndIf   
+		NGSOMALI(58)
+
+		nTOTGPRE := nTOTGPRE + nTOTPPRE
+		nTOTGREA := nTOTGREA + nTOTPREA
+
+	End
+
+	If nTOTGPRE > 0 .or. nTOTGREA > 0
+		NGSOMALI(58)
+		If MV_PAR04 == 1   
+			@ Li,071+nTamPro Psay STR0021 //"Total da Geral"    
+			@ Li,104+nTamPro Psay nTOTGPRE Picture "@E 99,999,999.99" 
+			@ Li,121+nTamPro Psay nTOTGREA Picture "@E 99,999,999.99" 
+		Else
+			@ Li,090+nTamPro Psay STR0021 //"Total da Geral"
+			@ Li,125+nTamPro Psay nTOTGPRE Picture "@E 99,999,999.99"
+			@ Li,142+nTamPro Psay nTOTGREA Picture "@E 99,999,999.99"
+		EndIf
+	Endif
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	oTempTable:Delete() //Deleta Arquivo temporario
+
+	// Devolve a condicao original do arquivo principam 
+	RetIndex("ST9")
+	Set Filter To
+
+	Set device to Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+Return NIL
+
+/*
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³R470GRATRB³ Autor ³ Inacio Luiz Kolling   ³ Data ³21/02/2001³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Grava no arquivo temporario                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR470        !                                           ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function R470GRATRB(cORDEPAI,cORDEM,cPLANO,cCODBEM,cSERVICO,cARQ,nSEQU,nCUST)
+
+	nSEQ := If(ValType(nSEQU)="C",Val(nSEQU),nSEQU)
+
+	DbSelectArea(cTRB)
+	If !DBSeek(cORDEPAI+cORDEM)
+		DbAppend()
+		(cTRB)->ORDEPAI := cORDEPAI
+		(cTRB)->ORDEFIL := cORDEM
+		(cTRB)->PLANO   := cPLANO
+		(cTRB)->CODBEM  := cCODBEM
+		(cTRB)->SERVICO := cSERVICO
+		(cTRB)->ARQUIVO := cARQ
+	Endif
+
+	If nSEQ == 0
+		(cTRB)->VALORPRE := (cTRB)->VALORPRE + nCUST
+	Else
+		(cTRB)->VALORREA := (cTRB)->VALORREA + nCUST
+	Endif
+
+Return .t.

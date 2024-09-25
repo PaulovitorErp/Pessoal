@@ -1,0 +1,1834 @@
+#Include "SGAA090.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA090
+Programa para definir planos de acao.
+
+@type    function
+
+@sample  SGAA090()
+
+@author  Thiago Olis Machado
+@since   28/10/2003
+
+@return  Lógico, Indica se pode ou não abrir a rotina
+/*/
+//-------------------------------------------------------------------
+Function SGAA090()
+
+	// Guarda conteudo e declara variaveis padroes
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local nFil
+	Local aCores   := {  { "TAA->TAA_STATUS == '2'", 'BR_AZUL' },;   // array para a legenda de status
+						 { "TAA->TAA_STATUS == '3'", 'BR_AMARELO' },;
+						 { "TAA->TAA_STATUS == '1'", 'BR_VERMELHO' } }
+	Local cFiltro  := "" //Filtro de browse usando parametro especificado no SX6
+	Local aParcFil := {}
+
+	If Amiin( 56, 35 ) //Verifica se o usuário possui licença para acessar a rotina.
+
+		//Verifica se o UPDSGA17 foi aplicado
+		If !SG90UPDVL()
+			Return .F.
+		EndIf
+
+		SGA090VARM()
+
+		If ";" $ cStatus
+			aParcFil := StrTokArr( cStatus, ";" )
+			cStatus := ""
+			For nFil := 1 To Len( aParcFil )
+				If !Empty( cStatus )
+					cStatus += ","
+				EndIf
+				cStatus += ValToSQL( aParcFil[ nFil ] )
+			Next nFil
+		Else
+			cStatus := ValToSQL( cStatus )
+		EndIf
+
+		// Endereca a funcao de BROWSE
+		dbSelectArea( "TAA" )
+		dbSetOrder( 1 )
+		cFiltro := "TAA_STATUS IN (" + cStatus + ")"
+		mBrowse( 6, 1, 22, 75, "TAA", , , , , , aCores, , , , , , , , cFiltro )
+
+	EndIf
+
+	// Retorna conteudo de variaveis padroes
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG090CA
+Funcao para montar uma tela para cadastro.
+
+@type    function
+
+@sample  Sg090Ca( 'TAA' , 0 , 3 )
+
+@author  Thiago Olis Machado
+@since   09/07/2004
+
+@param   cAlias, Caracter, Tabela a ser manipulada
+@param   nReg, Numerico, Indica o registro que está posicionado
+@param   nOpcX, Numerico, Indica a operação de manutenção
+@return  Numérico, Indica se salvou o registro (1) ou se cancelou (2)
+/*/
+//-------------------------------------------------------------------
+Function Sg090Ca( cAlias, nReg, nOpcX )
+
+	Local bCampo, ny, zy, zx, i, x, n, lCLICK
+	Local OLDIND, cError, cKEY, lFIELD
+	Local nCodRes, nTipRes
+
+	Local aNGBEGINTAA	:= NGBEGINPRM( , "SGAA090", , !( IsInCallStack( "SGAA300" ) .Or. IsInCallStack( "SGAA310" ) ) )
+	Local nOldN			:= IIf( Type( "n" ) == "N", n, )
+	Local aOldCols 		:= IIf( Type( "aCols" ) == "A", aClone( aCols ), )
+	Local aOldHeader 	:= IIf( Type( "aHeader" ) == "A", aClone( aHeader ), )
+	Local aOldTela 		:= IIf( Type( "aTela" ) == "A", aClone( aTela ), )
+	Local aOldGet 		:= IIf( Type( "aGETS" ) == "A", aClone( aGETS ), )
+	Local aOldChoice 	:= IIf( Type( "aChoice" ) == "A", aClone( aChoice ), )
+
+	Local aButtons 		:= {}
+	Local GetList		:= {}
+	Local aAlt 			:= {}
+	Local lDEL 			:= .T.
+	Local lAlterou 		:= .F.
+	Local aNoFields 	:= {}
+	Local lInclui   	:= (nOpcx == 3)
+	Local lAltera   	:= (nOpcx == 4)
+	Local aNao			:= {} // Array que recebe os campos que não aparecem na tela
+	Local LVar01 		:= 1
+	Local nLinhas		:= 0
+	Local nQtd 			:= 0
+	Local j 			:= 0
+	Local nLin 			:= 0
+	Local nCpo          := 0
+
+	Local aPages		:= {}
+	Local aTitles		:= {}
+	Local nControl 		:= 0
+
+	// Define variaveis private caso a origem nao seja o browse de planos de acao (SGAA090)
+	If !IsInCallStack( "SGAA090" )
+		SGA090VARM()
+	EndIf
+
+	Private lTpMeta    := NGCADICBASE( 'TAA_TPMETA', 'D', 'TAA', .F. ) //Verifica se existe o campo de tipo de Meta
+	Private lUpdMdt90  := NGCADICBASE( 'TAA_UNIMED', 'A', 'TAA', .F. ) //Verifica se foi executado update UPDMDT90
+	Private lStatusTCO := NGCADICBASE( 'TCO_STATUS', 'A', 'TCO', .F. ) //Verifica se existe o campo de tipo de Meta
+	Private aSize      := MsAdvSize( , .F., 430 )
+	Private nTotal1    := 0
+	Private lChama     := .F.
+	Private aHeadPla   := {}
+	Private aColsPla   := {}
+	Private lGRAVA     := .F.
+	Private cCodPla
+	Private oGetPla
+	Private oDlg
+	Private oGet
+	Private oMenu
+	// Monta a entrada de dados do arquivo
+	Private aTELA[0][0]
+	Private aGETS[0]
+
+
+	If !SuperGetMV( "MV_NG2QDO", .F., "2" ) == "1" //Verifica se tem integração com o modulo de QDO
+		aNao := { "TAA_DOCFIL", "TAA_DOCTO " }       //Adiciona os campos que não irão aparecer na tela
+	EndIf
+
+	aCols := {}
+	aHeader := {}
+	aChoice := NGCAMPNSX3( "TAA", aNao )
+
+	//Verifica se o UPDSGA17 foi aplicado
+	If !SG90UPDVL()
+		Return 0
+	EndIf
+
+	If nOpcx == 5
+		dbSelectArea( "TBI" )
+		dbSetOrder( 2 )
+		dbSeek( xFilial( "TBI" ) + TAA->TAA_CODPLA )
+		While !Eof() .And. xFilial( "TBI" ) + TAA->TAA_CODPLA == TBI->TBI_FILIAL + TBI->TBI_META
+			dbSelectArea( "TBH" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TBH" ) + TBI->TBI_OBJETI )
+				If TBH->TBH_SITUAC <> "4" .And. TBH->TBH_SITUAC != "1"
+					MsgAlert( STR0054,; //"Existem Objetivos e metas relacionados a este plano de ação. Seu cancelamento só é possível pela rotina de Objetivos e Metas."
+							 STR0010 )  //"Atenção"
+					Return 0
+				EndIf
+			EndIf
+			dbSelectArea( "TBI" )
+			dbSkip()
+		End
+	EndIf
+
+	bCampo := { |nCPO| Field( nCPO ) }
+
+	lFIELD := ( Type( "aCHOICE" ) == "A" )
+
+	If lFIELD
+		lFIELD := !Empty( aCHOICE )
+	EndIf
+
+	dbSelectArea( cALIAS )
+	dbSetOrder( 1 )
+	RegtoMemory( cALIAS, ( nOpcX == 3 ) )
+
+	aAdd( aTitles, OemToAnsi( STR0006 ) ) //"Plano de Ação"
+	aAdd( aPages, "Header 1" )
+	nControl++
+	aAdd( aTitles, OemToAnsi( STR0022 ) ) //"Responsáveis"
+	aAdd( aPages, "Header 2" )
+	nControl++
+	aAdd( aTitles, OemToAnsi( STR0023 ) ) //"Planejamento"
+	aAdd( aPages, "Header 3" )
+	nControl++
+
+	nOpca := 0
+
+	DEFINE MSDIALOG oDlg TITLE Ccadastro From aSize[7], 0 To aSize[6], aSize[5] OF oMainWnd PIXEL
+
+		// Folder 01
+		oFolder := TFolder():New( 1, 0, aTitles, aPages, oDlg, , , , .T., .F., 1000, 1000 )
+		oFolder:aDialogs[1]:oFont := oDlg:oFont
+		oFolder:aDialogs[2]:oFont := oDlg:oFont
+		oFolder:aDialogs[3]:oFont := oDlg:oFont
+		oFolder:Align := CONTROL_ALIGN_ALLCLIENT
+
+		If lFIELD
+			oEnchoice := Msmget():New( cALIAS, nReg, nopcx, , , , aCHOICE, { 0, 0, aSize[6]/2, aSize[5]/2 },;
+										 , 3, , , , oFolder:aDialogs[1], , , , , , , , , , .T. )
+		Else
+			oEnchoice := Msmget():New( cALIAS, nReg, nopcx, , , , , { 0, 0, aSize[6]/2, aSize[5]/2 },;
+										 , , , , , oFolder:aDialogs[1], , , , , , , , , , .T. )
+		EndIf
+		oEnchoice:oBox:Align := CONTROL_ALIGN_ALLCLIENT
+
+		// Folder 02
+		aAdd( aNoFields, 'TC9_CODPLA' )
+		cQuery := "SELECT * FROM " + RetSqlName( "TC9" ) + " TC9 WHERE TC9.TC9_FILIAL = '" + xFilial( "TC9" ) +;
+				 "' AND TC9.TC9_CODPLA = '" + M->TAA_CODPLA + "' AND TC9.D_E_L_E_T_ = ' '"
+		FillGetDados( nOpcx, "TC9", 1, xFilial( "TC9" ) + M->TAA_CODPLA, { || "TC9->TC9_FILIAL + TC9->TC9_CODPLA" },;
+					 { || .T. }, aNoFields, , , cQuery )
+
+		If Empty( aCols ) .Or. nOpcx == 3
+			aCols := BlankGetd( aHeader )
+		EndIf
+
+		n   := Len( aCols )
+		oGet:= MsGetDados():New( 0, 0, 210, 325, nOpcx, "Sg090Lin1()", "Sg090Lin1()", "", .T., , 1, , , , , , , oFolder:aDialogs[2] )
+		oGet:oBrowse:Default()
+		oGet:oBrowse:Refresh()
+		oGet:oBrowse:bLostFocus :={|| SG090Lin1()}
+		oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+		aHeader2 := aClone( aHeader )
+		aCols2   := aClone( aCols )
+
+		//Folder 03
+		aNoFields := {}
+		aAdd( aNoFields, 'TCN_CODPLA' )
+		aAdd( aNoFields, 'TCN_WFPROC' )
+
+		cQuery := "SELECT * FROM " + RetSqlName( "TCN" ) + " TCN WHERE TCN.TCN_FILIAL = '" + xFilial( "TCN" ) +;
+				 "' AND TCN.TCN_CODPLA = '" + TAA->TAA_CODPLA + "' AND TCN.D_E_L_E_T_ = ' '"
+		FillGetDados( nOpcx, "TCN", 1, xFilial( "TCN" ) + TAA->TAA_CODPLA, { || "TCN->TCN_FILIAL+TCN->TCN_CODPLA" },;
+					 { || .T. }, aNoFields, , , cQuery, , IIf( nOpcx == 3, .T., .F. ), @aHeadPla, @aColsPla )
+
+		If Empty( aColsPla ) .Or. nOpcx == 3
+			aColsPla := BlankGetd( aHeadPla )
+		EndIf
+
+		oGetPla := MsNewGetDados():New( 0, 0, 200, 200, IIf( !lInclui .And. !lAltera, 0, GD_INSERT + GD_UPDATE + GD_DELETE ), { ||SG090PlOK() },;
+									 { ||SG090PlOK( .T. ) }, , , , 9999, , , , oFolder:aDialogs[3], aHeadPla, aColsPla )
+		oGetPla:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+		aHeader := aClone( aHeader2 )
+		aCols   := aClone( aCols2 )
+
+		oFolder:bSetOption    := {|x| SG090Lin1()}
+		If Len( aSMenu ) > 0
+			NGPOPUP( aSMenu, @oMenu )
+			oDlg:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oDlg ) }
+			oEnchoice:oBox:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oDlg ) }
+		EndIf
+
+		If !IsInCallStack( "SGAC070" ) .And. nOpcx != 5 //Verifica se não está sendo chamado pela consulta ou exclusão
+			aAdd( aButtons, { "PARAMETROS", { || SG090QDO() }, STR0024 } ) //"Relacionar Documentos"
+			If !IsInCallStack( "SGAA300" ) .And. !IsInCallStack( "SGAA310" ) //Verifica se não está sendo chamado pelo objetivos e metas
+				aAdd( aButtons, { "PMSSETADOWN", { || IIf( SG090FIN( nOpcX ), oDlg:End(), nOpca := 0 ) }, STR0025 } ) //"Finalizar Plano de Ação"
+			EndIf
+		EndIf
+		If nOpcx == 3
+			M->TAA_STATUS := "1"
+		EndIf
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( oDlg,;
+		 { | | nOpca := 1, IIf( SG090Lin1( .T., nOpcx ) .And. SGA090VAL( nOpcx ), oDlg:End(), nOpca := 0 ) },;
+		 { | | oDlg:End() }, AlignObject( oDlg, { oEnchoice:oBox }, 1 ), aButtons )
+
+	// Se Confirmou e a opcao incluir ou alterar
+	If nOPCA == 1
+		EvalTrigger()
+		confirmSX8()
+	Else
+		RollBackSX8()
+	EndIf
+
+	If nOPCA == 1 .And. (nOPCx == 3 .Or. nOPCx == 4)
+
+		dbSelectArea( cALIAS )
+		RecLock( cAlias, ( nOpcx == 3 ) )
+			For ny := 1 To FCount()
+				nx := "M->" + FieldName( ny )
+				If "_FILIAL" $ Upper( nx )
+					&nx. := IIf( !Empty( cFilPln ), cFilPln, cFilAnt )
+				EndIf
+				FieldPut( ny, &nx. )
+			Next ny
+		&(cAlias)->(MsUnlock())
+
+		If Len( aCols ) > 0
+			aSort( aCols, , , { |x, y| x[Len( aCols[1] )] .And. !y[Len( aCols[1] )] } )
+		EndIf
+		nCodRes := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TC9_CODRES" } )
+		nTipRes := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TC9_TIPRES" } )
+
+		//Grava responsaveis
+		For nLin := 1 To Len( aCols )
+
+			cTipRes := IIf( lUpdMdt90, aCols[nLin, nTipRes], "" ) // Verifica se existe o campo TC9_TIPRES
+			If !Empty( aCols[nLin, nCodRes] )
+				If !aCols[nLin, Len( aCols[nLin] )]
+
+					dbSelectArea( "TC9" )
+					dbSetOrder( 1 )
+					If dbSeek( xFilial( "TC9" ) + M->TAA_CODPLA + cTipRes + aCols[nLin, nCodRes] )
+						Reclock( "TC9", .F. )
+					Else
+						Reclock( "TC9", .T. )
+					EndIf
+
+						For nCpo := 1 To FCount() //Percorre os campos da tabela
+							If "_FILIAL" $ Upper( FieldName( nCpo ) )
+								FieldPut( nCpo, xFilial( "TC9" ) )
+							ElseIf "_CODPLA" $ Upper( FieldName( nCpo ) )
+								FieldPut( nCpo, M->TAA_CODPLA )
+							ElseIf "_TIPRES" $ Upper( FieldName( nCpo ) ) .And. nTipRes > 0
+								FieldPut( nCpo, cTipRes )
+							ElseIf ( nPos := aScan( aHeader, { | x | AllTrim( Upper( x[ 2 ] ) ) == ;
+											AllTrim( Upper( FieldName( nCpo ) ) ) } ) ) > 0 //Caso posicao do campo esteja no aHeader
+								FieldPut( nCpo, aCols[ nLin, nPos ] )
+							EndIf
+
+						Next nCpo
+
+					MsUnlock( "TC9" )
+
+					//Grava Eventos
+					dbSelectArea( "QAA" )
+					dbSetOrder( 1 )
+					If dbSeek( xFilial( "QAA" ) + aCols[ nLin, nCodRes ] )
+						If !Empty( M->TAA_DOCTO )
+							If M->TAA_DOCTO == TAA->TAA_DOCTO
+								SgPostEve( '2', dDataBase, QAA->QAA_LOGIN, M->TAA_DOCTO )
+							EndIf
+						EndIf
+						If !Empty( M->TAA_CODPLA )
+							SgPostEve( '3', dDataBase, SubStr( QAA->QAA_LOGIN, 1, 15 ), M->TAA_CODPLA )
+						EndIf
+					EndIf
+				Else
+					aEval( aCols, { |x| IIf( x[1] == aCols[ nLin, nCodRes ], nQtd++, Nil ) } )
+					If nQtd <= 1
+						dbSelectArea( "TC9" )
+						dbSetOrder( 1 )
+						If dbSeek( xFilial( "TC9" ) + M->TAA_CODPLA + cTipRes + aCols[ nLin, nCodRes ] )
+							Reclock( "TC9", .F. )
+								TC9->(dbDelete())
+							TC9->(MsUnlock())
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+		Next nLin
+
+		dbSelectArea( "TC9" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TC9" ) + M->TAA_CODPLA )
+		While TC9->(!Eof()) .And. TC9->TC9_FILIAL == xFilial( "TC9" ) .And.;
+									TC9->TC9_CODPLA == M->TAA_CODPLA
+			If aScan( aCols, { | x | x[ nTipRes ] == TC9->TC9_TIPRES .And. x[ nCodRes ] == TC9->TC9_CODRES .And. !x[ Len( x ) ] } ) == 0
+				Reclock( "TC9", .F. )
+					TC9->( dbDelete() )
+				TC9->( MsUnLock() )
+			EndIf
+			dbSelectArea( "TC9" )
+			TC9->( dbSkip() )
+		End
+
+		//Carrega variaveis do planejamento
+		aColsPla := oGetPla:aCols
+		aHeadPla := oGetPla:aHeader
+		nDatPla	:= aScan( aHeadPla, { |x| Trim( Upper( x[2] ) ) == "TCN_DATA" } )
+		//Coloca os deletados por primeiro
+		If Len( aColsPla ) > 0
+			aSort( aColsPla, , , { |x, y| x[Len( aColsPla[1] )] .And. !y[Len( aColsPla[1] )] } )
+		EndIf
+
+		//Grava planejamento
+		For nLin := 1 To Len( aColsPla )
+
+			//Posiciona na tabela e percorre o aCols
+			dbSelectArea( "TCN" )
+			dbSetOrder( 1 )
+
+			If !aColsPla[ nLin, Len( aColsPla[nLin] ) ] .And. !Empty( aColsPla[nLin][nDatPla] ) //Se não é excluído e não está vazio
+
+				If !dbSeek( xFilial( "TCN" ) + M->TAA_CODPLA + DTOS( aColsPla[ nLin, nDatPla ] ) )
+					RecLock( "TCN", .T. )
+				Else
+					RecLock( "TCN", .F. )
+				EndIf
+
+					For nCpo := 1 To FCount() //Percorre os campos da tabela
+						If "_FILIAL" $ Upper( FieldName( nCpo ) )
+							FieldPut( nCpo, xFilial( "TCN" ) )
+						ElseIf "_CODPLA" $ Upper( FieldName( nCpo ) )
+							FieldPut( nCpo, M->TAA_CODPLA )
+						ElseIf ( nPos := aScan( aHeadPla, { | x | AllTrim( Upper( x[ 2 ] ) ) == ;
+										AllTrim( Upper( FieldName( nCpo ) ) ) } ) ) > 0 //Caso posicao do campo esteja no aHeader
+							FieldPut( nCpo, aColsPla[ nLin, nPos ] )
+						EndIf
+					Next nCpo
+
+				TCN->(MsUnLock())
+
+			ElseIf !Empty( aColsPla[nLin][nDatPla] )
+
+				dbSelectArea( "TCN" )
+				dbSetOrder( 1 )
+				If dbSeek( xFilial( "TCN" ) + TAA->TAA_CODPLA + DTOS( aColsPla[ nLin, nDatPla ] ) )
+					RecLock( "TCN", .F. )
+						TCN-> (dbDelete() )
+					TCN->( MsUnlock() )
+				EndIf
+
+			EndIf
+
+		Next nLin
+
+		dbSelectArea( "TCN" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TCN" ) + TAA->TAA_CODPLA )
+		While TCN->(!Eof()) .And. TCN->TCN_FILIAL == xFilial( "TCN" ) .And.;
+									TCN->TCN_CODPLA == TAA->TAA_CODPLA
+			If aScan( aColsPla, { | x | x[ nDatPla ] == TCN->TCN_DATA .And. !x[ Len( x ) ] } ) == 0
+				Reclock( "TCN", .F. )
+					TCN->( dbDelete() )
+				TCN->( MsUnLock() )
+			EndIf
+			dbSelectArea( "TCN" )
+			TCN->( dbSkip() )
+		End
+
+		If nOpcx == 3
+			SGAW010( TAA->TAA_CODPLA )
+		EndIf
+
+	EndIf
+
+	If nOPCA == 1 .And. nOPCx == 5
+		RecLock( "TAA", .F. )
+			TAA->TAA_STATUS := "3" //Cancelado
+		MsUnlock( "TAA" )
+		SG90ATOBJ( TAA->TAA_CODPLA ) //Atualiza Data dos objetivos
+		If lStatusTCO
+			If fVerRegTCO( TAA->TAA_CODPLA )
+				If MsgYesNo( STR0065 ) //"Existem Oportunidades de Melhorias que utilizam este plano de ação, deseja cancelá las junto com o plano?"
+					SGA410MEL( TAA->TAA_CODPLA, TAA->TAA_NOME, "3" )
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	lRefresh := .T.
+
+	If lChama
+		cCodPla := TAA->TAA_CODPLA
+		nTotal1 := TAA->TAA_QTDFIM
+		Sg090Ca( "TAA", 1, 3 )
+	EndIf
+
+	If ValType( nOldn ) == "N"
+		n := nOldN
+	EndIf
+	If ValType( aOldCols ) == "A"
+		aCols := aClone( aOldCols )
+	EndIf
+	If ValType( aOldHeader ) == "A"
+		aHeader := aClone( aOldHeader )
+	EndIf
+	If ValType( aOldTela ) == "A"
+		aTela := aClone( aOldTela )
+	EndIf
+	If ValType( aOldGet ) == "A"
+		aGets := aClone( aOldGet )
+	EndIf
+	If ValType( aOldChoice ) == "A"
+		aChoice := aClone( aOldChoice )
+	EndIf
+
+	NGRETURNPRM( aNGBEGINTAA )
+
+Return nOPCa
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090Qdo
+Monta uma tela para escolha da visualizacao ou Relacionamento
+
+@type    function
+
+@sample  Sg090Qdo()
+
+@author  Thiago Olis Machado
+@since   09/07/2004
+
+@return  Lógico, Indica se salvou o documento
+/*/
+//-------------------------------------------------------------------
+Function Sg090Qdo()
+
+	Local oDlgQdo
+	Local oRadio
+	Local nRadio := 1
+	Local nOpc   := 1
+	Local lRet   := .T.
+
+	Define MsDialog oDlgQdo From 03.5, 6 To 150, 320 Title STR0010 Pixel  //"Atencao"
+
+		Define FONT oBold NAME "Courier New" SIZE 0, -13 BOLD
+		@ 0, 0 BITMAP oBmp RESNAME "PROJETOAP" oF oDlgQdo SIZE 35, 250 NOBORDER WHEN .F. PIXEL
+
+		@ 05, 040 Say OemToAnsi( STR0011 ) Size 117, 7 Of oDlgQdo Pixel Font oBold  //"O que deseja fazer ?"
+
+		@ 20, 048 Radio oRadio Var nRadio Items STR0012, STR0013,; //"Relacionar um documento"###"Visualizar documento relacionado"
+		 STR0014 3d Size 105, 10 Of oDlgQdo Pixel                  //"Apagar um Documento Relacionamento"
+
+		Define sButton From 055, 090 Type 1 Enable Of oDlgQdo Action ( lGrava := .T., oDlgQdo:End() )
+		Define sButton From 055, 120 Type 2 Enable Of oDlgQdo Action ( lGrava := .F., oDlgQdo:End() )
+
+	Activate MsDialog oDlgQdo Centered
+
+	If !lGrava
+		lRet := .F.
+	Else
+		If nRadio == 1
+			If !Sg090RelQdo()
+				lRet := .F.
+			EndIf
+		ElseIf nRadio == 2
+			If !Sg090VieQdo()
+				lRet := .F.
+			EndIf
+		Else
+			M->TAA_DOCTO  := ' '
+			M->TAA_DOCFIL := ' '
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090Fin
+Monta tela de finalização do Plano
+
+@type    function
+
+@sample  Sg090Fin( 3 )
+
+@author  Rafael Diogo Richter
+@since   13/04/2005
+
+@param   nOpcao, Numérico, Indica a opção de manutenção
+@return  Lógico, Indica se finalizou o plano
+/*/
+//-------------------------------------------------------------------
+Function Sg090Fin( nOpcao )
+
+	Local aArea   := GetArea()
+	Local lRet    := .F.
+	Local lRes    := .F.
+	Local lFinObj := .F.
+	Local nQtd    := 0
+	Local i
+
+	nPos    := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == 'TC9_CODRES' } )
+
+	If nOpcao = 4
+
+		If NGCADICBASE( 'TAA_FORMUL', 'A', 'TAA', .F. )
+
+			If TAA->TAA_DTPRFI == "1" .And. dDataBase < TAA->TAA_DTFIPR
+
+				MsgAlert( STR0057,; //"Data atual é menor que a data prevista para finalização do plano de ação. A finalização somente será possível quando atingir a data prevista."
+						 STR0010 )  //"Atenção"
+				Return .F.
+
+			EndIf
+
+		EndIf
+
+		dbSelectArea( "TBI" )
+		dbSetOrder( 2 )
+		dbSeek( xFilial( "TBI" ) + M->TAA_CODPLA )
+		While !Eof() .And. xFilial( "TBI" ) + M->TAA_CODPLA == TBI->TBI_FILIAL + TBI->TBI_META
+			dbSelectArea( "TBH" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TBH" ) + TBI->TBI_OBJETI )
+				If TBH->TBH_SITUAC != "4" .And. TBH->TBH_SITUAC != "1"
+					MsgAlert( STR0051,; //"Existem Objetivos e metas relacionados a este plano de ação. Sua finalização somente será possível quando a meta for atingida."
+							 STR0010 )  //"Atenção"
+					Return .F.
+				EndIf
+			EndIf
+			dbSelectArea( "TBI" )
+			dbSkip()
+		End
+		For i := 1 To Len( aCols )
+			If !Empty( aCols[i][nPos] ) .And. !aCols[i][Len( aCols[i] )]
+				nQtd ++
+				Exit
+			EndIf
+		Next i
+		If nQtd == 0
+			MsgStop( STR0050, STR0010 ) //"Favor informar pelo menos um responsável."#"Atenção"
+			Return .F.
+		EndIf
+		If MsgYesNo( STR0026 ) //"Deseja finalizar o Plano de Ação?"
+			dbSelectArea( "TC9" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "TC9" ) + M->TAA_CODPLA )
+			While !Eof() .And. TC9->TC9_FILIAL == xFilial( "TC9" ) .And. TC9->TC9_CODPLA == M->TAA_CODPLA
+
+				dbSelectArea( "QAA" )
+				dbSetOrder( 1 )
+				If DbSeek( xFilial( "QAA" ) + TC9->TC9_CODRES )
+					If AllTrim( Upper( QAA->QAA_LOGIN ) ) == AllTrim( Upper( cUserName ) )
+						lRes := .T.
+						Exit
+					EndIf
+				EndIf
+				dbSelectArea( "TC9" )
+				dbSkip()
+			End
+
+			If lRes .Or. ( !lRes .And. MsgYesNo( STR0027 ) ) //"Usuário diferente do responsável pelo plano. Deseja mesmo finalizar?"
+				If lStatusTCO
+					If fVerRegTCO( TAA->TAA_CODPLA ) //Verifica se existe algum plano
+						If MsgYesNo( STR0064 ) //"Existem Oportunidades de Melhorias que utilizam este plano de ação, deseja finaliza las junto com o plano?"
+							SGA410MEL( TAA->TAA_CODPLA, TAA->TAA_NOME, "4" )
+						EndIf
+					EndIf
+				EndIf
+				Reclock( "TAA", .F. )
+					TAA->TAA_STATUS := "2"
+					TAA->TAA_USUARI := SubStr( cusuario, 7, 15 )
+					TAA->TAA_PERCEN := 100
+					TAA->TAA_DTFIRE := dDatabase
+					Sg090Aval()
+				MsUnlock( "TAA" )
+				//Se decrescente
+				If lTpMeta .And. TAA->TAA_TPMETA == "2"
+					If M->TAA_META < M->TAA_QTDATU
+						If MsgYesNo( STR0028 ) //"A meta atual não foi atingida com esse Plano de Ação. Deseja abrir um outro?"
+							lChama := .T.
+						EndIf
+					EndIf
+				Else //Crescente
+					If M->TAA_META > M->TAA_QTDATU
+						If MsgYesNo( STR0028 ) //"A meta atual não foi atingida com esse Plano de Ação. Deseja abrir um outro?"
+							lChama := .T.
+						EndIf
+					EndIf
+				EndIf
+				lRet := .T.
+			EndIf
+
+			If lRet
+				dbSelectArea( "TAA" )
+				Set Filter To &( "( TAA->TAA_STATUS $ '" + cStatus + "' )" )
+			EndIf
+		EndIf
+	Else
+		MsgAlert( STR0029 ) //"Opção apenas disponível no modo de alteração."
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090RelQdo
+Relaciona um procedimento a um documento QDO
+
+@type    function
+
+@sample  Sg090RelQdo()
+
+@author  Thiago Machado
+@since   09/07/2004
+
+@return  Lógico, Sempre falso
+/*/
+//-------------------------------------------------------------------
+Function Sg090RelQdo()
+
+	Local lRet := .F.
+
+	lRet := ConPad1( , , , "QDH", , , .F. )
+
+	If lRet
+		M->TAA_DOCTO  := QDH->QDH_DOCTO
+		M->TAA_DOCFIL := QDH->QDH_FILIAL
+	EndIf
+
+Return .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090VieQdo
+Visualiza um documento QDO
+
+@type    function
+
+@sample  Sg090VieQdo()
+
+@author  Thiago Machado
+@since   09/07/2004
+
+@return  Lógico, Indica que conseguiu realizar a visualização
+/*/
+//-------------------------------------------------------------------
+Function Sg090VieQdo()
+
+	Local _lRet := .F.
+
+	If !Empty( M->TAA_DOCTO )
+		If QDOVIEW( , M->TAA_DOCTO ) //Visualiza documento Word...
+			_lRet := .T.
+		EndIf
+	Else
+		MsgInfo( STR0030 ) //"Nao existe documento associado a este Plano de Ação"
+	EndIf
+
+Return _lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090Aval
+Inclui no Array as Avaliacoes relacionadas
+
+@type    function
+
+@sample  Sg090Aval()
+
+@author  Rafael Diogo Richter
+@since   09/05/2005
+
+@return  Null, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function Sg090Aval()
+
+	Local aPlano  := {}
+	Local lSituac := NGCADICBASE( "TAB_SITUAC", "A", "TAB", .F. ) //Verifica se existe situacao de desempenho
+
+	dbSelectArea( "TAB" )
+	dbSetOrder( 2 )
+	Dbseek( xFilial( "TAB" ) + M->TAA_CODPLA )
+	While !Eof() .And. xFilial( "TAB" ) == TAB->TAB_FILIAL .And. TAB->TAB_CODPLA == M->TAA_CODPLA
+
+		//Verifica se desempenho não está finalizado
+		If lSituac
+			If TAB->TAB_SITUAC <> "1"
+				dbSelectArea( "TAB" )
+				dbSkip()
+			EndIf
+		EndIf
+
+		TA4->( dbSeek( xFilial( "TA4" ) + TAB->TAB_CODASP ) )
+		cDescAsp := TA4->TA4_DESCRI
+
+		TAE->( DbSeek( xFilial( "TAE" ) + TAB->TAB_CODIMP ) )
+		cDescImp := TAE->TAE_DESCRI
+
+		TAF->( dbSetOrder( 2 ) )
+		TAF->( DbSeek( xFilial( "TAF" ) + '001' + TAB->TAB_CODNIV ) )
+		cIdent := TAF->TAF_NOMNIV
+
+		nAvaliacao := aScan( aPlano, { |x| x[1] == TAB->TAB_ORDEM } )
+
+		If nAvaliacao == 0
+			aAdd( aPlano, { TAB->TAB_ORDEM, cIdent, TAB->TAB_CODASP, cDescAsp, TAB->TAB_CODIMP, cDescImp, TAB->TAB_CODCLA, TAB->TAB_DTRESU, 'S' } )
+		EndIf
+		dbSelectArea( "TAB" )
+		dbSkip()
+	End
+
+	If Len( aPlano ) > 0
+
+		If MsgYesNo( STR0031 + AllTrim( Str( Len( aPlano ) ) ) + STR0032 + CHR( 13 ) + CHR( 13 ); //"Existem, "###" Avaliações a serem Reavaliadas"
+					+ STR0033, STR0010 ) //"Deseja visualizá-las?"###"Atenção"
+			MsgRun( OemToAnsi( STR0034 ), OemToAnsi( STR0035 ), { || Sg090ReAva( aPlano ) } ) //"Selecionando Avaliacoes a serem Reavaliadas..."###"Aguarde"
+		EndIf
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090ReAva
+Monta tela para mostrar as Avaliacoes.
+
+@type    function
+
+@sample  Sg090ReAva( {} )
+
+@author  Rafael Diogo Richter
+@since   09/05/2005
+
+@param   aPlano, Array, Array com os planos do Aspecto
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg090ReAva( aPlano )
+
+	Local oDlgAva
+	Local oBtn1
+	Local oBtn2
+	Local oBtn3
+	Local oBtn4
+	Local cPlano := M->TAA_CODPLA
+
+	Private oAspecto
+	Private oImpacto
+	Private cAspecto := ' '
+	Private cImpacto := ' '
+	Private lFirst   := .T.
+
+	Define MsDialog oDlgAva From 000, 000 To 305, 625 Title STR0010 Pixel //"Atenção"
+		Define FONT oBold NAME "Courier New" SIZE 0, -13 BOLD
+
+		@ 05, 035 Say OemToAnsi( STR0036 ) Size 187, 7 Of oDlgAva Pixel Font oBold //"Avaliações relacionadas com o Plano de Ação"
+		@ 05, 210 Say OemToAnsi( cPlano ) Color CLR_BLUE Pixel Font oBold
+
+		DEFINE SBUTTON oBtn1 FROM 003, 282 TYPE 11 ENABLE OF oDlgAva Action Sg090_Reavalia( .T., aPlano )
+		oBtn1:cCaption := STR0037 //"ReAvalia"
+		oBtn1:cToolTip := STR0037 //"ReAvalia"
+
+		DEFINE SBUTTON oBtn2 FROM 016, 282 TYPE 17
+
+		DEFINE SBUTTON oBtn3 FROM 029, 282 TYPE 03 ENABLE OF oDlgAva Action Sg090_Reavalia( .F., aPlano )
+		oBtn3:cCaption := STR0038 //"Não Afeta"
+		oBtn3:cToolTip := STR0038 //"Não Afeta"
+
+		DEFINE SBUTTON oBtn4 FROM 042,282 TYPE 02 ENABLE OF oDlgAva Action oDlgAva:End()
+
+		@ 012, 006 ListBox oList Var cList;
+		Fields Header;
+		STR0039, STR0040, STR0041; //"Ordem"###"Identificação"###"Data Resultado"
+		 ColSizes 50, 130, 50;
+		 On Change ( Sg090Change( aPlano ) );
+		 Size 270, 130 Of oDlgAva Pixel;
+		 On DblClick( Sg090_Reavalia( .T., aPlano ) )
+
+		bList := { || 	IIf( oList:nAt > Len( aPlano ) .Or. oList:nAt = 0,;
+		 { " ", " ", " ", " ", " ", " ", " ", " " },;
+		 { aPlano[oList:nAt, 1], aPlano[oList:nAt, 2], aPlano[oList:nAt, 8] } ) }
+
+		oList:SetArray( aPlano )
+		oList:bLine:= bList
+		oList:GoTop()
+
+		@ 143, 007 Say OemToAnsi( STR0042 ) Of oDlgAva Size 45, 15 Pixel Color CLR_BLUE //"Aspecto"
+		@ 143, 037 Say oAspecto Var cAspecto Size 148, 08 Of oDlgAva Pixel
+
+		@ 143, 190 Say OemToAnsi( STR0043 ) Of oDlgAva Size 45, 15 Pixel Color CLR_BLUE //"Impacto"
+		@ 143, 217 Say oImpacto Var cImpacto Size 148, 08 Of oDlgAva Pixel
+
+	Activate MsDialog oDlgAva Centered
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090_Reavalia
+Mostra a tela de Avaliacao selecionada
+
+@type    function
+
+@sample  Sg090_reavalia( .T. , {} )
+
+@author  Rafael Diogo Richter
+@since   09/05/2005
+
+@param lChama, Lógico, Indica onde foi chamado (Reavalia - .T. ou Não Afeta - .F.)
+@param aPlano, Array, Array com os Planos do Aspecto
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg090_Reavalia( lChama, aPlano )
+
+	If Len( aPlano ) == 0
+		Return .T.
+	EndIf
+
+	If !lChama
+		nOpcao := 1
+	EndIf
+	CursorWait()
+	dbSelectArea( "TAB" )
+	dbSetOrder( 1 )
+	dbseek( xFilial( "TAB" ) + aPlano[oList:nAt, 1] )
+	If lChama
+		nOpcao := Sg110Pro( Alias(), Recno(), 4 )
+	EndIf
+	If nOpcao == 1
+		aDel( aPlano, oList:nAt )
+		aSize( aPlano, Len( aPlano ) - 1 )
+	EndIf
+	oList:Refresh()
+	CursorArrow()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090Change
+Mostra label do Aspecto e Impacto.
+
+@type    function
+
+@sample  Sg090Change( {} )
+
+@author  Rafael Diogo Richter
+@since   09/05/2005
+
+@param aPlano, Array, Array com os Planos do Aspecto
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg090Change( aPlano )
+
+	cAspecto := aPlano[oList:nAt, 4]
+	cImpacto := aPlano[oList:nAt, 6]
+
+	If lFirst
+		lFirst := .F.
+	Else
+		oAspecto:Refresh()
+		oImpacto:Refresh()
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg090Num
+Funcao para trazer o codigo auto-numerado.
+
+@type    function
+
+@sample  Sg090Num()
+
+@author  Rafael Diogo Richter
+@since   03/02/2006
+
+@return  Caracter, Sequencia autonumerada
+/*/
+//-------------------------------------------------------------------
+Function Sg090Num()
+
+	Local cDes := 0
+	Local nTam := TAMSX3( "TAA_CODPLA" )[1]
+	Local cFilterTbl
+
+	dbSelectArea( 'TAA' )
+	cFilterTbl := dBFilter()
+
+	Set Filter To
+
+	dbSelectArea( 'TAA' )
+	dbSetOrder( 1 )
+	dbGotop()
+	While TAA->(!Eof())
+		cDes := Max( cDes, Val( TAA->TAA_CODPLA ) )
+		DbSkip()
+	End
+	cDes++
+
+	Set Filter To &( cFilterTbl )
+
+Return StrZero( cDes, nTam )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Rafael Diogo Richter
+@since 11/01/2007
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lMenuMdi )
+
+	Local aRotina := {	 { STR0001, "AxPesqui", 0, 1 },;    //"Pesquisar"
+						 { STR0002, "Sg090Ca", 0, 2 },;     //"Visualizar"
+						 { STR0003, "Sg090Ca", 0, 3 },;     //"Incluir"
+						 { STR0004, "Sg090Ca", 0, 4 },;     //"Alterar"
+						 { STR0052, "Sg090Ca", 0, 5, 3 },;  //"Cancelar"
+						 { STR0053, "MsDocument", 0, 4 },; //Co&nhecimento
+						 { STR0060, "SGA90Leg", 0, 6 } }    //"Legenda"
+
+	Default lMenuMdi := .T.
+
+	If !lMenuMdi .And. NGCADICBASE( "TJ2_QUESTI", "A", "TJ2", .F. )
+		aAdd( aRotina, { "Questionário", "MDTA615QUE", 0, 4 } )
+	EndIf
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG090LIN1
+Funcao para trazer o codigo auto-numerado.
+
+@type    function
+
+@sample  Sg090Lin1( .T. , 3 )
+
+@author  Rafael Diogo Richter
+@since   06/02/2008
+
+@param   lFim, Lógico, Indica se é validação de Fim de GetDados
+@param   nOpcx, Numérico, Indica a operação de manutenção
+@return  Lógico, Indica se a linha é valida
+/*/
+//-------------------------------------------------------------------
+Function Sg090Lin1( lFim, nOpcx )
+
+	Local nx
+	Local nQtd    := 0
+	Local cCodPla := ''
+	Local lRet    := .T.
+
+	Default lFim  := .F.
+	Default nOpcx := 4
+
+	If !obrigatorio( aGets, aTela )
+		lRet := .F.
+	EndIf
+
+
+	//Valida Planejamento
+	If lRet .And. lFim .And. !SG090PlOK( .T. )
+		lRet := .F.
+	EndIf
+
+	nPos    := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == 'TC9_CODRES' } )
+	cCodPla := aCols[n][nPos]
+
+	If lRet
+		If lFim
+			nQtd := 0
+			For nx := 1 To Len( aCols )
+				If !Empty( aCols[nx][nPos] ) .And. !aCols[nx][Len( aCols[nx] )]
+					nQtd ++
+					Exit
+				EndIf
+			Next
+
+			If nQtd == 0
+				MsgStop( STR0050, STR0010 ) //"Favor informar pelo menos um responsável."#"Atenção"
+				lRet := .F.
+			EndIf
+		Else
+			If Empty( aCols[1][1] )
+				Return .T.
+			EndIf
+		EndIf
+	EndIf
+
+	If lRet
+		For nx:=1 To Len( aCols )
+			If !aCols[nx][Len( aCols[nx] )]
+				If Empty( aCols[nx][1] )
+					Help( " ", 1, "OBRIGAT" )
+					Return .F.
+				EndIf
+			EndIf
+		Next
+	EndIf
+
+	nQtd := 0
+
+	If lRet
+		If nPos > 0
+			aEval( aCols, { |x| nQtd += IIf( ! x[Len( aHeader ) + 1] .And. x[nPos] == cCodPla, 1, 0 ) } )
+		EndIf
+
+		If nQtd > 1
+			Help( " ", 1, STR0010, , STR0044, 3, 1 ) //"Atenção"###"Campo Responsável Duplicado"
+			Return .F.
+		EndIf
+	EndIf
+
+	PutFileInEof( "SRA" )
+	PutFileInEof( "QAA" )
+	PutFileInEof( "TC9" )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG090PlOK
+Valida a linha digitada no GetDados.
+
+@type    function
+
+@sample  Sg090PlOK( .F. )
+
+@author  Rafael Diogo Richter
+@since   08/12/2008
+
+@param   lFim, Lógico, Indica se é validação de Fim de GetDados
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG090PlOK( lFim )
+
+	Local f
+	Local aColsPla := oGetPla:aCols
+	Local aHeadPla := oGetPla:aHeader
+	Local n        := oGetPla:nAt
+	Local nPosData := aScan( aHeadPla, { |x| Trim( Upper( x[2] ) ) == "TCN_DATA" } )
+
+	Default lFim := .F.
+
+	If Len( aColsPla ) == 1
+		If Empty( aColsPla[1][nPosData] ) .Or. aColsPla[1][Len( aColsPla[1] )]
+			Return .T.
+		EndIf
+	EndIf
+	//Percorre aCols
+	For f := 1 To Len( aColsPla )
+		If !aColsPla[f][Len( aColsPla[f] )]
+			If lFim .Or. f == n
+				//VerIfica se os campos obrigatórios estão preenchidos
+				If Empty( aColsPla[f][nPosData] )
+					//Mostra mensagem de Help
+					Help( 1, " ", "OBRIGAT2", , aHeadPla[nPosData][1], 3, 0 )
+					Return .F.
+				EndIf
+				//Verifica se a data esta dentro do plano
+				If ( !Empty( M->TAA_DTINPR ) .And. aColsPla[f][nPosData] < M->TAA_DTINPR ) .Or. ( aColsPla[f][nPosData] < M->TAA_DTIMPL )
+					ShowHelpDlg( STR0010, { STR0055 }, 2 ) //"Atenção"###"Favor informar uma data maior que a Inicial do Plano"
+					Return .F.
+				EndIf
+				If !Empty( M->TAA_DTFIPR ) .And. aColsPla[f][nPosData] > M->TAA_DTFIPR
+					ShowHelpDlg( STR0010, { STR0056 }, 2 ) //"Atenção"###"Favor informar uma data menor que a Final do Plano"
+					Return .F.
+				EndIf
+			EndIf
+			//Verifica se é somente LinhaOk
+			If f != n .And. !aColsPla[n][Len( aColsPla[n] )]
+				If aColsPla[f][nPosData] == aColsPla[n][nPosData]
+					Help( " ", 1, "JAEXISTINF" )
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	Next f
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA090Nome
+Traz a descricao do Responsável.
+
+@type    function
+
+@sample  Sg090Nome()
+
+@author  Rafael Diogo Richter
+@since   03/06/2009
+
+@return  Caracter, Descrição do Responsável na QAA
+/*/
+//-------------------------------------------------------------------
+Function SGA090Nome()
+
+	Local cReturn := " "
+	Local nPos    := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TC9_CODRES" } )
+
+	If nPos > 0
+		If !Empty( aCols[Len( aCols )][nPos] )
+			dbSelectArea( "QAA" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "QAA" ) + aCols[Len( aCols )][nPos] )
+				cReturn := QAA->QAA_NOME
+			EndIf
+		EndIf
+	EndIf
+
+Return cReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ³SG090VldP
+Valida o conteudo do campo TAA_PERCEN
+
+@type    function
+
+@sample  SG090VldP()
+
+@author  Rafael Diogo Richter
+@since   28/08/2009
+
+@return  Lógico, Indica se o valor está correto
+/*/
+//-------------------------------------------------------------------
+Function SG090VldP()
+
+	Local lRet := .T.
+
+	If M->TAA_PERCEN < 0 .Or. M->TAA_PERCEN > 100
+		MsgStop( STR0049, STR0010 ) //"Valor informado deverá estar entre 0 e 100."###"Atenção"
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA90DTIM
+Valida o conteudo do campo TAA_DTIMPL
+
+@type    function
+
+@sample  SGA90DTIM()
+
+@author  Marcos Wagner Junior
+@since   21/10/2009
+
+@return  Lógico, Indica se o valor está correto
+/*/
+//-------------------------------------------------------------------
+Function SGA90DTIM()
+
+	If !Empty( M->TAA_DTIMPL ) .And. !Empty( M->TAA_DTINPR ) .And. ( M->TAA_DTIMPL > M->TAA_DTINPR )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTIMPL' ) ) + STR0017 + AllTrim( NGRETTITULO( 'TAA_DTINPR' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/menor que '"###"Atenção"
+		Return .F.
+	EndIf
+
+	If !Empty( M->TAA_DTIMPL ) .And. !Empty( M->TAA_DTFIPR ) .And. ( M->TAA_DTIMPL > M->TAA_DTFIPR )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTIMPL' ) ) + STR0017 + AllTrim( NGRETTITULO( 'TAA_DTFIPR' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/menor que '"###"Atenção"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA90DTINI
+Valida o conteudo do campo TAA_DTINPR
+
+@type    function
+
+@sample  SGA90DTINI()
+
+@author  Marcos Wagner Junior
+@since   21/10/2009
+
+@return  Lógico, Indica se o valor está correto
+/*/
+//-------------------------------------------------------------------
+Function SGA90DTINI()
+
+	If !Empty( M->TAA_DTINPR ) .And. !Empty( M->TAA_DTIMPL ) .And. ( M->TAA_DTINPR < M->TAA_DTIMPL )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTINPR' ) ) + STR0018 + AllTrim( NGRETTITULO( 'TAA_DTIMPL' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/maior que '"###"Atenção"
+		Return .F.
+	EndIf
+
+	If !Empty( M->TAA_DTINPR ) .And. !Empty( M->TAA_DTFIPR ) .And. ( M->TAA_DTINPR > M->TAA_DTFIPR )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTINPR' ) ) + STR0017 + AllTrim( NGRETTITULO( 'TAA_DTFIPR' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/menor que '"###"Atenção"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA90DTFIM
+Valida o conteudo do campo TAA_DTFIPR
+
+@type    function
+
+@sample  SGA90DTFIM()
+
+@author  Marcos Wagner Junior
+@since   21/10/2009
+
+@return  Lógico, Indica se o valor está correto
+/*/
+//-------------------------------------------------------------------
+Function SGA90DTFIM()
+
+	If !Empty( M->TAA_DTFIPR ) .And. !Empty( M->TAA_DTIMPL ) .And. ( M->TAA_DTFIPR < M->TAA_DTIMPL )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTFIPR' ) ) + STR0018 + AllTrim( NGRETTITULO( 'TAA_DTIMPL' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/maior que '"###"Atenção"
+		Return .F.
+	EndIf
+
+	If !Empty( M->TAA_DTFIPR ) .And. !Empty( M->TAA_DTINPR ) .And. ( M->TAA_DTFIPR < M->TAA_DTINPR )
+		MsgStop( STR0016 + AllTrim( NGRETTITULO( 'TAA_DTFIPR' ) ) + STR0018 + AllTrim( NGRETTITULO( 'TAA_DTINPR' ) ) + "'", STR0010 ) //"O campo '"###"' deverá ser igual/maior que '"###"Atenção"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG90META
+Verifica se o Plano de Acao e uma meta e se o objetivo foi aprovado
+
+@type    function
+
+@sample  SG90META( '000001' )
+
+@author  Roger Rodrigues
+@since   23/04/2010
+
+@param   cCodPla, Caracter, Indica o codigo do plano de ação a ser considerado
+@return  Lógico, Indica se a meta do objetivo foi fechada
+/*/
+//-------------------------------------------------------------------
+Function SG90META( cCodPla )
+
+	Default cCodPla := M->TAA_CODPLA
+
+	dbSelectArea( "TBI" )
+	dbSetOrder( 2 )
+	dbSeek( xFilial( "TBI" ) + cCodPla )
+	While !Eof() .And. xFilial( "TBI" ) + cCodPla == TBI->TBI_FILIAL + TBI->TBI_META
+		dbSelectArea( "TBH" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TBH" ) + TBI->TBI_OBJETI ) .And. TBH->TBH_SITUAC != "4"
+			Return .T.
+		EndIf
+		dbSelectArea( "TBI" )
+		dbSkip()
+	End
+
+Return .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG90ATOBJ
+Atualiza datas dos objetivos
+
+@type    function
+
+@sample  SG90ATOBJ( '000001' )
+
+@author  Roger Rodrigues
+@since   23/04/2010
+
+@param   cCodPla, Caracter, Indica o codigo do plano de ação a ser considerado
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG90ATOBJ( cCodPla )
+
+	If !Empty( cCodPla )
+		//Verifica os Objetivos e altera a data final e inicial
+		dbSelectArea( "TBI" )
+		dbSetOrder( 2 )
+		dbSeek( xFilial( "TBI" ) + cCodPla )
+		While !Eof() .And. xFilial( "TBI" ) + cCodPla == TBI->TBI_FILIAL + TBI->TBI_META
+			nRecTBI := TBI->(Recno())
+			dbSelectArea( "TBH" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TBH" ) + TBI->TBI_OBJETI ) .And. ( TBH->TBH_SITUAC == "1" .Or. TBH->TBH_SITUAC == "2" )
+				dDataIni := CTOD( "" )
+				dDataFim := CTOD( "" )
+				dbSelectArea( "TBI" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TBI" ) + TBH->TBH_CODOBJ )
+				While !Eof() .And. xFilial( "TBI" ) + TBH->TBH_CODOBJ == TBI->TBI_FILIAL + TBI->TBI_OBJETIV
+					dbSelectArea( "TAA" )
+					dbSetOrder( 1 )
+					If dbSeek( xFilial( "TAA" ) + TBI->TBI_META )
+						If Empty( dDataIni ) .Or. TAA->TAA_DTINPR < dDataIni
+							dDataIni := TAA->TAA_DTINPR
+						EndIf
+						If Empty( dDataFim ) .Or. TAA->TAA_DTFIPR > dDataFim
+							dDataFim := TAA->TAA_DTFIPR
+						EndIf
+					EndIf
+					dbSelectArea( "TBI" )
+					dbSkip()
+				End
+				dbSelectArea( "TBH" )
+				RecLock( "TBH", .F. )
+					TBH->TBH_ABERTU := IIf( !Empty( dDataIni ), dDataIni, TBH->TBH_ABERTU )
+					TBH->TBH_FECHAM := IIf( !Empty( dDataFim ), dDataFim, TBH->TBH_FECHAM )
+				MsUnlock( "TBH" )
+			EndIf
+			dbSelectArea( "TBI" )
+			dbGoTo( nRecTBI )
+			dbSetOrder( 2 )
+			dbSkip()
+		End
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG90UPDVL
+Verifica a aplicacao do UPDSGA17
+
+@type    function
+
+@sample  SG90UPDVL()
+
+@author  Roger Rodrigues
+@since   23/04/2010
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG90UPDVL()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG090VMET
+Valida os valores da meta inicial e final TAA_METINI E TAA_METFIM
+
+@type    function
+
+@sample  SG090VMET()
+
+@author  Thiago Henrique dos Santos
+@since   28/03/2012
+
+@return  Lógico, Indica se o valor está valido
+/*/
+//---------------------------------------------------------------------
+Function SG090VMET()
+
+	Local cVar := Alltrim( ReadVar() )
+	Local lRet := .T.
+
+	If cVar == "M->TAA_METINI"
+		lRet := M->TAA_METFIM == 0 .Or. M->TAA_METFIM >= M->TAA_METINI
+
+	Else
+		lRet := M->TAA_METFIM >= M->TAA_METINI
+
+	EndIf
+
+	If !lRet
+
+		ShowHelpDlg( STR0010, { STR0058 }, 5, { STR0059, "" }, 1 ) //Atenção###"Valor inválido para meta ."###"A Meta Final não pode ser menor que a Meta Inicial."
+
+	EndIf
+
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGA90LEG
+Tela de legenda que mostra o estado relacionado a sua cor
+
+@type    function
+
+@sample  SGA90LEG()
+
+@author  Juliani Schlickmann Damasceno
+@since   23/09/2013
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function SGA90LEG()
+
+	Local aLegenda := {	 { "BR_AZUL", STR0063 },;     //"Finalizado"
+						 { "BR_AMARELO", STR0062 },;  //"Cancelado"
+						 { "BR_VERMELHO", STR0061 } } //"Pendente"
+
+	BrwLegenda( cCadastro, STR0060, aLegenda ) //"Legenda"
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SG90PLACAO
+Função de tratativa para unificação das tabelas TNI e TAA
+referentes a Palno de Ação.
+
+@type    function
+
+@sample  SG90PLACAO()
+
+@author  Bruno Lobo de Souza
+@since   02/10/2013
+
+@return  Null, Sempre nulo
+/*/
+//---------------------------------------------------------------------
+Function SG90PLACAO()
+
+	Local cTable
+	Local nIdx
+	Local cSeek
+	Local cWhile
+	Local aField
+	Local lSigaMdtPs := SuperGetMv( "MV_MDTPS", .F., "N" ) == "S"
+
+	cCliMdtPs := IIf( lSigaMdtPs, SA1->A1_COD + SA1->A1_LOJA, Space( Len( SA1->A1_COD + SA1->A1_LOJA ) ) )
+
+	If NGCADICBASE( "TAA_UNIMED", "A", "TAA", .F. ) .And. !lSigaMdtPs
+		cTable := "TAA"
+		aField := { "TAA_FILIAL", "TAA_CODPLA", "TAA_NOME", "TAA_DTIMPL", "TAA_CCUSTO", "TAA_DTINPR", "TAA_DTFIPR", "TAA_DTINRE",;
+				 "TAA_DTFIRE", "TAA_OQUE", "TAA_MAT", "TAA_ONDE", "TAA_PORQUE", "TAA_COMO", "TAA_CUSTOP", "TAA_CUSTOR", "TAA_QTDATU",;
+				 "TAA_META", "TAA_QTDFIM", "TAA_PERCEN", "TAA_OBS", "TAA_DOCFIL", "TAA_DOCTO", "TAA_UNIMED", "TAA_ORDEM", "TAA_FILFUN",;
+				 "TAA_FUNRES", "TAA_NOMRES", "TAA_TIPOPL" }
+		If lSigaMdtPs
+			nIdx	  := 5
+			cSeek	  := xFilial( "TAA" ) + cCliMdtPs
+			cWhile	  := "TAA->TAA_FILIAL == xFilial('TAA') .And. cCliMdtPs == TAA->(TAA_CLIENT+TAA_LOJA)"
+			cCliente  := "TAA_CLIENT"
+			cLoja	  := "TAA_LOJA"
+		Else
+			nIdx	  := 1
+			cSeek	  := xFilial( "TAA" )
+			cWhile	  := "TAA->TAA_FILIAL == xFilial('TAA')"
+			cCliente  := ""
+			cLoja	  := ""
+		EndIf
+	Else
+		cTable 	:= "TNI"
+		aField := { "TNI_FILIAL", "TNI_CODPLA", "TNI_NOMPLA", "TNI_DTIMPL", "TNI_CC", "TNI_DTINPR", "TNI_DTFIPR", "TNI_DTINRE",;
+				 "TNI_DTFIRE", "TNI_OQUE", "TNI_QUEM", "TNI_ONDE", "TNI_PORQUE", "TNI_COMO", "TNI_CUSTOP", "TNI_CUSTOR", "TNI_QTDEAT",;
+				 "TNI_META", "TNI_QTDEFI", "TNI_PERCEN", "TNI_OBS", "TNI_DOCFIL", "TNI_QDOCTO", "TNI_UNIMED", "TNI_ORDEM", "TNI_FILFUN",;
+				 "TNI_FUNRES", "TNI_NOMERE", "TNI_TIPOPL" }
+		If lSigaMdtPs
+			nIdx	  := 5
+			cSeek	  := xFilial( "TNI" ) + cCliMdtPs
+			cWhile	  := "TNI->TNI_FILIAL == xFilial('TNI') .And. cCliMdtPs == TNI->(TNI_CLIENT+TNI_LOJA)"
+			cCliente  := "TNI_CLIENT"
+			cLoja 	  := "TNI_LOJA"
+		Else
+			nIdx	  := 1
+			cSeek	  := xFilial( "TNI" )
+			cWhile	  := "TNI->TNI_FILIAL == xFilial('TNI')"
+			cCliente  := ""
+			cLoja	  := ""
+		EndIf
+	EndIf
+
+	_SetOwnerPrvt( "cAliasPA", cTable )
+	_SetOwnerPrvt( "nIndexPA", nIdx )
+	_SetOwnerPrvt( "aFieldPA", aField )
+	_SetOwnerPrvt( "cSeekPA", cSeek )
+	_SetOwnerPrvt( "cWhilePA", cWhile )
+	_SetOwnerPrvt( "cClientePA", cCliente )
+	_SetOwnerPrvt( "cLojaPA", cLoja )
+	_SetOwnerPrvt( "cCliMdtPs", cCliMdtPs )
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SG90CONDX7
+Função de tratativa condicional para o gatilho
+do campo TC9_CODRES.
+
+@type    function
+
+@sample  SG90CONDX7( 'QAA' )
+
+@author Bruno Lobo de Souza
+@since  19/11/2013
+
+@param  cX7, Caracter, Indica qual a tabela a ser considerada
+@return Caracter, Valor da condição
+/*/
+//---------------------------------------------------------------------
+Function SG90CONDX7( cX7 )
+
+	Local cCond
+	Local nTpRes := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TC9_TIPRES" } )
+
+	If cX7 == "QAA"
+		cCond := aCols[n][nTpRes] == "1"
+	ElseIf cX7 == "SRA"
+		cCond := aCols[n][nTpRes] == "2"
+	EndIf
+
+Return cCond
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SG90FilFun
+Função de validação do campo filial do funcionario.
+
+@type    function
+
+@sample  SG90FilFun()
+
+@author  Bruno Lobo de Souza
+@since   19/11/2013
+
+@return  Lógico, Indica se o valor é valido
+/*/
+//---------------------------------------------------------------------
+Function SG90FilFun()
+
+	Local aArea    := GetArea()
+	Local aAreaSM0 := SM0->(GetArea())
+	Local lRet     := .T.
+	Local lFilial  := NGCADICBASE( "TAA_FILFUN", "A", "TAA", .F. )
+	Local cXFIL
+
+	dbSelectArea( "SM0" )
+	If !Dbseek( cEmpAnt + M->TAA_FILFUN )
+		Help( " ", 1, "REGNOIS" )
+		lRet := .F.
+	Else
+		cFilPln := xFilial( "SRA" )
+		If lFilial
+			cXFIL := xFilial( "SRA", M->TAA_FILFUN )
+		Else
+			cXFIL := xFilial( "SRA" )
+		EndIf
+		cFilAnt := M->TAA_FILFUN
+	EndIf
+
+	RestArea( aAreaSM0 )
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SG90TAATPL
+Função de validação do Tipo de Planejamento
+na consulta padrão TAATPL.
+
+@type    function
+
+@sample  SG90TAATPL()
+
+@author  Bruno Lobo de Souza
+@since   25/11/2013
+
+@return  Lógico, Indica se o valor é válido para o filtro
+/*/
+//---------------------------------------------------------------------
+Function SG90TAATPL()
+
+	Local lFiltro
+
+	If TAA->TAA_STATUS == "3"
+		Return .F.
+	EndIf
+
+	If Type( "cTIPOPL" ) <> "C" .Or. Empty( cTIPOPL )
+		Return .T.
+	EndIf
+
+	If cTIPOPL == "SESMT"
+		lFiltro := TAA->TAA_TIPOPL $ "2/3"
+	ElseIf cTIPOPL == "SGA"
+		lFiltro := TAA->TAA_TIPOPL $ "4/5"
+	ElseIf cTIPOPL == "CIPA"
+		lFiltro := TAA->TAA_TIPOPL $ "1/3"
+	Else
+		lFiltro := .T.
+	EndIf
+
+Return lFiltro
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGA090VARM
+Define variaveis private utilizadas no processo de plano de ação.
+@type    function
+
+@author  Hugo R. Pereira
+@since   25/08/2014
+
+/*/
+//---------------------------------------------------------------------
+Static Function SGA090VARM()
+
+	_SetOwnerPrvt( 'aRotina', MenuDef( .F. ) )
+	_SetOwnerPrvt( 'cCadastro', OemtoAnsi( STR0006 ) ) // "Plano de Ação"
+	_SetOwnerPrvt( 'aChkDel', {} )
+	_SetOwnerPrvt( 'aChoice', {} )
+	_SetOwnerPrvt( 'aVarNao', {} )
+	_SetOwnerPrvt( 'cCliMdtPs', '' )
+	_SetOwnerPrvt( 'cStatus', '' )
+	_SetOwnerPrvt( 'bNgGrava' )
+	_SetOwnerPrvt( 'cFilPln', '' )
+
+	If nModulo == 35
+		cStatus := SuperGetMv( 'MV_NG2STPL', .F., '1' )
+	ElseIf nModulo == 56
+		cStatus := SuperGetMv( 'MV_NG3STPL', .F., '1' )
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerRegTCO
+Verifica se existe registro utilizando o 'Plano de Ação' na tabela
+de Oportunidade de Melhoria.
+
+@type    function
+
+@sample  SGA090VARM()
+
+@author  Gabriel Augusto Werlich
+@since   03/08/2015
+
+@param   cCodPlano, Caracter, Indica o código do plano a ser avaliado
+@return  Lógico, identifica se há registros de ocorrência de melhoria
+/*/
+//---------------------------------------------------------------------
+Static Function fVerRegTCO( cCodPlano )
+
+	Local cFiltro :=  "TCO->TCO_FILIAL == '" + xFilial( "TCO" ) + "' .And. TCO->TCO_CODACA  == '" + cCodPlano + "'"
+	Local lRet    := .F.
+
+	dbSelectArea( "TCO" )
+	Set Filter To &( cFiltro )
+	dbGoTop()
+	While TCO->( !Eof() ) .And. lRet == .F.
+		lRet := .T.
+		TCO->( dbSkip() )
+	EndDo
+
+	Set Filter To
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA090TAA
+Filtro da consulta padrão TAA.
+
+@type function
+
+@sample SGA090TAA()
+
+@author Guilherme Freudenburg
+@since 23/09/2016
+
+@return Lógico, Retorna verdadeiro quando função estiver correta
+/*/
+//---------------------------------------------------------------------
+Function SGA090TAA()
+
+	Local lRet := .F. //Variavel de controle
+
+	If TAA->TAA_PERCEN < 100 .And. TAA->TAA_STATUS <> '3'
+		lRet := .T.
+		If IsInCallStack( "MDTA670" ) .Or. IsInCallStack( "MDTA675" ) //Plano de Ação CIPA
+			If !(TAA->TAA_TIPOPL $ "1/3") //Cipa # Cipa e Semst
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGA090VAL
+Função para realizar validações no Plano de Ação
+
+@type function
+
+@sample SGA090VAL( 3 )
+
+@author Jean Pytter da costa
+@since 01/02/2017
+
+@param nOpce, Logico, Indica a operação executada no momento.
+@return Logico, Indica se todas validações estão corretas.
+/*/
+//---------------------------------------------------------------------
+Function SGA090VAL( nOpce )
+
+	Local lRet  := .T.
+	Local aArea := GetArea()
+
+	If IsInCallStack( "SGAA300" ) .Or. IsInCallStack( "SGAA310" )
+		If nOpce == 3 .Or. nOpce == 4
+			If M->TAA_TPMETA == "3"
+				MsgStop( STR0066, STR0010 ) //"Não é possível relacionar uma meta de tipo 3=N/A"###"Atenção"
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	//Verifica se o Plano de Ação possui lançamentos(Resultados)
+	//Caso possuir lançamentos será apresentando uma mensagem informando
+	//se deseja continuar com a alteração
+	If lRet
+		If nOpce == 4
+
+			//Deverá verificar se foi alterado o campo de Formula do plano de ação
+			dbSelectArea( "TAA" )
+			dbSetOrder( 1 ) //TAA_FILIAL+TAA_CODPLA+DTOS(TAA_DTIMPL)
+			If DbSeek( xFilial( "TAA" ) + M->TAA_CODPLA )
+				If TAA->TAA_FORMUL <> M->TAA_FORMUL .Or. TAA->TAA_FORFEC <> M->TAA_FORFEC
+
+					//Deverá posicionar nas metas para obter o código do objetivo
+					dbSelectArea( "TBI" )
+					dbSetOrder( 2 ) //TBI_FILIAL+TBI_META+TBI_OBJETI
+					If DbSeek( xFilial( "TBI" ) + M->TAA_CODPLA )
+						lVal := .T.
+						//Deverá verificar todos os objetivos, pois a meta poderá se encontrar em todos os objetivos
+						While !Eof()
+							cCodObj := TBI->TBI_OBJETI
+							//Verifica se a meta possui lançamento(Resultado)
+							dbSelectArea( "TBK" )
+							dbSetOrder( 1 ) //TBK_FILIAL+TBK_CODOBJ+TBK_META+DTOS(TBK_DTRESU)+STR(TBK_VALOR,9,2)
+							If DbSeek( xFilial( "TBK" ) + cCodObj + M->TAA_CODPLA )
+								If lVal //caso possuir mais de 1 lançamento ñ irá perguntar novamente
+									If !MsgYesNo( STR0067 ) //Este Plano de Ação possui resultado(s), a alteração da(s) fórmula(s) impactará nos resultados. Deseja continuar?
+										lRet := .F.
+										Exit
+									EndIf
+									lVal := .F.
+								EndIf
+							EndIf
+
+							dbSelectArea( "TBI" )
+							DbSkip()
+						End
+					EndIf
+
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet

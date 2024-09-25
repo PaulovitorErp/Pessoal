@@ -1,0 +1,1022 @@
+#INCLUDE "MDTA090.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA090
+Programa de Cadastro de Tarefas por Funcionário
+
+@return Nil
+
+@sample MDTA090()
+
+@author Refeito por: Luis Fellipy Bett
+@since 21/06/2017
+/*/
+//---------------------------------------------------------------------
+Function MDTA090( lFontPS )
+
+	// Armazena as variáveis
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oBrowse
+
+	Private lSigaMdtPS := SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+
+	Default lFontPS := IsInCallStack( "MDTA090PS" )
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+
+		// Caso houver algum inconsistencia será retornado as variaveis.
+		If !fValExeRot( lFontPS )
+			oBrowse := FWMBrowse():New()
+				oBrowse:SetAlias( "TN5" )			// Alias da tabela utilizada
+				oBrowse:SetMenuDef( "MDTA090" )		// Nome do fonte onde esta a função MenuDef
+				oBrowse:SetDescription( STR0011 )	// Descrição do browse ###"Tarefas x Funcionário"
+				If lSigaMdtPS
+
+					nSizeSA1 := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+					nSizeLo1 := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+
+					cCliMdtPs := SA1->A1_COD + SA1->A1_LOJA
+
+					oBrowse:SetFilterDefault( "TN5->(TN5_CLIENT+TN5_LOJA) == cCliMdtPs" )
+				EndIf
+			oBrowse:Activate()
+		EndIf
+
+	EndIf
+
+	// Devolve as variáveis armazenadas
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC).
+
+@author Luis Fellipy Bett
+@since 21/06/2017
+
+@return aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	aAdd( aRotina, { STR0002, 'VIEWDEF.MDTA090', 0, 2, 0, NIL } ) // Visualizar
+	aAdd( aRotina, { STR0003, 'VIEWDEF.MDTA090', 0, 3, 0, NIL } ) // Incluir
+	aAdd( aRotina, { STR0004, 'VIEWDEF.MDTA090', 0, 4, 0, NIL } ) // Alterar
+	aAdd( aRotina, { STR0005, 'VIEWDEF.MDTA090', 0, 5, 0, NIL } ) // Excluir
+	aAdd( aRotina, { STR0038, 'VIEWDEF.MDTA090', 0, 8, 0, NIL } ) // Imprimir
+	aAdd( aRotina, { STR0039, 'VIEWDEF.MDTA090', 0, 9, 0, NIL } ) // Copiar
+	aAdd( aRotina, { STR0036, 'MDT626CAD'	   , 0, 9, 0, NIL } ) // EPI x Tarefa
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+
+@author Luis Fellipy Bett
+@since 21/06/2017
+
+@return oModel objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	//Cria estrutura de relacionamento
+	Local aRelations	:= { { 'TN6_FILIAL', 'xFilial( "TN6" )' }, ;
+							 { 'TN6_CODTAR', 'M->TN5_CODTAR'    } }
+
+    // Cria a estrutura a ser usada no Modelo de Dados
+	Local oStruct1TN5	:= FWFormStruct( 1 ,"TN5" , /*bAvalCampo*/ , /*lViewUsado*/ )
+	Local oStruct2TN5	:= FWFormStruct( 1 ,"TN6" , /*bAvalCampo*/ , /*lViewUsado*/ )
+
+	// Modelo de dados que será construído
+	Local oModel
+
+	//Classe para validações
+	Local oEvent		:= MDTA090A():New()
+
+	If SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+		aAdd( aRelations , { "TN6_CLIENT", "SA1->A1_COD" } )
+		aAdd( aRelations , { "TN6_LOJA"	 , "SA1->A1_LOJA" } )
+	EndIf
+
+	oStruct2TN5:AddTrigger( 'TN6_MAT', 'TN6_NOME', { || .T. }, { || SubStr( Posicione( 'SRA', 1, xFilial( 'SRA' ) + M->TN6_MAT, 'RA_NOME' ), 1, 20 ) } )
+
+	oStruct2TN5:RemoveField( "TN6_CODTAR" )
+	oStruct2TN5:RemoveField( "TN6_NOMTAR" )
+
+	If X3USO( GetSx3Cache( "TN5_VESSYP", "X3_USADO") )
+		FWMemoVirtual( oStruct1TN5, { { "TN5_VESSYP" , "TN5_MVESTI" , "SYP" } } )
+	EndIf
+
+	// Cria o objeto do Modelo de Dados
+	// cID     Identificador do modelo
+	// bPre    Code-Block de pre-edição do formulário de edição. Indica se a edição esta liberada
+	// bPost   Code-Block de validação do formulário de edição
+	// bCommit Code-Block de persistência do formulário de edição
+	// bCancel Code-Block de cancelamento do formulário de edição
+	oModel := MPFormModel():New( "MDTA090" , /*bPre*/ , /*bPos*/ , /*bCommit*/ , /*bCancel*/ )
+		//--------------------------------------------------
+		// Componentes do Modelo
+		//--------------------------------------------------
+
+		// Adiciona ao modelo um componente de Formulário Principal
+		// cId          Identificador do modelo
+		// cOwner       Identificador superior do modelo
+		// oModelStruct Objeto com  a estrutura de dados
+		// bPre         Code-Block de pré-edição do formulário de edição. Indica se a edição esta liberada
+		// bPost        Code-Block de validação do formulário de edição
+		// bLoad        Code-Block de carga dos dados do formulário de edição
+		oModel:AddFields( "TN5MASTER", , oStruct1TN5, /*bPre*/, /*bPost*/, /*bLoad*/ )
+			// Adiciona a descrição do Modelo de Dados (Geral)
+			oModel:SetDescription( STR0011 /*cDescricao*/ ) //"Tarefa"
+			// Adiciona a descricao do Componente do Modelo de Dados
+			oModel:GetModel( "TN5MASTER" ):SetDescription( STR0011 ) //"Tarefa"
+
+		oModel:AddGrid( "TN6DETAIL", "TN5MASTER", oStruct2TN5, , /*bValidLine*/)
+
+		oModel:GetModel( "TN6DETAIL" ):SetMaxLine( 10000 )
+
+		oModel:GetModel( "TN6DETAIL" ):SetOptional( .T. )
+
+		oModel:SetRelation( "TN6DETAIL", aRelations, ( "TN6" )->( IndexKey( 1 ) ) )
+
+		//Instalar evento no Modelo
+		oModel:InstallEvent( "MDTA090A", /*cOwner*/, oEvent )
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+
+@author Luis Fellipy Bett
+@since 21/06/2017
+
+@return oView objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	// Cria um objeto de Modelo de dados baseado no ModelDef() do fonte informado
+	Local oModel := FWLoadModel( "MDTA090" )
+
+	// Cria a estrutura a ser usada na View
+	Local oStruct1TN5 := FWFormStruct( 2, "TN5", /*bAvalCampo*/, /*lViewUsado*/ )
+	Local oStruct2TN5 := FWFormStruct( 2, "TN6", /*bAvalCampo*/, /*lViewUsado*/ )
+
+	// Interface de visualização construída
+	Local oView
+
+	oStruct1TN5:RemoveField( "TN5_VESSYP" )
+	oStruct1TN5:RemoveField( "TN5_ESOC" )
+	oStruct2TN5:RemoveField( "TN6_CODTAR" )
+	oStruct2TN5:RemoveField( "TN6_NOMTAR" )
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+		// Objeto do model a se associar a view.
+		oView:SetModel( oModel )
+		// Adiciona no View um controle do tipo formulário (antiga Enchoice)
+		// cFormModelID - Representa o ID criado no Model que essa FormField irá representar
+		// oStruct - Objeto do model a se associar a view.
+		// cLinkID - Representa o ID criado no Model ,Só é necessári o caso estamos mundando o ID no View.
+		oView:AddField( "VIEW_TN5", oStruct1TN5, "TN5MASTER" )
+			//Adiciona um titulo para o formulário
+			oView:EnableTitleView( "VIEW_TN5", STR0006 ) // Descrição do browse ###"Tarefa"
+		//Adiciona a Grid
+		oView:AddGrid( "VIEW_TN6DETAIL", oStruct2TN5, "TN6DETAIL")
+			//Adiciona um titulo para o formulário
+			oView:EnableTitleView( "VIEW_TN6DETAIL" , STR0012 ) // Descrição do browse ###"Funcionários"
+		// Cria os componentes "box" horizontais para receberem elementos da View
+		// cID		  	Id do Box a ser utilizado
+		// nPercHeight  Valor da Altura do box( caso o lFixPixel seja .T. é a qtd de pixel exato)
+		// cIdOwner 	Id do Box Vertical pai. Podemos fazer diversas criações uma dentro da outra.
+		// lFixPixel	Determina que o valor passado no nPercHeight é na verdade a qtd de pixel a ser usada.
+		// cIDFolder	Id da folder onde queremos criar o o box se passado esse valor, é necessário informar o cIDSheet
+		// cIDSheet     Id da Sheet(Folha de dados) onde queremos criar o o box.
+		oView:CreateHorizontalBox( "SUPERIOR", 50, /*cIdOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/ )
+		oView:CreateHorizontalBox( "INFERIOR", 50, /*cIdOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/ )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TN5", "SUPERIOR" )
+		oView:SetOwnerView( "VIEW_TN6DETAIL", "INFERIOR" )
+
+		oView:AddUserButton( STR0012, '', {|oView| fButton( oView )} ) //Funcionários
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fButton
+Adiciona multiplos no relacionamento
+
+@return Nil
+
+@param  oView - Objeto da View
+
+@sample fButton( oView )
+
+@author Jackson Machado
+@since  18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fButton( oView )
+
+	Local nCps		 := 0
+	Local aCamposTN6 := { "TN6_MAT", "TN6_NOME" }
+	Local aCampos	 := { "RA_MAT", "RA_NOME", "RA_CC", "RA_DESCCC" }
+	Local aArea		 := GetArea()//Salva a Area Atual
+	Local aAreaAtu	 := {}
+	Local nIdx		 := 0
+
+	// Variaveis para Filtro
+	Local cDeCC		:= Space( TAMSX3( "CTT_CUSTO" )[ 1 ] )
+	Local cAteCC	:= Replicate( "Z", TAMSX3( "CTT_CUSTO" )[ 1 ] )
+
+	// Variaveis para montar TRB
+	Local aDBF, aTRB, aIdx, aDescIdx
+
+	// Variaveis da Montagem do MarkBrowse
+	Local lOK := .F.
+	Local lInverte, lRet
+
+	// Definicoes de Objetos
+	Local oDialog
+	Local oMark
+	Local oPnlTot
+
+	// Variaveis Privadas
+	Private cAliasTRB	:= GetNextAlias()
+	Private cMarca	:= GetMark()
+
+	// Variaveis da Pesquisa
+	Private cPesquisar := Space( 200 )//Valor a ser pesquisado
+	Private cCbxPesq   := ""
+	Private aCbxPesq //ComboBox com indices de pesquisa
+	Private oBtnPesq, oPesquisar// Botao de Pesquisa e Campo para Pesquisa
+	Private oCbxPesq // ComboBox de Pesquisa
+
+	If oView:GetOperation() <> 1 // Se não for visualização
+
+		lInverte := .F.
+
+		// Valores e Caracteristicas da TRB
+		aDBF	 := {}
+		aTRB	 := {}
+		aIdx	 := {}
+		aDescIdx := {}
+
+		aAdd( aDBF , { "OK", "C" , 02 , 0 } )
+		aAdd( aTRB , { "OK", NIL , " ",   } )
+
+		// Define os campos
+		aAreaAtu := GetArea()
+		For nCps := 1 To Len( aCampos )
+			aTam := TAMSX3( aCampos[ nCps ] )
+			aAdd( aDBF , { aCampos[ nCps ] , Posicione( "SX3" , 2 , aCampos[ nCps ] , "X3_TIPO" ) , aTam[ 1 ] , aTam[ 2 ]	} )
+			aAdd( aTRB , { aCampos[ nCps ] , NIL , AllTrim( Posicione( "SX3" , 2 , aCampos[ nCps ] , "X3Titulo()" ) ) , } )
+		Next nCps
+
+		MDTA232IDX( @aIdx, @aDescIdx, aCampos ) // Realiza a Geração dos Índices
+
+		// Adiciona ultima posicao como Marcados
+		aAdd( aIdx , "OK" )
+		RestArea( aAreaAtu )
+
+		// Cria TRB
+		oTempTRB := FWTemporaryTable():New( cAliasTRB, aDBF )
+		For nIdx := 1 To Len( aIdx )
+			oTempTRB:AddIndex( RETASC( cValToChar( nIdx ) , 1 , .T. ), StrTokArr( aIdx[nIdx] , "+" ) )
+		Next nIdx
+		oTempTRB:Create()
+
+		dbSelectArea( "SRA" )
+
+		Processa( { | lEnd | fBuscaReg( cAliasTRB , aCampos , cDeCC , cAteCC ) } , STR0042 , STR0043 ) //"Buscando Registros" ## "Aguarde"
+
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		If ( cAliasTRB )->(Reccount()) <= 0
+			oTempTRB:Delete()
+			RestArea( aArea )
+			lRefresh := .T.
+			Msgstop( STR0020 , STR0021 )//"Não existem funcionários cadastrados."##"ATENÇÃO"
+			Return .T.
+		EndIf
+
+		DEFINE MSDIALOG oDialog TITLE OemToAnsi( STR0044 ) From 064,160 To 580,736 OF oMainWnd Pixel // "Funcionários da Tarefa"
+
+			oPnlTot := TPanel():New( , , , oDialog , , , , , , , , .F. , .F. )
+				oPnlTot:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPanel := TPanel():New( 0 , 0 , , oPnlTot , , .T. , .F. , , , 0 , 070 , .T. , .F. )
+				oPanel:Align := CONTROL_ALIGN_TOP
+
+				// - Descrição -
+				@ 005, 010 TO 020, 275 OF oPanel Pixel
+				// "Estes são os funcionários cadastrados no sistema." # "Selecione aqueles que devem ser relacionados a Tarefa."
+				TSay():New( 009 , 014 , { | | OemtoAnsi( STR0018 + STR0019) } , oPanel , , , .F. , .F. , .F. , .T. , CLR_BLACK , ;
+							CLR_WHITE , 279 , 010 )
+
+				// - Pesquisa/Ordenação -
+				@ 025, 010 TO 065, 165 OF oPanel PIXEL
+				aCbxPesq := aClone( aDescIdx )
+				aAdd( aCbxPesq , STR0041 ) // "Marcados"
+				cCbxPesq := aCbxPesq[ 1 ]
+
+				oCbxPesq := TComboBox():New( 035, 016 , { | u | If( PCount() > 0 , cCbxPesq := u , cCbxPesq ) } , ;
+												aCbxPesq , 143 , 08 , oPanel , , { | | }, , , , .T. , , , , , , , , , "cCbxPesq" )
+
+				oCbxPesq:bChange := { | | fSetIndex( cAliasTRB , aCbxPesq , @cPesquisar , oMark ) }
+
+				oPesquisar := TGet():New( 048 , 016 , { | u | If( PCount() > 0 , cPesquisar := u , cPesquisar ) } , ;
+											oPanel , 090 , 010 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+											.F. , , .T. /*lPixel*/ , , .F. , { | | .T. }/*bWhen*/ , .F. , .F. , , .F. ;
+											/*lReadOnly*/ , .F. , "" , "cPesquisar" , , , , .F. /*lHasButton*/ )
+
+				oBtnPesq := TButton():New( 048 , 109 , STR0001 , oPanel , { | | fPesqTRB( cAliasTRB , oMark ) } , ;//"Pesquisar" //"Pesquisar"
+											049 , 012 , , , .F. , .T. , .F. , , .F. , , , .F. )
+
+				// - Filtro por Centro de Custo -
+				TGet():New( 023, 170, { | u | If( PCount() == 0, cDeCC, cDeCC := u ) }, oPanel, 40.5, 10, "@!", ;
+							{||fVldCCust(cDeCC,cAteCC)} , , , , , , .T., , , , , , , .F., , "CTT" , "cDeCC" , , , ;
+							 , .T., .F., , STR0022, 2, , ,) //"De Centro de Custo"
+				TGet():New( 037, 170, { | u | If( PCount() == 0, cAteCC, cAteCC := u ) }, oPanel, 40.5, 10, "@!", ;
+							{||fVldCCust(cDeCC,cAteCC)} , , , , , , .T., , , , , , , .F., , "CTT" , "cAteCC", , , , ;
+							.T., .F., , STR0023, 2, , ,) //"Até Centro de Custo"
+
+				TButton():New( 053, 170, STR0024, oPanel, {|| fBuscaReg(cAliasTRB,aCampos,cDeCC,cAteCC)}, ;
+								49, 12, , , , .T., , , , /*Valid*/, , ) //"Filtrar"
+				TButton():New( 053, 228, STR0025, oPanel, {||fLimpFilt(cAliasTRB,aCampos,cDeCC,cAteCC)}, ;
+								49, 12, , , , .T., , , , /*Valid*/, , ) //"Limpar Filtro"
+
+				oMark := MsSelect():New( cAliasTRB , "OK" , , aTRB , @lInverte , @cMarca , { 45, 5, 254, 281 }, , , oPnlTot )
+					oMark:oBrowse:lHasMark		:= .T.
+					oMark:oBrowse:lCanAllMark	:= .T.
+					oMark:oBrowse:bAllMark		:= { | | fInverte( cMarca , cAliasTRB , oMark , .T. ) }//Funcao inverte marcadores
+					oMark:bMark	   				:= { | | fInverte( cMarca , cAliasTRB , oMark ) }//Funcao inverte marcadores
+					oMark:oBrowse:Align			:= CONTROL_ALIGN_ALLCLIENT
+
+		ACTIVATE MSDIALOG oDialog ON INIT EnchoiceBar(oDialog,{|| lOk := .T. ,oDialog:End()},{|| lOk := .F.,oDialog:End()}) CENTERED
+
+		If lOK
+			fGravCols( cAliasTRB , aCampos , aCamposTN6 )//Funcao para copiar planos a GetDados
+		EndIf
+
+		oTempTRB:Delete()
+
+	Else
+		Help(' ',1,STR0021,,STR0052,2,0,,,,,,{""}) //"Atenção" ## "Opção não disponível na visualização"
+	EndIf
+
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fLimpFilt
+Limpa o filtro de pesquisa
+
+@return .T.
+
+@param cAliasTRB- Valor do Alias da tabela temporária ( Obrigatório )
+@param aCampos	- Campos a serem impressos ( Obrigatório )
+@param cDeCC	- Valor do campo De ( Obrigatório )
+@param cAteCC	- Valor do campo Até ( Obrigatório )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fLimpFilt(cAliasTRB,aCampos,cDeCC,cAteCC)
+
+	cDeCC  := Space( TAMSX3( "CTT_CUSTO" )[ 1 ] )
+	cAteCC := Replicate( "Z" , TAMSX3( "CTT_CUSTO" )[ 1 ] )
+
+	fBuscaReg(cAliasTRB,aCampos,cDeCC,cAteCC)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldCCust
+Valida De/Ate Centro de Custo
+
+@return Lógico - Retorna verdadeiro caso validações estejam corretas
+
+@param cDeCC	- Valor do campo De ( Obrigatório )
+@param cAteCC	- Valor do campo Até ( Obrigatório )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fVldCCust( cDeCC, cAteCC )
+
+	Local lRet := .T.
+	Local cArea := Alias()
+
+	If !Empty(cDeCC)
+		If !ExistCpo("CTT",cDeCC)
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If cAteCC <> Replicate("Z",Len(cAteCC))
+		If cDeCC > cAteCC
+			Help(" ",1,"DEATEINVAL")
+			lRet := .F.
+		Else
+			If !ExistCpo("CTT",cAteCC)
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty(cArea)
+		dbSelectArea(cArea)
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSetIndex
+Seta o indice para pesquisa
+
+@return
+
+@param cAliasTRB	- Alias do TRB ( Obrigatório )
+@param aCbxPesq		- Indices de pesquisa do markbrowse. ( Obrigatório )
+@param cPesquisar	- Valor da Pesquisa ( Obrigatório )
+@param oMark		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fSetIndex( cAliasTRB , aCbxPesq , cPesquisar , oMark )
+
+	Local nIndice := fRetInd( aCbxPesq ) // Retorna numero do indice selecionado
+
+	// Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoBottom()
+
+	// Se o indice selecionado for o ultimo [Marcados]
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) // Limpa campo de pesquisa
+		oPesquisar:Disable()                     // Desabilita campo de pesquisa
+		oBtnPesq:Disable()                       // Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus()                 // Define foco no markbrowse
+	Else
+		oPesquisar:Enable()                      // Habilita campo de pesquisa
+		oBtnPesq:Enable()                        // Habilita botao de pesquisa
+		oBtnPesq:SetFocus()                      // Define foco no campo de pesquisa
+	EndIf
+
+	oMark:oBrowse:Refresh()
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetInd
+Retorna o indice, em numero, do item selecionado no combobox
+
+@return nIndice - Retorna o valor do Indice
+
+@param aIndMrk - Indices de pesquisa do markbrowse. ( Obrigatório )
+
+@author Hugo R. Pereira
+@since 07/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fRetInd( aIndMrk )
+
+	Local nIndice := aScan( aIndMrk , { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0021 ,	{ STR0045 } , 1 , ;//"ATENÇÃO"## "Índice não encontrado"
+								{ STR0046 } , 1 )  //"Contate o administrador do sistema"
+		nIndice := 1
+	EndIf
+
+Return nIndice
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaReg
+Realiza a busca dos registros para alimentar o TRB
+
+@return Nil
+
+@param cAliasTRB- Alias da tebela temporária
+@param aCampos  - Campos a serem considerados ( Obrigatório )
+@param cDeCC  	- Valor do campo De ( Obrigatório )
+@param cAteCC  	- Valor do campo Até ( Obrigatório )
+
+@sample
+fButton( "TN0" , 1 , { "TN0_NUMRIS" , "TN0_NOMAGE" } , "TN0_NUMRIS" )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaReg( cAliasTRB , aCampos , cDeCC , cAteCC )
+
+	Local nCps		:= 0
+	Local cCampo	:= ""
+
+	dbSelectArea( cAliasTRB )
+	ZAP
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SRA" ) )
+		While SRA->(!Eof())  .And. SRA->RA_FILIAL  == xFilial( "SRA" )
+			If SRA->RA_CC >= cDeCC .And. SRA->RA_CC <= cAteCC .And. ;
+			   SRA->RA_SITFOLH != "D" .And. Empty(SRA->RA_DEMISSA)
+				RecLock( cAliasTRB , .T. )
+				(cAliasTRB)->OK     := " "
+				For nCps := 1  To Len( aCampos )
+					cCampo := aCampos[ nCps ]
+					If cCampo # 'RA_DESCCC'
+						&( cAliasTRB + "->" + cCampo ) := &( "SRA->" + cCampo )
+					Else
+						&( cAliasTRB + "->" + cCampo ) := Posicione('CTT', 1, xFilial('CTT')+SRA->RA_CC, 'CTT_DESC01')
+					EndIf
+				Next nCps
+				( cAliasTRB )->( MsUnLock() )
+			EndIf
+			SRA->( dbSkip() )
+		End
+	EndIf
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+
+	dbSelectArea( cAliasTRB )
+	( cAliasTRB )->( dbGoTop() )
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravCols
+Faz as gravações do TRB para o aCols correspondente
+
+@return
+
+@param aCamposTN6	- Campos da TN6
+@param cAliasTRB 	- Alias do TRB ( Obrigatório )
+@param aCampos  	- Campos a serem considerados ( Obrigatório )
+
+@sample
+fButton( "TN0" , 1 , { "TN0_NUMRIS" , "TN0_NOMAGE" } , "TN0_NUMRIS" )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fGravCols( cAliasTRB , aCampos , aCamposTN6 )
+
+	Local nCps
+	Local oModel		:= FWModelActive()
+	Local oModelTN6		:= oModel:GetModel( "TN6DETAIL" )
+	Local aHeadOk		:= {}
+	Local lGrvTotFun	:= .T.
+	Local lFirstLin		:= .F.
+
+	aHeadOk := aClone( oModelTN6:aHeader )
+
+	oModelTN6:GoLine(1)
+	If Empty( oModelTN6:GetValue( 'TN6_MAT' ) )
+		lFirstLin := .T.
+	EndIf
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	While ( cAliasTRB )->( !Eof() )
+		If !Empty( ( cAliasTRB )->OK )
+			If fValidLine( oModelTN6 , 0 , ( cAliasTRB )->RA_MAT , dDataBase )
+				If !lFirstLin
+					oModelTN6:AddLine()
+				EndIf
+				For nCps := 1 To Len( aCamposTN6 )
+					oModelTN6:LoadValue( aCamposTN6[ nCps ] , SubStr(&( cAliasTRB + "->" + aCampos[ nCps ] ),1,;
+										TAMSX3( aCamposTN6[ nCps ] )[1]) )
+				Next nCps
+				oModelTN6:LoadValue( "TN6_DTINIC" , dDataBase )
+				lFirstLin := .F.
+			Else
+				lGrvTotFun := .F.
+			EndIf
+		EndIf
+		( cAliasTRB )->(dbSkip())
+	End
+
+	If !lGrvTotFun
+		Help( "" , 1 , "MARKFUNC" , , STR0047 ,4,5) //"Um ou mais funcionários marcados já possuem registro de Tarefa para a data atual"
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInverte
+Inverte as marcacoes ( bAllMark )
+
+@return
+
+@param cMarca 		- Valor da marca do TRB ( Obrigatório )
+@param cAliasTRB	- Alias do TRB ( Obrigatório )
+@param oMark		- Objeto do MarkBrowse ( Obrigatório )
+@param lAll			- Indica se eh AllMark
+
+@sample
+fInverte( "E" , "TRB" )
+
+@author Jackson Machado
+@since 18/07/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fInverte( cMarca , cAliasTRB , oMark , lAll )
+
+	Local aArea := {}
+
+	Default lAll := .F.
+
+	If lAll
+		aArea := GetArea()
+
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		While ( cAliasTRB )->( !Eof() )
+			( cAliasTRB )->OK := IF( Empty( ( cAliasTRB )->OK ) , cMarca , Space( Len( cMarca ) ) )
+			(cAliasTRB)->( dbskip() )
+		End
+
+		RestArea( aArea )
+	EndIf
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh()
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPesqTRB
+Funcao de Pesquisar no Browse.
+
+@samples fPesqTRB()
+
+@return Sempre verdadeiro
+
+@param cAliasTRB	- Alias do MarkBrowse ( Obrigatório )
+@param oMark 		- Objeto do MarkBrowse ( Obrigatório )
+
+@author Jackson Machado
+@since 29/04/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fPesqTRB( cAliasTRB , oMark )
+
+	Local nRecNoAtu := 1//Variavel para salvar o recno
+	Local lRet		:= .T.
+
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( cPesquisar ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		ApMsgInfo( STR0048 , STR0021 ) // "Valor não encontrado" ## "Atenção"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh(.T.)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT090VLDT
+Função de validação das datas da rotina MDTA090
+
+@return Lógico - Retorna verdadeiro caso validações estejam corretas
+
+@author Recriado por: Luis Fellipy Bett
+@since 20/06/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT090VLDT(lCandidato,lVldLinOk)
+
+	Local lRet := .T.
+	Local oModel := FWModelActive()
+	Local dDtIni
+	Local dDtFim
+	Local nMat
+	Local nPOS
+	Local nINIC
+	Local nFIM
+	Local nX
+	Local dDtAdmis := SToD('')
+
+	If !IsInCallStack("MDTA090")
+		Default n := 1
+	EndIf
+
+	If IsInCallStack("MDTA090") //Se for chamado pelo MDTA090 - Tarefas do Funcionário (MVC)
+
+		dDtIni	:= oModel:GetValue( "TN6DETAIL" , "TN6_DTINIC" )
+		dDtFim	:= oModel:GetValue( "TN6DETAIL" , "TN6_DTTERM" )
+		nMat	:= oModel:GetValue( "TN6DETAIL" , "TN6_MAT" )
+
+		DbSelectArea("SRA")
+		DbSetOrder(1)
+		DbSeek(xFilial("SRA")+nMat)
+
+		If SRA->RA_ADMISSA > dDtIni
+			Help(" ",1,"DTINIINVAL",,STR0007 + STR0008 + DToC(SRA->RA_ADMISSA),4,5)
+			//"A data de inicio nao pode ser anterior a data de admissao do funcionario."##"Data de Admissao: "
+			lRet := .F.
+		EndIf
+
+		If lRet .And. dDtIni > dDtFim .And. !Empty(dDtFim)
+			Help(" ",1,"DTINIINVAL",,STR0009,4,5)//"A data final não pode ser anterior a data de início."
+			lRet := .F.
+		EndIf
+
+		dbSelectArea("TM0")
+		dbSetOrder(3)
+		dbSeek(xFilial("TM0")+SRA->RA_MAT)
+
+		If lRet .And. dDtIni < TM0->TM0_DTIMPL
+			Help(" ",1,"DTINIINVAL",,STR0026 + STR0027 + DToC(TM0->TM0_DTIMPL),4,5)
+			//"A data de inicio nao pode ser anterior a data de implantação da ficha médica."##"Data de Implantação: "
+			lRet := .F.
+		EndIf
+
+	Else //Se for chamado pelo MDTA410 ou MDTA005 (Não MVC)
+
+		If lCandidato //Se for candidato
+
+			nPOS	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TKD_CODTAR"})
+			nINIC	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TKD_DTINIC"})
+			nFIM	:= aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TKD_DTTERM"})
+
+			If !aCols[ N , Len(aCols[N]) ] //Se a linha não estiver deletada
+
+				dDtIni	:= aCols[N,nINIC]
+				dDtFim	:= aCols[N,nFIM]
+
+				If dDtIni > dDtFim .And. !Empty(dDtFim)
+					Help(" ",1,"DTINIINVAL",,STR0009,4,5)//"A data final não pode ser anterior a data de início."
+					lRet := .F.
+				EndIf
+
+				If lRet .And. dDtIni < M->TM0_DTIMPL .And. !Empty(dDtIni)
+					Help(" ",1,"DTINIINVAL",,STR0026 + STR0027 + DToC(M->TM0_DTIMPL),4,5)
+					//"A data de inicio nao pode ser anterior a data de implantação da ficha médica."##"Data de Implantação: "
+					lRet := .F.
+				EndIf
+
+			EndIf
+
+		Else //Se for funcionário
+
+			nPOS     := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TN6_CODTAR"})
+			nINIC    := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TN6_DTINIC"})
+			nFIM	 := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TN6_DTTERM"})
+			dDtAdmis := Posicione( 'SRA', 1, xFilial('SRA', M->TM0_FILFUN ) + M->TM0_MAT, 'RA_ADMISSA' )
+
+			If !aCols[ N , Len(aCols[N]) ] //Se a linha não estiver deletada
+
+				dDtIni	:= aCols[N,nINIC]
+				dDtFim	:= aCols[N,nFIM]
+
+				If dDtIni > dDtFim .And. !Empty(dDtFim)
+					Help(" ",1,"DTINIINVAL",,STR0009,4,5)//"A data final não pode ser anterior a data de início."
+					lRet := .F.
+				EndIf
+
+				If lRet .And. dDtAdmis > dDtIni .And. !Empty(dDtIni)
+					Help(" ",1,"DTINIINVAL",,STR0007 + STR0008 + DToC(dDtAdmis),4,5)
+					//"A data de inicio nao pode ser anterior a data de admissao do funcionario."##"Data de Admissao: "
+					lRet := .F.
+				EndIf
+
+				If lRet .And. dDtIni < M->TM0_DTIMPL .And. !Empty(dDtIni)
+					Help(" ",1,"DTINIINVAL",,STR0026 + STR0027 + DToC(M->TM0_DTIMPL),4,5)
+					//"A data de inicio nao pode ser anterior a data de implantação da ficha médica."##"Data de Implantação: "
+					lRet := .F.
+				EndIf
+
+			EndIf
+		EndIf
+
+		//Se estiver preenchendo a data de término valida se possuem registros duplicados ou com períodos abertos
+		If lVldLinOk
+			//Verifica se existem elementos duplicados na Grid ou dois registros sem data de término para determinado período
+			For nX := 1 to Len(aCOLS)
+				If nX <> n .And. !GDDeleted( nX, aHeader, aCols ) .And. !GDDeleted( n, aHeader, aCols )
+					If lRet .And. aCOLS[nX][nPOS] == aCOLS[n][nPOS] .And. aCOLS[nX][nINIC] == aCOLS[n][nINIC]
+						Help(" ",1,"JAEXISTINF")
+						lRet := .F.
+					EndIf
+					If lRet .And. aCOLS[nX][nPOS] == aCOLS[n][nPOS] .And. Empty(aCOLS[nX][nFIM]) .And. Empty(aCOLS[n][nFIM])
+						Msginfo(STR0040)
+						lRet := .F.
+					EndIf
+				EndIf
+			Next nX
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValidLine
+Pós-validação do modelo de dados.
+
+@author Luis Fellipy Bett
+@since 22/06/2017
+
+@param oModel - Objeto do modelo de dados (Obrigatório)
+
+@return Lógico - Retorna verdadeiro caso validações estejam corretas
+/*/
+//---------------------------------------------------------------------
+Function fValidLine( oModelTN6 , nLine , cParMat, dParDtIni , dParDtFim )
+
+	Local lRet := .T.
+	Local lVldMark := .F.
+	Local nI := 0
+	Local cMatric := oModelTN6:GetValue( "TN6_MAT" )
+	Local dDtInic := oModelTN6:GetValue( "TN6_DTINIC" )
+	Local dDtTerm := oModelTN6:GetValue( "TN6_DTTERM" )
+
+	Default cParMat := ""
+	Default dParDtIni := SToD("")
+	Default dParDtFim := SToD("")
+
+	If !Empty( cParMat )
+		cMatric := cParMat
+		dDtInic := dParDtIni
+		dDtTerm := dParDtFim
+		lVldMark:= .T.
+	EndIf
+
+	If lVldMark .Or. !(oModelTN6:IsDeleted())
+		For nI := 1 To oModelTN6:Length()
+
+			oModelTN6:GoLine( nI )
+			If nI <> nLine .And. cMatric == oModelTN6:GetValue( "TN6_MAT" ) .And. !(oModelTN6:IsDeleted())
+				If Empty( oModelTN6:GetValue( "TN6_DTTERM" ) ) .And. ;
+					( dDtInic > oModelTN6:GetValue( "TN6_DTINIC" ) .Or. dDtTerm > oModelTN6:GetValue( "TN6_DTINIC" ) )
+					lRet := .F.
+				ElseIf Empty( dDtTerm ) .And. dDtInic < oModelTN6:GetValue( "TN6_DTTERM" )
+					lRet := .F.
+				ElseIf Empty( dDtTerm ) .And. Empty( oModelTN6:GetValue( "TN6_DTTERM" ) )
+					lRet := .F.
+				ElseIf oModelTN6:GetValue( "TN6_DTINIC" ) < dDtTerm .And. ;
+					oModelTN6:GetValue( "TN6_DTTERM" ) > dDtInic
+					lRet := .F.
+				EndIf
+
+				If !lVldMark .And. !lRet
+					Help( "" , 1 , "PERINVALID" , , STR0049 ,4,5) //"Período cadastrado já existe para o funcionário"
+				EndIf
+			EndIf
+		Next nI
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT090VAL
+Retornas as validações do campo.
+
+@author Guilherme Freudenburg
+@since 13/03/2014
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT090VAL()
+
+	Local cRet:= ".T."//caso nao tenha M-> simplesmente retorna .T.
+
+	If !Empty(M->TN6_MAT)//verifca a existencia da memoria
+		dbSelectArea("SRA")
+		dbSetOrder(1)
+		dbSeek(xFilial("SRA")+ M->TN6_MAT)
+
+		If(SRA->RA_MSBLQL == "1")
+			cRet:= "MDT090DMI()"//Quando funcionario não esta Habilitado.
+		Else
+			cRet:= "SitMdtFunc(M->TN6_MAT,.T.,.T.,.T.)"//Quando funcionário esta Habilitado.
+		EndIf
+ 	EndIf
+
+Return &cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT090DMI
+Verifica se funcionário esta com estatutos de não habilitado
+
+@author Guilherme Freudenburg
+@since 13/03/2014
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT090DMI()
+
+	Local lRet := .T.
+
+	If !Empty(M->TN6_MAT)
+		dbSelectArea("SRA")
+		dbSetOrder(1)
+		dbSeek(xFilial("SRA")+ M->TN6_MAT)
+		If(SRA->RA_MSBLQL == "1")//Campo determinada se o funcionário esta habilitado ou não sendo 1=Não Hab. e 2=Habilitado.
+			lRet := MsgYesNo(STR0037)//"Este funcionário não esta Habilitado.Deseja continuar ?"
+		EndIf
+  	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValExeRot
+Valida execução da rotina MDTA095PS
+
+@return lIncons Boolean Indica se há inconsistencia na execução.
+@param lFontPS  Boolean Indica se foi feito a chamada pelo MDTA095PS
+
+@sample fValExeRot(.T.)
+@author Jean Pytter da Costa
+
+@since 24/08/2015
+/*/
+//---------------------------------------------------------------------
+Static Function fValExeRot( lFontPS )
+
+	Local lIncons := .F.
+
+	If !lIncons .And. lSigaMDTPS .And. !lFontPS
+		Help(' ',1,"NOCALLPS" + CRLF + STR0050,,STR0051,2,0,,,,,,{STR0046})
+		//"Função incorreta" ## "Faz se necessário a alteração do Menu. A rotina
+		//'Tarefas do Funcionário' deverá chamar o programa MDTA090PS" ## "Contate o administrador do sistema"
+		lIncons := .T.
+	EndIf
+
+Return lIncons
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} D090CHKDT
+Função mantida para não ocorrer erro de falta de função em ambientes
+com o dicionário desatualizado -
+Verifica se a data de admissao do funcionário é menor que a data
+inicial do funcincionário executando essa tarefa
+
+@type    function
+@author  Marcio Costa
+@since   03/01/2000
+@sample  D090CHKDT( .T. )
+@param   lCandidato, Lógico, Verdadeiro se for para verificar pela
+ficha médica
+
+@return  Retdata, Lógico, Verdadeiro se a data for válida
+/*/
+//-------------------------------------------------------------------
+Function D090CHKDT( lCandidato )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} D090FIMDT
+Função mantida para não ocorrer erro de falta de função em ambientes
+com o dicionário desatualizado -
+Verifica se a data de termino á menor que a data inicial do funcionário
+executando essa tarefa
+
+@type    function
+@author  Denis Hyroshi de Souza
+@since   03/12/2003
+@sample  D090FIMDT( .T., .T., .T.)
+@param   lProg, Lógico, Se
+@param   lCandidato, Lógico, Se é canidato
+@param   lTudoOk, Lógico, Se vor validação final dos campos
+
+@return  Retdata, Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function D090FIMDT( lProg, lCandidato, lTudoOk )
+
+	Local lRet := .T.
+
+	lRet := MDT090VLDT()
+
+Return lRet

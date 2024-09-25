@@ -1,0 +1,1451 @@
+#Include "Mdta161.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA161
+Atendimento de Enfermagem Diario
+
+@author Jean Pytter da Costa
+@since  29/05/2015
+@type   function
+@sample MDTA161()
+
+@return Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDTA161()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( , "MDTA161" )
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cCadastro := OemtoAnsi( STR0004 )  //"Atendimento de Enfermagem Diario"
+	Private aRotina := MenuDef()
+
+	If AMiIn( 35 ) //Somente autorizado para SIGAMDT
+
+		// Endereca a funcao de BROWSE
+		dbSelectArea( "TMK" )
+		dbSetOrder( 1 )
+
+		MDT161Ag( "TMK", Recno(), 3 )
+
+	EndIf
+
+	// Retorna conteudo de variaveis padroes
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@type   function
+@Obs    Parametros do array a Rotina:
+			1. Nome a aparecer no cabecalho
+			2. Nome da Rotina associada
+			3. Reservado
+			4. Tipo de Transa‡„o a ser efetuada:
+				1 - Pesquisa e Posiciona em um Banco de Dados
+				2 - Simplesmente Mostra os Campos
+				3 - Inclui registros no Bancos de Dados
+				4 - Altera o registro corrente
+				5 - Remove o registro corrente do Banco de Dados
+			5. Nivel de acesso
+			6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Jackson Machado
+@since  18/07/2013
+@retur  aRotina, Array, Opções de menu
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lSigaMdtPs )
+
+	Local aRotina := {}
+
+	aAdd( aRotina, { STR0001, "AxPesqui", 0, 1 } ) //"Pesquisar"
+	aAdd( aRotina, { STR0002, "NGCAD01", 0, 2 } ) //"Visualizar"
+	aAdd( aRotina, { STR0024, "NGCAD01", 0, 3 } ) //"Incluir"
+	aAdd( aRotina, { STR0025, "NGCAD01", 0, 4 } ) //"Alterar"
+	aAdd( aRotina, { STR0026, "NGCAD01", 0, 5 } ) //"Excluir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161Ag
+Programa de Inclusao, alteracao e exclusao de Atendimentos
+
+@type   function
+@author Jean Pytter da Costa
+@since  29/05/2015
+@sample MDT161Ag( 'TMK', 20, 3 )
+
+@param  cAlias, Caracter, Alias do arquivo
+@param  nReg, Numerico, Numero do registro
+@param  nOpcx, Boolean, Opcao selecionada no menu
+
+@return Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDT161Ag( cAlias, nReg, nOpcx )
+
+	Local aAreaTMK 	 := TMK->( GetArea() )
+	Local aIndice	 := {}
+	Local lUsers	 := .F.
+	Local aInd 		 := { RetBoxTL5() } // Opções da combo
+	Local aCorFnd 	 := NGCOLOR() // Cor do fundo do Painel
+	Local aOldRotina := IIf( Type( "aRotina" ) <> "U", aClone( aRotina ), )
+	Local aListCamp	 := {"TMK_CODUSU", "TMK_NOMUSU", "TMK_ENTCLA", "TMK_DTINIC",;
+		                 "TMK_DTTERM", "TMK_SESMT", "TMK_INDFUN", "TMK_CC", "TMK_CIC"}
+
+	// Variaveis FillGetDados--
+	Local aNoFields	 := {}
+	Local cSeek		 := "TY3->TY3_CODMED"
+	Local cWhile	 := "TY3->TY3_FILIAL == xFilial( 'TY3' )"
+
+	Local oDialog
+	Local nDesMed
+	Local nUniMed
+	Local lAccsFic  := IIf( FindFunction( "MDTVldFldAcc" ), MDTVldFldAcc( "TL5_NUMFIC" ), .T. )
+
+	Private oList
+	Private aCOLS    := {}
+	Private dDtAtual
+	Private oGet, oPnlPai, oPnlTop, oPnlLeft, oPnlRight, oPnlBts, oPnlBot, oPnlFilt, oPnlDesc, oPnlShow
+	Private oMenu
+	Private oMemoTL5
+
+	// Variaveis de tamanho de tela e objetos
+	Private aSize    := {}
+	Private aObjects := {}
+	Private aHeader  := {}
+
+	If SuperGetMV( "MV_NG2SEG", .F., "2" ) == "1" .And. !( SuperGetMV( "MV_MDTPS", .F., "N" ) == "S" )
+		dbSelectArea( "TMK" )
+		dbSetOrder( 4 )
+		dbSeek( cUserName )
+		cFilTMK := TMK->TMK_FILIAL
+		cCodTMK := TMK->TMK_CODUSU
+		If !( TMK->TMK_INDFUN $ "2/3/7/8/9/A/B" )
+			ShowHelpDlg( STR0027, { STR0062 }, 2,; // "Atenção"###"Usuário não é um Atendente válido."
+								  { STR0063 }, 2 ) // "Para Atendimento de Enfermagem somente usuários dos tipos '2', '3', '7', '8', '9', 'A' ou 'B' são permitidos."
+			Return .F.
+		Else
+			dbSelectArea( "TMK" )
+			Set Filter To TMK->TMK_FILIAL == cFilTMK .And. TMK->TMK_CODUSU == cCodTMK
+		EndIf
+	Else
+		DbSelectArea( "TMK" ) // Verificar se possui atendentes ao entrar na rotina
+		DbSetOrder( 1 )
+		DbSeek( xFilial( "TMK" ) )
+		While !Eof() .And. TMK->TMK_FILIAL == xFilial( "TMK" )
+			If TMK->TMK_INDFUN == "2" .Or. TMK->TMK_INDFUN == "3" .Or. TMK->TMK_INDFUN == "7" .Or. TMK->TMK_INDFUN == "8" .Or.;
+		 		TMK->TMK_INDFUN == "9" .Or. TMK->TMK_INDFUN == "A" .Or. TMK->TMK_INDFUN == "B"
+				lUsers := .T.
+				Exit
+			EndIf
+			dbSelectArea( "TMK" )
+			TMK->( dbSkip() )
+		End
+		// Verifica se possui atendentes cadastrados.
+		If !lUsers
+			ShowHelpDlg( STR0027, { STR0028 }, 2,; // "Atenção"###"Não possui atendentes cadastrados."
+						 { STR0029 }, 2 ) // "Fazer o cadastro de atendentes com os tipos: '2', '3', '7', '8', '9', 'A' ou 'B'."
+			Return .F.
+		EndIf
+
+		dbSelectArea( "TMK" )
+		Set Filter To TMK->TMK_FILIAL == xFilial( "TMK" ) .And. ( TMK->TMK_INDFUN == '2' .Or. TMK->TMK_INDFUN == '3' .Or. ;
+			TMK->TMK_INDFUN == '7' .Or. TMK->TMK_INDFUN == '8' .Or. TMK->TMK_INDFUN == '9' .Or. TMK->TMK_INDFUN == 'A' .Or. ;
+			TMK->TMK_INDFUN == 'B' )
+	EndIf
+
+	// Inicia campos com valor para editar
+	RegToMemory( "TL5", .T., , .F. )
+	dDtAtual 		:= dDataBase // data atual
+	cHrAtual 		:= SubStr( TIME(), 1, 5 ) // hora atual
+	aInd 			:= StrTokArr( aInd[1], ";" ) //Separa cada posição de acordo com o caractere
+	cIndic 			:= aInd[ 1 ] // lista de opções da combobox
+	M->TL5_NUMFIC 	:=  Space( TAMSX3( "TL5_NUMFIC" )[1] )
+	M->TL5_MOTIVO 	:=  Space( TAMSX3( "TL5_MOTIVO" )[1] )
+	M->TL5_TEMPER 	:=  0
+	M->TL5_ALTURA 	:=  0
+	M->TL5_PESO   	:=  0
+	M->TL5_PRESIS 	:=  0
+	M->TL5_PREDIS 	:=  0
+	M->TL5_PULSO  	:=  Space( TAMSX3( "TL5_PULSO" )[1] )
+	M->TL5_RESPI  	:=  Space( TAMSX3( "TL5_RESPI" )[1] )
+	M->TL5_DINAMO 	:=  0
+	M->TL5_MASSA  	:=  Space( TAMSX3( "TL5_MASSA" )[1] )
+	M->TL5_MOBSER 	:=  Space( TAMSX3( "TL5_MOBSER" )[1] )
+
+	// Carrega os campos para a GetDados
+	aAdd( aNoFields, "TY3_NUMFIC" )
+	aAdd( aNoFields, "TY3_DTATEN" )
+	aAdd( aNoFields, "TY3_HRATEN" )
+	aAdd( aNoFields, "TY3_INDICA" )
+
+	dbSelectArea( "TY3" )
+	dbSetOrder( 1 )
+	FillGetDados( 4, "TY3", 1, cSeek, { | | }, { | | .T.}, aNoFields, , , , { | | NGMontaaCols( "TY3", &cSeek, cWhile, , 1 ) }, .T. )
+
+	// Definicao de tamanho de tela e objetos
+	aSize := MsAdvSize( , .F., 370 )
+	Aadd( aObjects, {030, 030, .T., .T.} )
+	Aadd( aObjects, {100, 100, .T., .T.} )
+
+	DEFINE MSDIALOG oDialog TITLE cCadastro From aSize[7], 0 To aSize[6], aSize[5] OF oMainWnd PIXEL
+
+	// Painel de Fundo
+	oPnlPai := TPanel():New( 00, 00, , oDialog, , , , , , 0, 0, .T., .T. )
+	oPnlPai:Align   := CONTROL_ALIGN_ALLCLIENT
+
+		// Divisória entre Painéis do lado direito com lado esquerdo
+		oSplitter := tSplitter():New( 0, 0, oPnlPai, 200, 200, 0 )
+		oSplitter:Align := CONTROL_ALIGN_ALLCLIENT
+
+			// Painel lado direito
+			oPnlRight:= tPanel():Create( oSplitter, 00, 00, , , .T., , , , aSize[5]/4, , , .T. )
+			oPnlRight:Align := CONTROL_ALIGN_RIGHT
+
+				// Painel canto superior direito - Campos do Atendimento
+				oPnlTop := TPanel():New( 00, 00, , oPnlRight, , , , , , , , .F., .F. )
+				oPnlTop:Align   := CONTROL_ALIGN_ALLCLIENT
+
+					// Botões para confirmar ou cancelar inclusão de um novo Atendimento
+					oPnlBts := TPanel():New( 00, 00, , oPnlTop, , , , , aCorFnd[2], 12, 12, .F., .F. )
+					oPnlBts:Align := CONTROL_ALIGN_LEFT
+
+					oBtnConfirm := TBtnBmp():NewBar( "ng_ico_confirmar", , , , , { | | MDT161VAL( 4, 3 ) .And. MDT161TUDOK() .And. MDT161GRV( 3 ) }, , oPnlBts, , , STR0030, , , , , "" ) //"Confirmar"
+					oBtnConfirm:Align := CONTROL_ALIGN_TOP
+					oBtnCancel := TBtnBmp():NewBar( "ng_ico_cancelar", , , , , { | | MDT161GRV( 5 ) }, , oPnlBts, , , STR0031, , , , , "" ) //"Cancelar"
+					oBtnCancel:Align := CONTROL_ALIGN_TOP
+					oBtnHistor := TBtnBmp():NewBar( "ng_ico_visana", , , , , { | | MDT161GRV( 2, .T. ) .And. MDT161HIST() }, , oPnlBts, , , STR0032, , , , , "" ) //"Histórico"
+					oBtnHistor:Align := CONTROL_ALIGN_TOP
+
+					oScroll := TScrollBox():New( oPnlTop, 50, 000, , , .T., .T., .T. )
+		   			oScroll:Align := CONTROL_ALIGN_ALLCLIENT
+
+						// Painel com os Campos do Atendimento
+						oPnlCmps := TPanel():New( 00, 00, , oScroll, , , , , , , , .F., .F. )
+						oPnlCmps:Align := CONTROL_ALIGN_ALLCLIENT
+
+							// Borda para os Campos do Atendimento
+							TGroup():New( 03, 02, 070, 380, STR0033, oPnlCmps, , , .T. ) // "Informações Gerais"
+							// Data Atendimento
+							tSay():New( 015, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_DTATEN" ) ) }, oPnlCmps, , , , , , .T., CLR_HBLUE, , 100, 10 )
+							tGet():New( 014, 040, { | u | IIf( PCount() > 0, dDtAtual := u, dDtAtual ) }, oPnlCmps, 50, 05, PesqPict( "TL5", "TL5_DTATEN" ),;
+										{ | | MDT161VAL( 1 ) }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_DTATEN', , , , .T. )
+							// Hora Atendimento
+							tSay():New( 015, 095, { | | OemtoAnsi( NGRETTITULO( "TL5_HRATEN" ) ) }, oPnlCmps, , , , , , .T., CLR_HBLUE, , 200, 010 )
+							tGet():New( 014, 125, { | u | IIf( PCount() > 0, cHrAtual := u, cHrAtual ) }, oPnlCmps, 30, 08, PesqPict( "TL5", "TL5_HRATEN" ),;
+										{ | | VALHORA( cHrAtual ) }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_HRATEN', , , , .T., .F. )
+							// Ficha Médica
+							tSay():New( 035, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_NUMFIC" ) ) }, oPnlCmps, , , , , , .T., CLR_HBLUE, , 200, 010 )
+							tGet():New( 034, 040, { | u | IIf( PCount() > 0, M->TL5_NUMFIC := u, MDTHideCpo( M->TL5_NUMFIC, "TL5_NUMFIC" ) ) }, oPnlCmps, 30, 08, PesqPict( "TL5", "TL5_NUMFIC" ),;
+										{ | | MDT161VAL( 2 ) }, , , , , , .T., , , { || lAccsFic }, .F., , , .F., .F., "TM0VIS", 'M->TL5_NUMFIC', , , , .T. )
+							// Nome
+							tSay():New( 035, 095, { | | OemtoAnsi( NGRETTITULO( "TL5_NOMFIC" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 034, 115, { | u | IIf( PCount() > 0, M->TL5_NOMFIC := u, MDTHideCpo( M->TL5_NOMFIC, "TL5_NOMFIC" ) ) }, oPnlCmps, 150, 08, ,;
+										{ | | }, , , , , , .T., , , { | | .F. } )
+							// Indicação
+							tSay():New( 055, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_INDICA" ) ) }, oPnlCmps, , , , , , .T., CLR_HBLUE, , 200, 010 )
+							TComboBox():New( 054 , 040 , { | u | If( PCount() > 0 , cIndic := u , cIndic ) }, aInd , 80 , 08 , oPnlCmps, , { | | },;
+									 	, , , .T. , , , , , , , , , "M->TL5_INDICA" )
+							// Motivo
+							tSay():New( 055, 140, { | | OemtoAnsi( NGRETTITULO( "TL5_MOTIVO" ) ) }, oPnlCmps, , , , , , .T., CLR_HBLUE, , 200, 010 )
+							tGet():New( 054, 170, { | u | IIf( PCount() > 0, M->TL5_MOTIVO := u, M->TL5_MOTIVO ) }, oPnlCmps, 30, 08, PesqPict( "TL5", "TL5_MOTIVO" ),;
+										{ | | MDT161VAL( 3 ) }, , , , , , .T., , , , .F., , , .F., .F., "TMS", 'M->TL5_MOTIVO', , , , .T. )
+							// Descrição do Motivo
+							tSay():New( 055, 225, { | | OemtoAnsi( NGRETTITULO( "TL5_DESMOT" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 054, 260, { | u | IIf( PCount() > 0, M->TL5_DESMOT := u, M->TL5_DESMOT ) }, oPnlCmps, 100, 08, PesqPict( "TL5", "TL5_DESMOT" ),;
+										{ | | }, , , , , , .T., , , { | | .F. } )
+
+							TGroup():New( 075, 02, 140, 380, STR0034, oPnlCmps, , , .T. ) // "Exame Clínico"
+							// Temperatura
+							tSay():New( 086, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_TEMPER" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 085, 040, { | u | IIf( PCount() > 0, M->TL5_TEMPER := u, M->TL5_TEMPER ) }, oPnlCmps, 20, 08, PesqPict( "TL5", "TL5_TEMPER" ),;
+										{ | | MDT161IMC() }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_TEMPER', , , , .T. )
+							// Altura
+							tSay():New( 086, 085, { | | OemtoAnsi( NGRETTITULO( "TL5_ALTURA" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 085, 110, { | u | IIf( PCount() > 0, M->TL5_ALTURA := u, M->TL5_ALTURA ) }, oPnlCmps, 25, 08, PesqPict( "TL5", "TL5_ALTURA" ),;
+										{ | | MDT161IMC() }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_ALTURA', , , , .T. )
+							// Peso
+							tSay():New( 086, 155, { | | OemtoAnsi( NGRETTITULO( "TL5_PESO" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 085, 170, { | u | IIf( PCount() > 0, M->TL5_PESO := u, M->TL5_PESO ) }, oPnlCmps, 25, 08, PesqPict( "TL5", "TL5_PESO" ),;
+										{ | | MDT161IMC() }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_PESO', , , , .T. )
+							// Massa
+							tSay():New( 086, 230, { | | OemtoAnsi( NGRETTITULO( "TL5_MASSA" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 085, 260, { | u | IIf( PCount() > 0, M->TL5_MASSA := u, M->TL5_MASSA ) }, oPnlCmps, 75, 08, PesqPict( "TL5", "TL5_MASSA" ),;
+										{ | |  }, , , , , , .T., , , { | | .F. } )
+							// Sistólica
+							tSay():New( 106, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_PRESIS" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 105, 040, { | u | IIf( PCount() > 0, M->TL5_PRESIS := u, M->TL5_PRESIS ) }, oPnlCmps, 25, 08, PesqPict( "TL5", "TL5_PRESIS" ),;
+										{ | | }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_PRESIS', , , , .T. )
+							// Diastólica
+							tSay():New( 106, 085, { | | OemtoAnsi( NGRETTITULO( "TL5_PREDIS" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 105, 110, { | u | IIf( PCount() > 0, M->TL5_PREDIS := u, M->TL5_PREDIS ) }, oPnlCmps, 25, 08, PesqPict( "TL5", "TL5_PREDIS" ),;
+										{ | | }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_PREDIS', , , , .T. )
+							// Pulso
+							tSay():New( 106, 155, { | | OemtoAnsi( NGRETTITULO( "TL5_PULSO" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 105, 170, { | u | IIf( PCount() > 0, M->TL5_PULSO := u, M->TL5_PULSO ) }, oPnlCmps, 50, 08, PesqPict( "TL5", "TL5_PULSO" ),;
+										{ | | }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_PULSO', , , , .T. )
+							// Respiração
+							tSay():New( 106, 230, { | | OemtoAnsi( NGRETTITULO( "TL5_RESPI" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 105, 260, { | u | IIf( PCount() > 0, M->TL5_RESPI := u, M->TL5_RESPI ) }, oPnlCmps, 55, 08, PesqPict( "TL5", "TL5_RESPI" ),;
+										{ | | }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_RESPI', , , , .T. )
+							// Dinamometria
+							tSay():New( 126, 005, { | | OemtoAnsi( NGRETTITULO( "TL5_DINAMO" ) ) }, oPnlCmps, , , , , , .T., , , 200, 010 )
+							tGet():New( 125, 040, { | u | IIf( PCount() > 0, M->TL5_DINAMO := u, M->TL5_DINAMO ) }, oPnlCmps, 50, 08, PesqPict( "TL5", "TL5_DINAMO" ),;
+										{ | | }, , , , , , .T., , , , .F., , , .F., .F., , 'M->TL5_DINAMO', , , , .T. )
+
+							// Observação
+							TGroup():New( 145, 02, 275, 380, STR0035, oPnlCmps, , , .T. )// "Observação"
+							oMemoTL5 := TSimpleEditor():New( 156, 040, oPnlCmps, 250, 100, , .F., { |u| IIf( Pcount() > 0, M->TL5_MOBSER := u, M->TL5_MOBSER ) }, , .T. )
+							oMemoTL5:SetCSS( 'background-color : transparent; border: 1px solid #DCDCDC;  border-radius: 4px; ' )
+
+							If ExistBlock( "MDTA1611" )
+								ExecBlock( "MDTA1611", .F., .F., { oPnlCmps } )
+							EndIf
+
+					// Botao para esconder painel inferior lado direito
+					oPnlShow := TButton():New( 000, 000, "\/", oPnlTop, , 10, 5, , , .F., .T., .F., , .F., , , .F. )
+					oPnlShow:bAction := { |x, y| ( oPnlShow:cTitle := IIf( oPnlShow:cTitle == "/\", "\/", "/\"), IIf( oPnlShow:cTitle == "\/", oPnlBot:Show(), oPnlBot:Hide() ) ), oPnlTop:SetFocus() }
+					oPnlShow:Align := CONTROL_ALIGN_BOTTOM
+					oPnlShow:SetCSS(	"QPushButton{ background-color: #F4F4F4; color: #BEBEBE; font-size: 8px; border: 1px solid #D3D3D3; } " +;
+										"QPushButton:Focus{ background-color: #FFFAFA; } " +;
+										"QPushButton:Hover{ background-color: #F4F4F4; color: #000000; border: 1px solid #D3D3D3; } ")
+
+				// Painel para Titulo do Medicamento
+				oPnlBot:= tPanel():Create( oPnlRight, 150, 150, , , .T., , , , aSize[5]/4, aSize[6]/7 )
+				oPnlBot:Align := CONTROL_ALIGN_BOTTOM
+
+					// Titulo
+					oPnlDesc := TPanel():New( 00, 00, , oPnlBot, , , , , aCorFnd[ 2 ], aSize[ 6 ], 12, .F., .F. )
+					oPnlDesc:Align := CONTROL_ALIGN_TOP
+					oSayInf := tSay():New( 03, 05, { | | STR0036 }, oPnlDesc, , , , , , .T., aCorFnd[ 1 ], aCorFnd[ 1 ], 100, 20 ) //"Medicamentos"
+
+					// Grid para incluir um Medicamento
+					oGet := MSGetDados():New( 00, 00, 00, 00, nOpcx, "MDT161LINOK()", "", "", .T., , , , 3000, , , , , oPnlBot )
+					oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+						// Limpa os campos do acols que vem com dados
+						nDesMed := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_DESMED" } )
+						nUniMed := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_UNIMED" } )
+
+						aCols[ 1, nDesMed ]	:= Space( TAMSX3( "TY3_DESMED" )[1] )
+						aCols[ 1, nUniMed ]	:= Space( TAMSX3( "TY3_UNIMED" )[1] )
+
+			//Painel lado esquerdo - Usuarios
+			oPnlLeft:= tPanel():Create( oSplitter, 50, 100, , , .T., , , , aSize[5]/6, 50, , .T. )
+			oPnlLeft:Align := CONTROL_ALIGN_LEFT
+			oSplitter:MoveToFirst( oPnlLeft ) // Define o Painel como o primeiro da divisória
+
+				aRotina := {}
+				oList := FWMBrowse():New()
+				oList:SetDescription( STR0037 )// "Lista de Atendentes"
+				oList:SetAlias( "TMK" )		// Alias da tabela utilizada
+				oList:SetOwner( oPnlLeft )		// Define o objeto pai
+				oList:SetOnlyFields( aListCamp ) // Campos que vão ser apresentados em tela
+				//oList:SetFilterDefault( "TMK->TMK_INDFUN == '2' .Or. TMK->TMK_INDFUN == '3' .Or. TMK->TMK_INDFUN == '7' .Or. TMK->TMK_INDFUN == '8' .Or. TMK->TMK_INDFUN == '9' .Or. TMK->TMK_INDFUN == 'B'")
+
+				aAdd( aIndice, { STR0038, { { "", "C", 20, 0, "", "@!" } } } ) // "Filial+Usuario"--- Indices de pesquisa
+	          	aAdd( aIndice, { STR0039, { { "", "C", 88, 0, "", "@!" } } } ) // "Filial+Nome"--- Indices de pesquisa
+				oList:SetSeek( .T., aIndice )
+
+				oList:DisableReport()
+				oList:DisableDetails()
+				oList:DisableConfig()
+				oList:Activate()
+
+	If SuperGetMV( "MV_NG2SEG", .F., "2" ) == "1" .And. !( SuperGetMV( "MV_MDTPS", .F., "N" ) == "S" )
+		oPnlLeft:Hide()
+		oPnlRight:Align := CONTROL_ALIGN_ALLCLIENT
+	EndIf
+
+	NgPopUp( asMenu, @oMenu )
+	oDialog:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oDialog )}
+
+	ACTIVATE MSDIALOG oDialog ON INIT EnchoiceBar( oDialog,;
+											 { | | oDialog:End() },; // Confirmar
+											 { | | oDialog:End() } ) CENTERED // Cancelar
+
+	DbSelectArea( "TMK" )
+	Set Filter to
+	RestArea( aAreaTMK )
+
+	If ValType( aOldRotina ) <> "U"
+		aRotina := aClone( aOldRotina )
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161GRV
+Funcao para gravar os dados.
+
+@type   function
+@author Jean Pytter da Costa
+@since  23/06/2015
+@sample MDT161GRV( 2, .T. )
+
+@param  nOpcao, Numérico, Ação que esta sendo feito na rotina.
+		nOpcao = 2 , Opção de visualizar, necessário para ao sair do Histórico
+		vir com os campos vazios na Inclusão do Atendimento
+		nOpcao = 3 , Opção de incluir no NGCAD02
+		nOpcao = 5 , Opção de excluir no NGCAD02
+@param  lLimpa, Lógico, Verdadeiro se deve limpar os campos da TL5
+na tela inicial
+
+@return lRet, Lógico, Verdadeiro se completou a gravação.
+/*/
+//---------------------------------------------------------------------
+Function MDT161GRV( nOpcao, lLimpa )
+
+	Local nPos
+	Local aOldRot	:= aClone( aRotina )
+	Local aRotina	:= MenuDef()
+
+	Local nCodMed	:= aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_CODMED" } )
+	Local nQuanti	:= aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_QUANT" } )
+	Local nMemoPos	:= aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_MPSOLO" } )
+	Local lRet		:= .T.
+	Local n, j
+
+	Default lLimpa := .F. //Variavel para limpar browse
+
+	If nOpcao == 3
+
+		DbSelectArea( "TL5" )
+		DbSetOrder( 1 ) //TL5_FILIAL+TL5_NUMFIC+DTOS(TL5_DTATEN)+TL5_HRATEN+TL5_INDICA+TL5_CODMED
+		If !DbSeek( xFilial( "TL5" ) + M->TL5_NUMFIC + DTOS( dDtAtual ) + cHrAtual + cIndic )
+			RecLock( "TL5", .T. )
+				TL5->TL5_FILIAL	:= xFilial( "TL5" )
+				TL5->TL5_DTATEN	:= dDtAtual
+				TL5->TL5_HRATEN	:= cHrAtual
+				TL5->TL5_NUMFIC	:= M->TL5_NUMFIC
+				TL5->TL5_INDICA	:= cIndic
+				TL5->TL5_MOTIVO	:= M->TL5_MOTIVO
+				TL5->TL5_TEMPER	:= M->TL5_TEMPER
+				TL5->TL5_ALTURA	:= M->TL5_ALTURA
+				TL5->TL5_PESO 	:= M->TL5_PESO
+				TL5->TL5_PRESIS	:= M->TL5_PRESIS
+				TL5->TL5_PREDIS	:= M->TL5_PREDIS
+				TL5->TL5_PULSO	:= M->TL5_PULSO
+				TL5->TL5_RESPI	:= M->TL5_RESPI
+				TL5->TL5_DINAMO	:= M->TL5_DINAMO
+				TL5->TL5_CODUSU	:= TMK->TMK_CODUSU
+				If ExistBlock( "MDTA1612" )
+					ExecBlock( "MDTA1612", .F., .F. )
+				EndIf
+				MSMM( , TAMSX3( "TL5_MOBSER" )[1], , M->TL5_MOBSER, 1, , 050, "TL5", "TL5_OBSSYP" ) //Gravação de campo Memo
+			( "TL5" )->( MsUnlock() )
+			cCodEnf := TL5->TL5_CODUSU
+
+			For n := 1 to Len( aCols )
+				If !aCols[ n, 8 ]
+					RecLock( "TY3", .T. )
+					For j := 1 to FCount()//Percorre todos os campos da tabela gravando as informacoes, caso necessaria inclusao específica, feita condicao via If/ElseIf
+						If "_FILIAL" $ Upper( FieldName( j ) )
+							FieldPut( j, xFilial( "TY3" ) )
+						ElseIf "_DTATEN" $ Upper( FieldName( j ) )
+							FieldPut( j, dDtAtual )
+						ElseIf "_HRATEN" $ Upper( FieldName( j ) )
+							FieldPut( j, cHrAtual )
+						ElseIf "_NUMFIC" $ Upper( FieldName( j ) )
+							FieldPut( j, M->TL5_NUMFIC )
+						ElseIf "_INDICA" $ Upper( FieldName( j ) )
+							FieldPut( j, cIndic )
+						ElseIf ( nPos := aScan( aHeader, { | x | AllTrim( Upper( x[ 2 ] ) ) == AllTrim( Upper( FieldName( j ) ) ) } ) ) > 0//Caso posicao do campo esteja no aHeader
+							FieldPut( j, aCols[ n, nPos ] )
+						Endif
+					Next j
+					MSMM( , , , aCols[n, nMemoPos], 1, , 030, "TY3", "TY3_PSOSYP" ) //Gravação de campo Memo
+					( "TY3" )->( MsUnlock() )
+
+					// Atualiza o estoque atual de medicamentos - Tabela TM1
+					fAtuSalTM3( "5", aCols[ n, nCodMed ], aCols[ n, nQuanti ], dDtAtual )//Saida por utilzacao
+				EndIf
+			Next n
+
+			lLimpa := .T.
+		Else
+			ShowHelpDlg( STR0027, { STR0040 }, 2,; //"Atenção"###"Já existe registro com essas informações."
+				 { STR0041 }, 2 ) //"Informe outros dados para conseguir incluir."
+			lRet := .F.
+		EndIf
+	ElseIf nOpcao == 5
+		lLimpa := MsgYesNo( STR0042 ) //"Deseja cancelar a inclusão do atendimento ?"
+	EndIf
+
+	If lRet .And. nOpcao == 3
+		MDT161AUT( cCodEnf )
+	EndIf
+
+	If lLimpa //Se foi Cancelado ou Confirmado vai limpar
+
+		dDtAtual 		:= dDataBase //data atual
+		cHrAtual 		:= SUBSTR( TIME(), 1, 5 ) //hora atual
+		M->TL5_NUMFIC	:= Space( TAMSX3( "TL5_NUMFIC" )[1] )
+		M->TL5_NOMFIC 	:= Space( TAMSX3( "TL5_NOMFIC" )[1] )
+		M->TL5_MOTIVO 	:= Space( TAMSX3( "TL5_MOTIVO" )[1] )
+		M->TL5_DESMOT 	:= Space( TAMSX3( "TL5_DESMOT" )[1] )
+		M->TL5_TEMPER 	:=  0
+		M->TL5_ALTURA 	:=  0
+		M->TL5_PESO   	:=  0
+		M->TL5_PRESIS 	:=  0
+		M->TL5_PREDIS 	:=  0
+		M->TL5_PULSO  	:= Space( TAMSX3( "TL5_PULSO" )[1] )
+		M->TL5_RESPI  	:= Space( TAMSX3( "TL5_RESPI" )[1] )
+		M->TL5_DINAMO 	:=  0
+		M->TL5_MASSA  	:= Space( TAMSX3( "TL5_MASSA" )[1] )
+		
+		If ExistBlock( "MDTA1614" )
+			ExecBlock( "MDTA1614", .F., .F. )
+		EndIf
+
+		M->TL5_MOBSER	:= ""
+		M->TL5_OBSSYP	:= ""
+		
+		oMemoTL5:Load( '' )
+		oMemoTL5:Refresh()
+
+		//Limpa os Medicamentos
+		aCols := BLANKGETD( aHeader )
+
+	EndIf
+
+	aRotina :=  aClone( aOldRot )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161Est
+Verifica se é possivel atualizar o saldo atual de medicamentos em estoque.
+
+@type   function
+@author Jean Pytter da Costa
+@since  23/06/2015
+@sample MDT161Est( cCodMed, nQntMed )
+@Param  cCodMed, Caractere, Código do Medicamento
+@Param  nQntMed, Caractere, Quantidade do Medicamento
+
+@return Lógico, Verdadeiro se é possível atualizar o estoque.
+/*/
+//---------------------------------------------------------------------
+Function MDT161Est( cCodMed, nQntMed )
+
+	Local aAreaTY3 := TY3->( GetArea() )
+	Local nDiferenca := 0
+
+	Default cCodMed := ""
+	Default nQntMed := 0
+
+	dbSelectArea( "TM1" )
+	dbSetOrder( 1 ) // TM1_FILIAL+TM1_CODMED
+	If dbSeek( xFilial( "TM1" ) + cCodMed )
+
+		If TM1->TM1_INDEST <> "1"
+			Return .T.
+		EndIf
+
+		nDiferenca := nQntMed
+
+		If ( nDiferenca < 0 )
+
+			nDiferenca := STR( nDiferenca )
+			nDiferenca := AllTrim( nDiferenca )
+			nDiferenca := Right( nDiferenca, Len( nDiferenca )- 1 )
+			nDiferenca := Val( nDiferenca )
+
+			If TM1->TM1_QTMINI > 0
+				If (TM1->TM1_QTATUA + nDiferenca) < TM1->TM1_QTMINI
+					If !MsgYesNo( STR0010 ) //"É recomendável que o estoque de medicamentos não atinja uma quantidade inferior à quantidade mínima. Deseja continuar mesmo assim?"
+						dbSelectArea( "TY3" )
+						RestArea( aAreaTY3 )
+						Return .F.
+					ElseIf (TM1->TM1_QTATUA + nDiferenca) < 0
+						Msgstop( STR0011 ) //"Estoque de Medicamentos sem saldo suficiente."
+						dbSelectArea( "TY3" )
+						RestArea( aAreaTY3 )
+						Return .F.
+					EndIf
+				EndIf
+			Else
+				If (TM1->TM1_QTATUA + nDiferenca) < 0
+					Msgstop( STR0011 ) //"Estoque de Medicamentos sem saldo suficiente."
+					dbSelectArea( "TY3" )
+					RestArea( aAreaTY3 )
+					Return .F.
+				EndIf
+			EndIf
+
+
+		ElseIf ( nDiferenca > 0 )
+
+			dbSelectArea( "TM1" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TM1" ) + cCodMed )
+
+				If TM1->TM1_QTMINI > 0
+					If (TM1->TM1_QTATUA - nDiferenca) < TM1->TM1_QTMINI
+						If !MsgYesNo( STR0010 ) //"É recomendável que o estoque de medicamentos não atinja uma quantidade inferior à quantidade mínima. Deseja continuar mesmo assim?"
+							Return .F.
+							dbSelectArea( "TY3" )
+							RestArea( aAreaTY3 )
+						ElseIf (TM1->TM1_QTATUA - nDiferenca) < 0
+							Msgstop( STR0011 ) //"Estoque de Medicamentos sem saldo suficiente."
+							dbSelectArea( "TY3" )
+							RestArea( aAreaTY3 )
+							Return .F.
+						EndIf
+					EndIf
+				Else
+					If (TM1->TM1_QTATUA - nDiferenca) < 0
+						Msgstop( STR0011 ) //"Estoque de Medicamentos sem saldo suficiente."
+						dbSelectArea( "TY3" )
+						RestArea( aAreaTY3 )
+						Return .F.
+					EndIf
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	dbSelectArea( "TY3" )
+	RestArea( aAreaTY3 )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161WMED
+When dos campos de medicamento no SBIS
+Uso MDTA161 (When de campos)
+
+@type   function
+@author Jackson Machado
+@since  21/08/2012
+@sample MDT161WMED()
+
+@return Lógico, Verdadeiro se gbiloita o campo
+/*/
+//---------------------------------------------------------------------
+Function MDT161WMED()
+
+	If SuperGetMv( "MV_NG2SEG", .F., "2" ) == "1" .And. !( SuperGetMV( "MV_MDTPS", .F., "N" ) == "S" )
+		If FindFunction( "MDTRESTRI" ) .And. !MDTVALUSR( "MDTA010", cUserName )
+			Return .F.
+		Endif
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161VAL
+Função para validar os campos
+
+@author Jean Pytter da Costa
+@since  17/06/2015
+@type  function
+@Param nCampo - Numero do campo
+		nCampo = 1 , Data Atendimento
+		nCampo = 2 , Numero da Ficha
+		nCampo = 3 , Motivo
+		nCampo = 4 , Opção de Confirmar
+@Param nOpcao - Se é inclusão = 3 ou cancelamento = 5.
+
+@sample MDT161VAL()
+
+@return lRet, Lógico, Verdadeiro se o campo é válido
+/*/
+//---------------------------------------------------------------------
+Function MDT161VAL( nCampo, nOpcao )
+
+	Local lRet := .T.
+
+	If nCampo == 1 .And. Empty( dDtAtual ) // Verifica se data esta preenchida
+		Help( 1, " ", "OBRIGAT2", , NGRETTITULO( "TL5_DTATEN" ), 3, 0 )
+		lRet := .F.
+	ElseIf nCampo == 2 .And. !Empty( M->TL5_NUMFIC ) // Verifica se Ficha médica esta preenchida para buscar o nome correto
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TM0" ) + M->TL5_NUMFIC )
+			M->TL5_NOMFIC := NGSEEK( "TM0", M->TL5_NUMFIC, 1, "TM0_NOMFIC" )
+		Else
+			lRet := .F.
+		EndIf
+	ElseIf nCampo == 3 .And. !Empty( M->TL5_MOTIVO ) // Verifica se Motivo esta preenchido para buscar o motivo correto
+		dbSelectArea( "TMS" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TMS" ) + M->TL5_MOTIVO )
+			M->TL5_DESMOT := NGSEEK( "TMS", M->TL5_MOTIVO, 1, "TMS_NOMOTI" )
+		Else
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If ( nCampo == 2 .Or. nCampo == 3 ) .And. !lRet // Verifica se campo da fiha médica ou medicamento esta incorreto.
+		ShowHelpDlg( STR0027, { STR0043 }, 2, { STR0044 }, 2 )// "Atenção"###"Código incorreto."###"Digite ou selecione um código correto."
+		lRet := .F.
+	EndIf
+
+	If nOpcao == 3 .And. nCampo == 4 .And. lRet .And. ;
+		( Empty( M->TL5_NUMFIC ) .Or. Empty( dDtAtual ) .Or. ;
+		  Empty( cHrAtual ) .Or. Empty( M->TL5_MOTIVO ) )
+		ShowHelpDlg( STR0027, { STR0045 }, 2, { STR0046 }, 2 ) // "Atenção"###"Possui campos obrigatórios não preenchidos."###"Preencha os campos corretamente."
+		lRet := .F.
+	EndIf
+
+	If lRet .And. nCampo == 4 .And. nOpcao == 3 .And. ;
+		!Empty( TMK->TMK_DTTERM ) .And. dDtAtual > TMK->TMK_DTTERM
+		lRet := MsgYesNo( STR0065 ) //"A Data do Atendimento é posterior a Data de Término do Responsável, deseja confirmar mesmo assim?
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161IMC
+Função para calculo do IMC.
+
+@type   function
+@author Jean Pytter da Costa
+@since  23/06/2015
+@sample MDT161IMC( 1 )
+@param  nTipo, Numérico, Tipo de inicalizador (1)-Padrão ,(2)-Browse
+
+@return cRet, Caractere, Descrição da massa corpórea calculada
+/*/
+//---------------------------------------------------------------------
+Function MDT161IMC( nTipo )
+
+	Local cRet    := Space( 16 )
+	Local lEntra  := IsInCallStack( "MDTC990" ) .Or. IsInCallStack( "MDTA160" ) .Or. IsInCallStack( "MDTA155" ) .Or. IsInCallStack( "MDTA076" )
+	Local lTMT    := IsInCallStack( "MDTA410" ) .Or. IsInCallStack( "MDTA110" )
+	Local nIMC
+	Local nPeso   := 0
+	Local nAltura := 0
+
+	Default nTipo := 1
+
+	If lEntra .Or. nTipo == 2
+		nAltura	    := TL5->TL5_ALTURA
+		nPeso		:= TL5->TL5_PESO
+		nTemp		:= TL5->TL5_TEMPER
+	ElseIf lTMT
+		nAltura	    := M->TMT_ALTURA
+		nPeso		:= M->TMT_PESO
+		nTemp		:= M->TMT_TEMPER
+	Else
+		nAltura	    := M->TL5_ALTURA
+		nPeso		:= M->TL5_PESO
+		nTemp		:= M->TL5_TEMPER
+	EndIf
+
+	If nPeso < 0 .Or. nAltura < 0 .Or. nTemp < 0 //Se peso ou altura menor que 0
+		ShowHelpDlg( STR0027, { STR0047 }, 2, { STR0048 }, 2 ) //"Atenção"###"Valor inválido."###"Digite um valor válido."
+		Return .F.
+	EndIf
+
+	If !Empty( nPeso ) .And. !Empty( nAltura )
+
+		nIMC := nPeso / ( nAltura * nAltura )
+
+		Do Case
+			Case nIMC >= 00.0 .And. nIMC < 16.0 ; cRet := STR0049 // "MAGREZA SEVERA"
+			Case nIMC >= 16.0 .And. nIMC < 17.0 ; cRet := STR0050 // "MAGREZA MODERADA"
+			Case nIMC >= 17.0 .And. nIMC < 18.5 ; cRet := STR0051 // "MAGREZA LEVE"
+			Case nIMC >= 18.5 .And. nIMC < 25.0 ; cRet := STR0052 // "PESO SAUDAVEL"
+			Case nIMC >= 25.0 .And. nIMC < 30.0 ; cRet := STR0053 // "PRE OBESIDADE"
+			Case nIMC >= 30.0 .And. nIMC < 35.0 ; cRet := STR0054 // "OBESIDADE GRAU 1"
+			Case nIMC >= 35.0 .And. nIMC < 40.0 ; cRet := STR0055 // "OBESIDADE GRAU 2"
+			Case nIMC >= 40.0 .And. nIMC < 99.9 ; cRet := STR0056 // "OBESIDADE GRAU 3"
+		EndCase
+
+		M->TL5_MASSA := cRet
+
+	ElseIf Empty( nPeso ) .Or. Empty( nAltura )
+
+		M->TL5_MASSA := cRet
+
+	EndIf
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161HIST
+Função chamada para exibir o histórico de cada atendente.
+
+@Param lHist - Variavel de controle se é para entra ou sair do Histórico
+@return .T.
+
+@sample
+MDT161HIST()
+
+@author Jean Pytter da Costa
+@since 23/06/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161HIST()
+
+	Local aCorFnd 	:= NGCOLOR() // Cor do fundo do Painel
+	Local aArea := GetArea()
+	Local oDlg
+
+	Private aNGBEGINPRM	:= NGBEGINPRM( , cPrograma, , .F. )
+
+	Private aHeader := {}
+	Private aCols	:= {}
+	Private aRotina := {}
+	Private nCodMed := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_CODMED" } )
+	Private aMemos  := { { "TL5_OBSSYP", "TL5_MOBSER"/*, "TY3_PSOSYP"*/ } }
+
+	aAdd( aRotina, { STR0001, "AxPesqui", 0, 1 } ) //"Pesquisar"
+	aAdd( aRotina, { STR0002, "MDT161MAN", 0, 2 } ) //"Visualizar"
+	aAdd( aRotina, { STR0025, "MDT161MAN", 0, 4 } ) //"Alterar"
+	aAdd( aRotina, { STR0026, "MDT161MAN", 0, 5 } ) //"Excluir"
+
+	//Variaveis NGCAD02
+	aCHOICE := {}
+	aVARNAO := {}
+	aGETNAO := {  { "TY3_NUMFIC", "M->TL5_NUMFIC" } , ;
+					{ "TY3_DTATEN", "M->TL5_DTATEN" } , ;
+					{ "TY3_HRATEN", "M->TL5_HRATEN" } , ;
+					{ "TY3_INDICA", "M->TL5_INDICA" } }
+
+	cGETMAKE  := "TL5->TL5_NUMFIC+DTOS(TL5->TL5_DTATEN)+TL5->TL5_HRATEN+TL5->TL5_INDICA"
+	cGETWHILE := "TY3->TY3_FILIAL == xFilial('TY3') .And. TY3->TY3_NUMFIC == M->TL5_NUMFIC .And. TY3->TY3_DTATEN == M->TL5_DTATEN .And. TY3->TY3_HRATEN == M->TL5_HRATEN .And. TY3->TY3_INDICA == M->TL5_INDICA"
+	cGETKEY   := "M->TL5_NUMFIC+DTOS(M->TL5_DTATEN)+M->TL5_HRATEN+M->TL5_INDICA+M->TY3_CODMED"
+	cGETALIAS := "TY3"
+	cTUDOOK   := "AllwaysTrue()"
+	cLINOK    := "MDT161LINOK()"
+	bNGGRAVA  := {|| fAtuEstMed() }
+	//------------------------
+
+	DbSelectArea( "TL5" )
+	Set Filter To TL5->TL5_FILIAL+TL5->TL5_CODUSU == xFilial( "TL5" ) + TMK->TMK_CODUSU // Filtra somente os pacientes do atendente posicionado
+
+	DEFINE MSDIALOG oDlg TITLE STR0032 From aSize[7], 0 To aSize[6], aSize[5] OF oMainWnd PIXEL // "Histórico"
+		// Painel de Fundo
+		oPnlHist := TPanel():New( 00, 00, , oDlg, , .T., , , aCorFnd[ 2 ], , , .F., .F. )
+		oPnlHist:Align := CONTROL_ALIGN_ALLCLIENT
+
+			// Painel de pacientes
+			oPnlHistTop:= tPanel():Create( oPnlHist, 0, 0, , , , , /*CLR_WHITE*/ , /*CLR_BLACK*/ , aSize[5], aSize[6]/2)
+			oPnlHistTop:Align := CONTROL_ALIGN_TOP
+
+				// Cria um browse de listagem
+				oHist := FWMBrowse():New()
+				oHist:SetAlias( "TL5" )
+				oHist:SetOwner( oPnlHistTop )
+				oHist:SetDescription( STR0057 ) // "Lista de Pacientes"
+				oHist:DisableReport()
+				oHist:DisableDetails()
+				oHist:DisableConfig()
+				oHist:Activate()
+
+	NgPopUp( asMenu, @oMenu )
+	oDlg:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oDlg )}
+
+	ACTIVATE MSDIALOG oDlg CENTERED
+
+	NGRETURNPRM( aNGBEGINPRM )
+
+	oList:Refresh()
+	RestArea( aArea )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161LINOK
+Função para validação de linha duplicada.
+
+@Param lTudoOk - Verifica se esta sendo chamado do TudoOk
+
+@return .T.
+@sample
+MDT161LINOK()
+
+@author Jean Pytter da Costa
+@since 29/06/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161LINOK( lTudoOk )
+
+	// Variaveis auxiliares
+	Local f
+	Local aColsOk 	:= {}, aHeadOk := {}
+	Local nPosMed 	:= 1, nAt := 1, nPosQtd := 2
+
+	Private lMV_NG2ESTN := Alltrim( Getmv( "MV_NG2ESTN" ) ) == "S"
+
+	Default lTudoOk := .F. // Define fim como .F.
+
+	// Salva o aCols e aHeader de acordo com a posicao, o nAt da GetDados posicionada e o código de acordo com sua posicao
+	aColsOk	:= aClone( aCols )
+	aHeadOk	:= aClone( aHeader )
+	nAt		:= n
+	nPosMed	:= aScan( aHeadOk, { | x | AllTrim( Upper( x[ 2 ] ) ) == "TY3_CODMED" } )
+	nPosQtd	:= aScan( aHeadOk, { | x | AllTrim( Upper( x[ 2 ] ) ) == "TY3_QUANT" } )
+
+	// Percorre aCols
+	For f:= 1 to Len( aColsOk )
+		If !aColsOk[ f, Len( aColsOk[ f ] ) ]
+
+			If lTudoOk .Or. f == nAt // Caso seja final ou linha atual
+				// Verifica se os campos obrigatórios estão preenchidos
+				If Empty( aColsOk[ f, nPosMed ] ) .And. !Empty( aColsOk[ f, nPosQtd ] )
+					// Mostra mensagem de Help
+					Help( 1, " ", "OBRIGAT2", , aHeadOk[ nPosMed, 1 ], 3, 0 )
+					Return .F.
+				Endif
+				If !Empty( aColsOk[ f, nPosMed ] ) .And. Empty( aColsOk[ f, nPosQtd ] )
+					// Mostra mensagem de Help
+					Help( 1, " ", "OBRIGAT2", , aHeadOk[ nPosQtd, 1 ], 3, 0 )
+					Return .F.
+				EndIf
+				// Se não é permitido saldo negativo de estoque, a movimentacao de medicamentos é validada
+				If !lMV_NG2ESTN  .And. ( Len( aColsOk ) <> 1 .Or. !Empty( aColsOk[ f, nPosMed ] ) ) .And. ;
+					!Empty( aColsOk[ f, nPosMed ] ) .And. !Empty( aColsOk[ f, nPosMed ] ) .And. ;
+					!MDT161EST( aColsOk[ f, nPosMed ], aColsOk[ f, nPosQtd ] )
+					Return .F.
+				EndIf
+			Endif
+
+			// Verifica se é somente LinhaOk
+			If f <> nAt .And. !aColsOk[ nAt, Len( aColsOk[ nAt ] ) ]
+				If aColsOk[ f, nPosMed ] == aColsOk[ nAt, nPosMed ]
+					// Mostra mensagem de Help
+					Help( " ", 1, "JAEXISTINF", , aHeadOk[ nPosMed, 1 ] )
+					Return .F.
+				Endif
+			Endif
+
+		Endif
+	Next f
+
+	// Posiciona tabelas em fim de arquivo
+	PutFileInEof( "TY3" )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161TUDOK()
+Função para validação de Medicamentos.
+
+@return lRet
+@sample
+MDT161TUDOK()
+
+@author Jean Pytter da Costa
+@since 27/01/2016
+/*/
+//---------------------------------------------------------------------
+Function MDT161TUDOK()
+
+	Local lRet := .T.
+
+	If !MDT161LINOK( .T. )
+		lRet := .F.
+	EndIf
+
+	If lRet .And. ExistBlock( "MDTA1613" )
+		lRet := ExecBlock( "MDTA1613", .F., .F. )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161Med
+Função para validação do Medicamento.
+
+@Param cCODMED - Código do medicamento
+@return .T.
+
+@sample
+MDT161Med()
+
+@author Jean Pytter da Costa
+@since 29/06/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161Med( cCODMED )
+
+	Local aAreaTM1
+	Local nDesMed := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_DESMED" } )
+	Local nUniMed := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TY3_UNIMED" } )
+
+	If Empty( cCODMED )
+		Return .T.
+	EndIf
+
+	If !ExistCPO( "TM1", cCODMED )
+		Return .F.
+	EndIf
+
+	aAreaTM1 := TM1->( GetArea() )
+	dbSelectArea( "TM1" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "TM1" ) + cCODMED )
+		aCols[ n, nDesMed ] := NGSEEK( "TM1", M->TY3_CODMED, 1, "TM1_NOMEDI" )
+		aCols[ n, nUniMed ] := TM1->TM1_UNIDAD
+
+		If TM1->TM1_INDAMB != "1"  //Se o medicamento nao é do ambulatorio
+			MsgStop( STR0009 )  //"Este medicamento não pertence ao ambulatório."
+			RestArea( aAreaTM1 )
+			Return .F.
+		EndIf
+	EndIf
+	RestArea( aAreaTM1 )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161AUT
+Função para agendamento automatico.
+
+@Param cCodEnf - Código do Enfermeiro
+@return .T.
+
+@sample
+MDT161ATU()
+
+@author Jean Pytter da Costa
+@since 07/07/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161AUT( cCodEnf )
+
+	Local lRet	:= .T.
+	Local aChoice := {}
+	Local aOldRotina:= IIf( Type( "aRotina" ) <> "U", aClone( aRotina ), Nil )
+	Local oDlgTMJ
+	Local cFilTMJ := ""
+	Local cFilTMK := ""
+	Local aArea	:= GetArea()
+
+	DbSelectArea( "TMJ" )
+	cFilTMJ := DbFilter()
+	dbClearFilter()
+	DbSelectArea( "TMK" )
+	cFilTMK := DbFilter()
+	dbClearFilter()
+
+	If MsgYesNo( STR0058 ) //"Deseja Agendar um Atendimento Médico ?"
+		// Variaveis utilizadas no MsMGet
+		Private aRotina := {}
+		aAdd( aRotina, {STR0001, "AxPesqui", 0, 1 } ) // "Pesquisar"
+		aAdd( aRotina, {STR0002, "AxVisual", 0, 2 } ) // "Visualizar"
+		aAdd( aRotina, {STR0024, "AxInclui", 0, 3 } ) // "Incluir"
+		aAdd( aRotina, {STR0025, "AxAltera", 0, 4 } ) // "Alterar"
+		aAdd( aRotina, {STR0026, "AxDeleta", 0, 5 } ) // "Excluir"
+
+			// Atribui valor as varáiveis de tela
+			dbSelectarea( "TMJ" )
+			RegToMemory( "TMJ", .T., , .F. )
+
+			// A Agenda médica recebe os valores do Atendimento de Enfermagem
+			M->TMJ_NUMFIC := M->TL5_NUMFIC
+			M->TMJ_NOMFIC := NGSeek( "TM0", M->TL5_NUMFIC, 1, "TM0_NOMFIC" )
+			M->TMJ_MAT    := fNumMat( M->TL5_NUMFIC )
+			M->TMJ_MOTIVO := M->TL5_MOTIVO
+			M->TMJ_NOMOTI := NGSeek( "TMS", M->TL5_MOTIVO, 1, "TMS_NOMOTI" )
+			M->TMJ_ATEENF := "1"
+			M->TMJ_CODENF := cCodEnf
+			M->TMJ_DESENF := NGSeek( "TMK", cCodEnf, 1, "TMK_NOMUSU" )
+			M->TMJ_INDENF := cIndic
+			M->TMJ_DTENFE := dDtAtual
+			M->TMJ_HRENFE := cHrAtual
+
+			//Monta a Tela
+			Define MsDialog oDlgTMJ Title OemToAnsi( STR0059 ) From aSize[ 7 ], 0 To aSize[ 6 ], aSize[ 5 ] Of oMainWnd Pixel//"Agendamento"
+
+				aNao := { "TMJ_MAT", "TMJ_CONVOC", "TMJ_DTPROG", "TMJ_DTATEN", "TMJ_PCMSO" }
+				If FindFunction( "MDTA076" )
+					Aadd( aNao, "TMJ_HRCHGD" )
+					Aadd( aNao, "TMJ_HRSAID" )
+				EndIf
+				aChoice  := NGCAMPNSX3( "TMJ", aNao )
+
+				oPnlPai := TPanel():New( 00, 00, , oDlgTMJ, , , , , , 0, 0, .F., .F. )
+				oPnlPai:Align   := CONTROL_ALIGN_ALLCLIENT
+					oEnchoice:= MsMGet():New( "TMJ", , 3, , , , aChoice, {0, 0, aSize[ 6 ]/2, aSize[ 5 ]/2}, , , , , , oPnlPai )
+
+			// Ativacao do Dialog
+			Activate MsDialog oDlgTMJ On Init EnchoiceBar( oDlgTMJ, { || nOpcao := 1, IIf( fTudoOk(), oDlgTMJ:End(), Nil ) }, { || nOpcao := 0, oDlgTMJ:End() } )CENTERED
+
+	EndIf
+
+	If Valtype( aOldRotina ) <> "U"
+		aRotina := aClone( aOldRotina )
+	EndIf
+
+	dbSelectArea( "TMJ" )
+	Set Filter To &( cFilTMJ )
+
+	dbSelectArea( "TMK" )
+	Set Filter To &( cFilTMK )
+
+	RestArea( aArea )
+
+	oList:Refresh()
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTudoOk
+Função para validação e gravação do atendimento médico.
+
+@return .T.
+
+@sample
+fTudoOk()
+
+@author Jean Pytter da Costa
+@since 08/07/2015
+/*/
+//---------------------------------------------------------------------
+Static Function fTudoOk()
+
+	Local lRet := .T.
+
+	// Variaveis populadas pelo MDTA076
+	Local cNewHrIni := ""
+	Local cNewQtHour := ""
+
+	Begin Transaction
+
+		If !Empty( M->TMJ_CODUSU ) .And. !Empty( M->TMJ_NUMFIC ) .And. !Empty( M->TMJ_MOTIVO ) .And. !Empty( M->TMJ_DTCONS ) .And. !Empty( M->TMJ_HRCONS )
+
+			// Função para verificar se possui interferencias de horarios
+			If FindFunction( "MDT076INT" )
+				lRet := MDT076INT( "TMJ", .T., , @cNewHrIni, @cNewQtHour )
+				If lRet
+					If Empty( cNewHrIni )
+						cNewHrIni := M->TMJ_HRCONS
+					EndIf
+
+					If Empty( cNewQtHour )
+						cNewQtHour := IIf( !Empty( M->TMJ_QTDHRS ), M->TMJ_QTDHRS, fQtdHrs( M->TMJ_CODUSU ) )
+					EndIf
+
+				EndIf
+			Else // Caso não possuir o MDTA076 deverá jogar o valor padrão
+				cNewHrIni := M->TMJ_HRCONS
+			EndIf
+
+			If lRet
+				DbSelectArea( "TMJ" )
+				DbSetOrder( 1 ) // TMJ_FILIAL+TMJ_CODUSU+DTOS(TMJ_DTCONS)+TMJ_HRCONS  // 11 - TMJ_FILIAL+TMJ_ATEENF+DTOS(TMJ_DTENFE)+TMJ_HRENFE+TMJ_INDENF
+				If !DbSeek( xFilial( "TMJ" ) + M->TMJ_CODUSU + DTOS( M->TMJ_DTCONS ) + cNewHrIni )
+					RecLock( "TMJ", .T. )
+						TMJ->TMJ_FILIAL := xFilial( "TMJ" )
+						TMJ->TMJ_CODUSU := M->TMJ_CODUSU
+						TMJ->TMJ_DTCONS := M->TMJ_DTCONS
+						TMJ->TMJ_HRCONS := cNewHrIni
+						TMJ->TMJ_NUMFIC := M->TMJ_NUMFIC
+						TMJ->TMJ_MAT    := M->TMJ_MAT
+						TMJ->TMJ_EXAME  := M->TMJ_EXAME
+						TMJ->TMJ_MOTIVO := M->TMJ_MOTIVO
+						TMJ->TMJ_OBSCON := M->TMJ_OBSCON
+						TMJ->TMJ_FILFUN := SRA->RA_FILIAL
+						TMJ->TMJ_ATEENF := M->TMJ_ATEENF
+						If M->TMJ_ATEENF == "1"
+							TMJ->TMJ_CODENF := TL5->TL5_CODUSU
+							TMJ->TMJ_DTENFE := TL5->TL5_DTATEN
+							TMJ->TMJ_HRENFE := TL5->TL5_HRATEN
+							TMJ->TMJ_INDENF := TL5->TL5_INDICA
+						EndIf
+						If FindFunction( "MDT076INT" )
+							TMJ->TMJ_QTDHRS := cNewQtHour
+						EndIf
+					( "TMJ" )->( MsUnlock() )
+				Else
+					ShowHelpDlg( STR0027, { STR0040}, 2,; // "Atenção"###"Já existe registro com essas informações."
+						 { STR0041 }, 2 ) // "Informe outros dados para conseguir incluir."
+					lRet := .F.
+				EndIf
+			EndIf
+		Else
+			ShowHelpDlg( STR0027, { STR0045}, 2,; // "Atenção"###"Possui campos obrigatórios não preenchidos."
+				 { STR0046 }, 2 ) // "Preencha os campos corretamente."
+			lRet := .F.
+		EndIf
+
+	End Transaction
+
+	oList:Refresh()
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161VLD
+Validação da relação do campo TMJ_NOMFIC
+
+@return .T.
+
+@author Jean Pytter da Costa
+@since 05/08/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161VLD()
+
+Return IIf ( IsInCallStack( "MDTA161" ), NGSEEK( 'TM0', M->TMJ_NUMFIC, 1, 'TM0_NOMFIC' ), IIf( INCLUI, '', NGSEEK( 'TM0', M->TMJ_NUMFIC, 1, 'TM0_NOMFIC' ) ) )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161WHEN
+Validação do When dos campos da TL5
+
+@return .T.
+
+@author Jean Pytter da Costa
+@since 05/08/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT161WHEN()
+
+Return IIf( !Empty( M->TL5_DTATEN ) .And. !Empty( M->TL5_HRATEN ) .And. !Empty( M->TL5_NUMFIC ) .And. !Empty( M->TL5_INDICA ), .F., .T. )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161MAN
+Validação do NGCAD02
+
+@author Jean Pytter da Costa
+@since  05/08/2015
+@sample MDT161MAN( 'TY3' , 22 , 3 )
+
+@Param  nVal - Valor da ação a ser feita.
+@return Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDT161MAN( cAlias, nRec, nOpcX )
+
+	Local nRet
+	Local aOldRotina := IIf( Type( "aRotina" ) <> "U", aClone( aRotina ), Nil )
+
+	Private aRotina := {}
+	Private lRetSalTM3 // Variável a ser utilizada na atualização de saldo
+
+	aAdd( aRotina, { STR0001, "AxPesqui", 0, 1 } ) // "Pesquisar"
+	aAdd( aRotina, { STR0002, "AxVisual", 0, 2 } ) // "Visualizar"
+	aAdd( aRotina, { STR0024, "AxInclui", 0, 3 } ) // "Incluir"
+	aAdd( aRotina, { STR0025, "AxAltera", 0, 4 } ) // "Alterar"
+	aAdd( aRotina, { STR0026, "AxDeleta", 0, 5 } ) // "Excluir"
+
+	If nOpcX == 3 .Or. nOpcX == 4 // Caso seja 3 ou 4 trata para alteração e exclusão
+		nOpcX++
+	EndIf
+
+	lRetSalTM3 := ( nOpcX == 5 )
+
+	aRotSetOpc( cAlias, nRec, nOpcX )
+
+	nRet := NGCAD02( cAlias, nRec, nOpcX )
+
+	If nRet == 1 .And. nOpcX == 5
+		oHist:GoTop( .T. )
+	EndIf
+
+	// Chama função para limpar variaveis ao sair do Histórico
+	MDT161GRV( 2, .T. )
+
+	If Valtype( aOldRotina ) <> "U"
+		aRotina := aClone( aOldRotina )
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fNumMat
+Busca a matricula do Funcionário
+
+@author Jean Pytter da Costa
+@since  28/01/2016
+@sample fNumMat( '00001' )
+
+@return cRet, Caractere, Matrícula do funcionário
+/*/
+//---------------------------------------------------------------------
+Static Function fNumMat( cNumFic )
+
+	Local cRet := ""
+	Local aAreaTM0 := TM0->( GetArea() )
+
+	DbSelectArea( "TM0" )
+	DbSetOrder( 1 )
+	If DbSeek( xFilial( "TM0" ) + cNumFic )
+		cRet := TM0->TM0_MAT
+	EndIf
+
+	RestArea( aAreaTM0 )
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT161AGE
+Verifica se usuario possui agenda
+
+@author Jean Pytter da Costa
+@since  10/02/2016
+@sample MDT161AGE()
+
+@return lRet, Lógico, Verdadeiro se possui agenda
+/*/
+//---------------------------------------------------------------------
+Function MDT161AGE()
+
+	Local lRet := .T.
+
+	If IsInCallStack( "MDTA161" )
+		DbSelectArea( "TML" )
+		DbSetOrder( 1 ) // TML_FILIAL+TML_CODUSU
+		If !DbSeek( xFilial( "TML" ) + M->TMJ_CODUSU )
+			ShowHelpDlg( STR0027, { STR0060 }, 2,; // "Atenção"###"O Atendente não possui agenda."
+				 { STR0064 }, 2 ) // "Favor selecionar outro Atendente."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAtuEstMed
+Atualiza estoque de medicamentos
+
+@author Jackson Machado
+@since 04/01/2017
+
+@source MDTA161.prx
+
+@return Lógico, Sempre verdadeiro
+/*/
+//---------------------------------------------------------------------
+Static Function fAtuEstMed()
+
+	Local nGrav		 := 0
+	Local aColsGrava := aClone( aCols )
+	Local nPosDel	 := Len( aCols[1] )
+	Local nCodigo	 := aScan( aHeader, { | x | AllTrim( Upper( x[ 2 ] ) ) == "TY3_CODMED" } )
+	Local nPosQtd    := aScan( aHeader, { | x | AllTrim( Upper( x[ 2 ] ) ) == "TY3_QUANT" } )
+	Local lExilRS    := Type( "lRetSalTM3" ) == "L"
+
+	// Coloca os deletados por primeiro
+	aSORT( aColsGrava, , , { | x, y | x[ nPosDel ] .And. !y[ nPosDel ] } )
+
+	Begin Transaction
+		// Posiciona na tabela e percorre o aCols
+		dbSelectArea( "TY3" )
+		dbSetOrder( 1 )
+		For nGrav := 1 To Len( aColsGrava )
+			If !aColsGrava[ nGrav, nPosDel ] .And. !Empty( aColsGrava[ nGrav, nCodigo ] ) // Caso nao esteja deletada a linha e campo codigo esteja preenchido
+				If lExilRS .And. lRetSalTM3
+					fAtuSalTM3( "4", aColsGrava[ nGrav, nCodigo ], aColsGrava[ nGrav, nPosQtd ], M->TL5_DTATEN ) // Entrada para ajuste
+				Else
+					If dbSeek( xFilial( "TY3" ) + &( cGETMAKE ) + aColsGrava[ nGrav, nCodigo ] ) .And. ;
+						aColsGrava[ nGrav, nPosQtd ] <> TY3->TY3_QUANT // Verifica se ja existe a informacao na tabela e se a quantidade foi alterada
+
+						fAtuSalTM3( "4", aColsGrava[ nGrav, nCodigo ], TY3->TY3_QUANT, M->TL5_DTATEN ) // Entrada para ajuste
+						fAtuSalTM3( "5", aColsGrava[ nGrav, nCodigo ], aColsGrava[ nGrav, nPosQtd ], M->TL5_DTATEN ) // Saida para utilizacao
+
+					Else
+
+						fAtuSalTM3( "5", aColsGrava[ nGrav, nCodigo ], aColsGrava[ nGrav, nPosQtd ], M->TL5_DTATEN ) // Saida para utilizacao
+
+					EndIf
+				EndIf
+			Else
+				If dbSeek( xFilial( "TY3" ) + &( cGETMAKE ) + aColsGrava[ nGrav, nCodigo ] ) // Caso campo esteja deletado e exista na tabela, atualiza saldo
+					fAtuSalTM3( "4", aColsGrava[ nGrav, nCodigo ], aColsGrava[ nGrav, nPosQtd ], M->TL5_DTATEN ) // Entrada para ajuste
+				EndIf
+			EndIf
+		Next nGrav
+	End Transaction
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAtuSalTM3
+Atualiza tabela de estoque de medicamentos
+
+@source MDTA161.prx
+
+@author Jackson Machado
+@since  04/01/2017
+
+@param  cTipMov, Caracter, Indica o tipo de movimentação
+@param  cCodMed, Caracter, Indica o código do medicamento
+@param  nQtdAtu, Numerico, Indica a quantidade da movimentação
+@param  dDtMov, Data, Indica a data da movimentação
+
+@return Nil, Sempre nulo
+/*/
+//---------------------------------------------------------------------
+Static Function fAtuSalTM3( cTipMov, cCodMed, nQtdAtu, dDtMov )
+
+	dbSelectArea( "TM1" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "TM1" ) + cCodMed )
+
+		// Se o saldo de estoque nao pode ficar negativo e
+		// o estoque do medicamento deve ser controlado
+		If TM1->TM1_INDEST == "1"
+			RecLock( "TM1", .F. )
+			If cTipMov == "4"
+		 		TM1->TM1_QTATUA += nQtdAtu
+		 	ElseIf cTipMov == "5"
+		 		TM1->TM1_QTATUA -= nQtdAtu
+		 	EndIf
+		 	TM1->( MsUnLock() )
+
+			// Atualiza a movimentacao de medicamentos - Tabela TM3
+			cNextSeq := GETSXENUM( "TM3", "TM3_SEQMOV" )
+			CONFIRMSX8()
+			dbSelectArea( "TM3" )
+			dbSetOrder( 1 )
+			RecLock( "TM3", .T. )
+			TM3->TM3_FILIAL := xFilial( "TM3" )
+			TM3->TM3_SEQMOV := cNextSeq
+			TM3->TM3_INDMOV := cTipMov
+			TM3->TM3_CODMED := cCodMed
+			TM3->TM3_QTMOVI := nQtdAtu
+		    TM3->TM3_DTMOVI := dDtMov
+			TM3->TM3_DTVALI := TM1->TM1_DTVALI
+			TM3->( MsUnLock() )
+		EndIf
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fQtdHrs
+Função para retornar a quantidade de horas.
+
+@type function
+
+@source MDTA161.prx
+
+@author Jean Pytter da costa
+@since 07/09/2017
+
+@param cCodMed, Caracter, Código do Médico
+
+@sample fQtdHrs( "444875" )
+
+@return Caracter, Quantidade de tempo para consulta.
+/*/
+//---------------------------------------------------------------------
+Static Function fQtdHrs( cCodMed )
+
+	DbSelectArea( "TML" )
+	DbSetOrder( 1 ) // TML_FILIAL+TML_CODUSU
+	If DbSeek( xFilial( "TML" ) + cCodMed )
+		cNewQtdHrs := TML->TML_QTDHRS
+	EndIf
+
+Return cNewQtdHrs

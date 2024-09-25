@@ -1,0 +1,2863 @@
+#INCLUDE "MNTR935.ch"
+#INCLUDE "PROTHEUS.ch"
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR935
+Consulta/relatorio de indicadores de consumo e combustivel.
+@author Soraia de Carvalho
+@since 23/03/06
+@version undefined
+@obs O relatorio faz a impressao de 3 Tipos : Detalhado, Resumido, Sintetico.
+@obs Varia conforme MV_NGOPER e conforme a existencia dos campos de unidades: T6_TIPO1.
+@obs Uso MNR935
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTR935()
+
+	//-------------------------------------------------------------------------
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 			 		  	  |
+	//-------------------------------------------------------------------------
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oTmpTbl1
+	Local oTmpTbl2
+	Local aPesq := {}
+	Local aAreaSM0 := SM0->(GetArea())
+
+	Private lRetS 	 := .F.
+	Private cCadastro:= OemtoAnsi(STR0004) //"Consulta/Relatório de Indicadores de Rendimento de Combustível"
+	Private aRotina  := MenuDef()
+	Private lST6Tipo := NGCADICBASE('T6_TIPO1','A','ST6',.F.)
+
+	//Variaveis com tamanho de campos
+	Private nSizeFil := If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(TQN->TQN_FILIAL))
+	Private nSizeCTT := If(TAMSX3("CTT_CUSTO")[1] <= 0, 9, TAMSX3("CTT_CUSTO")[1])
+	Private nSizeSHB := If(TAMSX3("HB_COD")[1] <= 0, 6, TAMSX3("HB_COD")[1])
+	Private nSizeST6 := If(TAMSX3("T6_CODFAMI")[1] <= 0, 6, TAMSX3("T6_CODFAMI")[1])
+	Private nSizeST9 := If(TAMSX3("T9_CODBEM")[1] <= 0, 16, TAMSX3("T9_CODBEM")[1])
+	Private nSizeTQM := If(TAMSX3("TQM_CODCOM")[1] <= 0, 3, TAMSX3("TQM_CODCOM")[1])
+	Private nControle := 0
+	Private cPar1,cPar2,cPar3,cPar4,cPar5,cPar6,cPar7,cPar8,cPar9,cPar10,cPar11,cPar12,cPar13,cPar14,cPar15
+
+	//TABELA TEMPORARIA	 1
+	Private cTRBB	:= GetNextAlias()
+	//TABELA TEMPORARIA	2
+	Private cTRBB2	:= GetNextAlias()
+
+	cParFr := SuperGetMv("MV_NGOPER",.F.," ")
+    If cParFr == Nil .Or. Empty(cParFr) .Or. cParFr == 'S'
+        lRetS := .T.
+    Endif
+
+
+	If !lRets
+		MNTR935SO()
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	Endif
+
+	Private cPerg   := "MNR935"
+	Private aPerg   := {}
+	Private cContab := GetMv("MV_MCONTAB")
+	Private vCampoCC:= {}
+
+	If cContab == "CTB"
+		vCampoCC := {"CTT","CTT->CTT_CUSTO","CTT->CTT_OPERAC"}
+	ElseIf cContab == "CON"
+		vCampoCC := {"SI3","SI3->I3_CUSTO","SI3->I3_OPERAC"}
+	EndIf
+
+	aPos1 := {15,1,95,315 }
+
+	aDBFB := {}
+		Aadd(aDBFB,{"VEIC  "  ,"C", 16,0})
+		Aadd(aDBFB,{"DATABA"  ,"D", 08,0})
+		Aadd(aDBFB,{"HRAABA"  ,"C", 05,0})
+		Aadd(aDBFB,{"KM    "  ,"N", 09,0})
+		Aadd(aDBFB,{"COMBUS"  ,"C",  3,0})
+		Aadd(aDBFB,{"LITROS"  ,"N", 09,3})
+		Aadd(aDBFB,{"KMROD "  ,"N", 09,0})
+		Aadd(aDBFB,{"MEDIAR"  ,"N", 09,2})
+		Aadd(aDBFB,{"MEDESP"  ,"N", 09,2})
+		Aadd(aDBFB,{"TIPSER"  ,"C", 40,0})
+		Aadd(aDBFB,{"CODBEM"  ,"C", 16,0})
+		Aadd(aDBFB,{"CCUSTO"  ,"C", 20,0})
+		Aadd(aDBFB,{"MODELO"  ,"C", 25,0})
+		Aadd(aDBFB,{"ANO"     ,"C", 04,0})
+		Aadd(aDBFB,{"VALLT"   ,"N", 15,3})
+		Aadd(aDBFB,{"NMFL"    ,"C", 15,0})
+		Aadd(aDBFB,{"CODFL"   ,"C", nSizeFil,0})
+		Aadd(aDBFB,{"CODSER"  ,"C", 03,0})
+		Aadd(aDBFB,{"DESEMP"  ,"N", 12,2})
+		Aadd(aDBFB,{"DTLEITU" ,"D", 08,0})
+		Aadd(aDBFB,{"HORA"    ,"C", 05,0})
+		Aadd(aDBFB,{"ACUMCON" ,"N", 12,0})
+		Aadd(aDBFB,{"TIPOLAN" ,"C", 01,0})
+	If lST6Tipo
+		Aadd(aDBFB,{"TPCONT"  ,"C", 03,0})
+		Aadd(aDBFB,{"UM"      ,"C", 02,0})
+		Aadd(aDBFB,{"UNDMED"  ,"C", 06,0})
+		Aadd(aDBFB,{"TPFORM"  ,"C", 01,0})
+	EndIf
+	Aadd(aDBFB,{"POSTOAB" ,"C", TAMSX3("TQF_CODIGO")[1],0,})
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1  := FWTemporaryTable():New( cTRBB, aDBFB )
+
+	If lST6Tipo
+		oTmpTbl1:AddIndex( "Ind01" , {"CODFL","CODSER","TPCONT","UM","CCUSTO","VEIC","DATABA","HRAABA"} )
+		//Cria Array para montar a chave de pesquisa
+		aAdd( aPesq , {STR0109 + " + " + STR0110 + " + " + STR0114 + " + " + STR0112 + " + " + STR0111 + " + " + STR0013 + " + " + STR0107 + " + " + STR0108, {{"","C" , 255 , 0 ,"","@!"}} } )
+	Else
+		oTmpTbl1:AddIndex( "Ind01" , {"CODFL","CODSER","VEIC","DATABA","HRAABA"} )
+		//Cria Array para montar a chave de pesquisa
+		aAdd( aPesq , {STR0109 + " + " + STR0110 + " + " + STR0013 + " + " + STR0107 + " + " +STR0108, {{"","C" , 255 , 0 ,"","@!"}} } )
+	EndIf
+
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	aDBFB2 := {}
+		Aadd(aDBFB2,{"VEIC  "  ,"C", 16,0})
+		AAdd(aDBFB2,{"COMBUS"  ,"C", 03,0})
+		Aadd(aDBFB2,{"CODBEM"  ,"C", 16,0})
+		Aadd(aDBFB2,{"DATABA"  ,"D", 08,0})
+		Aadd(aDBFB2,{"HRAABA"  ,"C", 05,0})
+		Aadd(aDBFB2,{"DTLEITU" ,"D", 08,0})
+		Aadd(aDBFB2,{"HORA"    ,"C", 05,0})
+		Aadd(aDBFB2,{"ACUMCON" ,"N", 12,0})
+		Aadd(aDBFB2,{"TIPOLAN" ,"C", 01,0})
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2  := FWTemporaryTable():New( cTRBB2, aDBFB2 )
+	//Cria Indices
+	oTmpTbl2:AddIndex( "Ind01" , {"VEIC","DATABA","HRAABA"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	//Campos para visualização em tela
+	If lST6Tipo
+		aTRBB := {  {STR0109 ,"CODFL" ,"C", nSizeFil,0,"@!" },;        //"Cod. Filial"
+					{STR0013 ,"VEIC"   ,"C", 16,0,"@!" },;        	   //"Veículo"
+					{STR0014 ,"MODELO" ,"C", 25,0,"@!" },;             //"Modelo"
+					{STR0015 ,"ANO"    ,"C", 04,0,"@!" },;             //"Ano Veic."
+					{STR0106 ,"COMBUS" ,"C", 03,0,"@!" },;			   //"Combustível"
+					{STR0057 ,"KMROD"  ,"N", 09,0,"@E 999,999,999" },; //"Utilizado"
+					{" "     ,"TPCONT" ,"C", 03,0,"@!" },;
+					{STR0017 ,"LITROS" ,"N", 09,3,"@E 99,999.999" },;  //"Abastecido"
+					{" "     ,"UM"     ,"C", 02,0,"@!" },;
+					{STR0107 ,"DATABA" ,"D", 08,0,"99/99/9999"},;      //"Dt. Abast."
+					{STR0108 ,"HRAABA" ,"C", 05,0,"@!"},; 			   // Hra. Abast.
+					{STR0018 ,"VALLT"  ,"N", 15,3,"@E 99,999,999,999.999" },; //"Vlr.Abast."
+					{STR0019 ,"MEDIAR" ,"N", 09,2,"@E 999,999.99" },;  //"Méd.Realiz."
+					{" "     ,"UNDMED" ,"C", 06,0, "@!" },;
+					{STR0020 ,"MEDESP" ,"N", 09,2,"@E 999,999.99" },;  //"Méd.Esperada"
+					{" "     ,"UNDMED" ,"C", 06,0, "@!" },;
+					{STR0021 ,"DESEMP" ,"N", 09,2,"@E 999,999.99" },;  //"Desempenho"
+					{" "     ,"UNDMED" ,"C", 06,0, "@!" },;
+					{STR0110 ,"CODSER" ,"C", 03,0,"@!"},; 	   //"Cod. Serv."
+					{STR0111 ,"CCUSTO" ,"C", 20,0,"@!" }}           //"C. Custo."
+
+	Else
+		aTRBB := {{STR0013, "VEIC"   ,"C", 16, 0, "@!" },;          //"Veículo"
+				  {STR0109, "CODFL"  ,"C", nSizeFil,0,"@!" },;      // Cod. Filial
+				  {STR0014, "MODELO" ,"C", 25, 0, "@!" },;          //"Modelo"
+				  {STR0015, "ANO"    ,"C", 04, 0, "@!" },;          //"Ano Veic."
+				  {STR0106, "COMBUS" ,"C", 03, 0, "@!" },;			//"Combustível"
+				  {STR0057, "KMROD"  ,"N", 09, 0, "@E 999,999,999" },;//"KM Rodado."
+				  {STR0058, "LITROS" ,"N", 09, 3, "@E 99,999.999" },;//"Lit. Abas."
+				  {STR0018, "VALLT"  ,"N", 15, 3, "@E 99,999,999,999.999" },; //"Vlr.Abast."
+				  {STR0019, "MEDIAR" ,"N", 09, 2, "@E 999,999.99" },;//"Méd.Realiz."
+				  {STR0020, "MEDESP" ,"N", 09, 2, "@E 999,999.99" },;//"Méd.Esperada"
+				  {STR0107, "DATABA" ,"D", 08, 0, "99/99/9999" },;   //"Dt. Abast."
+				  {STR0108, "HRAABA" ,"C", 05, 0, "@!"},; 		     // Hra. Abast.
+				  {STR0021, "DESEMP" ,"N", 09, 2, "@E 999,999.99" }} //"Desempenho"
+	EndIf
+
+	If Pergunte(cPerg,.T.)
+		Processa({ |lEnd| MNR935INI()}, STR0011,STR0012 ) //"Aguarde..."###"Processando Registros..."
+		DbSelectarea(cTRBB)
+		DbGotop()
+
+		oBrowse:= FWMBrowse():New()
+		oBrowse:SetDescription(cCadastro)
+		oBrowse:SetTemporary(.T.)
+		oBrowse:SetAlias(cTRBB)
+		oBrowse:SetFields(aTRBB)
+		oBrowse:SetProfileID( '1' )
+		oBrowse:SetSeek(.T.,aPesq)
+		oBrowse:Activate()
+
+	EndIf
+
+	oTmpTbl1:Delete()//Deleta Arquivo Temporario 1
+
+	oTmpTbl2:Delete()//Deleta Arquivo Temporario 2
+
+	DbSelectArea("TQN")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQN"))
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+	//Não disposicionar a filial logada
+	RestArea(aAreaSM0)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935INI
+Monta o arquivo temporario inicial mostrado no browse
+@author Soraia de Carvalho
+@since 23/03/06
+@version undefined
+@type function
+@obs Uso MNR935
+/*/
+//---------------------------------------------------------------------
+Function MNR935INI()
+
+	Local cVeicAnt
+	Local cDESOPER 	:= " "
+	Local cTpCon    := '1'
+
+	Private cCDOPER := " "
+	Private nKM 	:= 0
+
+	cAliasQry := "TETQN"
+	MNR935QUER(.T.)
+
+	//Carrega todos os dados na TRBB2
+	While !Eof()
+
+		IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+		DbSelectArea("ST9")
+		DbSetOrder(16)
+		If MsSeek((cAliasQry)->TQN_FROTA)
+
+			If lST6Tipo
+				If ST9->T9_TEMCONT <> 'S'
+					DbselectArea(cAliasQry)
+					DbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			If MV_PAR05 <= cCDOPER .AND. MV_PAR06 >= cCDOPER
+
+				RecLock((cTRBB2),.T.)
+
+				(cTRBB2)->VEIC    := (cAliasQry)->TQN_FROTA
+				(cTRBB2)->COMBUS  := (cAliasQry)->TQN_CODCOM
+				(cTRBB2)->CODBEM  := (cAliasQry)->T9_CODBEM
+				(cTRBB2)->DATABA  := STOD((cAliasQry)->TQN_DTABAS)
+				(cTRBB2)->HRAABA  := (cAliasQry)->TQN_HRABAS
+				(cTRBB2)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+				(cTRBB2)->HORA    := (cAliasQry)->TP_HORA
+				(cTRBB2)->ACUMCON := (cAliasQry)->TP_ACUMCON
+				(cTRBB2)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+				MsUnLock(cTRBB2)
+			EndIf
+		EndIf
+
+		DbselectArea(cAliasQry)
+		DbSkip()
+
+	End
+
+	DbSelectArea(cAliasQry)
+	DbGoTop()
+
+	While !Eof()
+
+		IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+		DbSelectArea("ST9")
+		DbSetOrder(16)
+		If !Empty(MV_PAR15) .And. STOD((cAliasQry)->TQN_DTABAS) >= MV_PAR01 .And. STOD((cAliasQry)->TQN_DTABAS) <= MV_PAR02  .And. (cAliasQry)->TQN_CODCOM == MV_PAR15
+			If MsSeek((cAliasQry)->TQN_FROTA)
+				If lST6Tipo
+					If ST9->T9_TEMCONT <> 'S'
+						DbselectArea(cALIASQRY)
+						DbSkip()
+						Loop
+					EndIf
+				EndIf
+
+				DbSelectArea(vCampoCC[1])
+				DbSetOrder(01)
+				If MsSeek((cAliasQry)->TQN_FILIAL+(cAliasQry)->TQN_CCUSTO)
+					DbSelectArea("TSZ")
+					DbSetOrder(01)
+					If dbSeek(xFilial("TSZ",(cAliasQry)->TQN_FILIAL)+&(vCampoCC[3]))
+						cCDOPER  := TSZ->TSZ_CODSER
+						cDESOPER := TSZ->TSZ_DESSER
+					Else
+						cCDOPER  := " "
+						cDESOPER := " "
+					EndIf
+				EndIf
+
+				If MV_PAR05 <= cCDOPER .AND. MV_PAR06 >= cCDOPER
+
+					dbSelectArea("TT8")
+					dbSetOrder(1)
+					If msSeek(FWxFilial("TT8")+(cAliasQry)->TQN_FROTA+(cAliasQry)->TQN_CODCOM)
+						cTpCon := TT8->TT8_TPCONT
+					EndIf
+
+					If cVeicAnt == (cAliasQry)->TQN_FROTA
+						//Busca Km anterior 
+						nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+					Else
+						nControle := 0
+						//Busca Km anterior
+						nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+					EndIf
+
+					RecLock((cTRBB),.T.)
+					(cTRBB)->CODFL := (cAliasQry)->TQN_FILIAL
+
+					DbSelectArea("SM0")
+					DbSetOrder(01)
+					If MsSeek(SM0->M0_CODIGO+(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->NMFL := SM0->M0_FILIAL
+					EndIf
+
+					(cTRBB)->VEIC    := (cAliasQry)->TQN_FROTA
+					(cTRBB)->COMBUS  := (cAliasQry)->TQN_CODCOM
+					(cTRBB)->VALLT   := (cAliasQry)->TQN_VALTOT
+					(cTRBB)->KM      := (cAliasQry)->TQN_HODOM
+					(cTRBB)->LITROS  := (cAliasQry)->TQN_QUANT
+					(cTRBB)->DATABA  := STOD((cAliasQry)->TQN_DTABAS)
+					(cTRBB)->HRAABA  := (cAliasQry)->TQN_HRABAS
+					(cTRBB)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+					(cTRBB)->HORA    := (cAliasQry)->TP_HORA
+					(cTRBB)->ACUMCON := (cAliasQry)->TP_ACUMCON
+					(cTRBB)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+					DbSelectArea(cTRBB2)
+					DbSetOrder(1)
+
+					If nKM <> 0
+						(cTRBB)->KMROD  := nKM
+						(cTRBB)->MEDIAR := ((cTRBB)->KMROD / (cTRBB)->LITROS)
+					Else
+						(cTRBB)->KMROD  := 0
+						(cTRBB)->MEDIAR := 0
+					EndIf
+
+					If lST6Tipo
+						(cTRBB)->CODBEM := ST9->T9_CODBEM
+						(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+						(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+					Else
+						(cTRBB)->CODBEM := ST9->T9_CODBEM
+						(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+						(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+					EndIf
+
+					DbSelectArea("DA3")
+					DbSetOrder(3)
+					If MsSeek(xFilial("DA3")+ST9->T9_PLACA)
+						(cTRBB)->ANO := DA3->DA3_ANOFAB
+					Else
+						(cTRBB)->ANO := (cAliasQry)->T9_ANOFAB
+					EndIf
+					(cTRBB)->TIPSER := cDESOPER
+					(cTRBB)->CODSER := cCDOPER
+					(cTRBB)->DESEMP := (Round(((cTRBB)->MEDIAR/(cTRBB)->MEDESP),4)*100)
+
+					If lST6Tipo
+						cTipo := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_TIPO1',(cAliasQry)->TQN_FILIAL))
+						cUnid := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_UNIDAD1',(cAliasQry)->TQN_FILIAL))
+						cTpUn := NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_MEDIA1',(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->TPCONT := If(Empty(cTipo),'---',cTipo)
+						(cTRBB)->UM     := If(Empty(cUnid),'--',cUnid)
+						(cTRBB)->UNDMED := MNTUndCont(cTipo,cUnid,cTpUn)
+						(cTRBB)->TPFORM := cTpUn
+						If cTpUn == '2' .And. (cTRBB)->MEDIAR <> 0
+							(cTRBB)->MEDIAR := ((cTRBB)->LITROS / (cTRBB)->KMROD)
+							(cTRBB)->DESEMP := (Round(((cTRBB)->MEDESP/(cTRBB)->MEDIAR),4)*100)
+						EndIf
+					EndIf
+
+					cVeicAnt := (cTRBB)->VEIC
+
+					MsUnLock(cTRBB)
+				EndIf
+			EndIf
+
+		ElseIf Empty(MV_PAR15)
+
+			If STOD((cAliasQry)->TQN_DTABAS) >= MV_PAR01 .And. STOD((cAliasQry)->TQN_DTABAS) <= MV_PAR02
+
+				If MsSeek((cAliasQry)->TQN_FROTA)
+					If lST6Tipo
+						If ST9->T9_TEMCONT <> 'S'
+							DbselectArea(cALIASQRY)
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					DbSelectArea(vCampoCC[1])
+					DbSetOrder(01)
+					If MsSeek((cAliasQry)->TQN_FILIAL+(cAliasQry)->TQN_CCUSTO)
+						DbSelectArea("TSZ")
+						DbSetOrder(01)
+						If dbSeek(xFilial("TSZ",(cAliasQry)->TQN_FILIAL)+&(vCampoCC[3]))
+							cCDOPER := TSZ->TSZ_CODSER
+							cDESOPER := TSZ->TSZ_DESSER
+						Else
+							cCDOPER := " "
+							cDESOPER := " "
+						EndIf
+					EndIf
+
+					If MV_PAR05 <= cCDOPER .AND. MV_PAR06 >= cCDOPER
+						
+						dbSelectArea("TT8")
+						dbSetOrder(1)
+						If msSeek(FWxFilial("TT8")+(cAliasQry)->TQN_FROTA+(cAliasQry)->TQN_CODCOM)
+							cTpCon := TT8->TT8_TPCONT
+						EndIf
+
+						//Busca Km anterior
+						nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+
+						RecLock((cTRBB),.T.)
+						(cTRBB)->CODFL := (cAliasQry)->TQN_FILIAL
+
+						DbSelectArea("SM0")
+						DbSetOrder(01)
+						If MsSeek(SM0->M0_CODIGO+(cAliasQry)->TQN_FILIAL)
+							(cTRBB)->NMFL := SM0->M0_FILIAL
+						EndIf
+
+						(cTRBB)->VEIC   := (cAliasQry)->TQN_FROTA
+						(cTRBB)->COMBUS := (cAliasQry)->TQN_CODCOM
+						(cTRBB)->VALLT  := (cAliasQry)->TQN_VALTOT
+						(cTRBB)->KM     := (cAliasQry)->TQN_HODOM
+						(cTRBB)->LITROS := (cAliasQry)->TQN_QUANT
+						(cTRBB)->DATABA := STOD((cAliasQry)->TQN_DTABAS)
+						(cTRBB)->HRAABA := (cAliasQry)->TQN_HRABAS
+						(cTRBB)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+						(cTRBB)->HORA    := (cAliasQry)->TP_HORA
+						(cTRBB)->ACUMCON := (cAliasQry)->TP_ACUMCON
+						(cTRBB)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+						If nKM <> 0
+							(cTRBB)->KMROD  := nKM
+							(cTRBB)->MEDIAR := ((cTRBB)->KMROD / (cTRBB)->LITROS)
+						Else
+							(cTRBB)->KMROD  := 0
+							(cTRBB)->MEDIAR := 0
+						EndIf
+
+						If lST6Tipo
+							(cTRBB)->CODBEM := ST9->T9_CODBEM
+							(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+							(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+							(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+						Else
+							(cTRBB)->CODBEM := ST9->T9_CODBEM
+							(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+							(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+							(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+						EndIf
+
+						DbSelectArea("DA3")
+						DbSetOrder(3)
+						If MsSeek(xFilial("DA3")+ST9->T9_PLACA)
+							(cTRBB)->ANO := DA3->DA3_ANOFAB
+						Else
+							(cTRBB)->ANO := (cAliasQry)->T9_ANOFAB
+						EndIf
+						(cTRBB)->TIPSER := cDESOPER
+						(cTRBB)->CODSER := cCDOPER
+						(cTRBB)->DESEMP := (Round(((cTRBB)->MEDIAR/(cTRBB)->MEDESP),4)*100)
+
+						If lST6Tipo
+							cTipo := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_TIPO1',(cAliasQry)->TQN_FILIAL))
+							cUnid := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_UNIDAD1',(cAliasQry)->TQN_FILIAL))
+							cTpUn := NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_MEDIA1',(cAliasQry)->TQN_FILIAL)
+							(cTRBB)->TPCONT := If(Empty(cTipo),'---',cTipo)
+							(cTRBB)->UM     := If(Empty(cUnid),'--',cUnid)
+							(cTRBB)->UNDMED := MNTUndCont(cTipo,cUnid,cTpUn)
+							(cTRBB)->TPFORM := cTpUn
+							If cTpUn == '2' .And. (cTRBB)->MEDIAR <> 0
+								(cTRBB)->MEDIAR := ((cTRBB)->LITROS / (cTRBB)->KMROD)
+								(cTRBB)->DESEMP := (Round(((cTRBB)->MEDESP/(cTRBB)->MEDIAR),4)*100)
+							EndIf
+						EndIf
+						MsUnLock(cTRBB)
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		DbselectArea(cALIASQRY)
+		DbSkip()
+
+	End
+
+	(cAliasQry)->(dbCloseArea())
+
+	nControle := 0
+
+	DbSelectArea(cTRBB)
+	DbGoTop()
+
+	If Reccount() = 0
+		MsgInfo(STR0022,STR0023) //"Não existem dados para montar a tela de consulta."###"ATENÇÃO"
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935PA
+Reprocessa o browse de acordo com os parametros
+@author Soraia de Carvalho
+@since 23/03/06
+@version undefined
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNR935PA()
+
+	If !Pergunte("MNR935",.T.)
+		Return
+	EndIf
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNR935INI() }, STR0011,STR0012 ) //"Aguarde..."###"Processando Registros..."
+
+	DbSelectArea(cTRBB)
+	DbGotop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935VI
+Visualiza consulta
+@author Soraia de carvalho
+@since 23/03/06
+@version undefined
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNR935VI()
+	Local aAlias := GetArea()
+
+	DbSelectArea("TQN")
+	DbSetOrder(01)
+	MsSeek((cTRBB)->CODFL+(cTRBB)->VEIC+DTOS((cTRBB)->DATABA)+(cTRBB)->HRAABA)
+	NgCad01("TQN",Recno(),1)
+
+	Restarea(aAlias)
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935IM
+Relatorio de indicadores de consumo e combustivel.
+@author Soraia de Carvalho
+@since 23/03/2006
+@version undefined
+@table ST9, TQN
+@type function
+@obs Uso SigaMNT
+/*/
+//---------------------------------------------------------------------
+Function MNR935IM()
+	Local cString    := "TQN"
+	Local cDesc1     := STR0024 //"Relatório de Indicadores de Rendimento de Combustível."
+	Local cDesc2     := STR0025  //"O usuário poderá utilizar a opção Parametros para"
+	Local cDesc3     := STR0026 //"a obtenção da seleção desejada."
+	Local wnRel      := "MNTR935"
+
+	Private aReturn  := { STR0027, 1,STR0028 , 2, 2, 1, "",1 }     //"Administracao"###"Zebrado"
+	Private nLastKey := 0
+	Private Titulo   := STR0029 //"Relatório de Indicadores de Rendimento de Combustível - Visão por Filial"
+	Private Tamanho  := "G"
+	Private cPerg    := "MNT935"
+	Private aPerg 	 :={}
+
+	aPos1 := {15,1,95,315 }
+
+	DbSelectArea("TQN")
+
+	//+-------------------------------------------+
+	//| Envia controle para a funcao SETPRINT     |
+	//+-------------------------------------------+
+	DbSelectArea(cTRBB)
+	DbGoTop()
+	If Reccount() > 0
+		wnRel := SetPrint(cString,wnRel,cPerg,Titulo,cDesc1,cDesc2,cDesc3,.f.,"")
+		If nLastKey = 27
+			Set Filter To
+			DbSelectArea("TQN")
+			Return
+		Endif
+		PERGUNTE(cPERG,.F.)
+		_cMV_PAR01 := MV_PAR01
+		SetDefault(aReturn,cString)
+		cPERGOLD := cPERG
+		cPERG := 'MNR935'
+		RptStatus({|lEnd| R935IMP(@lEnd,wnRel,Titulo,Tamanho,_cMV_PAR01)},Titulo)
+		cPERG := cPERGOLD
+	Else
+		MsgInfo(STR0034,STR0023) //"Nao exitem dados para imprimir o relatório."###"ATENÇÃO"
+	EndIf
+	DbSelectArea("TQN")
+
+Return Nil
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R935IMP
+Chamada do Relatorio.
+@author Soraia de Carvalho
+@since 23/03/2006
+@version undefined
+@param lEnd, logical
+@param wnRel
+@param Titulo
+@param Tamanho
+@param _cMV_PAR01
+@type function
+@obs Uso SigaMNT
+/*/
+//---------------------------------------------------------------------
+Static Function R935IMP(lEnd,wnRel,Titulo,Tamanho,_cMV_PAR01)
+
+	Local cRodaTxt  := ''
+	Local nCntImpr  := 0
+	Local cVeiculo  := " "
+	Local cModelo 	:= " "
+	Local cAno 		:= " "
+	Local lDif 		:= .F.
+	Local nI , nPos := 0
+	Local lPrim 	:= .T.
+	Local lOper 	:= .F.
+	Local nTGTOTKM 	:= 0
+	Local nTGTOTVALLT := 0
+	Local nTGTOTVALT := 0
+	Local nTGTOTMD	:= 0
+	Local nTGQtdMd	:= 0
+	Local nCont 	:= 0
+	Local nOPTOTKM 	:= 0
+	Local nOPTOTVALLT := 0
+	Local nOPTOTVALT:= 0
+	Local nOPTOTMD	:= 0
+	Local nOPQtdMd	:= 0
+	Local nTFTOTKM	:= 0
+	Local nTFTOTVALLT := 0
+	Local nQuantFil := 0
+	Local nQuant 	:= 0
+	Local cDesOper
+
+	Private nMEDREAL := 0
+	Private cTpForm := ""
+	Private cUM := ""
+	Private cUndMed := ""
+	Private cTipCont := ""
+	Private cCODFL := ""
+	Private li := 80 ,m_pag := 1
+	Private NomeProg  := "MNTR935"
+	Private Cabec1    := " "
+	Private Cabec2    := " "
+	Private lVerOpT   := .F.
+	Private nQtdMd    := 0
+	Private nTOTVALLT := 000000.00
+	Private nTOTMEDR  := 000000.00
+	Private nTOTKM    := 000000000
+	Private nTOTMD    := 00000.00
+	Private nTOTVALT  := 000000.00
+	Private cOPER  // CODIGO DA OPERACAO
+	Private cNOMFL 	   := " " // NOME DA FILIAL
+	Private cNomSer    := " "
+	Private cCDOPER    := " "
+	Private nGTOTKM    := 0
+	Private nGTOTVALLT := 0
+	Private nGTOTMEDR  := 0
+	Private nGTOTMD    := 0
+	Private nGTOTVALT  := 0
+	Private nGQtdMd    := 0
+	Private nDTOTKM    := 0
+	Private nDTOTVALLT := 0
+	Private nDTOTMEDR  := 0
+	Private nDTOTMD    := 0
+	Private nDTOTVALT  := 0
+	Private nDTotDes   := 0
+	Private nDQtdMd    := 0
+	Private nMEDPAD    := 0
+	Private nTotMedE   := 0
+	Private nDTotMedE  := 0
+	Private nTotSint   := 0
+	Private aTotais    := {}
+	Private aFiliais   := {}
+	Private nTotalOper := 0
+	Private nAcimaPad  := 0
+	Private nDentroPad := 0
+	Private cDescOpera := Space(40)
+	Private nGerOper   := 0
+	Private nGerPad    := 0
+	Private nDTKMFL    := 0 ,nDTVALLTFL := 0, nDTMEDRFL  := 0, nDTMDFL    := 0, nDTVALTFL  := 0, nDQtdMdFL  := 0 // Variaveis de total por filial
+	Private nDTKMOP    := 0, nDTVALLTOP := 0, nDTMEDROP  := 0, nDTMDOP    := 0, nDTVALTOP  := 0, nDQtdMdOP  := 0
+
+	PERGUNTE(cPERG,.F.)
+
+	If lST6Tipo
+		If _cMV_PAR01 == 1
+			Cabec1 := ''
+			//'Veiculo           Modelo                     Ano Veic.    ___ Combust.   ___  Utili.  __ Abast.          Vlr.Abast.        Média Realizada (___/_)  Média Esperada (___/_)  %Desempenho'
+		ElseIf _cMV_PAR01 == 2
+			Cabec1 := STR0059 //"                            Média Padrão       Média Realizada      %Desvio    Classificação"
+			//'                            Média Padrão       Média Realizada      %Desvio    Classificação'
+		ElseIf _cMV_PAR01 == 3
+			Cabec1 := STR0060				  //"Veiculo           Modelo                   Ano Veic.        Combustível           Utiliizado     Abastecido          Vlr.Abast.              Média Realiz.          Média Esper."
+			//'Veiculo           Modelo                   Ano Veic.        Combustível           Utiliizado     Abastecido          Vlr.Abast.              Média Realiz.          Média Esper.'
+		EndIf
+	Else
+		If _cMV_PAR01 == 1
+			Cabec1 := STR0061 //"Veiculo           Modelo                     Ano Veic.  Combustível        KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada  %Desempenho"
+		ElseIf _cMV_PAR01 == 2
+			Cabec1 := STR0059 //"                            Média Padrão       Média Realizada      %Desvio    Classificação"
+		ElseIf _cMV_PAR01 == 3
+			Cabec1 := STR0062 //"Veiculo           Modelo                     Ano Veic.  Combustível        KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada"
+		EndIf
+	EndIf
+	//----------------------------------------------------------------
+	//| Verifica se deve comprimir ou nao                            |
+	//----------------------------------------------------------------
+	nTipo  := IIf(aReturn[4]==1,15,18)
+
+	//----------------------------------------------------------------
+	//| Monta os Cabecalhos                                          |
+	//----------------------------------------------------------------
+	/*
+	If (Mv_Par05 == 1) .OR. (Mv_par05 == 3)
+	If lST6Tipo
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+
+	****************************************************************************************************************************************************************************
+	Operacao: xxxxxxxxxxx
+	xx - xxxxxxxxxxx
+	Veiculo           Modelo                     Ano Veic.        Combustível    ___ Utili.       __ Abast.          Vlr.Abast.  Média Realizada (___/__)   Média Esperada (___/__)  %Desempenho
+	---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	xxxxxxxx          xxxxxxxxxxxxxxxxxxxxxxxxx   9999            xxx           999,999,999       99,999.999  99,999,999,999.999             99,999.999            999,999.99          999,999.99
+
+	Else
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+	Veiculo           Modelo                     Ano Veic.        Combustível        KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada  %Desempenho
+	****************************************************************************************************************************************************************************
+	Operacao: xxxxxxxxxxx
+	xx - xxxxxxxxxxx
+	xxxxxxxx          xxxxxxxxxxxxxxxxxxxxxxxxx  9999             xxx              999,999,999       99,999.999 99,999,999,999.999       99,999.999        999,999.99   999,999.99
+	EndIf
+	Else
+
+	If Mv_Par05 == 2
+	If lST6Tipo
+	1         2         3         4         5         6         7         8         9         0         1
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+	Média Padrão       Média Realizada      %Desvio    Classificação
+	****************************************************************************************************************************************************************************
+	Operacao: xxxxxxxxxxx
+	xx - xxxxxxxxxxx
+	Total: (___/__)               999,999.99            999,999.99      999.99%    XXXXXXXX
+	Else
+	1         2         3         4         5         6         7         8         9         0         1
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+	Média Padrão       Média Realizada      %Desvio    Classificação
+	****************************************************************************************************************************************************************************
+	Operacao: xxxxxxxxxxx
+	xx - xxxxxxxxxxx
+	xxxxxxxxxxxxxxxx              999,999.99            999,999.99
+
+	EndIf
+	EndIf
+	/*/
+
+	//------------------------------------------------------------
+	//| Define o indice de leitura do arquivo                    |
+	//------------------------------------------------------------
+
+	DbSelectArea(cTRBB)
+	ProcRegua(RecCount())
+	DbGoTop()
+
+	If lST6Tipo
+		cTipCont := " "
+		cUM      := " "
+		cUndMed  := " "
+		cTpForm  := " "
+	EndIf
+
+	If !lDif
+
+		While !Eof()
+
+			IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+			dbSelectArea( "TQN" )
+			dbSetOrder( 01 )
+			TQN->( dbFilter() ) //Retorna a expressão do filtro ativo na área de trabalho corrente, da tabela TQN.
+			If !dbSeek( (cTRBB)->CODFL + (cTRBB)->CODBEM + DTOS((cTRBB)->DATABA) + (cTRBB)->HRAABA )
+				DbSelectArea( cTRBB )
+				dbSkip()
+				Loop
+			EndIf
+			If lEnd
+				@ Prow()+1,001 PSay STR0035  //"CANCELADO PELO OPERADOR"
+				Exit
+			EndIf
+
+			If (cTRBB)->CODFL <> cCODFL
+				NgSomaLi(58)
+				If (cTRBB)->CODFL <> cCODFL .And. !lPrim .And. _cMV_PAR01 <> 3
+					NgSomaLi(58)
+					@ Li,000 Psay STR0100  //"Total por Operação:"
+					@ Li,066 Psay nDTKMOP    Picture "@E 999,999,999"
+					@ Li,084 Psay nDTVALLTOP  Picture "@E 999,999.999"
+					@ Li,096 Psay nDTVALTOP  Picture "@E 99,999,999,999.999"
+					If cTpForm == "2"
+						@ Li,126 PSay nDTVALLTOP / nDTKMOP Picture "@E 999,999.99"
+					Else
+						@ Li,126 PSay nDTKMOP / nDTVALLTOP Picture "@E 999,999.99"
+					EndIf
+					NgSomaLi(58)
+					@ Li,000 Psay STR0101 //"Total por Filial:"
+					@ Li,066 Psay nDTKMFL    Picture "@E 999,999,999"
+					@ Li,084 Psay nDTVALLTFL  Picture "@E 999,999.999"
+					@ Li,096 Psay nDTVALTFL  Picture "@E 99,999,999,999.999"
+					If cTpForm == "2"
+						@ Li,126 PSay nDTVALLTFL / nDTKMFL Picture "@E 999,999.99"
+					Else
+						@ Li,126 PSay nDTKMFL / nDTVALLTFL Picture "@E 999,999.99"
+					EndIf
+
+					NgSomaLi(58)
+				EndIf
+
+				If !lPrim
+					NgSomaLi(58)
+				EndIf
+				@ Li,000 PSay STR0044 //"Filial:"
+				@ Li,009 PSay (cTRBB)->CODFL
+				@ Li,023 PSay (cTRBB)->NMFL
+				NgSomaLi(58)
+				@ Li,000 Psay Replicate("_",220)
+
+				nDTKMFL    := 0
+				nDTVALLTFL := 0
+				nDTMEDRFL  := 0
+				nDTMDFL    := 0
+				nDTVALTFL  := 0
+				nDQtdMdFL  := 0
+				nDTKMOP    := 0
+				nDTVALLTOP := 0
+				nDTMEDROP  := 0
+				nDTMDOP    := 0
+				nDTVALTOP  := 0
+				nDQtdMdOP  := 0
+			EndIf
+			If (cTRBB)->CODFL <> cCODFL .And. _cMV_PAR01 == 3 .Or. (cTRBB)->CODSER <> cOPER .And. _cMV_PAR01 == 3
+				NgSomaLi(58)
+				NgSomaLi(58)
+				@ Li,000 PSay STR0043 //"Operação:"
+				@ Li,010 PSay If(!Empty((cTRBB)->TIPSER),(cTRBB)->TIPSER,STR0102) //"Não existe operação relacionada ao centro de custos do bem."
+				cNomSer := If(!Empty((cTRBB)->TIPSER),(cTRBB)->TIPSER,STR0102)
+				lPrim := .F.
+				lOper := .T.
+
+			EndIf
+
+			If _cMV_PAR01 == 1
+
+				If lST6Tipo
+					If (cTipCont <> (cTRBB)->TPCONT) .Or. (Li > 58) .Or. (cUM <> (cTRBB)->UM)
+						cTipCont := (cTRBB)->TPCONT
+						cUM      := (cTRBB)->UM
+						cUndMed  := If(Empty((cTRBB)->UNDMED),"",'('+AllTrim((cTRBB)->UNDMED)+')')
+						cTpForm  := (cTRBB)->TPFORM
+					EndIf
+				EndIf
+				If (cTRBB)->CODFL <> cCODFL
+					NgSomaLi(58)
+					//'Veiculo           Modelo                     Ano Veic.   ___ Utili.  __ Abast.          Vlr.Abast.        Média Realizada (___/_)  Média Esperada (___/_)  %Desempenho'
+					cCabec935 := STR0063+Space(6-Len(AllTrim(cTipCont)))+AllTrim(cTipCont)+STR0064+Space(10-Len(AllTrim(cUM)))+AllTrim(cUM)+STR0065+; //"Veiculo           Modelo                   Ano Veic. "###" Utili."###" Abast.          Vlr.Abast."
+					Space(9-Len(cUndMed))+STR0066+cUndMed+Space(10-Len(cUndMed))+STR0067+cUndMed+STR0068 //"Média Realiz."###"Média Esper."###"   %Desempenho"
+					@ Li,000 Psay cCabec935
+					NgSomaLi(58)
+					@ Li,000 Psay Replicate("_",220)
+				ElseIf (cTRBB)->CODSER <> cOPER
+					NgSomaLi(58)
+					NgSomaLi(58)
+					If !lPrim
+						@ Li,000 Psay STR0100  //"Total por Operação:"
+						@ Li,066 Psay nDTKMOP    Picture "@E 999,999,999"
+						@ Li,084 Psay nDTVALLTOP  Picture "@E 999,999.999"
+						@ Li,096 Psay nDTVALTOP  Picture "@E 99,999,999,999.999"
+						If cTpForm == "2"
+							@ Li,126 PSay nDTVALLTOP / nDTKMOP Picture "@E 999,999.99"
+						Else
+							@ Li,126 PSay nDTKMOP / nDTVALLTOP Picture "@E 999,999.99"
+						EndIf
+					EndIf
+					nDTKMOP    := 0
+					nDTVALLTOP := 0
+					nDTMEDROP  := 0
+					nDTMDOP    := 0
+					nDTVALTOP  := 0
+					nDQtdMdOP  := 0
+				EndIf
+
+				If (cTRBB)->CODFL <> cCODFL .Or. (cTRBB)->CODSER <> cOPER
+					NgSomaLi(58)
+					NgSomaLi(58)
+					@ Li,000 PSay STR0043 //"Operação:"
+					@ Li,010 PSay If(!Empty((cTRBB)->TIPSER),(cTRBB)->TIPSER,STR0102) //"Não existe operação relacionada ao centro de custos do bem."
+					cNomSer := If(!Empty((cTRBB)->TIPSER),(cTRBB)->TIPSER,STR0102)
+					lPrim := .F.
+				EndIf
+				cCODFL := (cTRBB)->CODFL
+				cNOMFL := (cTRBB)->NMFL
+				cOPER  := (cTRBB)->CODSER
+
+				If (cTRBB)->CODSER = cOPER  //Imprime por operacao
+					NgSomaLi(58)
+					@ Li,000 PSay (cTRBB)->VEIC
+					@ Li,018 PSay (cTRBB)->MODELO
+					@ Li,046 PSay (cTRBB)->ANO
+					@ Li,053 Psay (cTRBB)->COMBUS
+					@ Li,066 PSay (cTRBB)->KMROD Picture "@E 999,999,999"
+					@ Li,084 PSay (cTRBB)->LITROS Picture "@E 99,999.999"
+					@ Li,096 PSay (cTRBB)->VALLT Picture "@E 99,999,999,999.999"
+					If lST6Tipo
+						@ Li,126 PSay (cTRBB)->MEDIAR Picture "@E 999,999.99"
+						@ Li,148 PSay (cTRBB)->MEDESP Picture "@E 999,999.99"
+						@ Li,162 PSay (cTRBB)->DESEMP Picture "@E 999,999.99"
+					Else
+						@ Li,126 PSay (cTRBB)->MEDIAR Picture "@E 999,999.99"
+						@ Li,148 PSay (cTRBB)->MEDESP Picture "@E 999,999.99"
+						@ Li,162 PSay (cTRBB)->DESEMP Picture "@E 999,999.99"
+						nTOTKM    += (cTRBB)->KMROD
+						nTOTVALLT += (cTRBB)->LITROS
+						nTOTMEDR  += (cTRBB)->MEDIAR
+						nTOTMD    += (cTRBB)->MEDESP
+						nTOTVALT  += (cTRBB)->VALLT
+						nQtdMd++
+					EndIf
+					//Total geral detalhado
+					nDTOTKM    += (cTRBB)->KMROD
+					nDTOTVALLT += (cTRBB)->LITROS
+					nDTOTMEDR  += (cTRBB)->MEDIAR
+					nDTOTMD    += (cTRBB)->MEDESP
+					nDTOTVALT  += (cTRBB)->VALLT
+					nDQtdMd++
+					//total por filial
+					nDTKMFL    += (cTRBB)->KMROD
+					nDTVALLTFL += (cTRBB)->LITROS
+					nDTMEDRFL  += (cTRBB)->MEDIAR
+					nDTMDFL    += (cTRBB)->MEDESP
+					nDTVALTFL  += (cTRBB)->VALLT
+					nDQtdMdFL++
+					//total por operacao
+					nDTKMOP    += (cTRBB)->KMROD
+					nDTVALLTOP += (cTRBB)->LITROS
+					nDTMEDROP  += (cTRBB)->MEDIAR
+					nDTMDOP    += (cTRBB)->MEDESP
+					nDTVALTOP  += (cTRBB)->VALLT
+					nDQtdMdOP++
+				EndIf
+				DbSelectArea(cTRBB)
+				DbSkip()
+			ElseIf _cMV_PAR01 == 2
+				cOPER  := (cTRBB)->CODSER
+				cCODFL := (cTRBB)->CODFL
+				nTOTKM    += (cTRBB)->KMROD
+				nTOTVALLT += (cTRBB)->LITROS
+				nTOTMEDR  += (cTRBB)->MEDIAR
+				nTOTMD    += (cTRBB)->MEDESP
+				nTOTVALT  += (cTRBB)->VALLT
+				nQtdMd++
+
+				If lST6Tipo
+					cTipCont := (cTRBB)->TPCONT
+					cUM      := (cTRBB)->UM
+					cUndMed  := If(Empty((cTRBB)->UNDMED),"",'('+AllTrim((cTRBB)->UNDMED)+')')
+					cTpForm  := (cTRBB)->TPFORM
+				EndIf
+				cDESOPER := " "
+				DbSelectArea(vCampoCC[1])
+				DbSetOrder(01)
+				If MsSeek(xFilial(vCampoCC[1])+(cTRBB)->CCUSTO)
+					DbSelectArea("TSZ")
+					DbSetOrder(01)
+					If dbSeek(xFilial("TSZ",(cTRBB)->CODFL)+&(vCampoCC[3]))
+						cCDOPER := TSZ->TSZ_CODSER
+						cDESOPER := TSZ->TSZ_DESSER
+					EndIf
+				Else
+					cCDOPER := (cTRBB)->CODSER
+					cDESOPER := (cTRBB)->TIPSER
+				EndIf
+
+				nPos2 := ASCAN(aFiliais,{|x| x[1]+x[3]+x[5] = cCDOPER+(cTRBB)->CODFL+(cTRBB)->VEIC})
+				If Empty(cDESOPER) .Or. Empty(cCDOPER)
+					cCDOPER := (cTRBB)->CODSER
+					cDESOPER := (cTRBB)->TIPSER
+				EndIf
+				If nPos2 > 0
+					aFiliais[nPos2][2] += 1
+					aFiliais[nPos2][6] += (cTRBB)->KMROD
+					aFiliais[nPos2][7] += (cTRBB)->LITROS
+				Else
+					AADD(aFiliais,{cCDOPER,1,(cTRBB)->CODFL,cDESOPER,(cTRBB)->VEIC,(cTRBB)->KMROD,(cTRBB)->LITROS,(cTRBB)->MEDESP})
+				Endif
+
+				DbSelectArea(cTRBB)
+				DbSkip()
+
+				If lST6Tipo
+					cCond := "(cTipCont <> (cTRBB)->TPCONT) .Or. (Li > 58) .Or. (cUM <> (cTRBB)->UM)"
+				Else
+					cCond := "(cTRBB)->CODSER <> cOPER .Or. (cTRBB)->CODFL <> cCODFL"
+				EndIf
+
+				If &(cCond) .Or. (cTRBB)->CODFL <> cCODFL
+					NgSomaLi(58)
+					NgSomaLi(58)
+					If lST6Tipo
+						@ Li,005 Psay STR0101+cUndMed //"Total por Filial:"
+					Else
+						@ Li,005 Psay STR0045+" "+STR0044 //"Totais Filial"
+					EndIf
+
+					DbSelectArea("TSL")
+					DbSetOrder(1)
+					If DbSeek(xFilial("TSL")+cCODFL)
+						nMEDPAD := 	TSL->TSL_MEDIA
+					EndIf
+
+					@ Li,030 PSay nMEDPAD Picture "@E 999,999.99"
+					If lST6Tipo
+						If cTpForm == "2"
+							nMEDREAL := round((nTOTVALLT / nTOTKM),2)
+							@ Li,052 PSay nMEDREAL Picture "@E 999,999.99"
+						Else
+							nMEDREAL := round((nTOTKM / nTOTVALLT),2)
+							@ Li,052 PSay nMEDREAL Picture "@E 999,999.99"
+						EndIf
+					Else
+						nMEDREAL := round((nTOTKM / nTOTVALLT),2)
+						@ Li,052 PSay nMEDREAL Picture "@E 999,999.99"
+					EndIf
+					nDESVIO := ((nMEDREAL / nMEDPAD)-1)*100
+					@ Li,065 PSay nDESVIO Picture "@E 999,999.99%"
+					If nDESVIO <= 15 .AND. nDESVIO >= -15
+						@ Li,079 PSay STR0047 //"VERDE"
+					Else
+						@ Li,079 PSay STR0048 //"VERMELHO"
+					EndIf
+					If cCODFL <> (cTRBB)->CODFL
+						nTFTOTKM += nMEDPAD
+						nQuantFil += 1
+					EndIf
+					nTFTOTVALLT += nMEDREAL
+					nQuant += 1
+					NgSomaLi(58)
+
+					nTOTKM    := 0
+					nTOTVALLT := 0
+					nTOTMEDR  := 0
+					nTOTMD    := 0
+					nTOTVALT  := 0
+					nQtdMd    := 0
+
+				EndIf
+
+				dbSelectArea(cTRBB)
+				If Eof()
+					NgSomaLi(58)
+					NgSomaLi(58)
+					nDESVIO := 0
+					nMediaP := nTFTOTKM / nQuantFil
+					nMediaR := nTFTOTVALLT / nQuant
+					@ Li,005 Psay STR0046//"Total Geral:"
+					@ Li,030 PSay nMediaP Picture "@E 999,999.99"
+					@ Li,052 Psay nMediaR  Picture "@E 999,999.99"
+
+					nDESVIO := ((nMediaR / nMediaP)-1)*100
+					@ Li,065 PSay nDESVIO Picture "@E 999,999.99%"
+					If nDESVIO <= 15 .AND. nDESVIO >= -15
+						@ Li,079 PSay STR0047 //"VERDE"
+					Else
+						@ Li,079 PSay STR0048 //"VERMELHO"
+					EndIf
+
+					nTFTOTKM := 0
+					nTFTOTVALLT := 0
+
+					NgSomaLi(58)
+					@ Li,000 PSAY Replicate("_",66)
+					NgSomaLi(58)
+					@ Li,000 PSAY STR0049 //"Critérios de Avaliação:"
+					NgSomaLi(58)
+					NgSomaLi(58)
+					@ Li,000 PSAY STR0050       //"VERDE = Atingiu a meta, ficando 15% acima ou abaixo."
+					NgSomaLi(58)
+					@ Li,000 PSAY STR0051       //"VERMELHO = Desvio superior a 15% acima ou abaixo."
+					NgSomaLi(58)
+					@ Li,000 PSAY Replicate("_",66)
+					Cabec1 := STR0070 //"Operação                                         Filial                           Frotas Abastecidas   Dentro Padrão   % Dentro Padrão"
+					Cabec(titulo,Cabec1," ",nomeprog,tamanho,nTipo)
+
+					AFINAL := {}
+					For nI := 1 to Len(aFiliais)
+						nMediaCon := Round(((aFiliais[nI][6]/aFiliais[nI][7])/aFiliais[nI][8])*100,3)
+						nPadrao := 0
+						nAbaixo := 0
+						If nMediaCon >= 95 .AND. nMediaCon <= 130
+							nPadrao := 1
+						Else
+							nAbaixo := 1
+						Endif
+
+						nPos := ASCAN(AFINAL,{|x| x[1]+x[2] = aFiliais[nI][1]+aFiliais[nI][3]})
+						If nPos == 0
+							AADD(AFINAL,{aFiliais[nI][1],aFiliais[nI][3],1,nPadrao,nAbaixo,aFiliais[nI][4]})
+						Else
+							AFINAL[nPos][3] += 1
+							AFINAL[nPos][4] += nPadrao
+							AFINAL[nPos][5] += nAbaixo
+						Endif
+					Next
+
+					NgSomaLi(58)
+					cFilialAnt := ''
+					cOperacao  := ''
+					cOper		  := ''
+					AFINAL := aSort( AFINAL,,, { |x,y| x[1]+X[2] < y[1]+Y[2] } )
+					For nI := 1 to Len(AFINAL)
+						If cOperacao != AFINAL[nI][1] .Or. cDesOper != AFINAL[nI][6]
+							If nI != 1
+								MNR935TOPE(@nTotalOper,@nDentroPad,@nAcimaPad,1)
+							Endif
+							NgSomaLi(58)
+							If !Empty(AFINAL[nI][6])
+								@ Li,000 Psay AFINAL[nI][1] + ' - ' + AFINAL[nI][6]
+								cDescOpera := AFINAL[nI][6]
+							Else
+								@ Li,000 Psay STR0102
+								cDescOpera := STR0102
+							EndIf
+						Endif
+						If cFilialAnt != AFINAL[nI][2] .OR. cOperacao != AFINAL[nI][1]
+							DbSelectArea("SM0")
+							DbSetOrder(01)
+							If DbSeek(SM0->M0_CODIGO+AFINAL[nI][2])
+								NgSomaLi(58)
+								@ Li,049 Psay AFINAL[nI][2] + ' - ' + SM0->M0_FILIAL
+							EndIf
+						Endif
+						@ Li,082 Psay PADL(Transform(AFINAL[nI][3],"@E 999999999999999999"),18)
+						@ Li,103 Psay PADL(Transform(AFINAL[nI][4],"@E 9999999999999"),13)
+						nPerce := Round(((AFINAL[nI][4]/AFINAL[nI][3]) *100), 2)
+						@ Li,127	Psay nPerce Picture "@E 999.99"+'%'
+
+						cFilialAnt := AFINAL[nI][2]
+						cOperacao  := AFINAL[nI][1]
+						nTotalOper += AFINAL[nI][3]
+						nDentroPad += AFINAL[nI][4]
+						nAcimaPad  += AFINAL[nI][5]
+						cDesOper   := AFINAL[nI][6]
+					Next
+					If Len(AFINAL) > 0
+						MNR935TOPE(@nTotalOper,@nDentroPad,@nAcimaPad,2)
+					Endif
+				EndIf
+
+			Elseif _cMV_PAR01 == 3
+				cOPER  := (cTRBB)->CODSER
+				cCODFL := (cTRBB)->CODFL
+
+				If (cTRBB)->CODSER = cOPER  //Imprime por operacao
+
+					cVeiculo := (cTRBB)->VEIC
+					cModelo  := (cTRBB)->MODELO
+					cAno   := (cTRBB)->ANO
+					cMEDES := (cTRBB)->MEDESP
+					If lST6Tipo
+						cTpCont := (cTRBB)->TPCONT
+						cUm := (cTRBB)->UM
+						cUndMed := (cTRBB)->UNDMED
+						cTpForm  := (cTRBB)->TPFORM
+					EndIf
+					//total por veiculo
+					nTOTKM    += (cTRBB)->KMROD
+					nTOTVALLT += (cTRBB)->LITROS
+					nTOTMEDR  += (cTRBB)->MEDIAR
+					nTOTMD    += (cTRBB)->MEDESP
+					nTOTVALT  += (cTRBB)->VALLT
+					nQtdMd++
+					//total por filial
+					nGTOTKM    += (cTRBB)->KMROD
+					nGTOTVALLT += (cTRBB)->LITROS
+					nGTOTMEDR  += (cTRBB)->MEDIAR
+					nGTOTMD    += (cTRBB)->MEDESP
+					nGTOTVALT  += (cTRBB)->VALLT
+					nGQtdMd++
+					//total por geral sintetico
+					nDTOTKM    += (cTRBB)->KMROD
+					nDTOTVALLT += (cTRBB)->LITROS
+					nDTOTMEDR  += (cTRBB)->MEDIAR
+					nDTOTMD    += (cTRBB)->MEDESP
+					nDTOTVALT  += (cTRBB)->VALLT
+					nDQtdMd++
+
+					//Total geral
+					nTGTOTKM += (cTRBB)->KMROD
+					nTGTOTVALLT += (cTRBB)->LITROS
+					nTGTOTVALT += (cTRBB)->VALLT
+
+				EndIf
+				nCont += 1
+				DbSelectArea(cTRBB)
+				DbSkip()
+
+				If (cTRBB)->VEIC != cVeiculo .AND. !Empty(cVeiculo) //.and. Eof()
+					NgSomaLi(58)
+					nTotSint++
+					@ Li,000 PSay cVeiculo
+					@ Li,018 PSay cModelo
+					@ Li,046 PSay cAno
+					@ Li,060 Psay (cTRBB)->COMBUS
+					@ Li,080 Psay nTOTKM    Picture "@E 999,999,999"
+					If lST6Tipo
+						@ Li,093 PSay cTpCont
+						@ Li,095 Psay nTOTVALLT  Picture "@E 999,999.999"
+
+						@ Li,108 Psay nTOTVALT  Picture "@E 99,999,999,999.999"
+						If cTpForm == "2"
+							@ Li,150 PSay nTOTVALLT / nTOTKM Picture "@E 999,999.99"
+						Else
+							@ Li,150 PSay nTOTKM / nTOTVALLT Picture "@E 999,999.99"
+						EndIf
+						@ Li,161 PSay cUndMed
+						@ Li,174 PSay cMEDES Picture "@E 999,999.99"
+						@ Li,185 PSay cUndMed
+					Else
+						@ Li,095 Psay nTOTVALLT  Picture "@E 999,999.999"
+						@ Li,108 Psay nTOTVALT  Picture "@E 99,999,999,999.999"
+
+						@ Li,150 PSay nTOTKM / nTOTVALLT Picture "@E 999,999.99"
+						@ Li,174 PSay cMEDES Picture "@E 999,999.99"
+					EndIf
+
+					nOPTOTKM += nTOTKM
+					nOPTOTVALLT += nTOTVALLT
+					nOPTOTVALT += nTOTVALT
+					nOPTOTMD += nTOTMD
+					nOPQtdMd += nQtdMd
+
+					nTOTKM    := 0
+					nTOTVALLT := 0
+					nTOTMEDR  := 0
+					nTOTMD    := 0
+					nTOTVALT  := 0
+					nQtdMd    := 0
+				Endif
+				If (cTRBB)->CODSER <> cOPER .And. _cMV_PAR01 == 3
+					If nOPTOTKM != 0 .And. nOPTOTVALLT != 0 .And. nOPTOTVALT != 0
+						NgSomaLi(58)
+						NgSomaLi(58)
+						cNomSer := (cTRBB)->TIPSER
+						@ Li,000 Psay STR0100//"Total por Operação:"
+						If !Empty(cNomSer) .And. !Empty(cNOMFL)
+							@ Li,009 PSay AllTrim(cNomSer) + " - " + cNOMFL
+						EndIf
+						@ Li,080 Psay nOPTOTKM    Picture "@E 999,999,999"
+						@ Li,093 PSay '---'
+						@ Li,096 Psay nOPTOTVALLT  Picture "@E 999,999.999"
+						@ Li,109 Psay nOPTOTVALT  Picture "@E 99,999,999,999.999"
+						@ Li,151 PSay nOPTOTKM / nOPTOTVALLT Picture "@E 999,999.99"
+						NgSomaLi(58)
+
+						nOPTOTKM 	:= 0
+						nOPTOTVALLT	:= 0
+						nOPTOTVALT 	:= 0
+						nOPTOTMD	:= 0
+						nOPQtdMd	:= 0
+
+						nGTOTKM    := 0
+						nGTOTVALLT := 0
+						nGTOTMEDR  := 0
+						nGTOTMD    := 0
+						nGTOTVALT  := 0
+						nGQtdMd    := 0
+					EndIf
+				EndIf
+
+				If (cTRBB)->CODFL <> cCODFL
+					If nOPTOTKM != 0 .And. nOPTOTVALLT != 0 .And. nOPTOTVALT != 0
+						NgSomaLi(58)
+						NgSomaLi(58)
+						cNomSer := (cTRBB)->TIPSER
+						@ Li,000 Psay STR0100//"Total por Operação:"
+						If !Empty(cNomSer) .And. !Empty(cNOMFL)
+							@ Li,009 PSay AllTrim(cNomSer) + " - " + cNOMFL
+						EndIf
+						@ Li,080 Psay nOPTOTKM    Picture "@E 999,999,999"
+						@ Li,093 PSay '---'
+						@ Li,096 Psay nOPTOTVALLT  Picture "@E 999,999.999"
+						@ Li,109 Psay nOPTOTVALT  Picture "@E 99,999,999,999.999"
+
+						@ Li,151 PSay nOPTOTKM / nOPTOTVALLT Picture "@E 999,999.99"
+
+						nOPTOTKM 	:= 0
+						nOPTOTVALLT	:= 0
+						nOPTOTVALT 	:= 0
+						nOPTOTMD	:= 0
+						nOPQtdMd	:= 0
+
+						nGTOTKM    := 0
+						nGTOTVALLT := 0
+						nGTOTMEDR  := 0
+						nGTOTMD    := 0
+						nGTOTVALT  := 0
+						nGQtdMd    := 0
+					EndIf
+				EndIf
+
+				If cCODFL <> (cTRBB)->CODFL .And. !lPrim
+					NgSomaLi(58)
+					@ Li,000 Psay STR0101//"Total por Filial:"
+					If lST6Tipo
+						@ Li,080 Psay nDTOTKM    Picture "@E 999,999,999"
+						@ Li,093 PSay '---'
+						@ Li,096 Psay nDTOTVALLT  Picture "@E 999,999.999"
+						@ Li,109 Psay nDTOTVALT  Picture "@E 99,999,999,999.999"
+						If cTpForm == "2"
+							@ Li,151 PSay nDTOTVALLT / nDTOTKM Picture "@E 999,999.99"
+						Else
+							@ Li,151 PSay nDTOTKM / nDTOTVALLT Picture "@E 999,999.99"
+						EndIf
+					Else
+						MNR935T1(nDTOTKM,nDTOTVALLT,nDTOTVALT,nDTOTKM / nDTOTVALLT,nDTOTKM / nDQtdMd)
+					EndIf
+					Store 0 To nDTOTKM,nDTOTVALLT,nDTOTMD,nDTOTVALT,nDQtdMd
+				EndIf
+
+				If Eof()
+					NgSomaLi(58)
+					@ Li,000 Psay STR0046     //"Total Geral:"
+
+					@ Li,080 Psay nTGTOTKM    Picture "@E 999,999,999"
+					@ Li,093 PSay '---'
+					@ Li,096 Psay nTGTOTVALLT  Picture "@E 999,999.999"
+					@ Li,109 Psay nTGTOTVALT  Picture "@E 99,999,999,999.999"
+					@ Li,151 PSay nTGTOTKM / nTGTOTVALLT Picture "@E 999,999.99"
+				EndIf
+
+			EndIf
+			dbSelectArea(cTRBB)
+			lOper := .F.
+		End
+		NgSomaLi(58)
+		If _cMV_PAR01 <> 2 .And. _cMV_PAR01 <> 3
+			NgSomaLi(58)
+			@ Li,000 Psay STR0100  //"Total por Operação:"
+			@ Li,066 Psay nDTKMOP    Picture "@E 999,999,999"
+			@ Li,083 Psay nDTVALLTOP  Picture "@E 999,999.999"
+			@ Li,096 Psay nDTVALTOP  Picture "@E 99,999,999,999.999"
+			If cTpForm == "2"
+				@ Li,126 PSay nDTVALLTOP / nDTKMOP Picture "@E 999,999.99"
+			Else
+				@ Li,126 PSay nDTKMOP / nDTVALLTOP Picture "@E 999,999.99"
+			EndIf
+			NgSomaLi(58)
+			@ Li,000 Psay STR0101 //"Total por Filial:"
+			@ Li,066 Psay nDTKMFL    Picture "@E 999,999,999"
+			@ Li,083 Psay nDTVALLTFL  Picture "@E 999,999.999"
+			@ Li,096 Psay nDTVALTFL  Picture "@E 99,999,999,999.999"
+			If cTpForm == "2"
+				@ Li,126 PSay nDTVALLTFL / nDTKMFL Picture "@E 999,999.99"
+			Else
+				@ Li,126 PSay nDTKMFL / nDTVALLTFL Picture "@E 999,999.99"
+			EndIf
+			NgSomaLi(58)
+			@ Li,000 Psay STR0046     //"Total Geral:"
+			@ Li,066 Psay nDTOTKM    Picture "@E 999,999,999"
+			@ Li,083 Psay nDTOTVALLT  Picture "@E 999,999.999"
+			@ Li,096 Psay nDTOTVALT  Picture "@E 99,999,999,999.999"
+			@ Li,126 PSay nDTOTKM / nDTOTVALLT Picture "@E 999,999.99"
+		EndIf
+		Roda(nCntImpr,cRodaTxt,Tamanho)
+	EndIf
+
+	//----------------------------------------------------------------
+	//| Devolve a condicao original do arquivo principal             |
+	//----------------------------------------------------------------
+	RetIndex('TQN')
+
+	Set Filter To
+
+	Set device to Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT935DT
+Valida o parametro ate data
+@author Soraia de Carvalho
+@since 25/07/06
+@version undefined
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNT935DT()
+
+	If  MV_PAR02 < MV_PAR01
+		MsgStop(STR0056)  //"Data final não pode ser inferior à data inicial!"
+		Return .F.
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935TOPE
+Imprime o total da Operacao
+@author Marcos Wagner Junior
+@since 13/12/07
+@version undefined
+@param nTotalOper, numeric
+@param nDentroPad, numeric
+@param nAcimaPad, numeric
+@param nPar, numeric
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNR935TOPE(nTotalOper,nDentroPad,nAcimaPad,nPar)
+
+	NgSomaLi(58)
+	@ Li,000 Psay STR0103//+cDescOpera //"Total Operação:"
+	@ Li,082 Psay PADL(Transform(nTotalOper,"@E 999999999999999999"),18)
+	@ Li,103 Psay PADL(Transform(nDentroPad,"@E 9999999999999"),13)
+	nPerce := Round(((nDentroPad/nTotalOper) *100), 2)
+	@ Li,127 Psay nPerce Picture "@E 999.99"+'%'
+	NgSomaLi(58)
+	nGerOper += nTotalOper
+	nGerPad  += nDentroPad
+	If nPar == 2
+		NgSomaLi(58)
+		NgSomaLi(58)
+		@ Li,000 Psay STR0046
+		@ Li,082 Psay PADL(Transform(nGerOper,"@E 999999999999999999"),18)
+		@ Li,103 Psay PADL(Transform(nGerPad,"@E 9999999999999"),13)
+		nPerce := Round(((nGerPad/nGerOper) *100), 2)
+		@ Li,127 Psay nPerce Picture "@E 999.99"+'%'
+	Endif
+
+	nTotalOper := 0
+	nAcimaPad  := 0
+	nDentroPad := 0
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+@author Rafael Diogo Richter
+@since 02/02/2008
+@version undefined
+@type function
+@return Array com opcoes da rotina.
+@obs Uso SigaMNT
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	//------------------------------------------------------------
+	//	Parametros do array a Rotina:                 			 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transa‡„o a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 				 |
+	//------------------------------------------------------------
+
+	Local aRotina := {}
+	Local _lRetS := .F.
+	cMnuFr := SuperGetMv("MV_NGOPER",.F.," ")
+	If cMnuFr = Nil .Or. Empty(cMnuFr)
+		_lRetS := .T.
+	Else
+		If cMnuFr = 'S'
+			_lRetS := .T.
+		Endif
+	Endif
+
+	aRotina := {{STR0001 ,"MNR935VI" ,0,1},;    //"Visualizar"
+	{STR0002 ,If(_lRetS,"MNR935PA","MNR93OPA") ,0,3,0},;  //"Parametros"
+	{STR0003 ,If(_lRetS,"MNR935IM","MNR93OIM") ,0,3,0}} //"Imprimir"
+
+Return aRotina
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR935SO
+Consulta/relatorio de indicadores de consumo e combustivel / Sem o filtro pelo codigo da operacao
+@author Inacio Luiz Kolling
+@since 23/05/08
+@version undefined
+@type function
+@obs Uso MNR935
+/*/
+//---------------------------------------------------------------------
+Function MNTR935SO()
+
+	Local oTmpTbl3
+	Local oTmpTbl4
+	Local aPesq := {}
+
+	Private cPerg 	  := "MNR9352"
+	Private aPerg 	  :={}
+	Private nControle := 0
+
+	If !pergunte(cPerg,.T.)
+		Return
+	Endif
+
+	aDBFB := {}
+		Aadd(aDBFB,{"VEIC  "  ,"C", 16,0})
+		Aadd(aDBFB,{"DATABA"  ,"D",  8,0})
+		Aadd(aDBFB,{"HRAABA"  ,"C",  5,0})
+		Aadd(aDBFB,{"KM    "  ,"N",  9,0})
+		Aadd(aDBFB,{"COMBUS"  ,"C",  3,0})
+		Aadd(aDBFB,{"LITROS"  ,"N",  9,3})
+		Aadd(aDBFB,{"KMROD "  ,"N",  9,0})
+		Aadd(aDBFB,{"MEDIAR"  ,"N",  09,2})
+		Aadd(aDBFB,{"MEDESP"  ,"N",  09,2})
+		Aadd(aDBFB,{"TIPSER"  ,"C",  40,0})
+		Aadd(aDBFB,{"CODBEM"  ,"C",  16,0})
+		Aadd(aDBFB,{"CCUSTO"  ,"C",  20,0})
+		Aadd(aDBFB,{"MODELO"  ,"C",  25,0})
+		Aadd(aDBFB,{"ANO"     ,"C",  04,0})
+		Aadd(aDBFB,{"VALLT"   ,"N",  15,3})
+		Aadd(aDBFB,{"NMFL"    ,"C",  15,0})
+		Aadd(aDBFB,{"CODFL"   ,"C",  nSizeFil,0})
+		Aadd(aDBFB,{"DESEMP"  ,"N",  12,2})
+		Aadd(aDBFB,{"DTLEITU" ,"D", 08,0})
+		Aadd(aDBFB,{"HORA"    ,"C", 05,0})
+		Aadd(aDBFB,{"ACUMCON" ,"N", 12,0})
+		Aadd(aDBFB,{"TIPOLAN" ,"C", 01,0})
+	If lST6Tipo
+		Aadd(aDBFB,{"TPCONT"  ,"C",  03,0})
+		Aadd(aDBFB,{"UM"      ,"C",  02,0})
+		Aadd(aDBFB,{"UNDMED"  ,"C",  06,0})
+		Aadd(aDBFB,{"TPFORM"  ,"C",  01,0})
+	EndIf
+		Aadd(aDBFB,{"POSTOAB" ,"C", TAMSX3("TQF_CODIGO")[1],0,})
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl3 := FWTemporaryTable():New( cTRBB, aDBFB )
+
+	If lST6Tipo
+		oTmpTbl3:AddIndex( "Ind01" , {"CODFL","TPCONT","UM","VEIC","DATABA","HRAABA"}  )
+		//Cria Array para montar a chave de pesquisa
+		aAdd( aPesq , {STR0109 + " + " + STR0110 + " + " + STR0114 + " + " + STR0107 + " + " + STR0108, {{"","C" , 255 , 0 ,"","@!"}} } )
+	Else
+		oTmpTbl3:AddIndex( "Ind01" , {"CODFL","VEIC","DATABA","HRAABA"}  )
+		//Cria Array para montar a chave de pesquisa
+		aAdd( aPesq , {STR0109 + " + " + STR0013 + " + " + STR0107 + " + " + STR0108, {{"","C" , 255 , 0 ,"","@!"}} } )
+	EndIf
+
+	//Cria a tabela temporaria
+	oTmpTbl3:Create()
+
+	aDBFB2 := {}
+		Aadd(aDBFB2,{"VEIC  "  ,"C", 16,0})
+		AAdd(aDBFB2,{"COMBUS"  ,"C", 03,0})
+		Aadd(aDBFB2,{"CODBEM"  ,"C", 16,0})
+		Aadd(aDBFB2,{"DATABA"  ,"D", 08,0})
+		Aadd(aDBFB2,{"HRAABA"  ,"C", 05,0})
+		Aadd(aDBFB2,{"DTLEITU" ,"D", 08,0})
+		Aadd(aDBFB2,{"HORA"    ,"C", 05,0})
+		Aadd(aDBFB2,{"ACUMCON" ,"N", 12,0})
+		Aadd(aDBFB2,{"TIPOLAN" ,"C", 01,0})
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl4 := FWTemporaryTable():New( cTRBB2, aDBFB2 )
+	oTmpTbl4:AddIndex( "Ind01" , {"VEIC","DATABA","HRAABA"} )
+	//Cria a tabela temporaria
+	oTmpTbl4:Create()
+
+	If lST6Tipo
+		aTRBB := {	{STR0013 ,"VEIC"   ,"C", 16,0,"@!" },;                    //"Veículo"
+					{STR0014 ,"MODELO" ,"C", 25,0,"@!" },;                    //"Modelo"
+					{STR0015 ,"ANO"    ,"C", 04,0,"@!" },;                    //"Ano Veic."
+					{STR0106 ,"COMBUS" ,"C", 03,0,"@!" },;					  //"Combustível"
+					{STR0057 ,"KMROD"  ,"N", 09,0,"@E 999,999,999" },;        //"Utilizado"
+					{" "     ,"TPCONT" ,"C", 03,0,"@!" },;
+					{STR0017 ,"LITROS" ,"N", 09,3,"@E 99,999.999" },;         //"Abastecido"
+					{" "     ,"UM"     ,"C", 02,0,"@!" },;
+					{STR0018 ,"VALLT"  ,"N", 15,3,"@E 99,999,999,999.999" },; //"Vlr.Abast."
+					{STR0019 ,"MEDIAR" ,"N", 09,2,"@E 999,999.99" },;         //"Méd.Realiz."
+					{" "     ,"UNDMED" ,"C", 06,0, "@!" },;
+					{STR0020 ,"MEDESP" ,"N", 09,2,"@E 999,999.99" },;         //"Méd.Esperada"
+					{" "     ,"UNDMED" ,"C", 06,0, "@!" },;
+					{STR0109 ,"CODFL" ,"C", nSizeFil,0,"@!" },;          //"Cod. Filial"
+					{STR0107 ,"DATABA" ,"D", 08,0,"99/99/9999" },;        //"Dt. Abast."
+					{STR0108 ,"HRAABA" ,"C", 05,0,"@!"},; 				  // "Hra. Abast."
+					{STR0021 ,"DESEMP" ,"N", 09,2,"@E 999,999.99" }}          //"%Desempenho"
+	Else
+		aTRBB := {	{STR0013 ,"VEIC"   ,"C", 16,0,"@!" },;                    //"Veículo"
+					{STR0014 ,"MODELO" ,"C", 25,0,"@!" },;                    //"Modelo"
+					{STR0015 ,"ANO"    ,"C", 04,0,"@!" },;                    //"Ano Veic."
+					{STR0106 ,"COMBUS" ,"C", 03,0,"@!" },;						  //"Combustível"
+					{STR0057 ,"KMROD"  ,"N", 09,0,"@E 999,999,999" },; //"KM Rodado."
+					{STR0058 ,"LITROS" ,"N", 09,3,"@E 99,999.999" },; //"Lit. Abas."
+					{STR0018 ,"VALLT"  ,"N", 15,3,"@E 99,999,999,999.999" },; //"Vlr.Abast."
+					{STR0019 ,"MEDIAR" ,"N", 09,2,"@E 999,999.99" },;         //"Méd.Realiz."
+					{STR0020 ,"MEDESP" ,"N", 09,2,"@E 999,999.99" },;         //"Méd.Esperada"
+					{STR0109 ,"CODFL" ,"C", nSizeFil,0,"@!" },;          //"Cod. Filial"
+					{STR0107 ,"DATABA" ,"D", 08,0,"99/99/9999" },;        //"Dt. Abast."
+					{STR0108 ,"HRAABA" ,"C", 05,0,"@!"},;				  // Hra. Abast.
+					{STR0021 ,"DESEMP" ,"N", 09,2,"@E 999,999.99" }}          //"Desempenho"
+	EndIf
+
+	Processa({ |lEnd| MNR93OINI()}, STR0011,STR0012 ) //"Aguarde..."###"Processando Registros..."
+	DbSelectarea(cTRBB)
+	DbGotop()
+	//mBrowse(6,1,22,75,cTRBB,aTRBB)
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetDescription(cCadastro)
+	oBrowse:SetTemporary(.T.)
+	oBrowse:SetAlias(cTRBB)
+	oBrowse:SetFields(aTRBB)
+	oBrowse:SetProfileID( '2' )
+	oBrowse:SetSeek(.T.,aPesq)
+	oBrowse:Activate()
+
+	oTmpTbl3:Delete()//Deleta Arquivo Temporario 3
+
+	oTmpTbl4:Delete()//Deleta Arquivo Temporario 4
+
+	DbSelectArea("TQN")
+	DbSetOrder(01)
+	Dbseek(xFilial("TQN"))
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR93OINI
+Monta o arquivo temporario inicial mostrado no browse
+@author Soraia de Carvalho
+@since 23/03/06
+@version undefined
+@type function
+@obs Uso MNR93O
+/*/
+//---------------------------------------------------------------------
+Function MNR93OINI()
+
+	Local cVeicAnt
+	Local cTpCon    := '1'
+
+	Private nKM := 0
+
+	cAliasQry := "TETQN"
+	MNR935QUER(.f.)
+
+	//Carrega todos os dados na TRBB2
+	While !Eof()
+
+		IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+		DbSelectArea("ST9")
+		DbSetOrder(16)
+		If MsSeek((cAliasQry)->TQN_FROTA)
+
+			If lST6Tipo
+				If ST9->T9_TEMCONT <> 'S'
+					DbselectArea(cAliasQry)
+					DbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			RecLock((cTRBB2),.T.)
+
+			(cTRBB2)->VEIC   := (cAliasQry)->TQN_FROTA
+			(cTRBB2)->COMBUS := (cAliasQry)->TQN_CODCOM
+			(cTRBB2)->CODBEM := (cAliasQry)->T9_CODBEM
+			(cTRBB2)->DATABA := STOD((cAliasQry)->TQN_DTABAS)
+			(cTRBB2)->HRAABA := (cAliasQry)->TQN_HRABAS
+			(cTRBB2)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+			(cTRBB2)->HORA    := (cAliasQry)->TP_HORA
+			(cTRBB2)->ACUMCON := (cAliasQry)->TP_ACUMCON
+			(cTRBB2)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+			MsUnLock(cTRBB2)
+
+		EndIf
+
+		DbselectArea(cAliasQry)
+		DbSkip()
+
+	End
+
+	DbSelectArea(cAliasQry)
+	DbGoTop()
+
+	While !Eof()
+
+		IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+		DbSelectArea("ST9")
+		DbSetOrder(16)
+		If !Empty(MV_PAR13) .And. STOD((cAliasQry)->TQN_DTABAS) >= MV_PAR01 .And. STOD((cAliasQry)->TQN_DTABAS) <= MV_PAR02  .And. (cAliasQry)->TQN_CODCOM == MV_PAR13
+			If MsSeek((cAliasQry)->TQN_FROTA)
+
+				If !lST6Tipo
+					If (ST9->T9_TEMCONT <> 'S')
+						DbselectArea(cALIASQRY)
+						DbSkip()
+						Loop
+					EndIf
+				EndIf
+
+				dbSelectArea("TT8")
+				dbSetOrder(1)
+				If msSeek(FWxFilial("TT8")+(cAliasQry)->TQN_FROTA+(cAliasQry)->TQN_CODCOM)
+					cTpCon := TT8->TT8_TPCONT
+				EndIf
+
+				If cVeicAnt == (cAliasQry)->TQN_FROTA
+					//Busca Km anterior
+					nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+				Else
+					nControle := 0
+					//Busca Km anterior
+					nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+				EndIf
+
+				RecLock((cTRBB),.T.)
+				(cTRBB)->CODFL := (cAliasQry)->TQN_FILIAL
+
+				DbSelectArea("SM0")
+				DbSetOrder(01)
+				If MsSeek(SM0->M0_CODIGO+(cAliasQry)->TQN_FILIAL)
+					(cTRBB)->NMFL := SM0->M0_FILIAL
+				EndIf
+
+				(cTRBB)->VEIC   := (cAliasQry)->TQN_FROTA
+				(cTRBB)->COMBUS := (cAliasQry)->TQN_CODCOM
+				(cTRBB)->VALLT  := (cAliasQry)->TQN_VALTOT
+				(cTRBB)->KM     := (cAliasQry)->TQN_HODOM
+				(cTRBB)->LITROS := (cAliasQry)->TQN_QUANT
+				(cTRBB)->DATABA := STOD((cAliasQry)->TQN_DTABAS)
+				(cTRBB)->HRAABA := (cAliasQry)->TQN_HRABAS
+				(cTRBB)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+				(cTRBB)->HORA    := (cAliasQry)->TP_HORA
+				(cTRBB)->ACUMCON := (cAliasQry)->TP_ACUMCON
+				(cTRBB)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+				If nKM > 0
+					(cTRBB)->KMROD  := nKM
+					(cTRBB)->MEDIAR := ((cTRBB)->KMROD / (cTRBB)->LITROS)
+				EndIf
+
+				If lST6Tipo
+					(cTRBB)->CODBEM := ST9->T9_CODBEM
+					(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+					(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+					(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+				Else
+					(cTRBB)->CODBEM := ST9->T9_CODBEM
+					(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+					(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+					(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+				EndIf
+
+				DbSelectArea("DA3")
+				DbSetOrder(3)
+				If MsSeek(xFilial("DA3")+ST9->T9_PLACA)
+					(cTRBB)->ANO := DA3->DA3_ANOFAB
+				Else
+					(cTRBB)->ANO := (cAliasQry)->T9_ANOFAB
+				EndIf
+
+				(cTRBB)->DESEMP := (Round(((cTRBB)->MEDIAR/(cTRBB)->MEDESP),4)*100)
+
+				If lST6Tipo
+					cTipo := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_TIPO1',(cAliasQry)->TQN_FILIAL))//(cAliasQry)->T9_TPCONTA
+					cUnid := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_UNIDAD1',(cAliasQry)->TQN_FILIAL))//(cAliasQry)->TQM_UM
+					cTpUn := NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_MEDIA1',(cAliasQry)->TQN_FILIAL) //SubStr((cTRBB)->TPCONT,1,2)+"/"+(cTRBB)->UM
+					(cTRBB)->TPCONT := If(Empty(cTipo),'---',cTipo)
+					(cTRBB)->UM     := If(Empty(cUnid),'--',cUnid)
+					(cTRBB)->UNDMED := MNTUndCont(cTipo,cUnid,cTpUn)
+					(cTRBB)->TPFORM := cTpUn
+					If cTpUn == '2' .And. (cTRBB)->MEDIAR <> 0
+						(cTRBB)->MEDIAR := ((cTRBB)->LITROS / (cTRBB)->KMROD)
+						(cTRBB)->DESEMP := (Round(((cTRBB)->MEDESP/(cTRBB)->MEDIAR),4)*100)
+					EndIf
+				EndIf
+
+				cVeicAnt := (cTRBB)->VEIC
+
+				MsUnLock(cTRBB)
+
+			EndIf
+
+		ElseIf Empty(MV_PAR13)
+
+			If STOD((cAliasQry)->TQN_DTABAS) >= MV_PAR01 .And. STOD((cAliasQry)->TQN_DTABAS) <= MV_PAR02
+
+				If MsSeek((cAliasQry)->TQN_FROTA)
+
+					If !lST6Tipo
+						If (ST9->T9_TEMCONT <> 'S')
+							DbselectArea(cALIASQRY)
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					dbSelectArea("TT8")
+					dbSetOrder(1)
+					If msSeek(FWxFilial("TT8")+(cAliasQry)->TQN_FROTA+(cAliasQry)->TQN_CODCOM)
+						cTpCon := TT8->TT8_TPCONT
+					EndIf
+
+					//Busca Km anterior
+					nKm := NGCONTPER((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_DTABAS, (cAliasQry)->TQN_HRABAS, cTpCon)
+
+					RecLock((cTRBB),.T.)
+					(cTRBB)->CODFL := (cAliasQry)->TQN_FILIAL
+
+					DbSelectArea("SM0")
+					DbSetOrder(01)
+					If MsSeek(SM0->M0_CODIGO+(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->NMFL := SM0->M0_FILIAL
+					EndIf
+
+					(cTRBB)->VEIC   := (cAliasQry)->TQN_FROTA
+					(cTRBB)->COMBUS := (cAliasQry)->TQN_CODCOM
+					(cTRBB)->VALLT  := (cAliasQry)->TQN_VALTOT
+					(cTRBB)->KM     := (cAliasQry)->TQN_HODOM
+					(cTRBB)->LITROS := (cAliasQry)->TQN_QUANT
+					(cTRBB)->DATABA := STOD((cAliasQry)->TQN_DTABAS)
+					(cTRBB)->HRAABA := (cAliasQry)->TQN_HRABAS
+					(cTRBB)->DTLEITU := STOD((cAliasQry)->TP_DTLEITU)
+					(cTRBB)->HORA    := (cAliasQry)->TP_HORA
+					(cTRBB)->ACUMCON := (cAliasQry)->TP_ACUMCON
+					(cTRBB)->TIPOLAN := (cAliasQry)->TP_TIPOLAN
+
+					If nKM > 0
+						(cTRBB)->KMROD  := nKM
+						(cTRBB)->MEDIAR := ((cTRBB)->KMROD / (cTRBB)->LITROS)
+					EndIf
+
+					If lST6Tipo
+						(cTRBB)->CODBEM := ST9->T9_CODBEM
+						(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+						(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+					Else
+						(cTRBB)->CODBEM := ST9->T9_CODBEM
+						(cTRBB)->CCUSTO := (cAliasQry)->TQN_CCUSTO
+						(cTRBB)->MEDESP := MNTMdComb((cAliasQry)->TQN_FROTA, (cAliasQry)->TQN_CODCOM,(cAliasQry)->TQN_FILIAL)
+						(cTRBB)->MODELO := SubStr(ST9->T9_NOME,1,25)
+					EndIf
+
+					DbSelectArea("DA3")
+					DbSetOrder(3)
+					If MsSeek(xFilial("DA3")+ST9->T9_PLACA)
+						(cTRBB)->ANO := DA3->DA3_ANOFAB
+					Else
+						(cTRBB)->ANO := (cAliasQry)->T9_ANOFAB
+					EndIf
+
+					(cTRBB)->DESEMP := (Round(((cTRBB)->MEDIAR/(cTRBB)->MEDESP),4)*100)
+
+					If lST6Tipo
+						cTipo := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_TIPO1',(cAliasQry)->TQN_FILIAL))//(cAliasQry)->T9_TPCONTA
+						cUnid := AllTrim(NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_UNIDAD1',(cAliasQry)->TQN_FILIAL))//(cAliasQry)->TQM_UM
+						cTpUn := NGSEEK('ST6',(cAliasQry)->T9_CODFAMI,1,'T6_MEDIA1',(cAliasQry)->TQN_FILIAL) //SubStr((cTRBB)->TPCONT,1,2)+"/"+(cTRBB)->UM
+						(cTRBB)->TPCONT := If(Empty(cTipo),'---',cTipo)
+						(cTRBB)->UM     := If(Empty(cUnid),'--',cUnid)
+						(cTRBB)->UNDMED := MNTUndCont(cTipo,cUnid,cTpUn)
+						(cTRBB)->TPFORM := cTpUn
+						If cTpUn == '2' .And. (cTRBB)->MEDIAR <> 0
+							(cTRBB)->MEDIAR := ((cTRBB)->LITROS / (cTRBB)->KMROD)
+							(cTRBB)->DESEMP := (Round(((cTRBB)->MEDESP/(cTRBB)->MEDIAR),4)*100)
+						EndIf
+					EndIf
+
+					MsUnLock(cTRBB)
+
+				EndIf
+			EndIf
+		EndIf
+
+		DbselectArea(cALIASQRY)
+		DbSkip()
+
+	End
+	(cALIASQRY)->(dbCloseArea())
+
+	nControle := 0
+
+	DbSelectArea(cTRBB)
+	DbGoTop()
+
+	If Reccount() = 0
+		MsgInfo(STR0022,STR0023) //"Não existem dados para montar a tela de consulta."###"ATENÇÃO"
+	EndIf
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR93OPA
+Reprocessa o browse de acordo com os parametros
+@author Soraia de Carvalho
+@since 23/03/06
+@version undefined
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNR93OPA()
+
+	If !Pergunte("MNR9352",.T.)
+		Return
+	EndIf
+
+	DbSelectArea(cTRBB)
+	Zap
+
+	Processa({ |lEnd| MNR93OINI() }, STR0011,STR0012 ) //"Aguarde..."###"Processando Registros..."
+
+	DbSelectArea(cTRBB)
+	DbGotop()
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR93OIM
+Relatorio de indicadores de consumo e combustivel.
+@author Soraia de Carvalho
+@since 23/03/2006
+@version undefined
+@table ST9, TQN
+@type function
+@obs Uso SigaMNT
+/*/
+//---------------------------------------------------------------------
+Function MNR93OIM()
+
+	Local cString    := "TQN"
+	Local cDesc1     := STR0024 //"Relatório de Indicadores de Rendimento de Combustível."
+	Local cDesc2     := STR0025  //"O usuário poderá utilizar a opção Parametros para"
+	Local cDesc3     := STR0026 //"a obtenção da seleção desejada."
+	Local wnRel      := "MNTR935"
+
+	Private aReturn  := { STR0027, 1,STR0028 , 2, 2, 1, "",1 }     //"Administracao"###"Zebrado"
+	Private nLastKey := 0
+	Private Titulo   := STR0029 //"Relatório de Indicadores de Rendimento de Combustível - Visão por Filial"
+	Private Tamanho  := "G"
+	Private cPerg    := "MNT935"
+	Private aPerg :={}
+
+	//---------------------------------------------
+	//| Envia controle para a funcao SETPRINT     |
+	//---------------------------------------------
+	DbSelectArea(cTRBB)
+	DbGoTop()
+	If Reccount() > 0
+		wnRel := SetPrint(cString,wnRel,cPerg,Titulo,cDesc1,cDesc2,cDesc3,.f.,"")
+		If nLastKey = 27
+			Set Filter To
+			DbSelectArea("TQN")
+			Return
+		Endif
+		PERGUNTE(cPERG,.F.)
+		_cMV_PAR01 := MV_PAR01
+		SetDefault(aReturn,cString)
+		cPERGOLD := cPERG
+		cPERG := 'MNR9352'
+		RptStatus({|lEnd| R93OIMP(@lEnd,wnRel,Titulo,Tamanho,_cMV_PAR01)},Titulo)
+		cPERG := cPERGOLD
+	Else
+		MsgInfo(STR0034,STR0023) //"Nao exitem dados para imprimir o relatório."###"ATENÇÃO"
+	EndIf
+	DbSelectArea("TQN")
+
+Return Nil
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R93OIMP
+Chamada do Relatorio
+@author Soraia de Carvalho
+@since 23/03/2006
+@version undefined
+@param lEnd, logical
+@param wnRel
+@param Titulo
+@param Tamanho
+@param _cMV_PAR01
+@type function
+@obs Uso SigaMNT
+/*/
+//---------------------------------------------------------------------
+Static Function R93OIMP(lEnd,wnRel,Titulo,Tamanho,_cMV_PAR01)
+
+	Local cRodaTxt 	:= ''
+	Local nCntImpr 	:= 0
+	Local cVeiculo, cModelo, cAno
+	Local nI
+	Local lPrim 	:= .T.
+	Local cCODFL 	:= ""
+	Local aArea
+	Local nQuant 	:= 0, nQuantFil := 0
+	Local nTFTOTKM 	:= 0
+	Local nTFTOTVALLT := 0
+	Local nTFTOTVALT:= 0
+	Local nTFTOTMD 	:= 0
+	Local nTFQtdMd 	:= 0
+	Local nCont		:= 0
+	Local nMediaR 	:= 0, nMediaP := 0
+
+	Private        li  := 80 ,m_pag := 1
+	Private NomeProg   := "MNT935"
+	Private lVerOpT    := .F.
+	Private Cabec1,Cabec2,cDescOpera := Space(40),cNOMFL,cNomSer := ""
+	Private nTOTVALLT,nTOTMEDR,nTOTMD,nTOTVALT
+	Private nQtdMd,nTOTKM,nGTOTKM,nGTOTVALLT,nGTOTMEDR,nGTOTMD,nGTOTVALT,nGQtdMd,;
+	nDTOTKM,nDTOTVALLT,nDTOTMEDR,nDTOTMD,nDTOTVALT,nDTotDes,nDQtdMd,;
+	nMEDPAD,nTotMedE,nDTotMedE,nTotalOper,nAcimaPad,nDentroPad,;
+	nGerOper,nGerPad
+
+	Private aTotais  := {}
+	Private aFiliais := {}
+
+	Store " " To cVeiculo,cModelo,cAno,Cabec1,Cabec2
+	Store 0.00 To nTOTVALLT,nTOTMEDR,nTOTMD,nTOTVALT
+
+	Store 0 To nQtdMd,nTOTKM,nGTOTKM,nGTOTVALLT,nGTOTMEDR,nGTOTMD,nGTOTVALT
+	Store 0 To nGQtdMd,nDTOTKM,nDTOTVALLT,nDTOTMEDR,nDTOTMD,nDTOTVALT,nDTotDes
+	Store 0 To nDQtdMd,nMEDPAD,nTotMedE,nDTotMedE,nTotalOper,nAcimaPad
+	Store 0 To nDentroPad,nGerOper,nGerPad
+
+	Pergunte(cPERG,.F.)
+	If _cMV_PAR01 == 1
+		If lST6Tipo
+			Cabec1 := ''//'Veiculo           Modelo                     Ano Veic.        Combustível  ___ Rodado    __ Abast.          Vlr.Abast.  Média Realizada (___/_) Média Esperada (___/_) %Desempenho'
+		Else
+			Cabec1 := STR0061 //"Veiculo           Modelo                     Ano Veic.        Combustível  KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada  %Desempenho"
+		EndIf
+	ElseIf _cMV_PAR01 == 2
+		Cabec1 := STR0059 //"                            Média Padrão       Média Realizada      %Desvio    Classificação"
+	ElseIf _cMV_PAR01 == 3
+		If lST6Tipo
+			Cabec1 := STR0060				 //"Veiculo           Modelo                   Ano Veic.        Combustível        Utiliizado     Abastecido          Vlr.Abast.              Média Realiz.          Média Esper."
+		Else
+			Cabec1 := STR0062 //"Veiculo           Modelo                     Ano Veic.        Combustível  KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada"
+		EndIf
+	EndIf
+
+	nTipo := IIf(aReturn[4]==1,15,18)
+
+	//----------------------------------------------------------------
+	//| Monta os Cabecalhos                                          |
+	//----------------------------------------------------------------
+	/*
+	IF (Mv_Par05 == 1) .OR. (Mv_par05 == 3)
+	If lST6Tipo
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+
+	****************************************************************************************************************************************************************************
+	xx - xxxxxxxxxxx
+	Veiculo           Modelo                     Ano Veic.        Combustível  ___ Utili.       __ Abast.          Vlr.Abast.  Média Realizada (___/__)   Média Esperada (___/__)  %Desempenho
+	-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	xxxxxxxx          xxxxxxxxxxxxxxxxxxxxxxxxx  9999             xxx          999,999,999      99,999.999 99,999,999,999.999       99,999.999                999,999.99            999,999.99
+	Else
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+	Veiculo           Modelo                     Ano Veic.        Combustível    KM Rodado    Litros Abast.          Vlr.Abast.  Média Realizada    Média Esperada  %Desempenho
+	****************************************************************************************************************************************************************************
+	xx - xxxxxxxxxxx
+	xxxxxxxx          xxxxxxxxxxxxxxxxxxxxxxxxx  9999             xxx          999,999,999       99,999.999  99,999,999,999.999       99,999.999        999,999.99   999,999.99
+
+	EndIf
+	Else
+
+	If Mv_Par05 == 2
+
+	1         2         3         4         5         6         7         8         9         0         1
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	****************************************************************************************************************************************************************************
+	Média Padrão       Média Realizada      %Desvio    Classificação
+	****************************************************************************************************************************************************************************
+	If lST6Tipo
+	xx - xxxxxxxxxxx
+	Else
+	xxxxxxxxxxxxxxxx              999,999.99            999,999.99
+	EndIf
+	Total: (___/__)               999,999.99            999,999.99      999.99%    XXXXXXXX
+	/*/
+
+	//------------------------------------------------------------
+	//| Define o indice de leitura do arquivo                    |
+	//------------------------------------------------------------
+
+	DbSelectArea(cTRBB)
+	ProcRegua(RecCount())
+	DbGoTop()
+
+	cTipCont := " "
+	cUM      := " "
+	cTpForm  := " "
+
+	If _cMV_PAR01 == 1
+
+		While !Eof()
+
+			dbSelectArea( "TQN" )
+			dbSetOrder( 01 )
+			TQN->( dbFilter() ) //Retorna a expressão do filtro ativo na área de trabalho corrente, da tabela TQN.
+			If !dbSeek( (cTRBB)->CODFL + (cTRBB)->CODBEM + DTOS((cTRBB)->DATABA) + (cTRBB)->HRAABA )
+				DbSelectArea( cTRBB )
+				dbSkip()
+				Loop
+			EndIf
+
+			Store 0 To nTOTKM,nTOTVALLT,nTOTMEDR,nTOTMD,nTOTVALT,nQtdMd
+			NgSomaLi(58)
+			If cCODFL <> (cTRBB)->CODFL
+				@ Li,000 PSay STR0044 //"Filial:"
+				@ Li,009 PSay (cTRBB)->CODFL
+				@ Li,023 PSay (cTRBB)->NMFL
+				Store 0 To nDTKMFL,nDTVALLTFL,nDTMEDRFL,nDTMDFL,nDTVALTFL,nDQtdMdFL
+				If !lST6Tipo
+					NgSomaLi(58)
+					NgSomaLi(58)
+				EndIf
+			EndIf
+
+			IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+			If lST6Tipo
+				If (Li > 58) .Or. (cCODFL <> (cTRBB)->CODFL) //(cTipCont <> (cTRBB)->TPCONT) .Or.
+					cTipCont := (cTRBB)->TPCONT
+					cUM      := (cTRBB)->UM
+					cUndMed  := If(Empty((cTRBB)->UNDMED),"",'('+AllTrim((cTRBB)->UNDMED)+')')
+					cTpForm  := (cTRBB)->TPFORM
+					NgSomaLi(58)
+					//'Veiculo           Modelo                     Ano Veic.  ___ Rodado    __ Abast.          Vlr.Abast.  Média Realizada (___/_)  Média Esperada (___/_) %Desempenho'
+					cCabec935 := STR0063+Space(6-Len(AllTrim(cTipCont)))+AllTrim(cTipCont)+STR0064+Space(10-Len(AllTrim(cUM)))+AllTrim(cUM)+STR0065+; //"Veiculo           Modelo                   Ano Veic. "###" Utili."###" Abast.          Vlr.Abast."
+					Space(9-Len(cUndMed))+STR0066+cUndMed+Space(10-Len(cUndMed))+STR0067+cUndMed+STR0068 //"Média Realiz."###"Média Esper."###"   %Desempenho"
+					NgSomaLi(58)
+					@ Li,000 Psay cCabec935
+					NgSomaLi(58)
+					@ Li,000 Psay Replicate("_",220)
+					NgSomaLi(58)
+				EndIf
+			EndIf
+			@ Li,000 PSay (cTRBB)->VEIC   Picture "@!"
+			@ Li,018 PSay (cTRBB)->MODELO Picture "@!"
+			@ Li,046 PSay (cTRBB)->ANO    Picture "@!"
+			@ Li,053 Psay (cTRBB)->COMBUS Picture "@!"
+
+			MNR935T1((cTRBB)->KMROD,(cTRBB)->LITROS,(cTRBB)->VALLT,(cTRBB)->MEDIAR,;
+			(cTRBB)->MEDESP,(cTRBB)->DESEMP)
+			//total por geral sintetico
+			nDTOTKM    += (cTRBB)->KMROD
+			nDTOTVALLT += (cTRBB)->LITROS
+			nDTOTMEDR  += (cTRBB)->MEDIAR
+			nDTOTMD    += (cTRBB)->MEDESP
+			nDTOTVALT  += (cTRBB)->VALLT
+			nDQtdMd++
+			//total por filial
+			nDTKMFL    += (cTRBB)->KMROD
+			nDTVALLTFL += (cTRBB)->LITROS
+			nDTMEDRFL  += (cTRBB)->MEDIAR
+			nDTMDFL    += (cTRBB)->MEDESP
+			nDTVALTFL  += (cTRBB)->VALLT
+			nDQtdMdFL++
+
+			cCODFL := (cTRBB)->CODFL
+			cNOMFL := (cTRBB)->NMFL
+			lPrim := .F.
+			DbSelectArea(cTRBB)
+			DbSkip()
+
+			If cCODFL <> (cTRBB)->CODFL
+				If !lPrim
+					//NgSomaLi(58)
+					NgSomaLi(58)
+					@ Li,000 Psay STR0101 //"Total por filial: "
+					@ Li,066 Psay nDTKMFL    Picture "@E 999,999,999"
+					@ Li,084 Psay nDTVALLTFL  Picture "@E 999,999.999"
+					@ Li,096 Psay nDTVALTFL  Picture "@E 99,999,999,999.999"
+					If lST6Tipo
+						If cTpForm == "2"
+							@ Li,126 PSay nDTVALLTFL / nDTKMFL Picture "@E 999,999.99"
+						Else
+							@ Li,126 PSay nDTKMFL / nDTVALLTFL Picture "@E 999,999.99"
+						EndIf
+					Else
+						If cTpForm == "2"
+							@ Li,126 PSay nDTVALLTFL / nDTKMFL Picture "@E 999,999.99"
+						Else
+							@ Li,126 PSay nDTKMFL / nDTVALLTFL Picture "@E 999,999.99"
+						EndIf
+					EndIf
+					NgSomaLi(58)
+				EndIf
+			EndIf
+		End
+		NgSomaLi(58)
+		@ Li,000 Psay STR0046     //"Total Geral:"
+		@ Li,066 Psay nDTOTKM    Picture "@E 999,999,999"
+		@ Li,084 Psay nDTOTVALLT  Picture "@E 999,999.999"
+		@ Li,096 Psay nDTOTVALT  Picture "@E 99,999,999,999.999"
+		If lST6Tipo
+			@ Li,126 PSay nDTOTKM / nDTOTVALLT Picture "@E 999,999.99"
+		Else
+			@ Li,126 PSay nDTOTKM / nDTOTVALLT Picture "@E 999,999.99"
+		EndIf
+
+	ElseIf _cMV_PAR01 == 2
+		While !Eof()
+
+			dbSelectArea( "TQN" )
+			dbSetOrder( 01 )
+			TQN->( dbFilter() ) //Retorna a expressão do filtro ativo na área de trabalho corrente, da tabela TQN.
+			If !dbSeek( (cTRBB)->CODFL + (cTRBB)->CODBEM + DTOS((cTRBB)->DATABA) + (cTRBB)->HRAABA )
+				DbSelectArea( cTRBB )
+				dbSkip()
+				Loop
+			EndIf
+
+			Store 0 To nTOTKM,nTOTVALLT,nTOTMEDR,nTOTMD,nTOTVALT,nQtdMd
+			cCODFL := (cTRBB)->CODFL
+			cNOMFL := (cTRBB)->NMFL
+			NgSomaLi(58)
+			If !lPrim
+				NgSomaLi(58)
+			EndIf
+			@ Li,000 PSay STR0044 //"Filial:"
+			@ Li,009 PSay (cTRBB)->CODFL
+			@ Li,023 PSay (cTRBB)->NMFL
+			If !lPrim
+				NgSomaLi(58)
+			EndIf
+			lPrim := .F.
+			While !Eof() .And. (cTRBB)->CODFL = cCODFL
+				IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+
+				If lST6Tipo
+					cTipCont := (cTRBB)->TPCONT
+					cUM      := (cTRBB)->UM
+					cUndMed  := If(Empty((cTRBB)->UNDMED),"",'('+AllTrim((cTRBB)->UNDMED)+')')
+					cTpForm  := (cTRBB)->TPFORM
+				EndIf
+
+				nTOTKM    += (cTRBB)->KMROD
+				nTOTVALLT += (cTRBB)->LITROS
+				nTOTMEDR  += (cTRBB)->MEDIAR
+				nTOTMD    += (cTRBB)->MEDESP
+				nTOTVALT  += (cTRBB)->VALLT
+				nQtdMd++
+
+				nPos2 := ASCAN(aFiliais,{|x| x[2]+x[3] = (cTRBB)->CODFL+(cTRBB)->VEIC})
+				If nPos2 > 0
+					aFiliais[nPos2][1] += 1
+					aFiliais[nPos2][4] += (cTRBB)->KMROD
+					aFiliais[nPos2][5] += (cTRBB)->LITROS
+				Else
+					Aadd(aFiliais,{1,(cTRBB)->CODFL,(cTRBB)->VEIC,(cTRBB)->KMROD,(cTRBB)->LITROS,(cTRBB)->MEDESP})
+				Endif
+
+				DbSelectArea(cTRBB)
+				DbSkip()
+
+				If lST6Tipo
+					If (cTipCont <> (cTRBB)->TPCONT) .Or. (Li > 58) .Or. (cUM <> (cTRBB)->UM) .Or. (cTRBB)->CODFL <> cCODFL
+
+						NgSomaLi(58)
+						NgSomaLi(58)
+
+						@ Li,005 Psay SubStr((STR0101),1,16)+cUndMed  //"Total por Filial:"
+
+						DbSelectArea("TSL")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TSL")+cCODFL)
+							nMEDPAD :=  TSL->TSL_MEDIA
+						EndIf
+						@ Li,030 PSay nMEDPAD Picture "@E 999,999.99"
+						If cTpForm == "2"
+							nMEDREAL := round((nTOTVALLT / nTOTKM),2)
+							@ Li,047 PSay nMEDREAL Picture "@E 999,999.99"
+						Else
+							nMEDREAL := round((nTOTKM / nTOTVALLT),2)
+							@ Li,047 PSay nMEDREAL Picture "@E 999,999.99"
+						EndIf
+						nDESVIO := ((nMEDREAL / nMEDPAD)-1)*100
+						@ Li,065 PSay nDESVIO Picture "@E 999,999.99%"
+						If nDESVIO <= 15 .AND. nDESVIO >= -15
+							@ Li,079 PSay STR0047 //"VERDE"
+						Else
+							@ Li,079 PSay STR0048 //"VERMELHO"
+						EndIf
+						If cCODFL <> (cTRBB)->CODFL
+							nTFTOTKM += nMEDPAD
+							nQuantFil += 1
+						EndIf
+						nQuant += 1
+						nTFTOTVALLT += nMEDREAL
+
+						nTOTKM    := 0
+						nTOTVALLT := 0
+						nTOTMEDR  := 0
+						nTOTMD    := 0
+						nTOTVALT  := 0
+						nQtdMd    := 0
+
+					EndIf
+				EndIf
+
+				DbSelectArea(cTRBB)
+
+			End
+
+			If !lST6Tipo
+				NgSomaLi(58)
+				NgSomaLi(58)
+				@ Li,005 Psay STR0045   //"Totais:"
+
+				DbSelectArea("TSL")
+				DbSetOrder(1)
+				If DbSeek(xFilial("TSL")+cCODFL)
+					nMEDPAD :=  TSL->TSL_MEDIA
+				EndIf
+				@ Li,030 PSay nMEDPAD Picture "@E 999,999.99"
+
+				nMEDREAL := round((nTOTKM / nTOTVALLT),2)
+				@ Li,047 PSay nMEDREAL Picture "@E 999,999.99"
+				nDESVIO := ((nMEDREAL / nMEDPAD)-1)*100
+				@ Li,065 PSay nDESVIO Picture "@E 999,999.99%"
+				If nDESVIO <= 15 .AND. nDESVIO >= -15
+					@ Li,079 PSay STR0047 //"VERDE"
+				Else
+					@ Li,079 PSay STR0048 //"VERMELHO"
+				EndIf
+
+				DbSelectArea(cTRBB)
+			EndIf
+
+		End
+
+		If cCODFL <> (cTRBB)->CODFL .And. !lPrim
+			NgSomaLi(58)
+			NgSomaLi(58)
+			nDESVIO := 0
+			nMediaP := nTFTOTKM / nQuantFil
+			nMediaR := nTFTOTVALLT / nQuant
+			@ Li,005 Psay STR0046//"Total Geral:"
+			@ Li,030 PSay nMediaP Picture "@E 999,999.99"
+			@ Li,047 Psay nMediaR  Picture "@E 999,999.99"
+
+			nDESVIO := ((nMediaR / nMediaP)-1)*100
+			@ Li,065 PSay nDESVIO Picture "@E 999,999.99%"
+			If nDESVIO <= 15 .AND. nDESVIO >= -15
+				@ Li,079 PSay STR0047 //"VERDE"
+			Else
+				@ Li,079 PSay STR0048 //"VERMELHO"
+			EndIf
+
+			nTFTOTKM := 0
+			nTFTOTVALLT := 0
+			nTFTOTVALT := 0
+			nTFTOTMD := 0
+			nTFQtdMd := 0
+		EndIf
+
+		NgSomaLi(58)
+		@ Li,000 PSAY Replicate("_",66)
+		NgSomaLi(58)
+		@ Li,000 PSAY STR0049 //"Critérios de Avaliação:"
+		NgSomaLi(58)
+		NgSomaLi(58)
+		@ Li,000 PSAY STR0050       //"VERDE = Atingiu a meta, ficando 15% acima ou abaixo."
+		NgSomaLi(58)
+		@ Li,000 PSAY STR0051       //"VERMELHO = Desvio superior a 15% acima ou abaixo."
+		NgSomaLi(58)
+		@ Li,000 PSAY Replicate("_",66)
+		Cabec1 := STR0071 //"                                                 Filial                           Frotas Abastecidas   Dentro Padrão   % Dentro Padrão"
+		Cabec(titulo,Cabec1," ",nomeprog,tamanho,nTipo)
+
+		AFINAL := {}
+		For nI := 1 to Len(aFiliais)
+			nMediaCon := Round(((aFiliais[nI][4]/aFiliais[nI][5])/aFiliais[nI][6])*100,3)
+			nPadrao := 0
+			nAbaixo := 0
+			If nMediaCon >= 95 .AND. nMediaCon <= 130
+				nPadrao := 1
+			Else
+				nAbaixo := 1
+			Endif
+
+			nPos := ASCAN(AFINAL,{|x| x[1] = aFiliais[nI][2]})
+			If nPos == 0
+				Aadd(AFINAL,{aFiliais[nI][2],1,nPadrao,nAbaixo})
+			Else
+				AFINAL[nPos][2] += 1
+				AFINAL[nPos][3] += nPadrao
+				AFINAL[nPos][4] += nAbaixo
+			Endif
+		Next
+
+		NgSomaLi(58)
+		AFINAL := aSort( AFINAL,,, { |x,y| x[1] < y[1] } )
+		For nI := 1 to Len(AFINAL)
+			NgSomaLi(58)
+			vReto := NGSEEKSM0(SM0->M0_CODIGO+AFINAL[nI][1],{"M0_FILIAL"})
+			@ Li,049 Psay AFINAL[nI][1] + ' - ' + If(!Empty(vReto),vReto[1],'  ')
+			@ Li,082 Psay PADL(Transform(AFINAL[nI][2],"@E 999999999999999999"),18)
+			@ Li,103 Psay PADL(Transform(AFINAL[nI][3],"@E 9999999999999"),13)
+			nPerce := Round(((AFINAL[nI][3]/AFINAL[nI][2]) * 100), 2)
+			@ Li,127 Psay nPerce Picture "@E 999.99"+'%'
+			nTotalOper += AFINAL[nI][2]
+			nDentroPad += AFINAL[nI][3]
+			nAcimaPad  += AFINAL[nI][4]
+		Next
+
+		NgSomaLi(58)
+		NgSomaLi(58)
+		@ Li,000 Psay STR0046 //"Total Geral:"
+		@ Li,082 Psay PADL(Transform(nTotalOper,"@E 999999999999999999"),18)
+		@ Li,103 Psay PADL(Transform(nDentroPad,"@E 9999999999999"),13)
+		nPerce := Round(((nDentroPad/nTotalOper) *100), 2)
+		@ Li,127 Psay nPerce Picture "@E 999.99"+'%'
+
+	Elseif _cMV_PAR01 == 3
+
+		nDTOTKM    := 0
+		nDTOTVALLT := 0
+		nDTOTMEDR  := 0
+		nDTOTMD    := 0
+		nDTOTVALT  := 0
+		nDQtdMd    := 0
+		While !Eof()
+
+			dbSelectArea( "TQN" )
+			dbSetOrder( 01 )
+			TQN->( dbFilter() ) //Retorna a expressão do filtro ativo na área de trabalho corrente, da tabela TQN.
+			If !dbSeek( (cTRBB)->CODFL + (cTRBB)->CODBEM + DTOS((cTRBB)->DATABA) + (cTRBB)->HRAABA )
+				DbSelectArea( cTRBB )
+				dbSkip()
+				Loop
+			EndIf
+
+			cCODFL := (cTRBB)->CODFL
+			cNOMFL := (cTRBB)->NMFL
+			NgSomaLi(58)
+			@ Li,000 PSay STR0044 //"Filial:"
+			@ Li,009 PSay (cTRBB)->CODFL
+			@ Li,023 PSay (cTRBB)->NMFL
+			NgSomaLi(58)
+			@ Li,000 Psay Replicate("_",220)
+			NgSomaLi(58)
+			lPrim := .F.
+			Store 0 To nGTOTVALLT,nGTOTMEDR,nGTOTMD,nGTOTVALT,nGQtdMd
+			While !Eof() .And. (cTRBB)->CODFL = cCODFL
+
+				cVeiculo := (cTRBB)->VEIC
+				cModelo  := (cTRBB)->MODELO
+				cAno     := (cTRBB)->ANO
+				cMEDES   := (cTRBB)->MEDESP
+				If lST6Tipo
+					cTpCont := (cTRBB)->TPCONT
+					cUm := (cTRBB)->UM
+					cUndMed := (cTRBB)->UNDMED
+					cTpForm := (cTRBB)->TPFORM
+				EndIf
+				Store 0 To nTOTKM,nTOTVALLT,nTOTMEDR,nTOTMD,nTOTVALT,nQtdMd
+
+				While !Eof() .And. (cTRBB)->CODFL = cCODFL .And. (cTRBB)->VEIC = cVeiculo
+					IncProc(STR0011,STR0012) //"Aguarde..."###"Processando Registros..."
+					nTOTKM    += (cTRBB)->KMROD
+					nTOTVALLT += (cTRBB)->LITROS
+					nTOTMEDR  += (cTRBB)->MEDIAR
+					nTOTMD    += (cTRBB)->MEDESP
+					nTOTVALT  += (cTRBB)->VALLT
+					nQtdMd++
+					Dbskip()
+				End
+
+				NgSomaLi(58)
+				@ Li,000 PSay cVeiculo
+				@ Li,018 PSay cModelo
+				@ Li,048 PSay cAno
+				@ Li,068 Psay (cTRBB)->COMBUS Picture "@!"
+
+				If lST6Tipo
+					@ Li,080 PSay nTOTKM  Picture "@E 999,999,999"
+					@ Li,093 PSay cTpCont
+					@ Li,096 PSay nTOTVALLT Picture "@E 999,999.999"
+					@ Li,110 PSay nTOTVALT  Picture "@E 99,999,999,999.999"
+					If cTpForm == "2"
+						@ Li,151 PSay nTOTVALLT / nTOTKM Picture "@E 999,999.99"
+					Else
+						@ Li,151 PSay nTOTKM / nTOTVALLT Picture "@E 999,999.99"
+					EndIf
+					@ Li,163 PSay cUndMed
+					@ Li,172 PSay cMEDES Picture "@E 999,999.99"
+					@ Li,185 PSay cUndMed
+				Else
+					MNR935T1(nTOTKM,nTOTVALLT,nTOTVALT,nTOTKM / nTOTVALLT,cMEDES)
+				EndIf
+				//Total por Filial sintetico
+				nGTOTKM    += nTOTKM
+				nGTOTVALLT += nTOTVALLT
+				nGTOTMEDR  += nTOTMEDR
+				nGTOTMD    += nTOTMD
+				nGTOTVALT  += nTOTVALT
+				nGQtdMd    += nQtdMd
+
+				//Total Geral sintetico
+				nDTOTKM    += nTOTKM
+				nDTOTVALLT += nTOTVALLT
+				nDTOTMEDR  += nTOTVALT
+				nDTOTMD    += nTOTMD
+				nDTOTVALT  += nTOTVALT
+				nDQtdMd    += nQtdMd
+
+				If cCODFL <> (cTRBB)->CODFL .And. !lPrim
+					NgSomaLi(58)
+					@ Li,000 Psay STR0101//"Total por Filial:"
+					If lST6Tipo
+						@ Li,080 Psay nGTOTKM    Picture "@E 999,999,999"
+						@ Li,093 PSay '---'
+						@ Li,096 Psay nGTOTVALLT  Picture "@E 999,999.999"
+						@ Li,110 Psay nGTOTVALT  Picture "@E 99,999,999,999.999"
+						If cTpForm == "2"
+							@ Li,151 PSay nGTOTVALLT / nGTOTKM Picture "@E 999,999.99"
+						Else
+							@ Li,151 PSay nGTOTKM / nGTOTVALLT Picture "@E 999,999.99"
+						EndIf
+					Else
+						MNR935T1(nGTOTKM,nGTOTVALLT,nGTOTVALT,nGTOTKM / nGTOTVALLT,nGTOTKM / nDQtdMd)
+					EndIf
+					Store 0 To nGTOTKM,nGTOTVALLT,nGTOTMEDR,nGTOTMD,nGTOTVALT,nGQtdMd
+				EndIf
+
+			End
+			NgSomaLi(58)
+		End
+
+		If !lST6Tipo
+			NgSomaLi(58)
+			@ Li,000 Psay STR0046     //"Total Geral:"
+			MNR935T1(nDTOTKM,nDTOTVALLT,nDTOTMEDR,nDTOTKM / nDTOTVALLT,nDTOTMD / nDQtdMd)
+		Else
+			@ Li,000 Psay STR0046     //"Total Geral:"
+			@ Li,080 Psay nDTOTKM    Picture "@E 999,999,999"
+			@ Li,093 PSay '---'
+			@ Li,096 Psay nDTOTVALLT  Picture "@E 999,999.999"
+			@ Li,110 Psay nDTOTMEDR  Picture "@E 99,999,999,999.999"
+			@ Li,151 PSay nDTOTKM / nDTOTVALLT Picture "@E 999,999.99"
+		EndIf
+
+	Endif
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+
+	//----------------------------------------------------------------
+	//| Devolve a condicao original do arquivo principal             |
+	//----------------------------------------------------------------
+	RetIndex('TQN')
+
+	Set Filter To
+
+	Set device to Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+	MS_FLUSH()
+
+Return NIL
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935T1
+Impressão de valores
+@author Inacio Luiz Kolling
+@since 27/05/2008
+@version undefined
+@param nKMROD, numeric
+@param nLITROS, numeric
+@param nVALLT, numeric
+@param nMEDIAR, numeric
+@param nMEDESP, numeric
+@param nDESEMP, numeric
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNR935T1(nKMROD,nLITROS,nVALLT,nMEDIAR,nMEDESP,nDESEMP)
+	If lST6Tipo
+		@ Li,066 PSay nKMROD  Picture "@E 999,999,999"
+		@ Li,084 PSay nLITROS Picture "@E 999,999.999"
+		@ Li,096 PSay nVALLT  Picture "@E 99,999,999,999.999"
+		@ Li,126 PSay nMEDIAR Picture "@E 999,999.99"
+		@ Li,148 PSay nMEDESP Picture "@E 999,999.99"
+		If nDESEMP <> Nil
+			@ Li,162 PSay nDESEMP Picture "@E 999,999.99"
+		Endif
+	Else
+		@ Li,066 PSay nKMROD  Picture "@E 999,999,999"
+		@ Li,084 PSay nLITROS Picture "@E 999,999.999"
+		@ Li,096 PSay nVALLT  Picture "@E 99,999,999,999.999"
+		@ Li,126 PSay nMEDIAR Picture "@E 999,999.99"
+	EndIf
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTMdComb
+Retorna a media do combustivel utilizado
+@author Felipe N. Welter
+@since 28/10/2008
+@version undefined
+@param cFrota, characters
+@param cComb, characters
+@param cFilialTQN, characters
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNTMdComb(cFrota, cComb, cFilialTQN)
+
+	Local aArea		:= GetArea()
+	Local nMedia	:= 0
+	Local cChaveTT8	:= ""
+	Local nOrder
+
+	If !(NGCADICBASE("TT8_CODBEM","A","TT8",.F.) .And. NGCADICBASE("TT8_CODCOM","A","TT8",.F.))
+		dbSelectArea("ST9")
+		dbSetOrder(01)
+		If dbSeek(xFilial("ST9",cFilialTQN)+cFrota)
+			nMedia := ST9->T9_MEDIA
+		EndIf
+	Else
+		cChaveTT8 := xFilial("TT8",cFilialTQN)+cFrota+"1"+cComb
+		nOrder    := 2
+
+		dbSelectArea("TT8")
+		DbSetOrder(nOrder)
+
+		If dbSeek(cChaveTT8)
+			nMedia := TT8->TT8_MEDIA
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return nMedia
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTUndCont
+Monta Unidade de media para Contador e Unidade
+@author Felipe N. Welter
+@since 30/10/2008
+@version undefined
+@param cTipo, characters
+@param cUnid, characters
+@param cTpUn, characters
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNTUndCont(cTipo,cUnid,cTpUn)
+
+	Local cT := If(Empty(cTipo),'---',cTipo)
+	Local cU := If(Empty(cUnid),'--',cUnid)
+	Local cTU := cTpUn
+	Local cRet := " "
+
+	If cTU == '1'
+		cRet := cT+'/'+cU
+	ElseIf cTU == '2'
+		cRet := cU+'/'+cT
+	EndIf
+
+Return cRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR935QUER
+Query utilizada tanto para MV_NGOPER = 1 quanto = 2
+@author Marcos Wagner Junior
+@since 27/01/2010
+@version undefined
+@param lOperacao, logical
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Static Function MNR935QUER(lOperacao)
+
+	If lST6Tipo
+		cQuery := "SELECT "
+		cQuery += "TQN.TQN_FILIAL, TQN.TQN_FROTA, ST9.T9_MEDIA, TQN.TQN_CODCOM, TQN.TQN_NABAST, TQN.TQN_PLACA, TQN.TQN_POSTO, TQN.TQN_LOJA, "
+		cQuery += "TQN.TQN_DTABAS, TQN.TQN_TANQUE, TQN.TQN_BOMBA, TQN.TQN_QUANT, TQN.TQN_VALUNI, TQN.TQN_VALTOT, TQN.TQN_HODOM, TQN.TQN_CODMOT, "
+		cQuery += "TQN.TQN_CCUSTO, TQN.TQN_HRABAS, TQM.TQM_UM, ST9.T9_TPCONTA, ST9.T9_CODBEM, ST9.T9_NOME, ST9.T9_PLACA, ST9.T9_ANOFAB, ST9.T9_CODFAMI, "
+		cQuery += "STP.TP_CODBEM, STP.TP_DTLEITU, STP.TP_ACUMCON, STP.TP_TIPOLAN, STP.TP_HORA "
+		cQuery += "FROM " + RetSQLName("STP") + " STP, " + RetSQLName("ST9") + " ST9, " + RetSQLName("TQN") + " TQN "
+		cQuery += "LEFT JOIN " + RetSQLName("TQM") + " TQM ON TQM.TQM_CODCOM = TQN.TQN_CODCOM "
+		cQuery += "   AND " + NGMODCOMP("TQN", "TQM")
+		cQuery += " WHERE "
+		If NGSX2MODO("ST9") == NGSX2MODO("TQN")
+			cQuery += " ST9.T9_FILIAL = TQN.TQN_FILIAL AND STP.TP_FILIAL = TQN.TQN_FILIAL AND "
+		Else
+			cQuery += " ST9.T9_FILIAL = '" + xFilial("ST9") + "' AND "
+		EndIf
+			cQuery += NGMODCOMP("TQN","TQM") + " AND "
+		If NGSX2MODO("TQN") == 	'E'//Filtra por filial
+			cQuery += "TQN.TQN_FILIAL >= '" + MV_PAR03 + "' AND TQN.TQN_FILIAL <= '" + MV_PAR04 + "' AND "
+		Else
+			cQuery += "TQN.TQN_FILIAL >= '" + xFilial("TQN") + "' AND "
+		EndIf
+		cQuery += "TQN.TQN_DTABAS >= '" + DTOS(MV_PAR01) + "' AND TQN.TQN_DTABAS <= '" + DTOS(MV_PAR02) + "' "
+		cQuery += "AND TQN.D_E_L_E_T_ <> '*' AND TQM.D_E_L_E_T_ <> '*' AND ST9.D_E_L_E_T_ <> '*' AND STP.D_E_L_E_T_ <> '*' "
+		cQuery += "AND TQN.TQN_DTABAS = STP.TP_DTLEITU "
+		cQuery += "AND TQN.TQN_HRABAS = STP.TP_HORA "
+		cQuery += "AND ST9.T9_TEMCONT = 'S' "
+		cQuery += "AND ST9.T9_CODBEM = TQN.TQN_FROTA "
+		cQuery += "AND TQN.TQN_FROTA = STP.TP_CODBEM "
+		If lOperacao
+			cQuery += "AND ST9.T9_CODBEM >= '" + MV_PAR13 + "' AND ST9.T9_CODBEM <= '" + MV_PAR14 + "' "//Filtra por código do bem
+			cQuery += "AND TQN.TQN_CCUSTO >= '" + MV_PAR07 + "' AND TQN.TQN_CCUSTO <= '" + MV_PAR08 + "' "//Filtra por centro de custo
+			cQuery += "AND ST9.T9_CENTRAB >= '" + MV_PAR09 + "' AND ST9.T9_CENTRAB <= '" + MV_PAR10 + "' "//Filtra por centro de trabalho
+			cQuery += "AND ST9.T9_CODFAMI >= '" + MV_PAR11 + "' AND ST9.T9_CODFAMI <= '" + MV_PAR12 + "' "//Filtra por família
+			If !Empty(MV_PAR15)
+				cQuery += " AND TQM.TQM_CODCOM = '" + MV_PAR15 + "' "
+			EndIf
+		Else
+			cQuery += "AND ST9.T9_CODBEM >= '" + MV_PAR11 + "' AND ST9.T9_CODBEM <= '" + MV_PAR12 + "' "//Filtra por código do bem
+			cQuery += "AND TQN.TQN_CCUSTO >= '" + MV_PAR05 + "' AND TQN.TQN_CCUSTO <= '" + MV_PAR06 + "' "//Filtra por centro de custo
+			cQuery += "AND ST9.T9_CENTRAB >= '" + MV_PAR07 + "' AND ST9.T9_CENTRAB <= '" + MV_PAR08 + "' "//Filtra por centro de trabalho
+			cQuery += "AND ST9.T9_CODFAMI >= '" + MV_PAR09 + "' AND ST9.T9_CODFAMI <= '" + MV_PAR10 + "' "//Filtra por família
+			If !Empty(MV_PAR13)
+				cQuery += " AND TQM.TQM_CODCOM = '" + MV_PAR13 + "' "
+			EndIf
+		EndIf
+		cQuery += "GROUP BY TQN.TQN_FILIAL, ST9.T9_TPCONTA, TQN.TQN_CODCOM, TQM.TQM_UM, TQN.TQN_FROTA, TQN.TQN_PLACA, TQN.TQN_DTABAS, TQN.TQN_NABAST, "
+		cQuery += "TQN.TQN_POSTO, TQN.TQN_LOJA, TQN.TQN_TANQUE, TQN.TQN_BOMBA, TQN.TQN_QUANT, TQN.TQN_VALUNI, TQN.TQN_VALTOT, TQN.TQN_HODOM, "
+		cQuery += "TQN.TQN_CODMOT, TQN.TQN_CCUSTO, TQN.TQN_HRABAS, ST9.T9_TPCONTA, TQM.TQM_UM, ST9.T9_MEDIA, ST9.T9_CODBEM, ST9.T9_NOME, "
+		cQuery += "ST9.T9_PLACA, ST9.T9_ANOFAB, ST9.T9_CODFAMI, STP.TP_CODBEM, STP.TP_DTLEITU, STP.TP_ACUMCON, STP.TP_TIPOLAN, STP.TP_HORA "
+		cQuery += "ORDER BY TQN.TQN_FILIAL, TQN.TQN_FROTA, ST9.T9_TPCONTA, TQN.TQN_DTABAS, TQN.TQN_HRABAS, TQN.TQN_CODCOM "
+	Else
+		cQuery := " SELECT * "
+		cQuery += " FROM " + RetSQLName("TQN")+" TQN, " + RetSQLName("STP") + " STP, " + RetSQLName("ST9")+" ST9 WHERE"
+		If NGSX2MODO("ST9") == NGSX2MODO("TQN")
+			cQuery += " ST9.T9_FILIAL = TQN.TQN_FILIAL AND STP.TP_FILIAL = TQN.TQN_FILIAL AND "
+		Else
+			cQuery += " ST9.T9_FILIAL = '" + xFilial("ST9") + "' AND "
+		EndIf
+			cQuery += NGMODCOMP("TQN","TQM") + " AND "
+		If NGSX2MODO("TQN") == 	'E'
+			cQuery += "TQN.TQN_FILIAL >= '" + MV_PAR03 + "' AND TQN.TQN_FILIAL <= '" + MV_PAR04 + "'  AND "
+		Else
+			cQuery += "TQN.TQN_FILIAL >= '" + xFilial("TQN") + "' AND "
+		EndIf
+		cQuery += " AND TQN.TQN_DTABAS = STP.TP_DTLEITU"
+		cQuery += " AND TQN.TQN_HRABAS = STP.TP_HORA"
+		cQuery += " AND ST9.D_E_L_E_T_ <> '*'"
+		cQuery += " AND ST9.T9_TEMCONT = 'S'"
+		cQuery += " AND TQN.TQN_FROTA = ST9.T9_CODBEM"
+		cQuery += " AND TQN.TQN_FROTA = STP.TP_CODBEM"
+		If lOperacao
+			cQuery += " AND ST9.T9_CODBEM >= '" + MV_PAR13 + "' AND ST9.T9_CODBEM <= '" + MV_PAR14 + "' "//Filtra por codigo do bem
+			cQuery += " AND TQN.TQN_CCUSTO >= '" + MV_PAR07 + "' AND TQN.TQN_CCUSTO <= '" + MV_PAR08 + "' "//Filtra por centro de custo
+			cQuery += " AND ST9.T9_CENTRAB >= '" + MV_PAR09 + "' AND ST9.T9_CENTRAB <= '" + MV_PAR10 + "' "//Filtra por centro de trabalho
+			cQuery += " AND ST9.T9_CODFAMI >= '" + MV_PAR11 + "' AND ST9.T9_CODFAMI <= '" + MV_PAR12 + "' "//Filtra por familia
+			If !Empty(MV_PAR15)
+				cQuery += " AND TQM.TQM_CODCOM = '" + MV_PAR15 + "' "
+			EndIf
+		Else
+			cQuery += " AND ST9.T9_CODBEM >= '" + MV_PAR11 + "' AND ST9.T9_CODBEM <= '" + MV_PAR12 + "' "//Filtra por codigo do bem
+			cQuery += " AND TQN.TQN_CCUSTO >= '" + MV_PAR05 + "' AND TQN.TQN_CCUSTO <= '" + MV_PAR06 + "' "//Filtra por centro de custo
+			cQuery += " AND ST9.T9_CENTRAB >= '" + MV_PAR07 + "' AND ST9.T9_CENTRAB <= '" + MV_PAR08 + "' "//Filtra por centro de trabalho
+			cQuery += " AND ST9.T9_CODFAMI >= '" + MV_PAR09 + "' AND ST9.T9_CODFAMI <= '" + MV_PAR10 + "' "//Filtra por familia
+			If !Empty(MV_PAR13)
+				cQuery += " AND TQM.TQM_CODCOM = '" + MV_PAR13 + "' "
+			EndIf
+		EndIf
+		cQuery += " ORDER BY TQN.TQN_FILIAL, TQN.TQN_FROTA, TQN.TQN_DTABAS, TQN.TQN_HRABAS, TQN.TQN_CODCOM "
+	EndIf
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	DbSelectArea(cAliasQry)
+	DbGoTop()
+	ProcRegua(LastRec())
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR935FL
+Funcao para buscar a filial
+@author Rodrigo Soledade
+@since 23/09/2011
+@version undefined
+@param nOpc, numeric
+@type function
+@obs Uso MNTR935
+/*/
+//---------------------------------------------------------------------
+Function MNTR935FL(nOpc)
+
+	If nOpc == 1 .And. Empty(Mv_Par03)
+		Return .T.
+	Else
+		If nOpc == 1
+			lRet := IIf(Empty(Mv_Par03),.t.,ExistCpo('SM0',SM0->M0_CODIGO+Mv_Par03))
+			If !lRet
+				Return .F.
+			EndIf
+		EndIf
+
+		If nOpc == 2
+			If Mv_Par04 == Replicate("Z",Len(Mv_Par04))
+				Return .T.
+			EndIf
+			lRet := IIF(ATECODIGO('SM0',SM0->M0_CODIGO+Mv_Par03,SM0->M0_CODIGO+Mv_Par04,02),.T.,.F.)
+			If !lRet
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.

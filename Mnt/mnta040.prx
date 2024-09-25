@@ -1,0 +1,516 @@
+#INCLUDE "MNTA040.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA040
+Programa de atualizacao de Servicos
+
+@author Wexlei Silveira
+@since 04/01/2018
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA040()
+
+	Local oBrowse
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 35, 95 )
+
+		Private lTLTTIPINS := .F. //ESTA VARIAVEL NAO PODE SER DELETADA, POIS FAZ PARTE DO
+								//X3_INIBRW USADO NO MNTA400 E EM VµRIOS PROGRAMAS CONSULTAS,
+								//A MESMA INDICA SE É USADO ARQUIVO DA BASE (STL OU STT)PARA
+								//MOSTRAR NO BROWSE OU ARQUIVO AUXILLIAR (TRBL OU TRBT)
+
+		Private aRotina := {}
+
+		oBrowse := FWMBrowse():New()
+		oBrowse:SetAlias("ST4")// Alias da tabela utilizada
+		oBrowse:SetMenuDef("MNTA040")// Nome do fonte onde esta a função MenuDef
+		oBrowse:SetDescription(STR0006)// Descrição do browse //"Serviços"
+		oBrowse:Activate()
+
+	EndIf
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Opções de menu
+
+@author Wexlei Silveira
+@since 04/01/2018
+@return aRotina - Estrutura
+	[n,1] Nome a aparecer no cabecalho
+	[n,2] Nome da Rotina associada
+	[n,3] Reservado
+	[n,4] Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+		6 - Alteração sem inclusão de registros
+		7 - Cópia
+		8 - Imprimir
+	[n,5] Nivel de acesso
+	[n,6] Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+//Inicializa MenuDef com todas as opções
+Return FWMVCMenu( 'MNTA040' )
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Regras de Modelagem da gravacao
+
+@author Wexlei Silveira
+@since 04/01/2018
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	Local oStructST4 := FWFormStruct( 1, 'ST4', /*bAvalCampo*/,/*lViewUsado*/ ) // Cria a estrutura a ser usada no Modelo de Dados
+	Local oModel
+	Local lMVFROTA := IIf( FindFunction('MNTFrotas'), MNTFrotas(), GetNewPar('MV_NGMNTFR','N') == 'S' ) // Trabalha com utilizacao de Frotas
+	Local bCommit  := {|oModel| fCommit( oModel )  }
+	Local bPost    := {|oModel| fValidPos( oModel )  }
+
+	If !lMVFROTA
+		oStructST4:RemoveField("T4_BLOQPT")
+	EndIf
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New( 'MNTA040', /*bPre*/, bPost, bCommit, /*bCancel*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields( 'MNTA040_ST4', /*cOwner*/, oStructST4, /*bPreValidacao*/, /*bPosValidacao*/, /*bCarga*/ )
+
+	// Adiciona a descricao do Modelo de Dados
+	oModel:SetDescription( STR0006 )
+
+	// Adiciona a descricao do Componente do Modelo de Dados
+	oModel:GetModel('MNTA040_ST4' ):SetDescription( STR0021 ) // "Dados do Funcionário"
+
+Return oModel
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Regras de Interface com o Usuario
+
+@author Wexlei Silveira
+@since 04/01/2018
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	Local oModel   := FWLoadModel( 'MNTA040' ) // Cria um objeto de Modelo de Dados baseado no ModelDef do fonte informado
+	Local oStructST4 := FWFormStruct( 2, 'ST4' ) // Cria a estrutura a ser usada na View
+
+	Local lMVFROTA := IIf( FindFunction('MNTFrotas'), MNTFrotas(), GetNewPar('MV_NGMNTFR','N') == 'S' ) // Trabalha com utilizacao de Frotas
+
+	If !lMVFROTA
+		oStructST4:RemoveField("T4_BLOQPT")
+	EndIf
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+
+	// Define qual o Modelo de dados será utilizado
+	oView:SetModel( oModel )
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( 'VIEW_ST4', oStructST4, 'MNTA040_ST4' )
+
+	//Adiciona um titulo para o formulário
+	oView:EnableTitleView( 'VIEW_ST4' ,STR0006 ) // "Serviços"
+
+	// Relaciona o ID da View com o "box" para exibicao
+	oView:SetOwnerView( 'VIEW_ST4', /*cIDBox*/ )
+
+	//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn(oView,{{STR0017, 'MNT040QDO()'}},,fWhenBtn())
+
+Return oView
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fWhenBtn
+Indica em quais operações os botões devem aparecer no ações relacionadas
+
+@author Wexlei Silveira
+@since 08/01/2018
+@return Array - aWhenBtn
+/*/
+//------------------------------------------------------------------------------
+Static Function fWhenBtn()
+
+	Local aWhenBtn	 := {}
+	Local aOperation := {}
+
+	aAdd( aOperation , MODEL_OPERATION_VIEW	)
+	aAdd( aOperation , MODEL_OPERATION_UPDATE )
+	aAdd( aOperation , MODEL_OPERATION_INSERT )
+	aAdd( aOperation , MODEL_OPERATION_DELETE )
+
+	aAdd( aWhenBtn , { 'MNT040QDO'	, aOperation } )
+
+Return aWhenBtn
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT040QDO
+Monta a tela de visualizacao ou relacionamento do documento
+
+@sample MNT040QDO()
+
+@author Elisangela Costa
+@since 11/10/2004
+@return lRet Logico Retorna verdadeiro quando gravação correta
+/*/
+//---------------------------------------------------------------------
+Function MNT040QDO()
+
+	Local oDlgQdo
+	Local oRadio
+	Local nRadio := 1
+	Local lRet := .T.
+	Local lGrava
+
+	Define MsDialog oDlgQdo From 03.5,6 To 150,320 Title STR0010 Pixel  //"Atencao"
+	Define FONT oBold NAME "Courier New" SIZE 0, -13 BOLD
+	@ 0, 0 BITMAP oBmp RESNAME "PROJETOAP" oF oDlgQdo SIZE 35,250 NOBORDER WHEN .F. PIXEL
+
+	@ 05,040 Say OemToAnsi(STR0011) Size 117,7 Of oDlgQdo Pixel Font oBold //"O que deseja fazer ?"
+
+	@ 20,048 Radio oRadio Var nRadio Items STR0012,STR0013,STR0014 3d Size 105,10 Of oDlgQdo Pixel //"Relacionar um documento"#"Visualizar documento relacionado"#"Apagar documento relacionado"
+
+	Define sButton From 055,090 Type 1 Enable Of oDlgQdo Action (lGrava := .T.,oDlgQdo:End())
+	Define sButton From 055,120 Type 2 Enable Of oDlgQdo Action (lGrava := .F.,oDlgQdo:End())
+
+	Activate MsDialog oDlgQdo Centered
+
+	If !lGrava
+		lRet := .F.
+	Else
+		If nRadio == 1
+			If ConPad1( , , , "QDH",,,.f.)
+				M->T4_DOCTO  := QDH->QDH_DOCTO
+				M->T4_DOCFIL := QDH->QDH_FILIAL
+				lRet := .F.
+			EndIf
+		ElseIf nRadio == 2
+			If !MNT040VQDO()
+				lRet := .F.
+			EndIf
+		Else
+			M->T4_DOCTO  := " "
+			M->T4_DOCFIL := " "
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT040VQDO
+Visualiza um documento QDO
+
+@sample MNT040VQDO()
+
+@author Elisangela Costa
+@since 11/10/2004
+@return lRet Logico Retorna verdadeiro quando valores Banco de Conhecimento ativo
+/*/
+//---------------------------------------------------------------------
+Function MNT040VQDO()
+
+	Local lRet := .F.
+
+	If !Empty(M->T4_DOCTO)
+		If QDOVIEW( , M->T4_DOCTO ) //Visualiza documento Word...
+			lRet := .T.
+		Endif
+	Else
+		MsgInfo(STR0015,STR0016)//"Nao existe documento associado a esta demanda."#"NAO CONFORMIDADE"
+	Endif
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA040BLQ
+Consistencia antes de gravar
+
+@return Logico Retorna verdadeiro quando valores podem ser gravados
+
+@param lSaida Logico Indica se deve exibir mensagem de crítica de validacao
+
+@sample MNTA040BLQ()
+
+@author Inacio Luiz Kolling
+@since 20/10/2010
+/*/
+//---------------------------------------------------------------------
+Function MNTA040BLQ(lSaida)
+
+	Local vMenBlq := {.T.,Space(1)}
+
+	Default lSaida :=.T.
+
+	If  NGFUNCRPO("NGSERVBLOQ",.F.) .And. NGCADICBASE("T4_MSBLQL","D","ST4",.F.)
+		If  M->T4_MSBLQL = "1"
+			If NGIFDBSEEK("STF",M->T4_SERVICO+M->T4_CODAREA+M->T4_TIPOMAN,4)
+				While !Eof() .And. STF->TF_FILIAL = Xfilial("STF") .And. STF->TF_SERVICO = ST4->T4_SERVICO;
+					.And. STF->TF_CODAREA = ST4->T4_CODAREA .And. STF->TF_TIPO = ST4->T4_TIPOMAN
+					If STF->TF_ATIVO = "S"
+						vMenBlq := {.F.,STR0019+" "+STR0007+" "+STR0025+" "+STR0024}
+					Exit
+					EndIf
+					DbSkip()
+				End
+			EndIf
+
+			If vMenBlq[1]
+				nIndSB := NGRETORDEM("STJ","TJ_FILIAL+TJ_SERVICO+TJ_SITUACA+TJ_TERMINO")
+				If nIndSB > 0
+					If NGIFDBSEEK("STJ",M->T4_SERVICO+"PN",nIndSB)
+						vMenBlq := {.F.,STR0019+" "+STR0008+" "+STR0020}
+					ElseIf NGIFDBSEEK("STJ",M->T4_SERVICO+"LN",nIndSB)
+						vMenBlq := {.F.,STR0019+" "+STR0008+" "+STR0021}
+					EndIf
+				EndIf
+				If vMenBlq[1]
+					nIndPC := NGRETORDEM("TPC","TPC_FILIAL+TPC_SERVIC")
+					If nIndPC > 0
+						If NGIFDBSEEK("TPC",M->T4_SERVICO,nIndPC)
+							vMenBlq := {.F.,STR0019+" "+NGSX2NOME("TPC")}
+						EndIf
+					EndIf
+				EndIf
+				If vMenBlq[1]
+					nIndPF := NGRETORDEM("TPF","TPF_FILIAL+TPF_SERVIC")
+					If nIndPF > 0
+						If NGIFDBSEEK("TPF",M->T4_SERVICO,nIndPF)
+							vMenBlq := {.F.,STR0019+" "+NGSX2NOME("TPF")}
+						EndIf
+					EndIf
+				EndIf
+				If vMenBlq[1]
+					nIndTE := NGRETORDEM("TTE","TTE_FILIAL+TTE_SERVIC")
+					If nIndTE > 0
+						If NGIFDBSEEK("TTE",M->T4_SERVICO,nIndTE)
+							vMenBlq := {.F.,STR0019+" "+NGSX2NOME("TTE")}
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			If !vMenBlq[1]
+				If lSaida
+					MsgInfo(vMenBlq[2],STR0016)
+				EndIf
+			EndIf
+
+		EndIf
+	EndIf
+
+Return If(lSaida,vMenBlq[1],vMenBlq)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValidPos
+Validações após confirmação
+
+@author Maria Elisandra de Paula
+@param oModel, object, modelo de dados
+@since 12/04/21
+@return Logico Retorna verdadeiro quando valores podem ser gravados
+/*/
+//---------------------------------------------------------------------
+Static Function fValidPos( oModel )
+
+	Local aAreaSt4   := ST4->( GetArea() )
+	Local aAreaSte   := STE->( GetArea() )
+	Local aAreaStf   := STF->( GetArea() )
+	Local nOperation := oModel:GetOperation()
+	Local lContinua  := .T.
+	Local cCaracBD   := ''
+	Local cCaracMEM  := ''
+	Local oView
+
+	If Alltrim(SuperGetMv("MV_NGSEREF",.F.," ")) == Alltrim(oModel:GetValue('MNTA040_ST4','T4_SERVICO')) .And. oModel:GetValue('MNTA040_ST4','T4_VIDAUTI') == 'N' .And. !IsBlind()
+
+		lContinua := MsgYesNo( STR0030 + oModel:GetValue('MNTA040_ST4','T4_SERVICO') + STR0031 ) // "Se o serviço "###" for utilizado para reforma e o campo Vida Útil(T4_VIDAUTI) estiver como 'N', não será realizado o incremento na banda de pneu. Deseja Continuar?"
+		If !lContinua
+			Help( ' ', 1,,' ', STR0032 , 3, 1 ) // "Atenção"###"Altere o campo Vida Util (T4_VIDAUTI)"
+		EndIf
+	EndIf
+
+	//-----------------------------------------------
+	// Valida alteração de tipo manutenção e area
+	//-----------------------------------------------
+	If lContinua .And. nOperation == MODEL_OPERATION_UPDATE .And.;
+		( ST4->T4_CODAREA != M->T4_CODAREA .Or. ST4->T4_TIPOMAN != M->T4_TIPOMAN )
+
+		cServico := ST4->T4_SERVICO
+
+		//--------------------------------------------
+		// Valida alteração do tipo
+		//--------------------------------------------
+		If ST4->T4_TIPOMAN != M->T4_TIPOMAN
+
+			cCaracBD  := NGSEEK( 'STE', ST4->T4_TIPOMAN, 1, 'STE->TE_CARACTE' )
+			cCaracMEM := NGSEEK( 'STE', M->T4_TIPOMAN, 1, 'STE->TE_CARACTE' )
+
+			If cCaracBD != cCaracMEM // Verifica se está alterando o tipo de característica
+
+				If cCaracBD == 'P'
+
+					If NGIFDBSEEK( 'STF', cServico, 3 ) // verifica se há alguma manutenção cadastrada
+
+						lContinua := .F.
+						Help( ' ', 1, 'NGATENCAO',, STR0026 , 3, 1 ) // 'Não é possivel alterar o campo tipo de manutenção pois há manutenções cadastradas para este serviço.'
+
+					EndIf
+
+					If lContinua .And. NGIFDBSEEK( 'STJ', cServico, 4 )
+
+						lContinua := .F.
+						Help( ' ', 1, 'NGATENCAO',, STR0027, 3, 1 ) // 'Não é possivel alterar o campo tipo de manutenção pois há ordens de serviço geradas para este serviço.'
+
+					EndIf
+
+				ElseIf NGIFDBSEEK( 'STJ', cServico, 4 ) // verifica se há alguma O.S 
+
+					lContinua := .F.
+					Help( ' ', 1, 'NGATENCAO',, STR0027, 3, 1 ) // 'Não é possivel alterar o campo tipo de manutenção pois há ordens de serviço geradas para este serviço.'
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		If lContinua .And. !IsBlind()
+
+			//------------------------------------------------------------
+			// Caso tenha tela ativa da rotina mostra aviso/pergunta
+			//------------------------------------------------------------
+			oView := FwViewActive()
+			If ValType( oView ) == 'O' .And. oView:IsActive() .And. oView:GetModel():GetId() $ 'MNTA040'
+				lContinua := MsgYesNo( STR0028 + STR0029 ) // 'As informações alteradas serão repassadas para as manutenções e/ou ordens de serviço relacionadas.' + Deseja continuar ?'
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	RestArea( aAreaSt4 )
+	RestArea( aAreaSte )
+	RestArea( aAreaStf )
+
+Return lContinua
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCommit
+Gravação personalizada
+
+@author Maria Elisandra de Paula
+@param oModel, object, modelo de dados
+@since 12/04/21
+@return Logico Retorna verdadeiro quando valores podem ser gravados
+/*/
+//---------------------------------------------------------------------
+Static Function fCommit( oModel )
+
+	Local nOperation := oModel:GetOperation()
+	Local lRet       := .T.
+	Local cAliasQry  := ''
+	Local cServico   := M->T4_SERVICO
+	Local cTipoMan   := M->T4_TIPOMAN
+	Local cCodArea   := M->T4_CODAREA
+
+	//-------------------------------------------------------------
+	// Realiza atualizações ANTES da gravação da tabela principal
+	//-------------------------------------------------------------
+	If nOperation == MODEL_OPERATION_UPDATE .And.;
+		( ST4->T4_CODAREA != M->T4_CODAREA .Or. ST4->T4_TIPOMAN != M->T4_TIPOMAN )
+
+		//------------------------------------------------------------------
+		// Trecho abaixo altera os campos da manutenção
+		//------------------------------------------------------------------
+		cAliasQry := GetNextAlias()
+
+		BeginSQL Alias cAliasQry
+			SELECT STF.R_E_C_N_O_ AS RECNO
+			FROM %table:STF% STF
+			WHERE STF.TF_FILIAL = %xFilial:STF%
+				AND STF.TF_SERVICO = %exp:cServico%
+				AND STF.%notDel%
+		EndSQL
+
+		While !(cAliasQry)->( Eof() )
+
+			dbSelectArea('STF')
+			STF->( dbGoto( (cAliasQry)->RECNO ) )
+			Reclock( 'STF', .F. )
+			STF->TF_TIPO    := cTipoMan
+			STF->TF_CODAREA := cCodArea
+			STF->( MsUnLock() )
+
+			(cAliasQry)->( DbSkip() )
+		EndDo
+
+		(cAliasQry)->( dbCloseArea() )
+
+		//------------------------------------------------------------------
+		// Trecho abaixo altera os campos do tipo de manutenção
+		//------------------------------------------------------------------
+		cAliasQry := GetNextAlias()
+
+		BeginSQL Alias cAliasQry
+			SELECT TPF.R_E_C_N_O_ AS RECNO
+			FROM %table:TPF% TPF
+			WHERE TPF.TPF_FILIAL = %xFilial:TPF%
+				AND TPF.TPF_SERVIC = %exp:cServico%
+				AND TPF.%notDel%
+		EndSQL
+
+		While !(cAliasQry)->( Eof() )
+
+			dbSelectArea('TPF')
+			( dbGoto( (cAliasQry)->RECNO ) )
+			Reclock( 'TPF', .F. )
+			TPF->TPF_TIPO	:= cTipoMan
+			TPF->TPF_CODARE	:= cCodArea
+			TPF->( MsUnLock() )
+
+			(cAliasQry)->( DbSkip() )
+		EndDo
+
+		(cAliasQry)->( dbCloseArea() )
+
+		//------------------------------------------------------------------
+		// Trecho abaixo altera os campos da O.S
+		//------------------------------------------------------------------
+		cAliasQry := GetNextAlias()
+
+		BeginSQL Alias cAliasQry
+			SELECT STJ.R_E_C_N_O_ AS RECNO
+			FROM %table:STJ% STJ
+			WHERE STJ.TJ_FILIAL = %xFilial:STJ%
+				AND STJ.TJ_SERVICO = %exp:cServico%
+				AND STJ.%notDel%
+		EndSQL
+
+		While !(cAliasQry)->( Eof() )
+
+			dbSelectArea('STJ')
+			STJ->( dbGoto( (cAliasQry)->RECNO ) )
+			Reclock( 'STJ', .F. )
+			STJ->TJ_TIPO    := cTipoMan
+			STJ->TJ_CODAREA := cCodArea
+			STJ->( MsUnLock() )
+
+			(cAliasQry)->( DbSkip() )
+		EndDo
+
+		(cAliasQry)->( dbCloseArea() )
+
+	EndIf
+
+	FWFormCommit(oModel)	// Gravação do Modelo de Dados
+
+Return lRet

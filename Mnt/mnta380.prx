@@ -1,0 +1,2465 @@
+#INCLUDE "mnta380.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA380
+Programa para Retorno de Desgate por Producao
+Este Programa atualiza a posicao do contador e Var.Dia do bem basedo
+no desgaste ocorrido na producao
+
+@author  Paulo Pego
+@since   XX/XX/XXXX
+@version P11/P12
+@param   [cBem], Caracter, Código do bem.
+
+/*/
+//-------------------------------------------------------------------
+ Function MNTA380(cBem)
+
+	// Guarda conteudo e declara variaveis padroes
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local lOk         := .T.
+
+	Private asMenu    := NGRIGHTCLICK("MNTA380")
+	Private aRotina   := MenuDef()
+	Private cCadastro := OemtoAnsi(STR0004) //"Retorno Desgaste Producao"
+	Private faltera   := .F.
+	Private _cBem     := cBem
+
+	aPos1 := {15,1,145,315}
+
+	If "A" $ Alltrim(SuperGetMv("MV_NGLANEX",.F.,"-1"))
+		MsgStop(STR0051,STR0050)//"Parâmetro MV_NGLANEX restringe lançamentos do tipo Contador."
+		lOk := .F.
+	EndIf
+
+    If lOk
+
+        If ExistBlock("MNTA3801")
+            ExecBlock("MNTA3801",.F.,.F.,{_cBem})
+        Else
+
+            If cBem <> Nil
+                aRelac   := { { "TY_CODBEM" , "_cBem" } }
+                Inclui   := .T.
+                Altera   := .F.
+                lRefresh := .T.
+                NG380PROC( "STY", Recno(), 3)
+            Else
+                mBrowse( 6, 1,22,75,"STY")
+            EndIf
+
+        EndIf
+
+    EndIf
+
+	// Retorna conteudo de variaveis padroes
+	NGRETURNPRM(aNGBEGINPRM)
+
+ Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ NG380PROC³ Autor ³ Paulo Pego/Inacio Luiz³ Data ³          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Programa procesa o retorno do desgaste de Producao         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MNTA380()                                                  ³±±
+±±³          ³                                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+ Function NG380PROC(cAlias,nReg,nOpcx)
+
+	//Parametro de geracao de O.S outomatica controlado
+	//por contador
+	Local   cGERAPREV := AllTrim(GETMv("MV_NGGERPR")),xz
+
+	Private nREGVAL1      := 0, nREGVAL2 := 0
+	Private Tipoacom2     := .F.
+	Private lULTIREG      := .F.
+	Private aBENSFILP     := {}
+	Private nLIMCPAI1     := 0
+	Private nLIMCPAI2     := 0
+	Private nCONT1PAT     := 0
+	Private nCONT2PAT     := 0
+	Private M->TY_TIPOPRO := "N"
+	Private cCONSMAQP     := AllTrim(GETMv("MV_NGCMAQP"))
+
+	dbSelectArea("STY")
+	cAlias := "STY"
+	nReg   := Recno()
+	nIndix := IndexOrd()
+
+	If Inclui
+		nOpcx := 3
+	Else
+		nOpcx    := 5
+		aRotiold := aClone(aRotina)
+		aRotina  := {{STR0005 ,"AxPesqui" ,0,1}  ,; //"Pesquisar"
+	                 {STR0001 ,"NGCAD01"  ,0,2}  ,; //"Visualiza"
+	                 {STR0002 ,"NG380PROC",0,3,0},; //"Inclui"
+	                 {STR0006 ,"NG380PROC",0,4,0},; //"Altera"
+	                 {STR0003 ,"NG380PROC",0,5,3} } //"Exclui"
+	EndIf
+
+	nQUANT1   := 0
+	nQUANT2   := 0
+	nFATOR    := 1
+	cFAMI     := Space(06)
+	cBEM      := Space(16)
+
+	cBEMSTY   := STY->TY_CODBEM
+	dDAFIMSTY := STY->TY_DATAFIM
+	cHOFIMSTY := STY->TY_HORAFIM
+	dDAINISTY := STY->TY_DATAINI
+	cHOINISTY := STY->TY_HORAINI
+	nQUAT1STY := STY->TY_QUANTI1
+	nQUAT2STY := STY->TY_QUANTI2
+	nFATORSTY := If(STY->TY_FATOR <= 0.00, 1,STY->TY_FATOR)
+
+	bNGGRAVA  := {||NG380CKDAT(nOpcx)}
+	aRELAC    := {{"TY_TIPOPRO","M->TY_TIPOPRO"}}
+
+	If NGCAD01(cAlias,nReg,nOpcx) == 1
+
+		If nOpcX == 3     //INCLUSAO
+
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			dbSeek(xFILIAL("ST9")+STY->TY_CODBEM)
+
+			dbSelectArea("STR")
+			dbSetOrder(1)
+			If dbSeek( xFILIAL("STR") + cFAMI + STY->TY_CODBEM + STY->TY_PRODUTO)
+	        	nFATOR := If(STR->TR_FATOR <= 0.00, 1, STR->TR_FATOR)
+			Else
+				If dbSeek( xFILIAL("STR") + ST9->T9_CODFAMI + cBEM + STY->TY_PRODUTO)
+					nFATOR := If(STR->TR_FATOR <= 0.00, 1, STR->TR_FATOR)
+				EndIf
+			EndIf
+
+			nQUANT1 := STY->TY_QUANTI1 * nFATOR
+			nQUANT2 := STY->TY_QUANTI2 * nFATOR
+
+			dbSelectArea("STY")
+			RecLock("STY",.F.)
+			STY->TY_FATOR := nFATOR
+			MsUnlock("STY")
+
+			If !Empty(STY->TY_QUANTI1)
+
+				//Inclui o registro novo e recalcula variacao dia do Contador 1
+				NG380ATUHI(STY->TY_CODBEM,STY->TY_DATAFIM,STY->TY_HORAFIM,1,nREGVAL1,nOpcX,STY->TY_QUANTI1,nQUANT1, , )
+
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+				If dbSeek(xFILIAL("ST9")+STY->TY_CODBEM)
+	            	nLIMCPAI1 := ST9->T9_LIMICON  //Limite de contador do bem pai
+	            	nCONT1PAT := ST9->T9_POSCONT  //Contador atual do bem pai
+				EndIf
+
+			EndIf
+
+			If !Empty(STY->TY_QUANTI2)
+
+				//Inclui o registro novo e recalcula variacao dia do Contador 2
+				NG380ATUHI(STY->TY_CODBEM,STY->TY_DATAFIM,STY->TY_HORAFIM,2,nREGVAL2,nOpcX,STY->TY_QUANTI2,nQUANT2, , )
+
+				dbSelectArea("TPE")
+				dbSetOrder(1)
+				If dbSeek(xFILIAL("TPE")+STY->TY_CODBEM)
+	            	nLIMCPAI2 := TPE->TPE_LIMICO  //Limite de contador do bem pai
+	            	nCONT2PAT := TPE->TPE_POSCON  //Contador atual do bem pai
+				EndIf
+
+			EndIf
+
+			//Funcao que Retorna os bens que estava ou estao na estrutura apartir da data fim
+			//e hora fim da producao
+			aESTRU380 := NGCOMPPCONT(STY->TY_CODBEM,STY->TY_DATAFIM,STY->TY_HORAFIM)
+
+			//Atualiza os bens filhos da estrutura correspondentes ao bem da producao
+			For xz := 1 To Len(aESTRU380)
+
+				If !Empty(STY->TY_QUANTI1)
+					dbSelectArea("ST9")
+					dbSetOrder(1)
+					If dbSeek(xFilial("ST9")+aESTRU380[xz][1])
+
+						nPOS   := aSCAN(aBENSFILP,{|x|(x[1])== aESTRU380[xz][1] .And. (x[2]) == 1 })
+						lACHOU := .F.
+						If nPOS > 0
+							lACHOU := .T.
+						Else
+							Aadd(aBENSFILP,{aESTRU380[xz][1],1})
+						EndIf
+
+						//Processa os registros do historico para o bem filho adicionando a producao
+						NGESTR380(aESTRU380[xz][1],aESTRU380[xz][2],aESTRU380[xz][3],aESTRU380[xz][4],;
+	                              aESTRU380[xz][5],STY->TY_DATAFIM,STY->TY_HORAFIM,1,STY->TY_QUANTI1,nQUANT1, , ,;
+	                              3,lACHOU,nLIMCPAI1,nCONT1PAT)
+
+					EndIf
+				EndIf
+
+				If !Empty(STY->TY_QUANTI2)
+					dbSelectArea("TPE")
+					dbSetOrder(1)
+					If dbSeek(xFilial("TPE")+aESTRU380[xz][1])
+
+						nPOS   := aSCAN(aBENSFILP,{|x|(x[1])== aESTRU380[xz][1] .And. (x[2]) == 2 })
+						lACHOU := .F.
+						If nPOS > 0
+							lACHOU := .T.
+						Else
+							Aadd(aBENSFILP,{aESTRU380[xz][1],2})
+						EndIf
+
+						//Processa os registros do historico para o bem filho adicionando a producao
+						NGESTR380(aESTRU380[xz][1],aESTRU380[xz][2],aESTRU380[xz][3],aESTRU380[xz][4],;
+					              aESTRU380[xz][5],STY->TY_DATAFIM,STY->TY_HORAFIM,2,STY->TY_QUANTI2,nQUANT2, , ,;
+	                              3,lACHOU,nLIMCPAI2,nCONT2PAT)
+
+					EndIf
+				EndIf
+			Next
+
+			//GERA O.S AUTOMATICA POR CONTADOR
+			If !Empty(STY->TY_QUANTI1)
+				If cGERAPREV = "S" .Or. cGERAPREV = "C"
+					If NGCONFOSAUT(cGERAPREV)
+						NGGEROSAUT(STY->TY_CODBEM,STY->TY_QUANTI1)
+					EndIf
+				EndIf
+			Else
+				If cGERAPREV = "S" .Or. cGERAPREV = "C"
+					If NGCONFOSAUT(cGERAPREV)
+						NGGEROSAUT(STY->TY_CODBEM,STY->TY_QUANTI2)
+					EndIf
+				EndIf
+			EndIf
+
+		ElseIf nOpcX == 5  //EXCLUSAO
+
+			//Procura data e hora com producao 0
+			vDATA380 := NGCALHDT(dDAINISTY,cHOINISTY,2)
+			If !Empty(nQUAT1STY)
+
+				//Exclui o registro com producao 0 historico do bem e recalcula acumulado, contador e variacao
+				//apartir do registro deletado
+				NGATHMQP(cBEMSTY,vDATA380[1],vDATA380[2],1,,nOpcX)
+
+				//Exclui o registro relacionado no historico do bem e recalcula acumulado, contador e variacao
+				//apartir do registro deletado
+				NG380ATUHI(cBEMSTY,dDAFIMSTY,cHOFIMSTY,1, ,nOpcX, , ,;
+			               nQUAT1STY,nQUAT1STY * nFATORSTY)
+
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+				If dbSeek(xFILIAL("ST9")+cBEMSTY)
+					nLIMCPAI1 := ST9->T9_LIMICON  //Limite de contador do bem pai
+				EndIf
+			EndIf
+
+			If !Empty(nQUAT2STY)
+
+				//Exclui o registro com producao 0 historico do bem e recalcula acumulado, contador e variacao
+				//apartir do registro deletado
+				NGATHMQP(cBEMSTY,vDATA380[1],vDATA380[2],2,,nOpcX)
+
+				//Exclui o registro relacionado no historico do bem e recalcula acumulado, contador e variacao
+				//apartir do registro deletado
+				NG380ATUHI(cBEMSTY,dDAFIMSTY,cHOFIMSTY,2, ,nOpcX, , ,;
+	                       nQUAT2STY,nQUAT2STY * nFATORSTY)
+
+
+				dbSelectArea("TPE")
+				dbSetOrder(1)
+				If dbSeek(xFILIAL("TPE")+cBEMSTY)
+					nLIMCPAI2 := TPE->TPE_LIMICO  //Limite de contador do bem pai
+				EndIf
+			EndIf
+
+			//Funcao que Retorna os bens que estava ou estao na estrutura apartir da data fim
+			//e hora fim da producao
+			aESTRU380 := NGCOMPPCONT(cBEMSTY,dDAFIMSTY,cHOFIMSTY)
+
+			//Atualiza os bens filhos da estrutura correspondentes ao bem da producao
+			For xz := 1 To Len(aESTRU380)
+
+				If !Empty(nQUAT1STY)
+					dbSelectArea("ST9")
+					dbSetOrder(1)
+					If dbSeek(xFilial("ST9")+aESTRU380[xz][1])
+
+						nPOS   := aSCAN(aBENSFILP,{|x|(x[1])== aESTRU380[xz][1] .And. (x[2]) == 1 })
+						lACHOU := .F.
+						If nPOS > 0
+							lACHOU := .T.
+						Else
+							Aadd(aBENSFILP,{aESTRU380[xz][1],1})
+						EndIf
+
+						//Processa os registros do historico para o bem filho adicionando aproducao
+						NGESTR380(aESTRU380[xz][1],aESTRU380[xz][2],aESTRU380[xz][3],aESTRU380[xz][4],;
+	                              aESTRU380[xz][5],dDAFIMSTY,cHOFIMSTY,1, , ,nQUAT1STY,nQUAT1STY * nFATORSTY,;
+	                              5,lACHOU,nLIMCPAI1)
+					EndIf
+				EndIf
+
+				If !Empty(nQUAT2STY)
+					dbSelectArea("TPE")
+					dbSetOrder(1)
+					If dbSeek(xFilial("TPE")+aESTRU380[xz][1])
+
+						nPOS   := aSCAN(aBENSFILP,{|x|(x[1])== aESTRU380[xz][1] .And. (x[2]) == 2 })
+						lACHOU := .F.
+						If nPOS > 0
+							lACHOU := .T.
+						Else
+							Aadd(aBENSFILP,{aESTRU380[xz][1],2})
+						EndIf
+
+						//Processa os registros do historico para o bem filho adicionando aproducao
+						NGESTR380(aESTRU380[xz][1],aESTRU380[xz][2],aESTRU380[xz][3],aESTRU380[xz][4],;
+	                              aESTRU380[xz][5],dDAFIMSTY,cHOFIMSTY,2, , ,nQUAT2STY,nQUAT2STY * nFATORSTY,;
+	                              5,lACHOU,nLIMCPAI2)
+					EndIf
+				EndIf
+			Next
+		EndIf
+	EndIf
+
+	If nOpcX == 5
+		aRotina := aClone(aRotiold)
+	EndIf
+
+Return Nil
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380CONP ºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Valida se o bem informado tem contador proprio              º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³MNTA380( )                                                  º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+ Function NG380CONP()
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	If dbSeek(xFilial("ST9")+M->TY_CODBEM)
+		If ST9->T9_TEMCONT <> "S"
+	    	MsgStop(STR0007) //"O bem informado nao possui contador proprio"
+	    	Return .F.
+		EndIf
+	EndIf
+
+ Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGPOSCONT  ³ Autor ³ Thiago Olis Machado   ³ Data ³01/01/02  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Abre o campo STY->TY_QUANTI2 para digitacao se o bem possuir ³±±
+±±³          ³Contador 2                                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA380()                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+ Function NGPOSCONT(cBem)
+
+    //FindFunction remover na release GetRPORelease() >= '12.1.027'
+    If FindFunction("MNTCont2")
+		Tipoacom2 := MNTCont2(xFilial("TPE"), cBem)
+	Else
+		dbSelectArea("TPE")
+	    dbSetOrder(1)
+	    Tipoacom2 := dbSeek(xFilial("TPE")+cBem)
+	EndIf
+
+ Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380CKDATºAutor  ³Elisangela Costa    º Data ³  27/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Testa os intervalos aceitaveis de datas e hora para a in-   º±±
+±±º          ³clusao de retorno de producao                               º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380PROC( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function NG380CKDAT(nOpcx)
+
+	Local xz
+
+	Private cMENS    := Space(1)
+	Private lPROBL   := .F.
+	Private nREGISHI := 0
+	Private aRETOMQP := {}
+
+	M->TY_TIPOPRO    := "N"
+	If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"
+
+	    If M->TY_QUANTI1 > 0 .And. MNA385APR(M->TY_CODBEM,M->TY_DATAINI,M->TY_HORAINI,1)
+			ShowHelpDlg(STR0050,{STR0048+;          //"Atenção"##"Existem registros de histórico de contador com custo apropriado posteriores à data informada."
+								 STR0049},3,{""},2) //" Não é possível incluir ou excluir um registro."
+			Return .F.
+		EndIf
+
+		If M->TY_QUANTI2 > 0 .And. MNA385APR(M->TY_CODBEM,M->TY_DATAINI,M->TY_HORAINI,2)
+			ShowHelpDlg(STR0050,{STR0048+;          //"Atenção"##"Existem registros de histórico de contador com custo apropriado posteriores à data informada."
+								 STR0049},3,{""},2) //" Não é possível incluir ou excluir um registro."
+			Return .F.
+		EndIf
+
+	EndIf
+
+	If nOpcx <> 3
+	    Return .T.
+	EndIf
+
+	If Empty(cMENS) .And. Empty(M->TY_QUANTI1) .And. Empty(M->TY_QUANTI2)
+        cMENS := STR0008 //"Obrigatorio informar a quantidade de producao"
+	EndIf
+
+	If Empty(cMENS) .And. !Empty(M->TY_DATAINI) .And. !Empty(M->TY_DATAFIM)
+	    If M->TY_DATAFIM < M->TY_DATAINI
+	        cMENS := STR0009 //"Data Fim devera ser maior ou igual a Data Inicio "
+	    ElseIf M->TY_DATAFIM = M->TY_DATAINI .And. M->TY_HORAFIM <= M->TY_HORAINI
+            cMENS := STR0010 //"Hora fim devera ser maior que a hora inicio "
+	    EndIf
+	EndIf
+
+	If Empty(cMENS)
+        dbSelectArea("STY")
+        dbSetOrder(1)
+        If dbSeek(xFILIAL("STY")+M->TY_CODBEM+M->TY_PRODUTO+DTOS(M->TY_DATAINI)+M->TY_HORAINI+DTOS(M->TY_DATAFIM)+M->TY_HORAFIM)
+
+            If !Empty(M->TY_QUANTI1) .And. !Empty(M->TY_QUANTI2)
+                If !Empty(STY->TY_QUANTI1) .And. !Empty(STY->TY_QUANTI2)
+                    cMENS := STR0011 //"Retorno de producao ja existe para os Contadores 1 e 2"
+                EndIf
+
+            ElseIf !Empty(M->TY_QUANTI1)
+                If !Empty(STY->TY_QUANTI1)
+                    cMENS := STR0012 //"Retorno de producao ja existe para o Contador 1"
+                EndIf
+
+            ElseIf !Empty(M->TY_QUANTI2)
+                If !Empty(STY->TY_QUANTI2)
+                    cMENS := STR0013 //"Retorno de producao ja existe para o Contador 2"
+                EndIf
+
+            EndIf
+
+        Else
+
+            If dbSeek(xFILIAL("STY")+M->TY_CODBEM+M->TY_PRODUTO)
+	            While !Eof() .And. STY->TY_FILIAL  == xFILIAL("STY") .And. STY->TY_CODBEM  == M->TY_CODBEM   .And.;
+                                   STY->TY_PRODUTO == M->TY_PRODUTO  .And. !lPROBL
+
+                    If M->TY_DATAFIM < STY->TY_DATAFIM
+
+                        If M->TY_DATAFIM = STY->TY_DATAINI
+
+                            If M->TY_HORAFIM >= STY->TY_HORAINI
+                                //Cheka se intervalo e refente ao contador informado
+                                NG380CKCON()
+                            EndIf
+
+                        ElseIf M->TY_DATAINI > STY->TY_DATAINI
+                            //Cheka se intervalo e refente ao contador informado
+                            NG380CKCON()
+                        ElseIf M->TY_DATAFIM > STY->TY_DATAINI
+                           //Cheka se intervalo e refente ao contador informado
+                            NG380CKCON()
+                        EndIf
+                    Else
+                        If M->TY_DATAFIM > STY->TY_DATAFIM
+                            If M->TY_DATAINI = STY->TY_DATAFIM
+
+                                If M->TY_HORAINI <= STY->TY_HORAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            Else
+
+                                If M->TY_DATAINI < STY->TY_DATAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+                        Else
+                            If M->TY_DATAINI > STY->TY_DATAINI
+                                If M->TY_DATAFIM = STY->TY_DATAFIM
+                                    If M->TY_DATAINI = STY->TY_DATAFIM
+
+                                        If M->TY_HORAINI <= STY->TY_HORAFIM
+                                            //Cheka se intervalo e refente ao contador informado
+                                            NG380CKCON()
+                                        EndIf
+
+                                    EndIf
+                                EndIf
+                            EndIf
+                        EndIf
+                    EndIf
+
+                    If M->TY_DATAINI < STY->TY_DATAINI
+                        If M->TY_DATAFIM = STY->TY_DATAINI
+
+                            If M->TY_HORAFIM >= STY->TY_HORAINI
+                                //Cheka se intervalo e refente ao contador informado
+                                NG380CKCON()
+                            EndIf
+
+                        Else
+
+                            If M->TY_DATAFIM = STY->TY_DATAFIM
+                                //Cheka se intervalo e refente ao contador informado
+                                NG380CKCON()
+                            EndIf
+
+                        EndIf
+                    Else
+                        If M->TY_DATAINI > STY->TY_DATAINI
+                            If M->TY_DATAINI <> STY->TY_DATAFIM
+
+                                If M->TY_DATAFIM = STY->TY_DATAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+                        Else
+                            If M->TY_DATAINI = STY->TY_DATAINI
+
+                                If M->TY_DATAFIM < STY->TY_DATAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+                        EndIf
+                    EndIf
+
+                    If M->TY_DATAINI = STY->TY_DATAINI .And. M->TY_DATAFIM = STY->TY_DATAFIM
+                        If STY->TY_DATAINI = STY->TY_DATAFIM //DATAS IGUAIS MESMO DIA
+                            If M->TY_HORAFIM >= STY->TY_HORAINI  //INICIO DE ARQUIVO
+
+                                If M->TY_HORAINI < STY->TY_HORAINI
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+
+                            If M->TY_HORAINI <= STY->TY_HORAFIM   //FINAL DE ARQUIVO
+
+                                If M->TY_HORAFIM > STY->TY_HORAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+
+                            If M->TY_HORAINI >= STY->TY_HORAINI
+
+                                If M->TY_HORAFIM <= STY->TY_HORAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+
+                            EndIf
+                        Else //DATAS IGUAIS DIAS DIFERENTE
+
+                            If M->TY_HORAINI >= STY->TY_HORAINI
+                                //Cheka se intervalo e refente ao contador informado
+                                NG380CKCON()
+                            Else
+
+                                If M->TY_HORAFIM <= STY->TY_HORAFIM
+                                    //Cheka se intervalo e refente ao contador informado
+                                    NG380CKCON()
+                                EndIf
+                            EndIf
+
+                            If M->TY_HORAINI <= STY->TY_HORAINI .And. M->TY_HORAFIM >= STY->TY_HORAFIM
+                                //Cheka se intervalo e refente ao contador informado
+                                NG380CKCON()
+                            EndIf
+
+                        EndIf
+                    Else
+                        If M->TY_DATAINI = STY->TY_DATAINI .And. M->TY_DATAFIM = STY->TY_DATAINI
+
+                            If M->TY_HORAFIM >= STY->TY_HORAINI
+                               //Cheka se intervalo e refente ao contador informado
+                               NG380CKCON()
+                            EndIf
+
+                        EndIf
+                    EndIf
+                    dbSelectArea("STY")
+                    dbSkip()
+                End
+            EndIf
+        EndIf
+    EndIf
+
+	If !Empty(cMENS)
+	    MsgInfo(cMENS,STR0014) //"NAO CONFORMIDADE"
+	    Return .F.
+	EndIf
+
+	//Valida se as informacoes do retorno sao validas para efetuar
+	//o retorno com base no historico de contador do bem
+	If !Empty(M->TY_QUANTI1)
+	    If !NG380CKINT(1)
+	        Return .F.
+	    Else
+	        nREGVAL1 := nREGISHI
+	    EndIf
+	EndIf
+
+	If !Empty(M->TY_QUANTI2)
+	    If !NG380CKINT(2)
+	        Return .F.
+	    Else
+            nREGVAL2 := nREGISHI
+	    EndIf
+	EndIf
+
+	//Chama a funcao que cria o registro de producao = 0
+	If Len(aRETOMQP) > 0
+
+	    For xz := 1 To Len(aRETOMQP)
+	        //Contador 1
+	        If aRETOMQP[xz][3] = 1
+	            nREGVAL1 := NGATHMQP(M->TY_CODBEM,aRETOMQP[xz][1],aRETOMQP[xz][2],1,nREGVAL1,3)
+	        //Contador 2
+	        Else
+                nREGVAL2 := NGATHMQP(M->TY_CODBEM,aRETOMQP[xz][1],aRETOMQP[xz][2],2,nREGVAL2,3)
+	        EndIf
+	    Next
+
+	EndIf
+
+	dbSelectArea("SB1")
+	dbSetOrder(01)
+	If dbSeek(xFilial("SB1")+M->TY_PRODUTO)
+        M->TY_TIPOPRO := "S"
+	EndIf
+
+ Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380CKCONºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Cheka se intervalo do retorno de producao e referente ao    º±±
+±±º          ³ao contador informado na producao                           º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380CKDAT( )                                               º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+ Static Function NG380CKCON()
+
+    If !Empty(M->TY_QUANTI1) .And. !Empty(M->TY_QUANTI2)
+
+        If !Empty(STY->TY_QUANTI1) .And. !Empty(STY->TY_QUANTI2)
+            lPROBL := .T.
+            cMENS  :=  STR0015 + CHR(13) + CHR(13) + ; //"Ja existe Retorno de Producao entre o intervalo"
+                       STR0016                         //"de data e hora para o contador 1 e 2."
+        EndIf
+
+    ElseIf !Empty(M->TY_QUANTI1)
+
+        If !Empty(STY->TY_QUANTI1)
+            lPROBL := .T.
+            cMENS  :=  STR0015 + CHR(13) + CHR(13) +; //"Ja existe Retorno de Producao entre o intervalo"
+                       STR0017                        //"de data e hora para o contador 1"
+        EndIf
+
+    ElseIf !Empty(M->TY_QUANTI2)
+
+        If !Empty(STY->TY_QUANTI2)
+            lPROBL := .T.
+            cMENS  :=  STR0015 + CHR(13) + CHR(13) +; //"Ja existe Retorno de Producao entre o intervalo"
+                       STR0018                        //"de data e hora para o contador 2"
+        EndIf
+
+    EndIf
+
+ Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380CKINTºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Valida se o intervalo de data da producao e valido para     º±±
+±±º          ³efetuar a producao                                          º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³nTCONT = Tipo de contador (1= Contador 1 ; 2= Contador 2    º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380CKDAT( )                                               º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+ Static Function NG380CKINT(nTCONT)
+
+    Local vARQUI := If(nTCONT = 1,{'STP','STP->TP_FILIAL','STP->TP_CODBEM',;
+                                   'STP->TP_DTLEITU','STP->TP_HORA'},;
+                                  {'TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM',;
+                                   'TPP->TPP_DTLEIT','TPP->TPP_HORA'})
+
+    Local cMENSA2 := STR0019 //" Contador 1"
+    Local cMENSA3 := STR0020 //" Contador 2"
+    Local cMENSA4 := STR0014 //"NAO CONFORMIDADE"
+
+    nREGISHI := 0
+    dbSelectArea(vARQUI[1])
+    dbSetOrder(5)
+    If dbSeek(xFilial(vARQUI[1])+M->TY_CODBEM+DTOS(M->TY_DATAFIM)+M->TY_HORAFIM)
+
+        cMENSA1 := STR0021 + CHR(13) + CHR(13) + ; //"Ja existe registro com mesma informacao no historico de contador"
+                   STR0022                         //"do bem. Para o bem + data fim + hora fim do"
+
+        If nTCONT = 1
+           MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+        Else
+           MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+        EndIf
+
+        Return .F.
+
+    Else
+
+        dbSeek(xFilial(vARQUI[1])+M->TY_CODBEM+DTOS(M->TY_DATAINI)+M->TY_HORAINI,.T.)
+        If Eof()
+            dbSkip(-1)
+        Else
+            If &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) <> M->TY_CODBEM
+                dbSkip(-1)
+            EndIf
+        EndIf
+
+        If &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) = M->TY_CODBEM
+
+            //Verifica se a producao e valida tendo que ter um registro anterior a producao
+            nREGVAL := Recno()
+
+            dbSkip(-1)
+            If Bof()
+
+                Dbgoto(nREGVAL)
+                If !Eof().And. &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) = M->TY_CODBEM
+
+                    If &(vARQUI[4]) > M->TY_DATAINI  .Or. (&(vARQUI[4]) = M->TY_DATAINI  .And. &(vARQUI[5]) > M->TY_HORAINI)
+
+                        cMENSA1 :=  STR0023 + CHR(13) + CHR(13) + ; //"Retorno de producao nao pode ser efetuado. Nao existe registro"
+                                    STR0024                      //"anterior a producao no historico de contador do bem para o"
+
+                        If nTCONT = 1
+                            MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+                        Else
+                            MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+                        EndIf
+
+                        Return .F.
+                    EndIf
+                EndIf
+
+            ElseIf !Bof() .And. &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) <> M->TY_CODBEM
+
+                cMENSA1 :=  STR0025 + CHR(13) + CHR(13) + ; //"O retorno de producao nao pode ser efetuado. Nao existe registro"
+                            STR0024                         //"anterior a producao no historico de contador do bem para o"
+
+                If nTCONT = 1
+                    MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+                Else
+                    MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+                EndIf
+
+                Return .F.
+
+            Else
+                dbSkip()
+            EndIf
+
+            If M->TY_DATAINI > dDATABASE
+                MsgInfo(STR0026,STR0014) //"A data Inicio informada e maior que a data atual"###"NAO CONFORMIDADE"
+                Return .F.
+            EndIf
+
+            If M->TY_DATAINI = dDATABASE .And. M->TY_HORAINI > TIME()
+                MsgInfo(STR0027,STR0014) //"A Hora Inicio informada e maior que a Hora atual"###"NAO CONFORMIDADE"
+                Return .F.
+            EndIf
+
+            If M->TY_DATAFIM > dDATABASE
+                MsgInfo(STR0028,STR0014) //"A data fim informada e maior que a data atual"###"NAO CONFORMIDADE"
+                Return .F.
+            EndIf
+
+            If M->TY_DATAFIM = dDATABASE .And. M->TY_HORAFIM > TIME()
+                MsgInfo(STR0029,STR0014) //"A Hora Fim informada e maior que a Hora atual"###"NAO CONFORMIDADE"
+                Return .F.
+            EndIf
+
+            lTREGINT := .F.
+            lULTIREG := .F.
+            nREGISHI := 0
+
+            //Verifica se tem algum registro no intervalo das datas do retorno da producao
+            While !Eof() .And. &(vARQUI[2])  = xFILIAL(vARQUI[1]) .And. &(vARQUI[3])  = M->TY_CODBEM  .And.;
+                               &(vARQUI[4]) <= M->TY_DATAFIM      .And. &(vARQUI[5]) <= M->TY_HORAFIM .And. !lTREGINT
+
+                If DTOS(&(vARQUI[4]))+ &(vARQUI[5]) < DTOS(M->TY_DATAINI)+M->TY_HORAINI
+                    dbSkip()
+                    Loop
+                Else
+                    lTREGINT := .T.
+                EndIf
+
+                dbSelectArea(vARQUI[1])
+                dbSkip()
+
+            End
+
+            If &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) <> M->TY_CODBEM
+                lULTIREG := .T.
+                dbSkip(-1)
+            Else
+                If &(vARQUI[4]) >= M->TY_DATAFIM
+                    If &(vARQUI[4]) = M->TY_DATAFIM  .And. &(vARQUI[5]) > M->TY_HORAFIM
+                        dbSkip(-1)
+                    ElseIf &(vARQUI[4]) > M->TY_DATAFIM
+                        dbSkip(-1)
+                    EndIf
+                EndIf
+
+                If !lULTIREG
+                    dbSkip()
+                    If Eof()
+                        lULTIREG := .T.
+                    ElseIf !Eof() .And. &(vARQUI[2]) = xFILIAL(vARQUI[1]) .And. &(vARQUI[3]) <> M->TY_CODBEM
+                        lULTIREG := .T.
+                    EndIf
+                    dbSkip(-1)
+                EndIf
+            EndIf
+
+            nREGISHI := Recno()
+
+            If lTREGINT
+                cMENSA1 :=  STR0030 + CHR(13) + CHR(13) + ; //"O retorno de producao nao pode ser efetuado. Existe registro"
+                            STR0031 + CHR(13) + CHR(13) + ; //"no historico de contador do bem entre o intervalo de data"
+                            STR0032                         //"informada no retorno de producao para o"
+
+                If nTCONT = 1
+                    MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+                Else
+                    MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+                EndIf
+                Return .F.
+
+            Else
+                If cCONSMAQP == "S" //Cosiste retorno de producao com maquina parada
+                    If lULTIREG
+
+                        /*/
+                        If M->TY_DATAINI > &(vARQUI[4])
+
+                            dDATAINI := &(vARQUI[4]) + 1
+
+                            If M->TY_DATAINI > dDATAINI
+
+                                cMENSA1 :=   STR0033 + CHR(13) + CHR(13) + ; //"O retorno de producao nao pode ser efetuado. A data inicio"
+                                             STR0034 + CHR(13) + CHR(13) + ; //"informada nao e posterior ou igual a data de ultimo"
+                                             STR0035                         //"acompanhamento de contador do bem para o"
+
+                                If nTCONT = 1
+                                    MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+                                Else
+                                    MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+                                EndIf
+
+                                Return .F.
+
+                            EndIf
+                        /*/
+
+                        //Calcula data e hora inicio da producao
+                        vDTAINI   := NGCALHDT(&(vARQUI[4]),&(vARQUI[5]),1)
+                        dDTINTINI := vDTAINI[1]
+                        cHRINTINI := vDTAINI[2]
+
+                        //Calcula data e hora fim da producao
+                        vDTAFIM   := NGCALHDT(M->TY_DATAINI,M->TY_HORAINI,2)
+                        dDTINTFIM := vDTAFIM[1]
+                        cHRINTFIM := vDTAFIM[2]
+
+                        If M->TY_DATAINI <> dDTINTINI .Or. M->TY_HORAINI <> cHRINTINI
+
+                            cMENSMAQP := " "
+                            If nTCONT = 1
+                                cMENSMAQP := cMENSA2
+                            Else
+                                cMENSMAQP := cMENSA3
+                            EndIf
+
+                            If !MsgYesNo(STR0038+cMENSMAQP+STR0039+chr(13)    + ; //"Nao ha retorno de producao para o "#" do bem no periodo"
+                                         STR0040+Dtoc(dDTINTINI)              +" "+ cHRINTINI+STR0041+ Dtoc(dDTINTFIM)+" "+cHRINTFIM+chr(13)+chr(13) + ; //"que vai de: "#" a "
+                                         STR0042+Dtoc(&(vARQUI[4]))+chr(13)   + ; //"Dt.Ult.Lanc.Historico...:  "
+                                         STR0043+&(vARQUI[5])+chr(13)+chr(13) + ; //"Hr.Ult.Lanc.Historico...:  "
+                                         STR0044,STR0045)                         //"Confirma o retorno com bem parado ?" # "ATENCAO"
+
+                               Return .F.
+                            Else
+                                Aadd(aRETOMQP,{dDTINTFIM,cHRINTFIM,nTCONT})
+                            EndIf
+
+                        EndIf
+                    EndIf
+                EndIf
+            EndIf
+        Else
+            cMENSA1 :=  STR0036 + CHR(13)+CHR(13); //"O retorno de producao nao pode ser efetuado. Nao existe nenhum"
+                      + STR0037                     //"registro no historico de contador do bem para o"
+
+            If nTCONT = 1
+                MsgInfo(cMENSA1 + cMENSA2,cMENSA4)
+            Else
+                MsgInfo(cMENSA1 + cMENSA3,cMENSA4)
+            EndIf
+            Return .F.
+
+        EndIf
+    EndIf
+
+ Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380ATUHIºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Faz o processo de inclusao e exclusao do retorno de         º±±
+±±º          ³producao informado                                          º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³cCODBEM   = Codigo do Bem                                   º±±
+±±º          ³dDATAFIM  = Data fim da producao                            º±±
+±±º          ³cHORAFIM  = Hora fim da producao                            º±±
+±±º          ³nTIPOCONT = Tipo de contador (1= Contador 1 ; 2= Contador 2 º±±
+±±º          |nNUMREG   = Numero do registro para recalculo               º±±
+±±º          |nOPCAO    = Opcao escolhida (3= Inclusao, 5 = Exclusao)     º±±
+±±º          |nQUAPROD  = Quantidade de producao                          º±±
+±±º          |nPRODUFAT = Quantidade produzida mais o fator               º±±
+±±º          |nQPRODOLD = Quantidade produzida anterior a delecao         º±±
+±±º          |nPFATOLD  = Quantidade produzida + fator anterior a delecao º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380PROC( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+ Function NG380ATUHI(cCODBEM,dDATAFIM,cHORAFIM,nTIPOCONT,nNUMREG,nOPCAO,nQUAPROD,nPRODUFAT,nQPRODOLD,nPFATOLD)
+
+    Local nITENS    := GETMV("MV_VARDIA")
+    Local aARRSTP   := {}
+    Local nTAMHIS   := nITENS
+    Local nMAXAR    := 0
+    Local nACUMFIM  := 0
+    Local dDTACUFI
+    Local nCONTAFI  := 0
+    Local nVARDIFI  := 0
+    Local nPOSCONT  := 0
+    Local nCONTACUM := 0
+    Local nNUMREG1  := 0
+    Local nNUMREG2  := 0
+    Local xzy
+    Local vARQHIS   := If(nTIPOCONT = 1,{'ST9','ST9->T9_DTULTAC','ST9->T9_POSCONT','ST9->T9_CONTACU',;
+                                         'ST9->T9_VARDIA','ST9->T9_VIRADAS','ST9->T9_LIMICON',;
+                                         'STP','STP->TP_FILIAL','STP->TP_CODBEM','STP->TP_POSCONT',;
+                                         'STP->TP_DTLEITU','STP->TP_HORA','STP->TP_VARDIA',;
+                                         'STP->TP_ACUMCON','STP->TP_VIRACON','STP->TP_TIPOLAN'},;
+                                        {'TPE','TPE->TPE_DTULTA','TPE->TPE_POSCON','TPE->TPE_CONTAC',;
+                                         'TPE->TPE_VARDIA','TPE->TPE_VIRADA','TPE->TPE_LIMICO',;
+                                         'TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM','TPP->TPP_POSCON',;
+                                         'TPP->TPP_DTLEIT','TPP->TPP_HORA','TPP->TPP_VARDIA',;
+                                         'TPP->TPP_ACUMCO','TPP->TPP_VIRACO','TPP->TPP_TIPOLA'})
+    Private aARRSER := {}
+
+    If nOPCAO = 3   //INCLUSAO
+
+        dbSelectArea(vARQHIS[1])
+        dbSetOrder(1)
+        If dbSeek(xFILIAL(vARQHIS[1])+cCODBEM)
+
+            If !Empty(nNUMREG)
+
+                dbSelectArea(vARQHIS[8])
+                dbSetOrder(5)
+                dbGoTo(nNUMREG)
+
+                lVIRADA := .F.
+                If !Eof() .And. !Bof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM
+
+                    nCONTINC  := &(vARQHIS[11])            //Posicao inicial antes de atribuir a producao
+                    nPOSCONT  := &(vARQHIS[11])+ nQUAPROD  //Posicao do contador com producao
+                    nCONTACUM := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+
+                    //Verifica se tem virada de contador
+                    If nPOSCONT > &(vARQHIS[7])
+
+                        lVIRADA := .T.
+                        //Diferenca que vai ser a posicao do contador da virada
+                        nDIFERE := nPOSCONT - &(vARQHIS[7])
+
+                        //Grava Historico do contador
+                        NGGRAVAHIS(cCODBEM,nDIFERE,&(vARQHIS[14]),dDATAFIM,;
+                                   nCONTACUM,&(vARQHIS[16])+ 1,cHORAFIM,nTIPOCONT,"P")
+                    Else
+                        NGGRAVAHIS(cCODBEM,nPOSCONT,&(vARQHIS[14]),dDATAFIM,;
+                                   nCONTACUM,&(vARQHIS[16]),cHORAFIM,nTIPOCONT,"P")
+                    EndIf
+
+                    dbSelectArea(vARQHIS[8])
+                    nNUMREG2 := Recno() //Numero do registro incluido
+
+                    //Carrega a array com as informacoes de contador para recalculo de variacao dia
+                    While !Bof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM .And. nITENS > 0
+
+                        If !Empty(&(vARQHIS[12]))
+                            Aadd(aARRSTP,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])})
+                            nITENS--
+                        EndIf
+                        dbSkip(-1)
+
+                    End
+
+                    nMAXAR := Len(aARRSTP)+1
+
+                    For xzy := 1 To Len(aARRSTP)
+                        Aadd(aARRSER,aARRSTP[nMAXAR-xzy])
+                    Next
+
+                    //Recalcula a variacao dia do registro novo
+                    nVARDNOV := NG380CALVA()
+
+                    dbSelectArea(vARQHIS[8])
+                    dbGoTo(nNUMREG2)
+                    RecLock(vARQHIS[8],.F.)
+                        &(vARQHIS[14]) := nVARDNOV
+                    MsUnLock(vARQHIS[8])
+
+                    //Grava a posicao inicial e Final contador da producao
+                    dbSelectArea("STY")
+                    RecLock("STY",.F.)
+                    If nTIPOCONT = 1
+                        STY->TY_POSINI1 := nCONTINC        //Posicao inicial da producao cont1
+                        STY->TY_POSFIM1 := &(vARQHIS[11]) //Posicao Final da producao cont1
+                        STY->TY_DTUTAC  := &(vARQHIS[12]) //Data de ultimo acompanhamento
+                        STY->TY_ULTCONT := &(vARQHIS[15]) //Ultimo contador acumulado
+                        STY->TY_VARDIA  := &(vARQHIS[14]) //Variacao dia
+                    Else
+                        STY->TY_POSINI2 := nCONTINC
+                        STY->TY_POSFIM2 := &(vARQHIS[11])
+                    EndIf
+                    MsUnLock("STY")
+
+                    //Guarda as informacoes de contadores para fim de atualizacao do bem
+                    dbSelectArea(vARQHIS[8])
+                    dDTACUFI := &(vARQHIS[12]) //Data da Leitura
+                    nCONTAFI := &(vARQHIS[11]) //Posicao do contador
+                    nACUMFIM := &(vARQHIS[15]) //Acumulado
+                    nVARDIFI := &(vARQHIS[14]) //Variacao dia
+                    nNUMVIRA := &(vARQHIS[16]) //Numero de viradas
+
+                    dbSkip()
+                    If !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM
+
+                        While !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM
+
+                            If Len(aARRSER) = nTAMHIS
+                                Adel(aARRSER,1)
+                                Asize(aARRSER,Len(aARRSER)-1)
+                            EndIf
+
+                            If (&(vARQHIS[11])+ nQUAPROD) > &(vARQHIS[7])
+
+                                //Diferenca que vai ser a posicao do contador da virada
+                                nDIFERE  := (&(vARQHIS[11])+ nQUAPROD) - &(vARQHIS[7])
+                                //Verifica realmente e uma virada
+                                dbSkip(-1)
+                                If nDIFERE < &(vARQHIS[11])
+
+                                    If lVIRADA
+                                        nNUMVIRA := nNUMVIRA + 1       //Soma mais uma virada
+                                    Else
+                                        lVIRADA  := .T.
+                                        nNUMVIRA := &(vARQHIS[16]) + 1 //Soma mais uma virada
+                                    EndIf
+
+                                EndIf
+                                dbSkip()
+                                Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,nDIFERE})
+
+                            Else
+
+                                nCONT380 := &(vARQHIS[11])+ nQUAPROD
+                                dbSkip(-1)
+                                If nCONT380 < &(vARQHIS[11]) //Tem virada
+
+                                    dbSkip()
+                                    If lVIRADA
+                                        nNUMVIRA := nNUMVIRA + 1         //Soma mais uma virada
+                                    Else
+                                        lVIRADA  := .T.
+                                        nNUMVIRA := &(vARQHIS[16]) + 1  //Soma mais uma virada
+                                    EndIf
+                                    Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])+ nQUAPROD})
+
+                                Else
+                                    dbSkip()
+                                    Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])+ nQUAPROD})
+                                EndIf
+                            EndIf
+
+                            //Recalcula variacao dia
+                            nVARDNOV := NG380CALVA()
+
+                            RecLock(vARQHIS[8],.F.)
+                            &(vARQHIS[11]) := aARRSER[Len(aARRSER)][3] //Posicao do contador
+                            &(vARQHIS[15]) := aARRSER[Len(aARRSER)][2] //Acumulado
+                            &(vARQHIS[14]) := nVARDNOV                 //Vaiacao dia
+                            &(vARQHIS[16]) := nNUMVIRA                 //Numero de viradas
+                            MsUnLock(vARQHIS[8])
+
+                            dDTACUFI := &(vARQHIS[12]) //Data da Leitura
+                            nCONTAFI := &(vARQHIS[11]) //Posicao do contador
+                            nACUMFIM := &(vARQHIS[15]) //Acumulado
+                            nVARDIFI := &(vARQHIS[14]) //Variacao dia
+                            nNUMVIRA := &(vARQHIS[16]) //Numero de viradas
+                            dbSkip()
+                        End
+
+                        //Atualiza as informacoes de contador do bem
+                        If !Empty(nACUMFIM)
+
+                            dbSelectArea(vARQHIS[1])
+                            RecLock(vARQHIS[1],.F.)
+                            &(vARQHIS[2]) := dDTACUFI //Data de Ultimo Acomp. do bem
+                            &(vARQHIS[3]) := nCONTAFI //Contador do bem
+                            &(vARQHIS[4]) := nACUMFIM //Acumulado do bem
+                            &(vARQHIS[5]) := nVARDIFI //Variacao dia do bem
+                            &(vARQHIS[6]) := nNUMVIRA //Numero de viradas do bem
+                            MsUnLock(vARQHIS[1])
+
+                        EndIf
+
+                    Else
+                        //Atualiza as informacoes de contador do bem
+                        If !Empty(nACUMFIM)
+
+                            dbSelectArea(vARQHIS[1])
+                            RecLock(vARQHIS[1],.F.)
+                            &(vARQHIS[2]) := dDTACUFI //Data de Ultimo Acomp. do bem
+                            &(vARQHIS[3]) := nCONTAFI //Contador do bem
+                            &(vARQHIS[4]) := nACUMFIM //Acumulado do bem
+                            &(vARQHIS[5]) := nVARDIFI //Variacao dia do bem
+                            &(vARQHIS[6]) := nNUMVIRA //Numero de viradas do bem
+                            MsUnLock(vARQHIS[1])
+
+                        EndIf
+                    EndIf
+                EndIf
+            EndIf
+        EndIf
+
+    ElseIf nOPCAO = 5   //EXCLUSAO
+
+        dbSelectArea(vARQHIS[8])
+        dbSetOrder(5)
+        If dbSeek(xFilial(vARQHIS[8])+cCODBEM+DTOS(dDATAFIM)+cHORAFIM)
+
+            If &(vARQHIS[17]) == "P" //Registro de producao
+
+                //Pega informacoes do registro anterior a delecao
+                dbSkip(-1)
+                dDATALE := &(vARQHIS[12]) //Data leitura
+                nCONTAD := &(vARQHIS[11]) //Contador
+                nACUMUL := &(vARQHIS[15]) //Acumulado
+                nVARIAC := &(vARQHIS[14]) //Variacao
+                nVIRADA := &(vARQHIS[16]) //Virada
+
+                dbSkip()
+                RecLock(vARQHIS[8],.F.)
+                    Dbdelete()
+                MsUnLock(vARQHIS[8])
+
+                dbSkip()
+                If !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM
+
+                    //Altualiza os demais registro porterior a delecao do registro
+                    nVETORBEM := NG380RETPR(cCODBEM,nQPRODOLD,nPFATOLD,nVIRADA,nITENS,nTIPOCONT)
+
+                    //Atualiza o cadastro do bem
+                    dbSelectArea(vARQHIS[1])
+                    dbSetOrder(1)
+                    If dbSeek(xFILIAL(vARQHIS[1])+cCODBEM)
+                        RecLock(vARQHIS[1],.F.)
+                        &(vARQHIS[2]) := nVETORBEM[1]  //Data de Ultimo Acompanhamento
+                        &(vARQHIS[3]) := nVETORBEM[2]  //Posicao do contador
+                        &(vARQHIS[4]) := nVETORBEM[3]  //Acumulado
+                        &(vARQHIS[5]) := nVETORBEM[4]  //Variacao dia
+                        &(vARQHIS[6]) := nVETORBEM[5]  //Numero de Viradas do contador
+                    EndIf
+
+                Else
+
+                    dbSelectArea(vARQHIS[1])
+                    dbSetOrder(1)
+                    If dbSeek(xFILIAL(vARQHIS[1])+cCODBEM)
+                        RecLock(vARQHIS[1],.F.)
+                        &(vARQHIS[2]) := dDATALE
+                        &(vARQHIS[3]) := nCONTAD
+                        &(vARQHIS[4]) := nACUMUL
+                        &(vARQHIS[5]) := nVARIAC
+                        &(vARQHIS[6]) := nVIRADA
+                    EndIf
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+ Return .T.
+
+/*
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³NG380CALVA ³ Autor ³Ellisangela Costa     ³ Data ³28/10/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Calcula e retorna a variacao dia do contador do bem         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³NG380ATUHI, NG380RETPR, NGESTR380 e NG380RPROF              ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function  NG380CALVA()
+
+Local nVARD1 := 1
+
+nVARD1 := Round ( (aARRSER[Len(aARRSER),2] - aARRSER[1,2]) / (aARRSER[Len(aARRSER),1] - aARRSER[1,1]) ,0)
+nVARD1 := If(nVARD1 == 0,1,nVARD1)
+
+Return nVARD1
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380RETPRºAutor  ³Elisangela Costa    º Data ³  05/11/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Retira a producao dos lancamentos posterior a delecao       º±±
+±±º          ³do registro da producao                                     º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³cCODBEM  = Codigo do Bem                                    º±±
+±±º          |nQPRODUC = Quantidade produzida anterior a delecao          º±±
+±±º          |nPROFATO = Quantidade produzida + fator anterior a delecao  º±±
+±±º          |nVIRADAS = Numero de viradas do registro anterior a delecao º±±
+±±º          |nITENS   = Numero de registro para ler conforme o parametro º±±
+±±º          |           MV_VARDIA                                        º±±
+±±º          ³nTIPOCONT = Tipo de contador (1= Contador 1 ; 2= Contador 2)º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380ATUHI( )                                               º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function NG380RETPR(cCODBEM,nQPRODUC,nPROFATO,nVIRADAS,nITENS,nTIPOCONT)
+Local nCONT1 := 0,nACUMU1 := 0,nTAMHIS := nITENS,xzk
+Local vARQHIS1 := If(nTIPOCONT = 1,{'ST9','st9->t9_limicon','STP','STP->TP_FILIAL','STP->TP_CODBEM',;
+                                     'stp->tp_poscont','STP->TP_DTLEITU','STP->TP_HORA',;
+                                     'stp->tp_vardia','stp->tp_acumcon','stp->tp_viracon'},;
+                                    {'TPE','tpe->tpe_limico','TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM',;
+                                     'tpp->tpp_poscon','TPP->TPP_DTLEIT','TPP->TPP_HORA',;
+                                     'tpp->tpp_vardia','tpp->tpp_acumco','tpp->tpp_viraco'})
+
+Private aARRSTP1 := {}, aARRSER := {}
+
+dbSelectArea(vARQHIS1[1])
+dbSetOrder(1)
+If dbSeek(xFILIAL(vARQHIS1[1])+cCODBEM)
+
+   dbSelectArea(vARQHIS1[3])
+   nCONT1  := &(vARQHIS1[6])  - nQPRODUC   //Contador menos a quantidade produzida
+   nACUMU1 := &(vARQHIS1[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+   If nCONT1 > 0
+
+      dbSkip(-1)
+      If nCONT1 < &(vARQHIS1[6])//Tem virada
+
+         nVIRADAS := nVIRADAS + 1 //Soma mais um no numero de viradas do contador
+
+      EndIf
+
+      dbSkip()
+      RecLock(vARQHIS1[3],.F.)
+      &(vARQHIS1[10]):= nACUMU1   //Acumulado
+      &(vARQHIS1[6]) := nCONT1    //Posicao do contador
+	   &(vARQHIS1[11]):= nVIRADAS  //Numero de viradas
+	   MsUnLock(vARQHIS1[3])
+   Else
+
+      // Contador + Limite do contador - Producao
+      nCONT1  := &(vARQHIS1[6]) + &(vARQHIS1[2]) - nQPRODUC
+
+      dbSkip(-1)
+      If nCONT1 < &(vARQHIS1[6]) //Tem virada
+
+         nVIRADAS := nVIRADAS + 1 //Soma mais um no numero de viradas do contador
+
+      EndIf
+
+      dbSkip()
+      RecLock(vARQHIS1[3],.F.)
+      &(vARQHIS1[10]):= nACUMU1   //Acumulado
+      &(vARQHIS1[6]) := nCONT1    //Posicao do contador
+	   &(vARQHIS1[11]):= nVIRADAS  //Numero de viradas
+	   MsUnLock(vARQHIS1[3])
+
+   EndIf
+
+   nRECSTP1 := Recno()
+
+   //Carrega a array com as informacoes de contador para recalculo de variacao dia
+   While !Bof() .And. &(vARQHIS1[4]) = xFilial(vARQHIS1[3]) .And.;
+      &(vARQHIS1[5]) = cCODBEM .And. nITENS > 0
+
+      If !Empty(&(vARQHIS1[7]))
+         Aadd(aARRSTP1,{&(vARQHIS1[7]),&(vARQHIS1[10]),&(vARQHIS1[6])})
+         nITENS--
+      EndIf
+      dbSkip(-1)
+   End
+
+   nMAXAR := Len(aARRSTP1)+1
+
+   For xzk := 1 To Len(aARRSTP1)
+     Aadd(aARRSER,aARRSTP1[nMAXAR-xzk])
+   Next
+
+   //Recalcula a variacao dia do registro novo
+   nVARDNOV := NG380CALVA()
+
+   dbSelectArea(vARQHIS1[3])
+   dbGoTo(nRECSTP1)
+   RecLock(vARQHIS1[3],.F.)
+   &(vARQHIS1[9]) := nVARDNOV
+   MsUnLock(vARQHIS1[3])
+
+   dDTACUFI := &(vARQHIS1[7])  //Data da Leitura
+   nCONTAFI := &(vARQHIS1[6])  //Posicao do contador
+   nACUMFIM := &(vARQHIS1[10]) //Acumulado
+   nVARDIFI := &(vARQHIS1[9])  //Variacao dia
+   nVIRADAS := &(vARQHIS1[11]) //Numero de viradas
+
+   dbSkip()
+   While !Eof() .And. &(vARQHIS1[4]) = xFilial(vARQHIS1[3]) .And. &(vARQHIS1[5]) = cCODBEM
+
+      If Len(aARRSER) = nTAMHIS
+         Adel(aARRSER,1)
+	      Asize(aARRSER,Len(aARRSER)-1)
+	   EndIf
+
+	   nCONT1  := &(vARQHIS1[6])  - nQPRODUC  //Contador menos a quantidade produzida
+      nACUMU1 := &(vARQHIS1[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+      If nCONT1 > 0
+
+         dbSkip(-1)
+         If nCONT1 < &(vARQHIS1[6])  //Tem virada
+
+            nVIRADAS := nVIRADAS + 1 //Soma mais um no numero de viradas do contador
+
+         EndIf
+
+         dbSkip()
+         Aadd(aARRSER,{&(vARQHIS1[7]),nACUMU1,nCONT1})
+      Else
+
+         // Contador + Limite do contador - Producao
+         nCONT1  := &(vARQHIS1[6]) + &(vARQHIS1[2]) - nQPRODUC
+
+         dbSkip(-1)
+         If nCONT1 < &(vARQHIS1[6])  //Tem virada
+
+            nVIRADAS := nVIRADAS + 1 //Soma mais um no numero de viradas do contador
+
+         EndIf
+
+         dbSkip()
+         Aadd(aARRSER,{&(vARQHIS1[7]),nACUMU1,nCONT1})
+
+      EndIf
+
+      nVARDNOV := NG380CALVA()
+	   RecLock(vARQHIS1[3],.F.)
+	   &(vARQHIS1[10]) := aARRSER[Len(aARRSER)][2]  //Acumulado
+      &(vARQHIS1[6])  := aARRSER[Len(aARRSER)][3]  //Posicao do contador
+	   &(vARQHIS1[9])  := nVARDNOV                   //Vaiacao dia
+	   &(vARQHIS1[11]) := nVIRADAS                   //Soma mais uma virada
+	   MsUnLock(vARQHIS1[3])
+
+ 	   dDTACUFI := &(vARQHIS1[7])  //Data da Leitura
+ 	   nCONTAFI := &(vARQHIS1[6])  //Posicao do contador
+ 	   nACUMFIM := &(vARQHIS1[10]) //Acumulado
+	   nVARDIFI := &(vARQHIS1[9])  //Variacao dia
+	   nVIRADAS := &(vARQHIS1[11]) //Numero de viradas
+	   dbSkip()
+   End
+EndIf
+Return {dDTACUFI,nCONTAFI,nACUMFIM,nVARDIFI,nVIRADAS}
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NGESTR380 ºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Faz o processo de inclusao e  exclusao de um                º±±
+±±º          ³retorno de producao para os bens filhos                     º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³cCOMPON   = Bem filho                                       º±±
+±±º          ³dDATAENT  = Data de entrada na estrutura                    º±±
+±±º          ³cHORAENT  = Hora de entrada na estrutura                    º±±
+±±º          ³dDATASAI  = Data de saida da estrutura                      º±±
+±±º          |cHORASAI  = Hora de saida da estrutura                      º±±
+±±º          |dDATAFIM  = Data fim da producao                            º±±
+±±º          |cHORAFIM  = Hora fim da producao                            º±±
+±±º          |nTIPOCONT = Tipo de contador(1= Contador 1, 2= Contador 2)  º±±
+±±º          |nQUAPROD  = Quantidade de producao                          º±±
+±±º          |nPRODUFAT = Quantidade produzida + fator de desgaste        º±±
+±±º          |nPFATOLD  = Quantidade produzida anterior a exclusao +      º±±
+±±º          |            fator de desgaste                               º±±
+±±º          |nOPCAO    = 3 = Inclusao, 5= Exclusao                       º±±
+±±º          |lBEMPROC  = .T.= Ja adicionou a producao + fator de desgasteº±±
+±±º          |                 no historico do contador no acumulado,     º±±
+±±º          |            .F.= Nao adicionou producao + fator de desgaste º±±
+±±º          |                 no historico do contador no acumulado,     º±±
+±±º          |nLIMBEMPAI = Limite de contador do bem pai da estrutura     º±±
+±±º          |nCONTATUAL = Contador atual do bem pai                      º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380PROC( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function NGESTR380(cCOMPON,dDATAENT,cHORAENT,dDATASAI,cHORASAI,;
+                          dDATAFIM,cHORAFIM,nTIPOCONT,nQUAPROD,nPRODUFAT,;
+                          nQPRODOLD,nPFATOLD,nOPCAO,lBEMPROC,nLIMBEMPAI,;
+                          nCONTATUAL)
+
+Local nITENS   := GETMV("MV_VARDIA"),aARRSTP := {},nTAMHIS := nITENS
+Local nMAXAR   := 0, nACUMFIM := 0, dDTACUFI, nCONTAFI := 0, nVARDIFI := 0, nACUMUL := 0
+Local nPOSCONT := 0,nCONTACUM := 0
+Local nNUMREG2 := 0,xzl
+Local vARQHIS  := If(nTIPOCONT = 1,{'ST9','st9->t9_dtultac','st9->t9_poscont','st9->t9_contacu',;
+                                     'st9->t9_vardia','st9->t9_viradas','st9->t9_limicon',;
+                                     'STP','STP->TP_FILIAL','STP->TP_CODBEM','stp->tp_poscont',;
+                                     'STP->TP_DTLEITU','STP->TP_HORA','stp->tp_vardia',;
+                                     'stp->tp_acumcon','stp->tp_viracon','stp->tp_tipolan'},;
+                                    {'TPE','tpe->tpe_dtulta','tpe->tpe_poscon','tpe->tpe_contac',;
+                                     'tpe->tpe_vardia','tpe->tpe_virada','tpe->tpe_limico',;
+                                     'TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM','tpp->tpp_poscon',;
+                                     'TPP->TPP_DTLEIT','TPP->TPP_HORA','tpp->tpp_vardia',;
+                                     'tpp->tpp_acumco','tpp->tpp_viraco','tpp->tpp_tipola'})
+
+Private aARRSER   := {}
+Private lULTREGHI := .F.
+
+If nOPCAO = 3   //INCLUSAO
+
+   dbSelectArea(vARQHIS[1])
+   dbSetOrder(1)
+   If dbSeek(xFILIAL(vARQHIS[1])+cCOMPON)
+
+      dbSelectArea(vARQHIS[8])
+      dbSetOrder(5)
+      dbSeek(xFilial(vARQHIS[8])+cCOMPON+DTOS(dDATAFIM)+cHORAFIM,.T.)
+      If Eof()
+         dbSkip(-1)
+      Else
+         If &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) <> cCOMPON
+            dbSkip(-1)
+         EndIf
+      EndIf
+
+      If !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCOMPON
+
+         If &(vARQHIS[12]) >= dDATAFIM
+            If &(vARQHIS[12]) = dDATAFIM
+               If &(vARQHIS[13]) > cHORAFIM
+                  nREGPROD := Recno()
+                  dbSkip(-1)
+                  If Bof()
+                     dbGoTo(nREGPROD)
+                  ElseIf !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) <> cCOMPON
+                     dbGoTo(nREGPROD)
+                  EndIf
+               EndIf
+            Else
+               nREGPROD := Recno()
+               dbSkip(-1)
+               If Bof()
+                  dbGoTo(nREGPROD)
+               ElseIf !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) <> cCOMPON
+                  dbGoTo(nREGPROD)
+               EndIf
+            EndIf
+         EndIf
+
+         If Empty(dDATASAI)
+
+            If &(vARQHIS[12]) = dDATAENT  .And. &(vARQHIS[13]) = cHORAENT
+               dbSkip()
+               If Eof() .Or. &(vARQHIS[9]) <> xFilial(vARQHIS[8]) .Or. &(vARQHIS[10]) <> cCOMPON
+                  lULTREGHI := .T.
+               EndIf
+               dbSkip(-1)
+            EndIf
+
+         EndIf
+
+         If lULTREGHI
+            nPOSCONT  :=  nCONTATUAL                //Posicao do bem pai
+            nCONTACUM := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+         Else
+            nPOSCONT  := &(vARQHIS[11])+ nQUAPROD  //Posicao do contador com producao
+            nCONTACUM := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+         EndIf
+
+         //Verifica se tem virada de contador
+         If !Empty(nLIMBEMPAI)
+
+            If nPOSCONT > nLIMBEMPAI
+
+               //Diferenca que vai ser a posicao do contador da virada
+               nDIFERE := nPOSCONT - nLIMBEMPAI
+
+               //Grava Historico do contador
+               NGGRAVAHIS(cCOMPON,nDIFERE,&(vARQHIS[14]),dDATAFIM,;
+                          nCONTACUM,&(vARQHIS[16]),cHORAFIM,nTIPOCONT,"P")
+
+            Else
+               NGGRAVAHIS(cCOMPON,nPOSCONT,&(vARQHIS[14]),dDATAFIM,;
+                          nCONTACUM,&(vARQHIS[16]),cHORAFIM,nTIPOCONT,"P")
+            EndIf
+         Else
+            NGGRAVAHIS(cCOMPON,nPOSCONT,&(vARQHIS[14]),dDATAFIM,;
+                       nCONTACUM,&(vARQHIS[16]),cHORAFIM,nTIPOCONT,"P")
+         EndIf
+
+         dbSelectArea(vARQHIS[8])
+         nNUMREG2 := Recno()      //Numero do registro Alterado ou incluido
+
+         //Carrega a array com as informacoes de contador para recalculo de variacao dia
+         While !Bof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And.;
+            &(vARQHIS[10]) = cCOMPON .And. nITENS > 0
+
+            If !Empty(&(vARQHIS[12]))
+               Aadd(aARRSTP,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])})
+               nITENS--
+            EndIf
+            dbSkip(-1)
+
+         End
+
+         nMAXAR := Len(aARRSTP)+1
+
+         For xzl := 1 To Len(aARRSTP)
+            Aadd(aARRSER,aARRSTP[nMAXAR-xzl])
+         Next
+
+         //Recalcula a variacao dia
+         nVARDNOV := NG380CALVA()
+
+         dbSelectArea(vARQHIS[8])
+         dbGoTo(nNUMREG2)
+         RecLock(vARQHIS[8],.F.)
+         &(vARQHIS[14]) := nVARDNOV
+         MsUnLock(vARQHIS[8])
+
+         //Guarda as informacoes de contadores para fim de atualizacao do bem
+	      dbSelectArea(vARQHIS[8])
+	      dDTACUFI := &(vARQHIS[12]) //Data da Leitura
+	      nCONTAFI := &(vARQHIS[11]) //Posicao do contador
+	      nACUMFIM := &(vARQHIS[15]) //Acumulado
+		   nVARDIFI := &(vARQHIS[14]) //Variacao dia
+
+         dbSkip()
+         If !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCOMPON
+
+            While !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCOMPON
+
+               If Len(aARRSER) = nTAMHIS
+                  Adel(aARRSER,1)
+		            Asize(aARRSER,Len(aARRSER)-1)
+		         EndIf
+
+		         //Se o componente ja saiu da estrutura
+               If !Empty(dDATASAI)
+                  If &(vARQHIS[12]) >= dDATASAI
+                     If &(vARQHIS[12]) = dDATASAI
+
+                        //Hora de leitura do contador maior que a hora de saida da estrutura
+                        //altera so acumulado
+                        If &(vARQHIS[13]) > cHORASAI
+
+                           If !lBEMPROC
+                              Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])})
+                           Else
+                              Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])})
+                           EndIf
+
+    		               Else
+                           //Hora de leitura do contador menor ou igual a hora de saida da estrutura
+                           //altera acumulado  e contador
+
+                           //Altera os registro do historico
+                           NGHIST380(vARQHIS,nLIMBEMPAI,nQUAPROD,nPRODUFAT,lBEMPROC,2)
+
+                        EndIf
+                     Else
+
+                        //Data de leitura e hora maior que a data saida e hora da estrutura altera so acumulado
+                        If !lBEMPROC
+                           Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])})
+                        Else
+                           Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])})
+                        EndIf
+
+                     EndIf
+                  Else
+                     //Data de leitura menor que data\hora de saida da estrutura, altera acumulado e contador
+
+                     //Altera os registro do historico
+                     NGHIST380(vARQHIS,nLIMBEMPAI,nQUAPROD,nPRODUFAT,lBEMPROC,2)
+
+                  EndIf
+               Else
+                  //Nao saiu da estrutura altera contador e acumulado
+
+                  //Altera os registro do historico
+                  NGHIST380(vARQHIS,nLIMBEMPAI,nQUAPROD,nPRODUFAT,lBEMPROC,2)
+
+               EndIf
+
+               //Recalcula variacao dia
+		         nVARDNOV := NG380CALVA()
+
+	            RecLock(vARQHIS[8],.F.)
+	            &(vARQHIS[11]) := aARRSER[Len(aARRSER)][3] //Posicao do contador
+  	            &(vARQHIS[15]) := aARRSER[Len(aARRSER)][2] //Acumulado
+    		      &(vARQHIS[14]) := nVARDNOV                  //Vaiacao dia
+	            MsUnLock(vARQHIS[8])
+
+      		   dDTACUFI := &(vARQHIS[12]) //Data da Leitura
+      		   nCONTAFI := &(vARQHIS[11]) //Posicao do contador
+ 	            nACUMFIM := &(vARQHIS[15]) //Acumulado
+		         nVARDIFI := &(vARQHIS[14]) //Variacao dia
+		         dbSkip()
+		      End
+
+		      //Atualiza as informacoes de contador do bem
+		      If !Empty(nACUMFIM)
+
+               dbSelectArea(vARQHIS[1])
+               RecLock(vARQHIS[1],.F.)
+               &(vARQHIS[2]) := dDTACUFI //Data de Ultimo Acomp. do bem
+               &(vARQHIS[3]) := nCONTAFI //Contador do bem
+               &(vARQHIS[4]) := nACUMFIM //Acumulado do bem
+               &(vARQHIS[5]) := nVARDIFI //Variacao dia do bem
+               MsUnLock(vARQHIS[1])
+
+            EndIf
+		   Else
+		      //Atualiza as informacoes de contador do bem
+		      If !Empty(nACUMFIM)
+
+               dbSelectArea(vARQHIS[1])
+               RecLock(vARQHIS[1],.F.)
+               &(vARQHIS[2]) := dDTACUFI //Data de Ultimo Acomp. do bem
+               &(vARQHIS[3]) := nCONTAFI //Contador do bem
+               &(vARQHIS[4]) := nACUMFIM //Acumulado do bem
+               &(vARQHIS[5]) := nVARDIFI //Variacao dia do bem
+               MsUnLock(vARQHIS[1])
+
+            EndIf
+		   EndIf
+      EndIf
+   EndIf
+ElseIf nOPCAO = 5   //EXCLUSAO
+
+   dbSelectArea(vARQHIS[8])
+   dbSetOrder(5)
+   If dbSeek(xFilial(vARQHIS[8])+cCOMPON+DTOS(dDATAFIM)+cHORAFIM)
+
+      If &(vARQHIS[17]) == "P" //Registro de producao
+
+         nREGDELE := Recno()
+         dbSkip(-1)
+         If !Bof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCOMPON
+
+            //Pega informacoes do registro anterior a delecao
+            dDATALE := &(vARQHIS[12]) //Data leitura
+            nCONTAD := &(vARQHIS[11]) //Contador
+            nACUMUL := &(vARQHIS[15]) //Acumulado
+            nVARIAC := &(vARQHIS[14]) //Variacao
+
+         EndIf
+
+         dbGoTo(nREGDELE)
+         RecLock(vARQHIS[8],.F.)
+         Dbdelete()
+         MsUnLock(vARQHIS[8])
+
+         dbSkip()
+         If !Eof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCOMPON
+
+            //Altualiza os demais registro porterior a delecao do registro
+            nVETORBEM := NG380RPROF(cCOMPON,nQPRODOLD,nPFATOLD,nITENS,nTIPOCONT,;
+                                    dDATAENT,cHORAENT,dDATASAI,cHORASAI,nLIMBEMPAI,lBEMPROC)
+
+            //Atualiza o cadastro do bem
+            dbSelectArea(vARQHIS[1])
+            dbSetOrder(1)
+            If dbSeek(xFILIAL(vARQHIS[1])+cCOMPON)
+               RecLock(vARQHIS[1],.F.)
+               &(vARQHIS[2]) := nVETORBEM[1]  //Data de Ultimo Acompanhamento
+               &(vARQHIS[3]) := nVETORBEM[2]  //Posicao do contador
+               &(vARQHIS[4]) := nVETORBEM[3]  //Acumulado
+               &(vARQHIS[5]) := nVETORBEM[4]  //Variacao dia
+            EndIf
+         Else
+            dbSelectArea(vARQHIS[1])
+            dbSetOrder(1)
+            If dbSeek(xFILIAL(vARQHIS[1])+cCOMPON)
+               RecLock(vARQHIS[1],.F.)
+               &(vARQHIS[2]) := dDATALE
+               &(vARQHIS[3]) := nCONTAD
+               &(vARQHIS[4]) := nACUMUL
+               &(vARQHIS[5]) := nVARIAC
+            EndIf
+         EndIf
+      EndIf
+   EndIf
+EndIf
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NGHIST380 ºAutor  ³Elisangela Costa    º Data ³  28/10/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Altera os registro ou carrega a array com os valores de     º±±
+±±º          ³contador e acumulado                                        º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³vARQHIS    = Vetor que contem os campos do historico        º±±
+±±º          ³nLIMBEMPAI = Limite do contador do bem pai                  º±±
+±±º          ³nQUAPROD   = Quantidade de producao                         º±±
+±±º          ³nPRODUFAT  = Quatidade de producao + fator de desgaste      º±±
+±±º          |lBEMPROC   = Variavel logica que indica se o acumulado ja   º±±
+±±º          |             recebeu a quantide de producao + fator         º±±
+±±º          |cTIPO      = Tipo de processamento (1 = Altera o registro   º±±
+±±º          |             corrente, 2 = carrega a array)                 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NGESTR380()                                                 º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function NGHIST380(vARQHIS,nLIMBEMPAI,nQUAPROD,nPRODUFAT,lBEMPROC,cTIPO)
+
+If cTIPO = 1
+   If !Empty(nLIMBEMPAI)
+      If (&(vARQHIS[11])+ nQUAPROD) > nLIMBEMPAI
+
+         //Diferenca que vai ser a posicao do contador da virada
+         nDIFERE  := (&(vARQHIS[11])+ nQUAPROD) - nLIMBEMPAI
+
+         RecLock(vARQHIS[8],.F.)
+         &(vARQHIS[11]) := nDIFERE                         //Posicao do acumulado com producao e fator
+         If !lBEMPROC
+             &(vARQHIS[15]) := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+         EndIf
+         MsUnLock(vARQHIS[8])
+
+      Else
+
+         RecLock(vARQHIS[8],.F.)
+  	      &(vARQHIS[11])    := &(vARQHIS[11])+ nQUAPROD  //Posicao do contador mais producao
+  	      If !lBEMPROC
+  	         &(vARQHIS[15]) := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+  	      EndIf
+  	      MsUnLock(vARQHIS[8])
+
+	   EndIf
+   Else
+
+      RecLock(vARQHIS[8],.F.)
+      &(vARQHIS[11])    := &(vARQHIS[11])+ nQUAPROD  //Posicao do contador mais producao
+      If !lBEMPROC
+         &(vARQHIS[15]) := &(vARQHIS[15])+ nPRODUFAT //Posicao do acumulado com producao e fator
+      EndIf
+      MsUnLock(vARQHIS[8])
+
+   EndIf
+Else
+   If !Empty(nLIMBEMPAI)
+      If (&(vARQHIS[11])+ nQUAPROD) > nLIMBEMPAI
+
+         //Diferenca que vai ser a posicao do contador da virada
+         nDIFERE  := (&(vARQHIS[11])+ nQUAPROD) - nLIMBEMPAI
+
+         If !lBEMPROC
+            Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,nDIFERE})
+         Else
+            Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15]),nDIFERE})
+         EndIf
+
+      Else
+
+         If !lBEMPROC
+            Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])+ nQUAPROD})
+         Else
+            Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])+ nQUAPROD})
+         EndIf
+
+      EndIf
+   Else
+
+      If !lBEMPROC
+         Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15])+ nPRODUFAT,&(vARQHIS[11])+ nQUAPROD})
+      Else
+         Aadd(aARRSER,{&(vARQHIS[12]),&(vARQHIS[15]),&(vARQHIS[11])+ nQUAPROD})
+      EndIf
+
+   EndIf
+EndIf
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NG380RPROFºAutor  ³Elisangela Costa    º Data ³  05/11/03   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Retira a producao dos lancamentos do historico do contador  º±±
+±±º          ³dos bens filhos da estrutura do bem pai                     º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³cCODCOMP  = Codigo do bem filho da estrutura                º±±
+±±º          |nQPRODUC  = Quantidade produzida anterior a delecao         º±±
+±±º          |nPROFATO  = Quantidade produzida + fator anterior a delecao.º±±
+±±º          |nITENS    = Numero de registros a serem lidos para calculo  º±±
+±±º          ³            de variacao dia                                 º±±
+±±º          ³nTIPOCONT = Tipo de contador (1= Contador 1 ; 2= Contador 2)º±±
+±±º          |dDATAENT  = Data de entrada na estrutura                    º±±
+±±º          |cHORAENT  = Hora de entrada na estrutura                    º±±
+±±º          |dDATASAI  = Data de saida na estrutura                      º±±
+±±º          |cHORASAI  = Hora de saida na estrutura                      º±±
+±±º          |nLIMBEMPAI = Limite do contador do bem pai                  º±±
+±±º          |lBEMPROC   = Indica se ja foi tirado a producao do acumulad º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NGESTR380( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function NG380RPROF(cCODCOMP,nQPRODUC,nPROFATO,nITENS,nTIPOCONT,;
+                           dDATAENT,cHORAENT,dDATASAI,cHORASAI,nLIMBEMPAI,lBEMPROC)
+
+Local nCONT1 := 0,nACUMU1 := 0,nTAMHIS := nITENS,xzc
+Local vARQHIS2 := If(nTIPOCONT = 1,{'ST9','st9->t9_limicon','STP','STP->TP_FILIAL','STP->TP_CODBEM',;
+                                      'stp->tp_poscont','STP->TP_DTLEITU','STP->TP_HORA',;
+                                      'stp->tp_vardia','stp->tp_acumcon','stp->tp_viracon'},;
+                                    {'TPE','tpe->tpe_limico','TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM',;
+                                      'tpp->tpp_poscon','TPP->TPP_DTLEIT','TPP->TPP_HORA',;
+                                      'tpp->tpp_vardia','tpp->tpp_acumco','tpp->tpp_viraco'})
+
+Private aARRSTP1 := {}, aARRSER := {}
+
+//Se o componente ja saiu da estrutura
+If !Empty(dDATASAI)
+   If &(vARQHIS2[7]) >= dDATASAI
+      If &(vARQHIS2[7]) = dDATASAI
+
+         //Hora de leitura do contador maior que a hora de saida da estrutura
+         //altera so acumulado
+         If &(vARQHIS2[8]) > cHORASAI
+
+            nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+            If !lBEMPROC
+               RecLock(vARQHIS2[3],.F.)
+               &(vARQHIS2[10]) := nACUMU1
+               MsUnLock(vARQHIS2[3])
+            EndIf
+
+         Else
+            //Hora de leitura do contador menor ou igual a hora de saida da estrutura
+            //altera acumulado  e contador
+
+            nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+            nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+            If nCONT1 > 0
+
+               RecLock(vARQHIS2[3],.F.)
+               If !lBEMPROC
+                  &(vARQHIS2[10]):= nACUMU1  //Acumulado
+               EndIf
+               &(vARQHIS2[6]) := nCONT1      //Posicao do contador
+	            MsUnLock(vARQHIS2[3])
+
+            Else
+               // Contador + Limite do contador - Producao
+               nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+               RecLock(vARQHIS2[3],.F.)
+               If !lBEMPROC
+                  &(vARQHIS2[10]):= nACUMU1  //Acumulado
+               EndIf
+               &(vARQHIS2[6]) := nCONT1      //Posicao do contador
+	            MsUnLock(vARQHIS2[3])
+	         EndIf
+         EndIf
+      Else
+         //Data de leitura e hora maior que a data saida e hora da estrutura, altera so acumulado
+         nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+         If !lBEMPROC
+            RecLock(vARQHIS2[3],.F.)
+            &(vARQHIS2[10]) := nACUMU1
+            MsUnLock(vARQHIS2[3])
+         EndIf
+
+      EndIf
+   Else
+      //Data de leitura menor que data\hora de saida da estrutura, altera acumulado e contador
+
+      nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+      nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+      If nCONT1 > 0
+
+         RecLock(vARQHIS2[3],.F.)
+         If !lBEMPROC
+            &(vARQHIS2[10]):= nACUMU1  //Acumulado
+         EndIf
+         &(vARQHIS2[6]) := nCONT1      //Posicao do contador
+	      MsUnLock(vARQHIS2[3])
+
+      Else
+         // Contador + Limite do contador - Producao
+         nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+         RecLock(vARQHIS2[3],.F.)
+         If !lBEMPROC
+            &(vARQHIS2[10]):= nACUMU1 //Acumulado
+         EndIf
+         &(vARQHIS2[6]) := nCONT1     //Posicao do contador
+	      MsUnLock(vARQHIS2[3])
+	   EndIf
+   EndIf
+Else
+   //Nao saiu da estrutura altera contador e acumulado
+
+   nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+   nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+   If nCONT1 > 0
+
+      RecLock(vARQHIS2[3],.F.)
+      If !lBEMPROC
+         &(vARQHIS2[10]):= nACUMU1  //Acumulado
+      EndIf
+      &(vARQHIS2[6]) := nCONT1      //Posicao do contador
+	   MsUnLock(vARQHIS2[3])
+
+   Else
+
+      // Contador + Limite do contador - Producao
+      nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+      RecLock(vARQHIS2[3],.F.)
+      If !lBEMPROC
+         &(vARQHIS2[10]):= nACUMU1  //Acumulado
+      EndIf
+      &(vARQHIS2[6]) := nCONT1      //Posicao do contador
+      MsUnLock(vARQHIS2[3])
+
+   EndIf
+EndIf
+
+nRECSTP1 := Recno()
+
+//Carrega a array com as informacoes de contador para recalculo de variacao dia
+While !Bof() .And. &(vARQHIS2[4]) = xFilial(vARQHIS2[3]) .And.;
+   &(vARQHIS2[5]) = cCODCOMP .And. nITENS > 0
+
+   If !Empty(&(vARQHIS2[7]))
+      Aadd(aARRSTP1,{&(vARQHIS2[7]),&(vARQHIS2[10]),&(vARQHIS2[6])})
+      nITENS--
+   EndIf
+   dbSkip(-1)
+End
+
+nMAXAR := Len(aARRSTP1)+1
+
+For xzc := 1 To Len(aARRSTP1)
+    Aadd(aARRSER,aARRSTP1[nMAXAR-xzc])
+Next
+
+//Recalcula a variacao dia do registro novo
+nVARDNOV := NG380CALVA()
+
+dbSelectArea(vARQHIS2[3])
+dbGoTo(nRECSTP1)
+RecLock(vARQHIS2[3],.F.)
+&(vARQHIS2[9]) := nVARDNOV
+MsUnLock(vARQHIS2[3])
+
+dDTACUFI := &(vARQHIS2[7]) //Data da Leitura
+nCONTAFI := &(vARQHIS2[6]) //Posicao do contador
+nACUMFIM := &(vARQHIS2[10])//Acumulado
+nVARDIFI := &(vARQHIS2[9]) //Variacao dia
+
+dbSkip()
+While !Eof() .And. &(vARQHIS2[4]) = xFilial(vARQHIS2[3]) .And. &(vARQHIS2[5]) = cCODCOMP
+
+   If Len(aARRSER) = nTAMHIS
+      Adel(aARRSER,1)
+      Asize(aARRSER,Len(aARRSER)-1)
+   EndIf
+
+   If !Empty(dDATASAI)
+      If &(vARQHIS2[7]) >= dDATASAI
+         If &(vARQHIS2[7]) = dDATASAI
+
+            //Hora de leitura do contador maior que a hora de saida da estrutura
+            //altera so acumulado
+            If &(vARQHIS2[8]) > cHORASAI
+
+               nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+               If !lBEMPROC
+                  Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,&(vARQHIS2[6])})
+               Else
+                  Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),&(vARQHIS2[6])})
+               EndIf
+
+            Else
+               //Hora de leitura do contador menor ou igual a hora de saida da estrutura
+               //altera acumulado  e contador
+
+               nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+               nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+               If nCONT1 > 0
+
+                  If !lBEMPROC
+                     Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+                  Else
+                     Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+                  EndIf
+
+               Else
+                  // Contador + Limite do contador - Producao
+                  nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+                  If !lBEMPROC
+                     Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+                  Else
+                     Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+                  EndIf
+
+	            EndIf
+            EndIf
+         Else
+            //Data de leitura e hora maior que a data saida e hora da estrutura, altera so acumulado
+            nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+            If !lBEMPROC
+               Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,&(vARQHIS2[6])})
+            Else
+               Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),&(vARQHIS2[6])})
+            EndIf
+
+         EndIf
+      Else
+         //Data de leitura menor que data\hora de saida da estrutura, altera acumulado e contador
+
+         nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+         nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+         If nCONT1 > 0
+
+            If !lBEMPROC
+               Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+            Else
+               Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+            EndIf
+
+         Else
+            // Contador + Limite do contador - Producao
+            nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+            If !lBEMPROC
+               Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+            Else
+               Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+            EndIf
+
+	      EndIf
+      EndIf
+   Else
+      //Nao saiu da estrutura altera contador e acumulado
+
+      nCONT1  := &(vARQHIS2[6])  - nQPRODUC  //Contador menos a quantidade produzida
+      nACUMU1 := &(vARQHIS2[10]) - nPROFATO  //Acumulado menos a quantidade produzida + fator
+
+      If nCONT1 > 0
+
+         If !lBEMPROC
+            Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+         Else
+            Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+         EndIf
+
+      Else
+         // Contador + Limite do contador - Producao
+         nCONT1  := &(vARQHIS2[6]) + nLIMBEMPAI - nQPRODUC
+
+         If !lBEMPROC
+            Aadd(aARRSER,{&(vARQHIS2[7]),nACUMU1,nCONT1})
+         Else
+            Aadd(aARRSER,{&(vARQHIS2[7]),&(vARQHIS2[10]),nCONT1})
+         EndIf
+
+	   EndIf
+   EndIf
+
+   nVARDNOV := NG380CALVA()
+   RecLock(vARQHIS2[3],.F.)
+   &(vARQHIS2[10]) := aARRSER[Len(aARRSER)][2] //Acumulado
+   &(vARQHIS2[6])  := aARRSER[Len(aARRSER)][3] //Posicao do contador
+   &(vARQHIS2[9])  := nVARDNOV                   //Vaiacao dia
+   MsUnLock(vARQHIS2[3])
+
+   dDTACUFI := &(vARQHIS2[7]) //Data da Leitura
+   nCONTAFI := &(vARQHIS2[6]) //Posicao do contador
+   nACUMFIM := &(vARQHIS2[10])//Acumulado
+   nVARDIFI := &(vARQHIS2[9]) //Variacao dia
+   dbSkip()
+
+End
+
+Return {dDTACUFI,nCONTAFI,nACUMFIM,nVARDIFI}
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NGATHMQP  ºAutor  ³Elisangela Costa    º Data ³  16/09/04   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Faz o processo de inclusao e exclusao do retorno de         º±±
+±±º          ³producao informado com maquina parada                       º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³cCODBEM   = Codigo do Bem                                   º±±
+±±º          ³dDATAFIM  = Data fim da producao                            º±±
+±±º          ³cHORAFIM  = Hora fim da producao                            º±±
+±±º          ³nTIPOCONT = Tipo de contador (1= Contador 1 ; 2= Contador 2 º±±
+±±º          |nNUMREG   = Numero do registro para recalculo               º±±
+±±º          |nOPCAO    = Opcao escolhida (3= Inclusao, 5 = Exclusao)     º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380PROC( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function NGATHMQP(cCODBEM,dDATAFIM,cHORAFIM,nTIPOCONT,nNUMREG,nOPCAO)
+
+Local xz
+Local vARQHIS   := If(nTIPOCONT = 1,{'ST9','st9->t9_dtultac','st9->t9_poscont','st9->t9_contacu',;
+                                      'st9->t9_vardia','st9->t9_viradas','st9->t9_limicon',;
+                                      'STP','STP->TP_FILIAL','STP->TP_CODBEM','stp->tp_poscont',;
+                                      'STP->TP_DTLEITU','STP->TP_HORA','stp->tp_vardia',;
+                                      'stp->tp_acumcon','stp->tp_viracon'},;
+                                     {'TPE','tpe->tpe_dtulta','tpe->tpe_poscon','tpe->tpe_contac',;
+                                      'tpe->tpe_vardia','tpe->tpe_virada','tpe->tpe_limico',;
+                                      'TPP','TPP->TPP_FILIAL','TPP->TPP_CODBEM','tpp->tpp_poscon',;
+                                      'TPP->TPP_DTLEIT','TPP->TPP_HORA','tpp->tpp_vardia',;
+                                      'tpp->tpp_acumco','tpp->tpp_viraco'})
+
+
+
+
+Private aBENSFILMP := {}, nCONTATMQ := 0, nNREG380 := 0
+
+If nOPCAO = 3   //INCLUSAO
+
+   dbSelectArea(vARQHIS[1])
+   dbSetOrder(01)
+   If dbSeek(xFILIAL(vARQHIS[1])+cCODBEM)
+
+      nLIMITEPAI := &(vARQHIS[7])
+
+      If !Empty(nNUMREG)
+
+         dbSelectArea(vARQHIS[8])
+         dbSetOrder(05)
+         dbGoTo(nNUMREG)
+
+         If !Eof() .And. !Bof() .And. &(vARQHIS[9]) = xFilial(vARQHIS[8]) .And. &(vARQHIS[10]) = cCODBEM
+
+            NGGRAVAHIS(cCODBEM,&(vARQHIS[11]),&(vARQHIS[14]),dDATAFIM,;
+                       &(vARQHIS[15]),&(vARQHIS[16]),cHORAFIM,nTIPOCONT,"P")
+
+            dbSelectArea(vARQHIS[8])
+            nNREG380  := Recno() //Numero do registro incluido
+            nCONTATMQ := &(vARQHIS[11])
+
+            //Recalcula a variacao dia do registro novo
+            nVARDNOV := NGVARIADT(cCODBEM,dDATAFIM,nTIPOCONT,&(vARQHIS[15]),.T.)
+
+            dbSelectArea(vARQHIS[8])
+            dbGoTo(nNREG380)
+            RecLock(vARQHIS[8],.F.)
+            &(vARQHIS[14]) := nVARDNOV
+            MsUnLock(vARQHIS[8])
+         EndIf
+
+         //Funcao que Retorna os bens que estava ou estao na estrutura apartir da data fim
+         //e hora fim da producao
+         aESTRUMQP := NGCOMPPCONT(cCODBEM,dDATAFIM,cHORAFIM)
+
+         //Atualiza os bens filhos da estrutura correspondentes ao bem da producao
+         For xz := 1 To Len(aESTRUMQP)
+
+            dbSelectArea(vARQHIS[1])
+            dbSetOrder(01)
+            If dbSeek(xFILIAL(vARQHIS[1])+aESTRUMQP[xz][1])
+
+               nPOS := aSCAN(aBENSFILMP,{|x|(x[1])== aESTRUMQP[xz][1]})
+
+               lACHOU := .F.
+               If nPOS > 0
+                  lACHOU := .T.
+               Else
+                  Aadd(aBENSFILMP,{aESTRUMQP[xz][1]})
+               EndIf
+
+               //Processa os registros do historico para o bem filho adicionando a producao
+               NGESTR380(aESTRUMQP[xz][1],aESTRUMQP[xz][2],aESTRUMQP[xz][3],aESTRUMQP[xz][4],;
+                         aESTRUMQP[xz][5],dDATAFIM,cHORAFIM,nTIPOCONT,0,0,0,0,nOPCAO,lACHOU,nLIMITEPAI,nCONTATMQ)
+            EndIf
+
+         Next
+      EndIf
+   EndIf
+ElseIf nOPCAO = 5 //EXCLUSAO
+
+   dbSelectArea(vARQHIS[1])
+   dbSetOrder(01)
+   If dbSeek(xFILIAL(vARQHIS[1])+cCODBEM)
+
+      nLIMITEPAI := &(vARQHIS[7])
+
+      //Processa a exclusao do registro com producao 0 do bem pai
+      NG380ATUHI(cCODBEM,dDATAFIM,cHORAFIM,nTIPOCONT,,nOPCAO,0,0,0,0)
+
+      //Funcao que Retorna os bens que estava ou estao na estrutura apartir da data fim
+      //e hora fim da producao
+      aESTRUMQP := NGCOMPPCONT(cCODBEM,dDATAFIM,cHORAFIM)
+
+      //Atualiza os bens filhos da estrutura correspondentes ao bem da producao
+      For xz := 1 To Len(aESTRUMQP)
+
+         dbSelectArea(vARQHIS[1])
+         dbSetOrder(01)
+         If dbSeek(xFILIAL(vARQHIS[1])+aESTRUMQP[xz][1])
+
+            nPOS := aSCAN(aBENSFILMP,{|x|(x[1])== aESTRUMQP[xz][1]})
+
+            lACHOU := .F.
+            If nPOS > 0
+               lACHOU := .T.
+            Else
+               Aadd(aBENSFILMP,{aESTRUMQP[xz][1]})
+            EndIf
+
+            //Processa os registros do historico para o bem filho adicionando a producao
+            NGESTR380(aESTRUMQP[xz][1],aESTRUMQP[xz][2],aESTRUMQP[xz][3],aESTRUMQP[xz][4],;
+                      aESTRUMQP[xz][5],dDATAFIM,cHORAFIM,nTIPOCONT,0,0,0,0,nOPCAO,lACHOU,nLIMITEPAI,)
+
+         EndIf
+      Next
+   EndIf
+EndIf
+
+Return  nNREG380
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFun‡…o    ³NGCALHDT  ºAutor  ³Elisangela Costa    º Data ³  16/09/04   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Calcula a hora e data somando ou diminuindo um minuto da    º±±
+±±º          ³hora                                                        º±±
+±±ºÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³dDATACAL  = Data fim da producao                            º±±
+±±º          ³cHORACAL  = Hora fim da producao                            º±±
+±±º          ³nTIPOCAL  = Tipo de Calculo (1- Soma um minuto na hora,     º±±
+±±º          ³            2- Diminui um minuto na hora                    º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³NG380PROC( )                                                º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function NGCALHDT(dDATACAL,cHORACAL,nTIPOCAL)
+
+Local dDTA380  := CTOD("  /  /  ")
+Local cHORA380 := "  :  "
+
+If nTIPOCAL = 1
+
+   //Soma 1 minuto na hora
+   If Alltrim(cHORACAL) == "23:59"
+      dDTA380  := dDATACAL + 1
+      cHORA380 := "00:00"
+   Else
+      dDTA380  := dDATACAL
+	   cHORA380 := MTOH(HTOM(cHORACAL)+1) //Soma 1 minuto na hora
+   EndIf
+
+Else
+
+   //Diminui 1 minuto na hora
+   If Alltrim(cHORACAL) == "00:00"
+      dDTA380  := dDATACAL - 1
+      cHORA380 := "23:59"
+   Else
+      dDTA380  := dDATACAL
+	   cHORA380 := MTOH(HTOM(cHORACAL)-1) //Diminui 1 minuto na hora
+	EndIf
+
+EndIf
+
+Return {dDTA380,ChORA380}
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Programa  ³MenuDef   ³ Autor ³ Ricardo Dal Ponte     ³ Data ³29/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Utilizacao de menu Funcional                               ³±±
+±±³          ³                                                            ³±±
+±±³          ³                                                            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³		1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³   DATA   ³ Programador   ³Manutencao efetuada                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³          ³               ³                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+
+ Static Function MenuDef()
+
+	Local aRotina := {{STR0005 ,"AxPesqui" ,0,1}  ,; //"Pesquisar"
+	                  {STR0001 ,"NGCAD01"  ,0,2}  ,; //"Visualiza"
+	                  {STR0002 ,"NG380PROC",0,3,0},; //"Inclui"
+	                  {STR0003 ,"NG380PROC",0,4,3}}  //"Exclui"
+ Return(aRotina)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT380ESTO
+Função de validação do campo TY_PRODUTO.
+
+@author Diego de Oliveira
+@since 21/05/2015
+@version MP10
+/*/
+//---------------------------------------------------------------------
+Function MNT380ESTO()
+
+	If !Empty(M->TY_PRODUTO)
+		If !(SB1->(dbSeek(XFILIAL()+TY_PRODUTO)))
+			Return .F.
+		Else
+			If !(SG1->(dbSeek(XFILIAL()+TY_PRODUTO)))
+				Chkhelp("NAOPRODUZIDO")
+				Return .F.
+			EndIf
+		EndIf
+
+        If !EXISTCPO("SB1",M->TY_PRODUTO)
+            Return .F.
+        EndIf
+    EndIf
+
+Return .T.

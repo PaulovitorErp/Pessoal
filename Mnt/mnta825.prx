@@ -1,0 +1,601 @@
+#INCLUDE "MNTA825.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA825
+Acumular os Planos de Manutencao / Historic 
+
+Este Programa Exclui as Planos de Manutencao e Grava no os Historico.
+Somente Manutencao terminados ate a data informada como parametro    
+
+@since 04/07/97
+@author Inacio Luiz Kolling
+@return	boolean
+/*/
+//---------------------------------------------------------------------
+Function MNTA825()
+
+   Local aAreaSTI := STI->( GetArea() )
+
+   If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+      
+      Help( NIL, 1, STR0018, NIL, STR0019, 1, 0, NIL, NIL, NIL, NIL, NIL, {} ) // "ATENÇÃO"###"Esta rotina tem por objetivo otimizar processos
+                                                                               // relacionados a Ordens de Serviço enviando as informações de 
+                                                                               // TODAS as tabelas relacionadas a O.S. para tabelas de 
+                                                                               // histórico, posteriormente DELETANDO as informações de suas 
+                                                                               // tabelas originadas. Todos os relatórios e consultas buscam 
+                                                                               // informações das tabelas originais e de históricos. 
+                                                                               // É aconselhável realizar um Backup da base antes do 
+                                                                               // procedimento, para mais detalhes acessar a documentação da 
+                                                                               // rotina em: https://tdn.totvs.com/x/H6kYIQ"
+
+      cCadastro := OemToAnsi(STR0001) //"Acumula Manutencao"
+
+      aARRAY1 := {}
+      AADD (aARRAY1,{'STJ','STL','STN','STA','STQ','TPQ','TPL'})
+      aARRAY2 := {}
+      AADD (aARRAY2,{'STS','STT','STU','STV','STX','TPX','TQ6'})
+
+      DbSelectArea("STJ")
+      DbSelectArea("STL")
+      DbSelectArea("STN")
+      DbSelectArea("STA")
+      DbSelectArea("STQ")
+      DbSelectArea("TPQ")
+      DbSelectArea("STS")
+      DbSelectArea("STT")
+      DbSelectArea("STU")
+      DbSelectArea("STV")
+      DbSelectArea("STX")
+      DbSelectArea("TPX")
+      DbSelectArea("TPL")
+      DbSelectArea("TQ6")
+
+      If !NGINTESTRU(aARRAY1,aARRAY2)
+         
+         MSGINFO(STR0003+chr(13)+STR0004+chr(13)+chr(13)+"                       SX3 "+;
+               chr(13)+chr(13)+STR0005+"TS_SUBSTIT"+chr(13)+STR0006+"C"+;
+               chr(13)+STR0007+"2"+chr(13)+STR0008+"0"+chr(13)+STR0009+"99"+;
+               chr(13)+STR0010+STR0011+chr(13)+STR0012+STR0013+chr(13)+STR0014+"1"+;
+               chr(13)+STR0015+STR0016,STR0002)
+
+      Else
+
+         //ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+         //³ Verifica as perguntas selecionadas                           ³
+         //³ mv_par01     // Ate Data de Manutencao                       ³
+         //ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+         DbSelectArea("STI")
+         SetKey( VK_F12, { || Pergunte("MNT825",.T.) } )
+
+         If Pergunte("MNT825",.T.)
+            Processa({|lEND| aCOMU825()})
+         EndIf
+         
+         Set Key VK_F12 To 
+
+      EndIf
+
+   EndIf
+
+   RestArea( aAreaSTI )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA825
+Exclui os Plano de Manutencao e seu relacionamento
+
+Este Programa Exclui as Planos de Manutencao e Grava no os Historico.
+Somente Manutencao terminados ate a data informada como parametro    
+
+@since 04/07/97
+@author Inacio Luiz Kolling
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ACOMU825()
+
+   Local aDeletSti := {}
+   Local nX        := 0
+   Local lTQ9      := NGCADICBASE( 'TQ9_ORDEM','A', 'TQ9', .F. )
+   Local lNgInter  := SuperGetMv( 'MV_NGINTER', .F., 'N' ) == 'M'
+   Local lExecOnce := .F. // define se executou pelo menos uma ordem de todo o processo
+
+   DbSelectArea("STI")
+   DbSetOrder(3)
+   DbSeek(xFILIAL("STI"))
+   Do While !Eof() .And. xFILIAL("STI") == STI->TI_FILIAL
+
+      /*---------------------------------------------------------------------------+
+      | deve deletar apenas manuais, corretivas ou preventivas com plano terminadas|
+      +---------------------------------------------------------------------------*/
+      If Val( STI->TI_PLANO ) <= 1 .Or. STI->TI_TERMINO == 'S'
+
+         If H_STJ( lTQ9, lNgInter )
+
+            lExecOnce := .T.
+
+            If Val( STI->TI_PLANO ) > 1
+               aAdd( aDeletSti, STI->( Recno() ) )
+            EndIf            
+
+         EndIf
+
+      EndIf
+
+      DbSelectArea("STI")
+      DbSkip()
+
+   EndDo
+
+   /*------------------------------+
+   | Deleta os planos terminados   |
+   +------------------------------*/
+   For nX := 1 to Len( aDeletSti )
+
+      DbSelectArea( 'STI' )
+      DbGoTo( aDeletSti[nX] )
+
+      RecLock( 'STI', .F. )
+      DbDelete()
+      MsUnlock()
+
+   Next nX
+
+   DbSelectArea("STI")
+   DbSetOrder(1)
+
+   If lExecOnce
+      MsgInfo( STR0020 + CRLF + STR0022 ) //"Histórico da Mantenção executado com sucesso para o período informado !" #"Execute o pack das tabelas envolvidas neste processo."
+   Else
+      MsgAlert( STR0021 ) //"Ordens não encontradas para o período informado !"
+   EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} H_STJ
+Aciona função que executa processos de cópia e exclusão
+
+@param lTQ9, boolean, se possui tabela tq9
+@param lNgInter, boolean, se possui parâmetro NGINTER habilitado
+@since 01/08/97
+@author Inacio Luiz Kolling
+@return boolean, se executou pelo menos uma ordem
+/*/
+//---------------------------------------------------------------------
+Static Function H_STJ( lTQ9, lNgInter )
+
+   Local lExecPlan := .F.  // define se executou pelo menos uma ordem do PLANO
+   Local cOrdem    := ''
+
+   DbSelectArea("STJ")
+   DbSetOrder(3)
+   DbSeek(xFILIAL('STJ')+STI->TI_PLANO)
+   ProcRegua(Reccount())
+   Do While !Eof() .And. STJ->TJ_FILIAL == FwxFilial("STJ") .And. STJ->TJ_PLANO == STI->TI_PLANO
+
+      IncProc()
+
+      If !fDeletSTJ()
+
+         STJ->( dbSkip() )
+         Loop
+
+      EndIf
+
+      lExecPlan := .T.
+
+      cOrdem := STJ->TJ_ORDEM
+
+      Processa({|lEND| fProcessa( lTQ9, lNgInter ) }, STR0017+Alltrim(STI->TI_PLANO) + '/' + cOrdem ) //"Processando ordens de servicos do plano "
+
+      DbSelectArea('STJ')
+      Dbskip()
+   EndDo
+   DbSelectArea("STJ")
+   DbSetOrder(1)
+
+Return lExecPlan
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fProcessa
+Efetua a copia do STJ para o STS e exclui o STJ 
+
+@param lTQ9, boolean, se possui tabela tq9
+@param lNgInter, boolean, se possui parâmetro NGINTER habilitado
+@since 01/08/97
+@author Inacio Luiz Kolling
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fProcessa( lTQ9, lNgInter )
+
+   Local ng1
+
+   H_STL()
+   H_STN()
+   H_STA()
+   H_STQ()
+   H_TPL()
+   If lTQ9
+      H_TQ9()
+   EndIf    
+
+   // GRAVA O STJ NO STS
+   DbSelectArea('STS')
+   RecLock("STS",.T.)
+   DbSelectArea("STJ")
+   For ng1 := 1 To Fcount()
+      ny := "STS->TS_" + Substr(FieldName(ng1),4,Len(FieldName(ng1)))
+      nx := "STJ->" + FieldName(ng1)
+      &ny. := &nx.
+   Next      
+   STS->(MsUnlock())  
+   
+   If lNgInter
+      NGMUMntOrd(STJ->(RecNo()),5)
+   EndIf
+   
+   // EXCLUI O REGISTRO DO ARQUIVO ( STJ990 )
+   DbSelectArea('STJ')
+   RecLock('STJ',.F.)
+   dbDelete()
+   STJ->(MsUnlock())
+
+
+Return Nil
+
+//--------------------------------------------------------------
+/*/{Protheus.doc} fTemSS
+Válida se existe a S.S. vinculada a O.S. encontra-se em aberto.
+@type function
+
+@author Alexandre Santos
+@since 03/01/2022
+
+@param cSS     , string, Código da S.S.
+@return boolean, Indica se a S.S. encontra em aberto.
+/*/
+//--------------------------------------------------------------
+Static Function fTemSS( cSS )
+
+   Local aAreaTQB := TQB->( GetArea() )
+   Local lRet     := .F.
+
+   If !Empty( cSS )
+
+      dbSelectArea( 'TQB' )
+      dbSetOrder( 1 ) // TQB_FILIAL + TQB_SOLICI
+      If dbSeek( xFilial( 'TQB' ) + cSS ) .And. !( TQB->TQB_SOLUCA $ 'E#C' )
+
+         /*--------------------------------------------------------------------+
+         | Impede a movimentação para histórico das O.S. vinculadas a uma S.S. |
+         | não encerrada ou cancelada.                                         |
+         +--------------------------------------------------------------------*/
+         lRet := .T.
+
+      EndIf
+
+   EndIf
+
+   RestArea( aAreaTQB )
+   
+Return lRet
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_STL    ³ Autor ³ Paulo Pego            ³ Data ³ 01/08/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do STJ para o STS e exclui o STJ            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_STL()
+
+Local ng2
+DbSelectArea("STL")
+DbSetOrder(01)
+DbSeek(xfilial("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+
+Do While !Eof()                      .And.;
+   STL->TL_FILIAL == xFILIAL("STL") .And.;
+   STL->TL_ORDEM  == STJ->TJ_ORDEM  .And.;
+   STL->TL_PLANO  == STJ->TJ_PLANO
+
+   DbSelectArea('STT')
+   RecLock("STT",.T.)
+   DbSelectArea("STL")
+   For ng2 := 1 to Fcount()
+       ny := "STT->TT_" + Substr(FieldName(ng2),4,Len(FieldName(ng2)))
+       nx := "STL->" + FieldName(ng2)
+       &ny. := &nx.
+   Next
+   STT->(MsUnlock())  
+
+   // EXCLUI O REGISTRO DO ARQUIVO ( STL )
+   DbSelectArea("STL")
+   RecLock('STL',.F.)
+   dbDelete()
+   STL->(MsUnlock())
+   DbSkip()
+EndDo
+Return Nil
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_STN    ³ Autor ³ Paulo Pego            ³ Data ³ 01/08/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do STJ para o STS e exclui o STJ            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_STN()
+
+Local ng3
+DbSelectArea("STN")
+DbSetOrder(01)
+DbSeek(XFILIAL("STN") + STJ->TJ_ORDEM + STJ->TJ_PLANO)
+Do While !Eof() .and.;
+   STN->TN_FILIAL == XFILIAL("STN") .And.;
+   STN->TN_ORDEM  == STJ->TJ_ORDEM  .And.;
+   STN->TN_PLANO  == STJ->TJ_PLANO
+
+   // GRAVA NO ARQUIVO DE HISTORICO  ( STU )
+
+   DbSelectArea('STU')
+   RecLock("STU",.T.)
+   DbSelectArea("STN")
+   For ng3 := 1 To Fcount()
+       ny := "STU->TU_" + Substr(FieldName(ng3),4,Len(FieldName(ng3)))
+       nx := "STN->" + FieldName(ng3)
+       &ny. := &nx.
+   Next
+   STU->(MsUnlock())  
+
+   // EXCLUI O REGISTRO DO ARQUIVO ( STN990 )
+   DbSelectArea("STN")
+   RecLock('STN',.F.)
+   dbDelete()
+   STN->(MsUnlock())  
+   Dbskip()
+EndDo
+Return NIL
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_STA    ³ Autor ³ Paulo Pego            ³ Data ³ 01/08/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do STJ para o STS e exclui o STJ            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_STA()
+
+Local ng4
+DbSelectArea("STA")
+DbSetOrder(01)
+DbSeek(XFILIAL("STA") + STJ->TJ_ORDEM + STJ->TJ_PLANO)
+
+Do While !Eof()                      .And.;
+   STA->TA_FILIAL == XFILIAL("STA") .And.;
+   STA->TA_ORDEM  == STJ->TJ_ORDEM  .And.;
+   STA->TA_PLANO  == STJ->TJ_PLANO
+
+   // GRAVA NO ARQUIVO DE HISTORICO  ( STV )
+   DbSelectArea('STV')
+   RecLock("STV",.T.)
+   DbSelectArea("STA")
+   For ng4 := 1 To Fcount()
+       ny := "STV->TV_" + Substr(FieldName(ng4),4,Len(FieldName(ng4)))
+       nx := "STA->" + FieldName(ng4)
+       &ny. := &nx.
+   Next
+   STV->(MsUnlock())  
+   
+   // EXCLUI O REGISTRO DO ARQUIVO ( STA )
+   DbSelectArea("STA")
+   RecLock('STA',.F.)
+   dbDelete()
+   STA->(MsUnlock())  
+   DbSkip()
+EndDo
+Return Nil
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_STQ    ³ Autor ³ Paulo Pego            ³ Data ³ 01/08/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do STJ para o STS e exclui o STJ            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_STQ()
+
+Local ng5
+DbSelectArea("STQ")
+DbSetOrder(01)
+DbSeek(XFILIAL("STQ") + STJ->TJ_ORDEM + STJ->TJ_PLANO)
+
+Do While !Eof()                      .And.;
+   STQ->TQ_FILIAL == XFILIAL("STQ") .And.;
+   STQ->TQ_ORDEM  == STJ->TJ_ORDEM  .And.;
+   STQ->TQ_PLANO  == STJ->TJ_PLANO
+
+   // GRAVA NO ARQUIVO DE HISTORICO  ( STX )
+   DbSelectArea('STX')
+   RecLock("STX",.T.)
+   DbSelectArea("STQ")
+   For ng5 := 1 To Fcount()
+       ny := "STX->TX_" + Substr(FieldName(ng5),4,Len(FieldName(ng5)))
+       nx := "STQ->" + FieldName(ng5)
+       &ny. := &nx.
+   Next
+   STX->(MsUnlock())  
+   
+   dbSelectArea("TPQ")
+   dbSetOrder(01)
+   dbSeek(XFILIAL("TPQ")+STQ->TQ_ORDEM+STQ->TQ_PLANO+STQ->TQ_TAREFA+STQ->TQ_ETAPA)
+   Do While !Eof()                       .And.;
+      TPQ->TPQ_FILIAL == XFILIAL("TPQ") .And.;
+      TPQ->TPQ_ORDEM  == STQ->TQ_ORDEM  .And.;
+      TPQ->TPQ_PLANO  == STQ->TQ_PLANO  .And.;
+      TPQ->TPQ_TAREFA == STQ->TQ_TAREFA .And.;
+      TPQ->TPQ_ETAPA  == STQ->TQ_ETAPA
+
+      // GRAVA NO ARQUIVO DE HISTORICO  ( TPX )
+      DbSelectArea('TPX')
+      RecLock("TPX",.T.)
+      DbSelectArea("TPQ")
+      For ng5 := 1 To Fcount()
+          ny := "TPX->TPX_" + Substr(FieldName(ng5),5,Len(FieldName(ng5)))
+          nx := "TPQ->" + FieldName(ng5)
+          &ny. := &nx.
+      Next
+      TPX->(MsUnlock())  
+
+      DbSelectArea("TPQ")
+      RecLock('TPQ',.F.)
+      DbDelete()
+      TPQ->(MsUnlock())  
+      Dbskip()
+   End
+
+   // EXCLUI O REGISTRO DO ARQUIVO ( STQ )
+   DbSelectArea("STQ")
+   RecLock('STQ',.F.)
+   DbDelete()
+   STQ->(MsUnlock())  
+   DbSkip()
+EndDo
+Return Nil
+
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_TPL    ³ Autor ³ Ricardo Dal Ponte     ³ Data ³ 12/02/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do TPL para o TQ6 e exclui o TPL            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_TPL()
+
+Local ng6
+DbSelectArea("TPL")
+DbSetOrder(01)
+DbSeek(XFILIAL("TPL") + STJ->TJ_ORDEM)
+Do While !Eof() .and.;
+   TPL->TPL_FILIAL == XFILIAL("TPL") .And.;
+   TPL->TPL_ORDEM  == STJ->TJ_ORDEM
+
+   // GRAVA NO ARQUIVO DE HISTORICO  ( TQ6 )
+   DbSelectArea('TQ6')
+   RecLock("TQ6",.T.)
+   DbSelectArea("TPL")
+   For ng6 := 1 To Fcount()
+       ny := "TQ6->TQ6_" + Substr(FieldName(ng6),5,Len(FieldName(ng6)))
+       nx := "TPL->" + FieldName(ng6)
+       &ny. := &nx.
+   Next
+   TQ6->(MsUnlock())                                                         
+
+   // EXCLUI O REGISTRO DO ARQUIVO ( TPL990 )
+   DbSelectArea("TPL")
+   RecLock('TPL',.F.)
+   dbDelete()
+   TPL->(MsUnlock())  
+   Dbskip()
+EndDo
+Return NIL   
+
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ H_TQ9    ³ Autor ³ Elisangela Costa      ³ Data ³ 05/11/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Efetua a copia do TQ9 para o TT0 e exclui o TQ9            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Mnta825                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function H_TQ9()
+
+Local ng6
+dbSelectArea("TQ9")
+dbSetOrder(01)
+dbSeek(xFILIAL("TQ9")+STJ->TJ_ORDEM)
+While !Eof() .And. TQ9->TQ9_FILIAL == xFILIAL("TQ9") .And.;
+   TQ9->TQ9_ORDEM  == STJ->TJ_ORDEM
+
+   // GRAVA NO ARQUIVO DE HISTORICO  ( TT0 )
+   dbSelectArea("TT0")
+   RecLock("TT0",.T.)
+   dbSelectArea("TQ9")
+   For ng6 := 1 To Fcount()
+       ny := "TT0->TT0_" + Substr(FieldName(ng6),5,Len(FieldName(ng6)))
+       nx := "TQ9->" + FieldName(ng6)
+       &ny. := &nx.
+   Next
+   TT0->(MsUnlock())                                                         
+
+   // EXCLUI O REGISTRO DO ARQUIVO ( TQ9990 )
+   dbSelectArea("TQ9")
+   RecLock("TQ9",.F.)
+   dbDelete()
+   TQ9->(MsUnlock())  
+   dbSkip()
+End
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fDeletSTJ
+Verifica se deve deletar STJ
+
+@since 04/07/97
+@author Maria Elisandra de Paula
+@return boolean, se deve deletar
+/*/
+//---------------------------------------------------------------------
+Static Function fDeletSTJ()
+
+   Local lRet := .T.
+
+   If STJ->TJ_SITUACA == 'C'
+      Return .T.
+   EndIf
+
+   If STJ->TJ_SITUACA == 'P' ;
+      .Or. STJ->TJ_TERMINO == 'N' ;
+      .Or. fTemSS( STJ->TJ_SOLICI ) ;
+      .Or. Empty( STJ->TJ_DTMRFIM ) ;
+      .Or. STJ->TJ_DTMRFIM > MV_PAR01
+
+      Return .F.
+
+   EndIf    
+
+Return lRet

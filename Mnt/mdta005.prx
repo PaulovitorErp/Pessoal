@@ -1,0 +1,3630 @@
+#Include "Mdta005.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA005
+Programa de manutencao de fichas medicas
+
+@return Lógico Sempre verdadeiro
+
+@author Inacio Luiz Kolling -- Refeito por: Jackson Machado
+@since 12/01/2000 -- Refeito em: 26/10/2015
+@version 41.0
+/*/
+//---------------------------------------------------------------------
+Function MDTA005()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aNao        := { "TM0_CLIENT", "TM0_LOJA", "TM0_FILIAL",;
+							"TM0_NOMCLI", "TM0_NRECLI", "TM0_REGBIO" }
+
+	Private lSigaMdtPS := SuperGetMv( "MV_MDTPS", .F., "N" ) == "S"
+	Private cCadastro	:= OemtoAnsi( STR0010 ) //"Fichas Medicas"
+	Private aRotina		:= MenuDef()
+	Private aNgButton	:= {}
+	Private aTarefaTKD	:= {}
+	Private aHeadTar    := {}
+	Private lFirstTKD	:= .T.
+	Private cAliasTrf
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cPROGRAMA := 'MDTA005'
+	Private TMTNUMFIC := .F.         // DESABILITA CAMPO TMT_NUMFIC DO TMT
+	Private TMTDTCONS := .T.         // HABILITA CAMPO TMT_DTCONS DO TMT
+	Private TMTHRCONS := .T.         // HABILITA CAMPO TMT_HRCONS DO TMT
+	Private TMTCODUSU := .T.         // HABILITA CAMPO TMT_CODUSU DO TMT
+	Private cFichaGrv := Space( 06 )
+	Private cDepenGrv := Space( 02 )
+	Private aCHOICE   := {}
+
+	If cReleaseRPO == '12.1.2310' .Or. cReleaseRPO == '12.1.2410' .Or. cReleaseRPO == '12.1.2510'
+
+		//--------------------------------------------------------------------------------------------------------
+		// Mensagens:
+		// "Atenção"
+		// "A partir da release 12.1.2310 esse fonte não é mais utilizado"
+		// "Atualize o menu para o menu da sua versão ou troque o fonte da rotina de ficha médica para o MDTA007"
+		//--------------------------------------------------------------------------------------------------------
+		Help( Nil, Nil, STR0068, Nil, STR0102 + '.', 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0103 + '.' } )
+		Return .F.
+
+	EndIf
+
+	If AMiIn( 35, 07 ) // Somente autorizado para SIGAMDT
+
+		nSizeCli := IIf( ( TAMSX3( "A1_COD" )[1] ) < 1, 6, ( TAMSX3( "A1_COD" )[1] ) )
+		nSizeLoj := IIf( ( TAMSX3( "A1_LOJA" )[1] ) < 1, 2, ( TAMSX3( "A1_LOJA" )[1] ) )
+
+		If FindFunction( "MDTRESTRI" ) .And. !MDTRESTRI( cPrograma )
+			NGRETURNPRM( aNGBEGINPRM ) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+			Return .F.
+		EndIf
+
+		If lSigaMdtps
+			// Define o cabecalho da tela de atualizacoes
+			PRIVATE aCHKDEL := {}, bNGGRAVA
+
+			dbSelectArea( "SA1" )
+			dbSetOrder( 1 )
+			mBrowse( 6, 1, 22, 75, "SA1" )
+
+		Else
+			M->TM0_FILFUN := xFilial( "TM0" )
+			M->TM0_EMPFUN := cEmpAnt
+
+			// Função que define o Clique da direita na barra de abutton da EnchoiceBar
+			// Adiciona no array do parametro as funções do aSMenu
+			If FindFunction( "NGClickBar" )
+				NGClickBar( @aNgButton )
+			EndIf
+
+			aCHOICE := NGCAMPNSX3( "TM0", aNao )
+
+			bNGGRAVA  := {|| CHKTA005() }
+
+			//------------------------------------------------------------------
+			// aCHKDEL array que verifica a INTEGRIDADE REFERENCIAL na exclucao
+			// do registro.
+			//
+			// 1 - Chave de pesquisa
+			// 2 - Alias de pesquisa
+			// 3 - Ordem de pesquisa
+			//------------------------------------------------------------------
+			aCHKDEL := { {'TM0->TM0_NUMFIC', "TMI", 1},;
+				         {'TM0->TM0_NUMFIC', "TM5", 1},;
+				         {'TM0->TM0_NUMFIC', "TMF", 1},;
+				         {'TM0->TM0_NUMFIC', "TMN", 2},;
+				         {'TM0->TM0_NUMFIC', "TM2", 1},;
+				         {'TM0->TM0_NUMFIC', "TMJ", 2},;
+				         {'TM0->TM0_NUMFIC', "TNY", 1},;
+				         {'TM0->TM0_NUMFIC', "TNA", 1},;
+				         {'TM0->TM0_NUMFIC', "TMY", 2},;
+				         {'TM0->TM0_NUMFIC', "TMT", 1} }
+
+			// Endereca a funcao de BROWSE
+			mBrowse( 6, 1, 22, 75, "TM0", , , , , , fFichaCor() )
+		EndIf
+
+	EndIf
+
+	NGRETURNPRM( aNGBEGINPRM ) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Rafael Diogo Richter -- Refeito por: Jackson Machado
+@since 29/11/2006 -- Refeito em: 26/10/2015
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lMdtPs )
+
+	Local lPyme         := IIf( Type( "__lPyme" ) != "U", __lPyme, .F. )
+	Local lSigaMdtPS	:= SuperGetMv( "MV_MDTPS", .F., "N" ) == "S"
+	Local lAudit		:= SuperGetMv( "MV_NG2AUDI", .F., "2" ) == "1"
+	Local aRotina
+	Local xRetBlock
+
+	Default lMdtPs := lSigaMdtPS
+
+	If lMdtPs
+		aRotina := { 	 { STR0004, "AxPesqui", 0, 1 },;	//"Pesquisar"
+						 { STR0005, "NGCAD01", 0, 2 },;		//"Visualizar"
+						 { STR0010, "MDT005FI", 0, 4 } }	//"Fichas Médicas"
+	Else
+		aRotina :=	{;
+			{ STR0004, "AxPesqui"	, 0, 1, Nil	, Nil	},;	// "Pesquisar"
+			{ STR0005, "VISMDT005"	, 0, 2, Nil	, Nil	},;	// "Visualizar"
+			{ STR0006, "mdt005inc"	, 0, 3, Nil	, Nil	},;	// "Incluir"
+			{ STR0007, "ALTMDT005"	, 0, 4, Nil	, Nil	},;	// "Alterar"
+			{ STR0008, "DELMDT005"	, 0, 5, 3 	, Nil	},;	// "Excluir"
+			{ STR0052, 'MDTRegBio'  , 0, 6, 0	, Nil	},; // "Biometria"
+			{ STR0009, "MDTA155B"	, 0, 6, 3 	, Nil	},;	// "Diagnostico"
+			{ STR0012, "GpLegend"	, 0, 6, 0	, .F. 	},; // "Legenda"
+			{ STR0041, 'Mdta007Tar'	, 0, 6, 0 	, Nil	}; // "Tarefas"
+		}
+
+		If !lSigaMdtPS .And. lAudit
+			aAdd( aRotina, { STR0084, "MDTA991('TM0')", 0, 3 } )	//"Hist. Exc."
+		EndIf
+		If !lPyme
+			aAdd( aRotina, { STR0100, "MsDocument", 0, 4 } )  		//"Conhecimento"
+		EndIf
+	EndIf
+
+	If ExistBlock( "MDTA0051" )
+		xRetBlock := ExecBlock( "MDTA0051", .F., .F., { aRotina } )
+		If ValType( xRetBlock ) == "A"
+			aRotina := aClone( xRetBlock )
+		EndIf
+	EndIf
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ALTMDT005
+
+Executa a alteracao da ficha medica
+
+@author  Denis Hyroshi de Souza
+@since   12/02/2003
+
+@sample  ALTMDT005("TM0", 1, 4)
+
+@param   cAli, Caracter, Alias do registro que está sendo alterado
+@param   nR, Numerico, Numero do registro sendo alterado no browse
+@param   nOpcx, Numerico, Opcao de menu sendo executada
+
+@return  .T., return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function ALTMDT005( cAli, nR, nOpcx )
+
+	Private cMatricula := TM0->TM0_MAT
+	Private cCandidato := TM0->TM0_CANDID
+	Private bNGGRAVA := {|| MDTA005Atm0()}
+
+	aTarefaTKD := {}
+	lFirstTKD  := .T.
+
+	cFichaGrv := TM0->TM0_MAT
+	cDepenGrv := TM0->TM0_NUMDEP
+
+	If lSigaMdtPs
+		cSetorGrv := TM0->TM0_CC
+
+		If NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+			cDeptoGrv := TM0->TM0_DEPTO
+		EndIf
+
+		cFuncaGrv := TM0->TM0_CODFUN
+	EndIf
+
+	If ExistBlock("MDTA0053")
+        ExecBlock("MDTA0053",.F.,.F.)
+    EndIf
+
+	If ExistBlock("MDTA0054")
+        ExecBlock("MDTA0054",.F.,.F.)
+    EndIf
+
+	// Verifica se bloqueia a alteração do registro
+	If SuperGetMv( "MV_NG2ATM0", .F., '3' ) == '1' .And. !NGVALSX9( "TM0" ) // Bloqueia
+		Help( , , 'NG2ATM0' ) // "Nao é permitida a alteração desse registro." ## "Alterar o valor do parâmetro MV_NG2ATM0 para 2 ou 3."
+	Else
+
+		Begin Transaction
+			nRet := NGCAD01( "TM0", nR, 4 )
+			MDT005Ope( 4, nRet == 1 )
+		End Transaction
+
+	EndIf
+
+	dbSelectArea( "TM0" )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA005Atm0
+
+Valida a alteração da Ficha Medica de acordo com o parametro MV_NG2ATM0
+
+@author  Jorge Luís Siementkowski
+@since   14/08/2017
+
+@return  Lógico, Determina se o registro será alterado ou não
+/*/
+//-------------------------------------------------------------------
+Function MDTA005Atm0()
+
+	Local cMenTM0, cRegTM0
+	Local nCont
+	Local lRet  := .T.
+	Local aArea := GetArea()
+
+	If SuperGetMv( "MV_NG2ATM0", .F., '3' ) == '2' .And. !NGVALSX9( "TM0" ) // Questiona
+
+		// Verifica se algum campo da ficha foi alterado
+		For nCont := 1 To FCOUNT()
+			cRegTM0 := "TM0->"	+ FieldName( nCont )
+			cMenTM0 := "m->" 	+ FieldName( nCont )
+
+			If &(cRegTM0) != &(cMenTM0)
+				lRet := MsgYesNo( STR0097, "MV_NG2ATM0" ) // "Tem certeza que deseja alterar a ficha medica?"
+				Exit
+			EndIf
+
+		Next nCont
+
+	EndIf
+
+	//--------------------------------------------------------------------------------------
+	// Realiza as validações das informações do evento S-2240 que serão enviadas ao Governo
+	//--------------------------------------------------------------------------------------
+	If lRet
+		lRet := fTarS2240( 4, .F. )
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DELMDT005
+
+Funcao para deletar a ficha medica
+
+@author  Denis Hyroshi de Souza
+@since   12/02/2003
+
+@sample  DELMDT005("TM0", 1, 5)
+
+@param   cAli, Caracter, Alias do registro que está sendo alterado
+@param   nR, Numerico, Numero do registro sendo alterado no browse
+@param   nOpcx, Numerico, Opcao de menu sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function DELMDT005( cAli, nR, nOpcx )
+
+	Local aArea := GetArea()
+	Local aNgButtonOld := aClone( aNgButton )
+
+	Private M->TM0_NUMFIC := Space( 9 )
+
+	aNgButton := {}
+
+	aCHKDEL := {  { 'TM0->TM0_NUMFIC', "TMI", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TM5", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TMF", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TMN", 2 },;
+				  { 'TM0->TM0_NUMFIC', "TM2", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TMJ", 2 },;
+				  { 'TM0->TM0_NUMFIC', "TNY", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TNA", 1 },;
+				  { 'TM0->TM0_NUMFIC', "TMY", 2 },;
+				  { 'TM0->TM0_NUMFIC', "TMT", 1 } }
+
+	If Empty( TM0->TM0_MAT )
+		aAdd( aCHKDEL, { 'TM0->TM0_NUMFIC', "TKD", 1 } )
+	EndIf
+
+	If AliasInDic( "TOF" )
+		aADD( aCHKDEL, { 'TM0->TM0_NUMFIC', "TOF", 1 } )
+	EndIf
+
+	dbSelectArea( "TM0" )
+	bNGGRAVA := {|| CHKDEL005() }
+
+	Begin Transaction
+
+		nRET := NGCAD01( "TM0", nR, 5 )
+
+		MDT005Ope( 5, nRet == 1 )
+
+	End Transaction
+
+	aNgButton := aClone( aNgButtonOld )
+
+	If lSigaMdtps
+		bNGGRAVA  := {|| CHK2TA005()}
+	Else
+		bNGGRAVA  := {|| CHKTA005() }
+	EndIf
+
+	RestArea( aArea )
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VISMDT005
+
+Visualização da ficha medica
+
+@author  Denis Hyroshi de Souza
+@since   12/02/2003
+
+@sample  VISMDT005("TM0", 1, 2)
+
+@param   cAli, Caracter, Alias do registro que está sendo alterado
+@param   nR, Numerico, Numero do registro sendo alterado no browse
+@param   nOpcx, Numerico, Opcao de menu sendo executada
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function VISMDT005( cAli, nR, nOpcx )
+
+	Local nRet
+	Private cMatricula := TM0->TM0_MAT
+	Private cCandidato := TM0->TM0_CANDID
+	aTarefaTKD := {}
+	lFirstTKD := .T.
+
+	bNGGRAVA  := {}
+
+	If ExistBlock( "MDTA0054" )
+		ExecBlock("MDTA0054",.F.,.F.)
+	EndIf
+
+	nRET := NGCAD01( "TM0", nR, 2 )
+
+	If lSigaMdtps
+		bNGGRAVA  := {|| CHK2TA005()}
+	Else
+		bNGGRAVA  := {|| CHKTA005() }
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHKTA005
+
+Programa De Consistencia Final
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  lRet, Logico, Determina se existe integridade referencial
+                       ou outras dependencias
+/*/
+//-------------------------------------------------------------------
+Function CHKTA005()
+
+	Local lRet		:= .T.
+	Local nOper		:= IIf( INCLUI, 3, IIf( ALTERA, 4, 5 ) ) //Pega a operação que está sendo realizada
+
+	If Empty( M->TM0_CANDID ) .And. Empty( M->TM0_MAT )
+		ShowHelpDlg( STR0068, { STR0089 }, 1, { STR0090 }, 2 )//"Atenção"##"Os campos Candidato e Matrícula não foram preenchidos."##"Favor preencher o campo Candidato ou Matrícula."
+		lRet:= .F.
+	EndIf
+
+	If Empty( M->TM0_MAT ) .And. Altera .And. lRet
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )//TM0_FILIAL+TM0_NUMFIC
+		dbSeek( xFilial( "TM0" ) + M->TM0_NUMFIC )
+		If TM0->TM0_MAT != M->TM0_MAT//Verifica se o registro salvo em base esta diferente
+			lRet:= NGVALSX9( "TM0", , .T., , .F. ) //Verifica o relacionamento da ficha médica.
+		EndIf
+	EndIf
+
+	If !Empty( M->TM0_MAT ) .And. Empty( M->TM0_NUMDEP ) .And. lRet
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If dbSeek( xFilial( "TM0" ) + M->TM0_MAT )
+			If INCLUI
+				Help( " ", 1, "MSG_JCAMAT" )
+				dbSetOrder( 1 )
+				lRet:= .F.
+			Else
+				If cFichaGrv != TM0->TM0_MAT
+					Help( " ", 1, "MSG_JCAMAT" )
+					dbSetOrder( 1 )
+					lRet:= .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty( M->TM0_MAT ) .And. !Empty( M->TM0_NUMDEP ) .And. lRet
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If dbSeek( xFilial( "TM0" ) + M->TM0_MAT + M->TM0_NUMDEP )
+			If INCLUI
+				Help( " ", 1, "MSG_JCADEP" )
+				dbSetOrder( 1 )
+				lRet:= .F.
+			Else
+				If cFichaGrv != TM0->TM0_MAT .Or. cDepenGrv != TM0->TM0_NUMDEP
+					Help( " ", 1, "MSG_JCAMAT" )
+					dbSetOrder( 1 )
+					lRet:= .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	//--------------------------------------------------------------------------------------
+	// Realiza as validações das informações do evento S-2240 que serão enviadas ao Governo
+	//--------------------------------------------------------------------------------------
+	If lRet
+		lRet := fTarS2240( nOper, .F. )
+	EndIf
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TM0" ) + M->TM0_NUMFIC )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NOMEFUNC
+
+Retorna o nome do proprietario da ficha
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NOMEFUNC()
+
+	Local cCliMdtPs := ""
+	Local cOpcComb := ""
+
+	//Verifica se o funcionario esta demitido
+	If !SitMdtFunc( M->TM0_MAT, .F., .T., .T., cCliMdtps )
+		Return .T.
+	EndIf
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+
+	If dbSeek( xFilial( "SRA" ) + M->TM0_MAT )
+		M->TM0_NOMFIC := SRA->RA_NOME
+		M->TM0_NOMSOC := SRA->RA_NSOCIAL
+		M->TM0_DTNASC := SRA->RA_NASC
+		M->TM0_FILFUN := SRA->RA_FILIAL
+		M->TM0_EMPFUN := cEmpAnt
+		M->TM0_RG     := SRA->RA_RG
+
+		If SRA->RA_SEXO = 'M'
+			M->TM0_SEXO  := '1'
+		ElseIf SRA->RA_SEXO = 'F'
+			M->TM0_SEXO  := '2'
+		Else
+			M->TM0_SEXO  := SRA->RA_SEXO
+		EndIf
+
+		M->TM0_DTIMPL := IIf( Empty( M->TM0_DTIMPL ), SRA->RA_ADMISSA, M->TM0_DTIMPL )
+		M->TM0_CODFUN := SRA->RA_CODFUNC
+		M->TM0_DESCFUN:=NGSEEK( "SRJ", M->TM0_CODFUN, 1, "RJ_DESC" )
+		M->TM0_CC     := SRA->RA_CC
+		M->TM0_CCDESC :=NGSEEK( "CTT", M->TM0_CC, 1, "CTT_DESC01" )
+
+		If Type( "M->TM0_DEPTO" ) != "U"
+			M->TM0_DEPTO  := SRA->RA_DEPTO
+			M->TM0_DESCDP := NGSEEK( "SQB", M->TM0_DEPTO, 1, "QB_DESCRIC" )
+		EndIf
+
+		M->TM0_CPF    := SRA->RA_CIC
+		M->TM0_NUMCP  := SRA->RA_NUMCP
+		M->TM0_SERCP  := SRA->RA_SERCP
+		M->TM0_UFCP   := SRA->RA_UFCP
+		If TM0->(FieldPos( "TM0_CODPOS" )) > 0
+			M->TM0_CODPOS := SRA->RA_POSTO
+		EndIf
+		If TM0->(FieldPos( "TM0_TIPDEF" )) > 0
+			M->TM0_TIPDEF  := SRA->RA_TPDEFFI //Portador de Deficiencia
+		EndIf
+		M->TM0_ESTCIV := SRA->RA_ESTCIVI
+
+		If !Empty( SRA->RA_RACACOR )
+			If SRA->RA_RACACOR == "1" //Indigena
+				cOpcComb := "5"
+			ElseIf SRA->RA_RACACOR == "2" //Branco
+				cOpcComb := "1"
+			ElseIf SRA->RA_RACACOR == "4" //Negro
+				cOpcComb := "2"
+			ElseIf SRA->RA_RACACOR == "6" //Amarelo
+				cOpcComb := "4"
+			ElseIf SRA->RA_RACACOR == "8" //Pardo
+				cOpcComb := "3"
+			ElseIf SRA->RA_RACACOR == "9" //Não informado
+				cOpcComb := " "
+			EndIf
+			M->TM0_CORPEL := cOpcComb
+		EndIf
+
+		If SRA->(ColumnPos( "RA_CTPCD" )) > 0  .And. TM0->(ColumnPos( "TM0_CTPCD" )) > 0 //Cota de Deficiente
+			M->TM0_CTPCD  := SRA->RA_CTPCD
+		EndIf
+
+		lRefresh := .T.
+	EndIf
+
+	If Empty( M->TM0_MAT )
+		M->TM0_FILFUN := Space( 2 )
+		lRefresh      := .T.
+	EndIf
+
+	dbSelectArea( "TM0" )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHECKDEP
+
+Consiste o Dependente
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function CHECKDEP()
+
+	If !Empty( M->TM0_NUMDEP )
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If dbSeek( xFilial("TM0") + M->TM0_MAT + M->TM0_NUMDEP )
+			Help( " ", 1, "MSG_JCADEP" )
+			dbSetOrder( 1 )
+			Return .F.
+		EndIf
+
+		dbSelectArea( "SRB" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SRB" ) + M->TM0_MAT )
+		While !Eof() .And. SRB->RB_FILIAL == xFilial( "SRB" );
+						.And. SRB->RB_MAT == M->TM0_MAT
+
+			If SRB->RB_COD == M->TM0_NUMDEP
+				M->TM0_NOMFIC := SRB->RB_NOME
+				M->TM0_DTNASC := SRB->RB_DTNASC
+
+				If SRB->RB_SEXO = 'M'
+					M->TM0_SEXO  := '1'
+				ElseIf SRB->RB_SEXO = 'F'
+					M->TM0_SEXO  := '2'
+				Else
+					M->TM0_SEXO  := SRB->RB_SEXO
+				EndIf
+
+				M->TM0_CANDID := Space( 6 )
+				lRefresh := .T.
+				Return .T.
+			EndIf
+
+			dbSelectArea( "SRB" )
+			dbSkip()
+		End
+
+		Help( " ", 1, "MSG_NCADAS" )
+
+		dbSelectArea( "TM0" )
+
+		dbSetOrder( 1 )
+		Return .F.
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VERCANDID
+
+Verifica se já existe um registro com as mesmas informacoes
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  lRet, Logico, return_descr
+/*/
+//-------------------------------------------------------------------
+Function VERCANDID()
+
+	Local lRet := .T.
+	Local aArea := GetArea()
+
+	If !Empty( M->TM0_CANDID )
+		dbSelectArea( 'TM0' )
+		dbSetOrder( 5 )
+		dbSeek( xFilial( 'TM0' ) + M->TM0_CANDID )
+		While xFilial( 'TM0' ) == TM0->TM0_FILIAL .And. TM0->TM0_CANDID == M->TM0_CANDID
+   			If TM0->TM0_NUMFIC != M->TM0_NUMFIC
+				ShowHelpDlg( STR0081, { STR0091 }, 1, { STR0092 }, 2 )
+				lRet := .F.
+				Exit
+			EndIf
+			dbSkip()
+		End
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LERCANDID
+
+Programa Validacao de leitura do campo TM0_CANDID
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  .F., Logico
+/*/
+//-------------------------------------------------------------------
+Function LERCANDID()
+
+	If Empty( M->TM0_MAT ) .And. INCLUI
+		Return .T.
+	EndIf
+
+Return .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LERMATNUM
+
+Programa Validacao de leitura dos campos TM0_MAT.TM0_NUMDEP
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  .F., Logico
+/*/
+//-------------------------------------------------------------------
+Function LERMATNUM()
+
+	If Empty( M->TM0_CANDID ) .And. INCLUI
+		Return .T.
+	ElseIf !Empty( M->TM0_CANDID ) .And. ALTERA
+		Return .T.
+	ElseIf lSigaMdtps
+
+		If Empty( M->TM0_CANDID ) .And. Empty( M->TM0_MAT )
+			Return .T.
+		EndIf
+
+	EndIf
+
+Return .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NUMFICTMT
+
+Relaciona o numero da ficha quando for incluir diagnostico a variavel
+ccNUMFIC ‚ criado no programa MDTA155.PRX
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  _cret, Caracter, Retorna um valor de numero de ficha dependendo
+                          de quais rotinas estão sendo executadas
+/*/
+//-------------------------------------------------------------------
+Function NUMFICTMT()
+
+	Local _cret := TMT->TMT_NUMFIC
+
+	If IsInCallStack( "MDTA005" ) .Or. IsInCallStack( "MDTA110" )
+		_cret := ccNUMFIC
+	ElseIf IsInCallStack( "MDTA155" ) .And. Inclui
+		_cret := Space( Len( _cret ) )
+	EndIf
+
+Return _cret
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CCTMT
+
+Relaciona o C.custo da ficha quando for incluir diagnóstico
+a variavel ccNUMFIC ‚ criado no programa MDTA155.PRX
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  _cret, Caracter, Retorna um valor de centro de custo da SRA ou TM0
+/*/
+//-------------------------------------------------------------------
+Function CCTMT()
+
+	local _cret := TMT->TMT_CC
+
+	If INCLUI .And. (IsInCallStack('MDTA005') .Or. IsInCallStack('MDTA110') .Or. IsInCallStack('MDTA410') )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TM0" ) + M->TMT_NUMFIC )
+		_cret := TM0->TM0_CC
+
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )
+		If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT )
+			_cret := SRA->RA_CC
+		EndIf
+	EndIf
+
+Return _cret
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CODFUNTMT
+
+Relaciona a funcao  da ficha quando for incluir diagnostico
+a variavel ccNUMFIC ‚ criado no programa MDTA155.PRX
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  _cret, Caracter, Retorna um valor de código de função da SRA ou TM0
+/*/
+//-------------------------------------------------------------------
+Function CODFUNTMT()
+
+	Local _cret := TMT->TMT_CODFUN
+
+	If INCLUI .And. (IsInCallStack('MDTA005') .Or. IsInCallStack('MDTA110') .Or. IsInCallStack('MDTA410') )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TM0" ) + M->TMT_NUMFIC )
+		_cret := TM0->TM0_CODFUN
+
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )
+		If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT )
+			_cret := SRA->RA_CODFUNC
+		EndIf
+
+	EndIf
+
+Return _cret
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CBOTMT
+
+Relaciona a CBO da ficha quando for incluir diagnostico a variavel
+ccNUMFIC ‚ criado no programa MDTA155.PRX
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  _cret, Caracter, Retorna o valor do CBO na tabela de Funções
+/*/
+//-------------------------------------------------------------------
+Function CBOTMT()
+
+	Local _cret := TMT->TMT_CBO
+
+	If INCLUI .And. (IsInCallStack('MDTA005') .Or. IsInCallStack('MDTA110') .Or. IsInCallStack('MDTA410') )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TM0" ) + M->TMT_NUMFIC )
+
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )
+		If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT )
+			dbSelectArea( "SRJ" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "SRJ" ) + SRA->RA_CODFUNC )
+			_cret := SRJ->RJ_CBO
+			If !Empty( SRJ->RJ_CODCBO )
+				_cret := SRJ->RJ_CODCBO
+			EndIf
+		EndIf
+	EndIf
+
+Return _cret
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CBOTMT
+
+Relaciona a filial  da ficha quando for incluir diagnostico
+a variavel ccNUMFIC ‚ criado no programa MDTA155.PRX
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  _cret, Caracter, Retorna a Filial do funcionário da ficha
+/*/
+//-------------------------------------------------------------------
+Function FILFUNTMT()
+
+	local _cret := TMT->TMT_FILFUN
+
+	If INCLUI .And. (IsInCallStack('MDTA005') .Or. IsInCallStack('MDTA110') .Or. IsInCallStack('MDTA410') )
+
+		dbSelectArea( "TM0" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TM0" ) + M->TMT_NUMFIC )
+		_cret := TM0->TM0_FILFUN
+
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )
+		If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT )
+			_cret := SRA->RA_FILIAL
+		EndIf
+	EndIf
+
+Return _cret
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG005CC
+Atualiza as variaveis M->TM0_CLIENT e M->TM0_LOJA
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NG005CC()
+
+	If GetMv( "MV_NGMDTPS" ) = 'S'
+		dbSelectArea( "SRA" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "SRA" ) + M->TM0_MAT )
+			M->TM0_CLIENT	:= SubStr( SRA->RA_CC, 1, nSizeCli )
+			M->TM0_LOJA := SubStr( SRA->RA_CC, nSizeCli+1, nSizeLoj )
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG005IMC
+
+Atualiza a variavel M->TM0_MASSA
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NG005IMC()
+
+	Local aArea := TM0->(GetArea()	)
+	Local cRet  := Space( 16 )
+	Local nIMC
+
+	If Type( "M->TM0_MASSA" ) != "C"
+		Return .T.
+	EndIf
+
+	If Empty( M->TM0_PESO ) .Or. Empty( M->TM0_ALTURA )
+		Return .T.
+	EndIf
+
+	nIMC := M->TM0_PESO / (M->TM0_ALTURA*M->TM0_ALTURA)
+
+	If     nIMC >= 00.0 .And. nIMC < 16.0 ; cRet := STR0013//"MAGREZA SEVERA"
+	ElseIf nIMC >= 16.0 .And. nIMC < 17.0 ; cRet := STR0014//"MAGREZA MODERADA"
+	ElseIf nIMC >= 17.0 .And. nIMC < 18.5 ; cRet := STR0015//"MAGREZA LEVE"
+	ElseIf nIMC >= 18.5 .And. nIMC < 25.0 ; cRet := STR0016//"PESO SAUDAVEL"
+	ElseIf nIMC >= 25.0 .And. nIMC < 30.0 ; cRet := STR0017//"PRE OBESIDADE"
+	ElseIf nIMC >= 30.0 .And. nIMC < 35.0 ; cRet := STR0018//"OBESIDADE GRAU 1"
+	ElseIf nIMC >= 35.0 .And. nIMC < 40.0 ; cRet := STR0019//"OBESIDADE GRAU 2"
+	ElseIf nIMC >= 40.0 .And. nIMC < 99.9 ; cRet := STR0020//"OBESIDADE GRAU 3"
+	EndIf
+	M->TM0_MASSA := cRET
+	RestArea( aArea )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005inc
+
+Valida parametro p/ atualizar campos
+
+@author Rafael Diogo Richter
+@since 06/08/2003
+@return
+/*/
+//---------------------------------------------------------------------
+Function mdt005inc()
+
+	Local bNGGravOld := IIf( Type( "bNGGrava" ) == "B", bNGGrava, Nil )
+	Local aOldChc := IIf( Type( "aChoice" ) == "A", aChoice, Nil )
+	lSigaMdtps := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+	cCliMdtSv := SA1->A1_COD+SA1->A1_LOJA
+	aTarefaTKD := {}
+	lFirstTKD := .T.
+
+	Private M->TM0_NUMFIC := Space( 9 )
+	Private M->TM0_CODFUN := Space( TAMSX3( "TM0_CODFUN" )[1] )
+
+	If lSigaMdtps
+		bNGGRAVA  := {|| CHK2TA005()}
+	Else
+		bNGGRAVA  := {|| CHKTA005() }
+	EndIf
+
+	Begin Transaction
+
+		nRETU := NGCAD01( "TM0", RecNo(), 3 )
+
+		MDT005Ope( 3, nRETU = 1 )
+
+	End Transaction
+
+	If lSigaMdtps
+		cCliMdtPs := cCliMdtSv
+	EndIf
+
+	If Type( "bNGGrava" ) == "B"
+		bNGGrava:= bNGGravOld
+	EndIf
+
+	If ValType( aOldChc ) == "A"
+		aChoice := aOldChc
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fFichaCor³
+
+Funcao que defini as cores das situacoes dos funcionarios.
+
+@author  Andre E. P. Alvarez
+@since   14/12/2005
+
+@return  aCores, Array, Contem as cores das situacoes dos funcionarios
+/*/
+//-------------------------------------------------------------------
+Function fFichaCor()
+
+	Local aCores := { ;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_RESCRAI') $  '30/31'",  'BR_PINK'     },;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH') == ' '",      'BR_VERDE'    },;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH') == 'D'",      'BR_VERMELHO' },;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH') == 'A'",      'BR_AMARELO'  },;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH') == 'F'",      'BR_AZUL'     },;
+					 { "FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH') == 'I'",      'BR_LARANJA'  } }
+
+Return( aCores )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FuSeek
+
+Retorna o valor de um determinado campo da tabela "Funcionarios".
+
+@author  Andre E. Perez Alvarez
+@since   16/05/06
+
+@sample  FuSeek(TM0->TM0_FILFUN,TM0->TM0_MAT,'SRA->RA_SITFOLH')
+
+@param   param, param_type, param_descr
+
+@param cFil, Caracter, Filial do funcionario
+@param cMat, Caracter, Matricula do funcionario
+@param cField, Caracter, Nome do campo cujo valor deve ser retornado
+
+@return  cRet, Caracter, Valor de um campo da tabela SRA
+/*/
+//-------------------------------------------------------------------
+Function FuSeek( cFil, cMat, cField )
+
+	Local oldAlias := Alias()
+	Local cRet
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 01 )
+	If dbSeek( cFil + cMat )
+		cRet := &cField.
+	Else
+		cRet := " "
+	EndIf
+
+	dbSelectArea( oldAlias )
+
+Return cRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHKDEL005
+
+Validacao no momento da exclusao
+
+@author  Denis Hyroshi de Souza
+
+@return  lRet, Logico, Determina se a exclusao e valida ou nao
+/*/
+//-------------------------------------------------------------------
+Function CHKDEL005()
+
+	Local lRet := .T.
+	Local aArea := GetArea()
+
+	If !Altera .And. !Inclui
+		dbSelectarea( "TNC" )
+		dbSetorder( 1 )
+		dbSeek( xFilial( "TNC" ) )
+		While !Eof() .And. xFilial( "TNC" ) == TNC->TNC_FILIAL
+
+			If M->TM0_NUMFIC == TNC->TNC_NUMFIC
+				lRet := .F.
+				cError := AllTrim( FwX2Nome( 'TNC' ) ) + " (" + "TNC" + ")"
+				HELP( " ", 1, "MA10SC", , cError, 5, 1 )
+				Exit
+			EndIf
+			dbSkip()
+		End
+		If lRet
+			//Funcao do NGUTIL05 que valida todos os SX9 do Dominio
+			If !NGVALSX9( "TM0", { "TNC" }, .T. )
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If lRet .And. ExistBlock( "MDTA0055" )// ponto de entrada
+		If !ExecBlock( "MDTA0055", .F., .F. )
+			lRet := .F.
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MA005CliNom
+
+Retorna a loja e o nome do Cliente de acordo com os valores da memoria.
+
+@author  Andre E. Perez Alvarez
+@since   16/08/2006
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MA005CliNom()
+
+	dbSelectArea( "SA1" )
+	dbSetOrder( 1 )
+
+	If Empty( M->TM0_LOJA )
+		dbSeek( xFilial( "SA1" ) + M->TM0_CLIENT )
+		M->TM0_LOJA   := SA1->A1_LOJA
+		M->TM0_NOMCLI := SA1->A1_NOME
+	Else
+		If dbSeek( xFilial( "SA1" ) + M->TM0_CLIENT + M->TM0_LOJA )
+			M->TM0_NOMCLI := SA1->A1_NOME
+		Else
+			dbSeek( xFilial( "SA1" ) + M->TM0_CLIENT )
+			M->TM0_LOJA   := SA1->A1_LOJA
+			M->TM0_NOMCLI := SA1->A1_NOME
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MA005LojNom
+
+Retorna o nome do cliente com base no codigo e loja escolhidos pelo usuario
+
+@author  Andre E. Perez Alvarez
+@since   16/08/2006
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MA005LojNom()
+
+	dbSelectArea( "SA1" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "SA1" ) + M->TM0_CLIENT + M->TM0_LOJA )
+	M->TM0_NOMCLI := SA1->A1_NOME
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT005CCVD
+
+Valida TM0_CC
+
+@author  Denis Hyroshi de Souza
+@since   6/08/2003
+
+@sample  MDT005CCVD("D MG 01")
+
+@param   cTM0_CC, Caracter, Valor do centro de custo a ser validado
+
+@return  lRet, Logico, Define se o valor do centro de custo e valido ou nao
+/*/
+//-------------------------------------------------------------------
+Function MDT005CCVD( cTM0_CC )
+
+	Local lRet := .T.
+	Local lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+
+	If !Empty( cTM0_CC )
+		If lSigaMdtPS
+			lRet := MDTCCPSVL( cTM0_CC )
+		Else
+			lRet := CTB105CC()
+		EndIf
+	EndIf
+
+	If lRet .And. Type( "oENCHOICE" ) == "O"
+		nITEM := aScan( oENCHOICE:aGETS, { |X| "TM0_CODFUN" $X } )
+		If nITEM > 0
+			oOBFUN := oENCHOICE:aENTRYCTRLS[nITEM]
+			oOBFUN:SETFOCUS( oOBFUN )
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT005FUVD
+
+Valida TM0_CODFUNC
+
+@author  Denis Hyroshi de Souza
+@since   06/08/2003
+
+@sample  MDT005FUVD("00001")
+@param   cTM0_CODFUN, Caracter, Codigo da funcao da ficha medica
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MDT005FUVD( cTM0_CODFUN )
+
+	If !Empty( cTM0_CODFUN )
+		If !ExistCpo( "SRJ", cTM0_CODFUN )
+			Return .F.
+		EndIf
+	EndIf
+
+	If Type( "cCliMdtPs" ) == "C"
+		If !Empty( cCliMdtPs )
+			dbSelectarea( "TOS" )
+			dbSetorder( 1 )
+			If !dbSeek( xFilial( "TOS" ) + cTM0_CODFUN + cCliMdtPs )
+				Help( " ", 1, "REGNOIS" )
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT005FI
+
+Mostra as fichas medicas do cliente
+
+@author  Andre Perez Alvarez
+@since   21/09/07
+/*/
+//-------------------------------------------------------------------
+Function MDT005FI()
+
+	Local aArea			:= GetArea()
+	Local aAreaTM0		:= TM0->( GetArea() )
+	Local aIndexTM0		:= {}
+
+	Local oldROTINA := aCLONE( aROTINA )
+	Local bNGGravOld := IIf( Type( "bNGGrava" ) == "B", bNGGrava, Nil )
+
+	Private aAC := { STR0001, STR0002 } //"Abandona"###"Confirma"
+	Private aCRA:= { STR0002, STR0003, STR0001 } //"Confirma"###"Redigita"###"Abandona"
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+	Private cCliMdtSv := SA1->A1_COD+SA1->A1_LOJA
+	Private cCadastro := OemtoAnsi( STR0010 ) //"Fichas Medicas"
+	Private cPROGRAMA := 'MDTA005'
+	Private TMTNUMFIC := .F.         // DESABILITA CAMPO TMT_NUMFIC DO TMT
+	Private TMTDTCONS := .T.         // HABILITA CAMPO TMT_DTCONS DO TMT
+	Private TMTHRCONS := .T.         // HABILITA CAMPO TMT_HRCONS DO TMT
+	Private TMTCODUSU := .T.         // HABILITA CAMPO TMT_CODUSU DO TMT
+	Private cFichaGrv := Space( 06 )
+	Private cDepenGrv := Space( 02 )
+
+	bNGGRAVA  := {|| CHK2TA005()}
+
+	Begin Sequence
+		Private aRotina := MenuDef( .F. )
+
+
+
+		// aCHKDEL array que verifica a INTEGRIDADE REFERENCIAL na exclusao do registro.
+		// 1 - Chave de pesquisa
+		// 2 - Alias de pesquisa
+		// 3 - Ordem de pesquisa
+
+		aCHKDEL := { {'TM0->TM0_NUMFIC', "TMI", 1},;
+					 {'TM0->TM0_NUMFIC', "TM5", 1},;
+					 {'TM0->TM0_NUMFIC', "TMF", 1},;
+					 {'TM0->TM0_NUMFIC', "TMN", 2},;
+					 {'TM0->TM0_NUMFIC', "TM2", 1},;
+					 {'TM0->TM0_NUMFIC', "TMJ", 2},;
+					 {'TM0->TM0_NUMFIC', "TNY", 1},;
+					 {'TM0->TM0_NUMFIC', "TNA", 1},;
+					 {'TM0->TM0_NUMFIC', "TMY", 2},;
+					 {'TM0->TM0_NUMFIC', "TMT", 1} }
+
+		M->TM0_FILFUN := xFilial( "TM0" )
+
+		Private bFiltraBrw	:= { || NIL }
+		cCadastro	:= OemToAnsi( STR0010 + " - " + STR0037 + Alltrim( SA1->A1_NOME ) ) //"Fichas Medicas"+" - Cliente: "
+
+
+		// Inicializa o filtro utilizando a funcao FilBrowse
+		cFiltraRh := ChkRh( "MDTA005", "TM0", "1" )
+		cFiltraRh += IIf( !Empty( cFiltraRh ), ' .And. ', '' )
+		cFiltraRh += 'TM0_CLIENT == "' + SubStr( cCliMdtPs, 1, nSizeCli ) + '" .And. '
+		cFiltraRh += 'TM0_LOJA == "' + SubStr( cCliMdtPs, nSizeCli+1, nSizeLoj ) + '"'
+		bFiltraBrw := { || FilBrowse( "TM0", @aIndexTM0, @cFiltraRH ) }
+		Eval( bFiltraBrw )
+
+		TM0->( dbGoTop() )
+		mBrowse( 6, 1, 22, 75, "TM0", , , , , , fFichaCor() )
+		EndFilBrw( "TM0", aIndexTm0 ) // Deleta o filtro utilizando a funcao FilBrowse
+
+	End Sequence
+
+	RestArea( aAreaTm0 )
+	RestArea( aArea )
+	aROTINA := aCLONE( oldROTINA )
+	If Type( "bNGGrava" ) == "B"
+		bNGGrava:= bNGGravOld
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005MAVD
+
+Função respnsavel para validar o campo TM0_MAT
+
+@param cTM0_MAT - Matricula do funcionário.
+@Obs Utilização - X3_VALID - TM0_MAT
+@Obs Função utilizada também para Prestador de Serviço.
+
+@author Denis Hyroshi de Souza
+@since 6/08/2003
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MDT005MAVD( cTM0_MAT )
+
+	Local aArea := GetArea() //Salva área posicionada
+	Local lRet := .T. //Variavel de retorno
+
+
+	If !Empty( cTM0_MAT )
+		If !ExCpoMDT( "SRA", cTM0_MAT )
+			RestArea( aArea )
+			lRet:= .F.
+		EndIf
+
+		If Type( "cCliMdtPs" ) == "C" .And. lRet
+			If !Empty( cCliMdtPs )
+				lPrest := .T.
+				dbSelectArea( "SRA" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SRA" ) + cTM0_MAT )
+				If SubStr( SRA->RA_CC, 1, Len( cCliMdtPs ) ) != cCliMdtPs
+					Help( " ", 1, "REGNOIS" )
+					RestArea( aArea )
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. Altera .And. cTM0_MAT != TM0->TM0_MAT .And. !Empty( TM0->TM0_MAT )
+			lRet:= NGVALSX9( "TM0", , .T., , .F. ) //Verifica o relacionamento da ficha médica.
+		EndIf
+
+		If Empty( TM0->TM0_MAT ) //inclusão de matricula para ficha médica
+			If lRet
+				dbSelectArea( "SRA" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SRA" ) + cTM0_MAT )
+				If !Empty( M->TM0_CPF ) .And. SRA->RA_CIC <> M->TM0_CPF //Verifica se o CPF do candidato é o mesmo que o do funcionário
+					lRet := MsgYesNo( STR0095, STR0024 )
+				EndIf
+			EndIf
+		EndIf
+
+		//Caso não tenha relacionamento permite alterar
+		//Deixar chamadas por ultimo, para gatilhar campos relacionados ao funcionário
+		If lRet
+			NOMEFUNC()
+			NG005CC()
+		EndIf
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT005F3
+
+Inclusao de Ficha via F3
+
+@author  Denis Hyroshi de Souza
+@since   06/08/2003
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MDT005F3()
+
+	Local cAlias5 := Alias()
+	Local cSvOrd5 := IndexOrd()
+	Local OldbNGGRAVA
+	Local lRet := .F.
+
+	Private aDadIncHis := {}
+
+	If Type( "bNGGRAVA" ) == "B"
+		OldbNGGRAVA := bNGGRAVA
+	EndIf
+
+	If Type( "cPrograma" )=="C"
+		If cPROGRAMA == "MDTA430" .Or.cPROGRAMA == "MDTA075"
+			cFunc075 := Space( 5 )
+			PutFileInEof( 'SA1' )
+			If Pergunte( "MDTA43", .T. )
+				If Empty( Mv_par01 ) .Or. Empty( Mv_par02 )
+					MsgStop( STR0023, STR0024 )//"Os campos Cliente e Loja são obrigatórios."##"ATENCAO"
+					Return .F.
+				EndIf
+				dbSelectArea( "SA1" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SA1" ) + Mv_par01 + Mv_par02 )
+				cCliMdtPs := Mv_par01 + Mv_par02
+				Inclui := .T.
+				Altera := .F.
+				bNGGRAVA  := { || CHK2TA005() }
+				If NGCAD01( "TM0", TM0->(Recno()), 3 ) == 1
+					lRet := .T.
+					If Empty( TM0->TM0_MAT )
+						dbSelectArea( "SRA" )
+						cRA_MAT := GETSXENUM( 'SRA', 'RA_MAT' )
+						CONFIRMSX8()
+						SRA->(RecLock( "SRA", .T. ))
+							SRA->RA_FILIAL	:=xFilial( "SRA" )
+							SRA->RA_MAT 	:=cRA_MAT
+							SRA->RA_NOME	:=TM0->TM0_NOMFIC
+							SRA->RA_SEXO	:=IIf( TM0->TM0_SEXO != "2", "M", "F" )
+							SRA->RA_ESTCIVI	:=TM0->TM0_ESTCIV
+							SRA->RA_NASC	:=TM0->TM0_DTNASC
+							SRA->RA_CC		:=TM0->TM0_CC
+							If NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+								SRA->RA_DEPTO	:=TM0->TM0_DEPTO
+							EndIf
+							SRA->RA_ADMISSA	:=TM0->TM0_DTIMPL
+							SRA->RA_CODFUNC	:=TM0->TM0_CODFUN
+							SRA->RA_CATFUNC	:="M"
+							SRA->RA_RG  	:=TM0->TM0_RG
+							SRA->RA_NUMCP  	:=TM0->TM0_NUMCP
+							SRA->RA_SERCP	:=TM0->TM0_SERCP
+							SRA->RA_UFCP	:=TM0->TM0_UFCP
+							If SRA->(ColumnPos( "RA_CTPCD" )) > 0  .And. TM0->(ColumnPos( "TM0_CTPCD" )) > 0 //Cota de Deficiente
+								SRA->RA_CTPCD := TM0->TM0_CTPCD
+							EndIf
+						SRA->(MsUnlock())
+
+						dbSelectArea( "TM0" )
+						TM0->(RecLock( "TM0", .F. ))
+							TM0->TM0_MAT    := cRA_MAT
+							TM0->TM0_FILFUN := xFilial( "SRA" )
+						TM0->(MsUnlock())
+
+						If Len( aDadIncHis ) > 0
+							aDadIncHis[1] := SRA->RA_ADMISSA
+							aDadIncHis[2] := SRA->RA_MAT
+							aDadIncHis[3] := SRA->RA_CC
+
+							dbSelectArea( "SRE" )
+							dbSetOrder( 1 )
+							RecLock( "SRE", .T. )
+								SRE->RE_FILIAL  := xFilial( "SRE" )
+								SRE->RE_DATA    := aDadIncHis[1]
+								SRE->RE_EMPD    := cEmpAnt
+								SRE->RE_FILIALD := cFilAnt
+								SRE->RE_MATD    := aDadIncHis[4]
+								SRE->RE_CCD     := aDadIncHis[5]
+								SRE->RE_EMPP    := cEmpAnt
+								SRE->RE_FILIALP := cFilAnt
+								SRE->RE_MATP    := aDadIncHis[2]
+								SRE->RE_CCP     := aDadIncHis[3]
+							MsUnlock( "SRE" )
+						EndIf
+					EndIf
+					If cPROGRAMA == "MDTA075"
+						M->TMJ_NUMFIC := TM0->TM0_NUMFIC
+					ElseIf cPROGRAMA == "MDTA430"
+						M->TM5_NUMFIC := TM0->TM0_NUMFIC
+					EndIf
+					cFunc075 := TM0->TM0_CODFUN
+
+				Else
+					RollBackSX8()
+				EndIf
+				bNGGRAVA := {}
+				If Type( "OldbNGGRAVA" ) == "B"
+					bNGGRAVA := OldbNGGRAVA
+				EndIf
+			EndIf
+
+			dbSelectArea( cAlias5 )
+			dbSetOrder( cSvOrd5 )
+			Return lRet
+		EndIf
+	EndIf
+
+	bNGGRAVA  := { || CHKTA005() }
+	If Type( "cCliMdtPs" ) == "C"
+		If !Empty( cCliMdtPs )
+			bNGGRAVA  := {|| CHK2TA005()}
+		EndIf
+	EndIf
+	If !NGCAD01( "TM0", TM0->(Recno()), 3 ) == 1
+		RollBackSX8()
+	EndIf
+	bNGGRAVA := {}
+	If Type( "OldbNGGRAVA" ) == "B"
+		bNGGRAVA := OldbNGGRAVA
+	EndIf
+
+	dbSelectArea( cAlias5 )
+	dbSetOrder( cSvOrd5 )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHKTA0052
+
+Programa De Consistencia Final
+
+@author  Inacio Luiz Kolling
+@since   12/01/2000
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function CHK2TA005()
+
+	Local aAreaXXX := GetArea()
+	Local aAreaTM0 := TM0->(GetArea())
+	Local aAreaSA1 := SA1->(GetArea())
+
+	If Empty( M->TM0_CLIENT ) .Or. Empty( M->TM0_LOJA )
+		Help( " ", 1, "ATENCAO", , STR0023, 4, 5 ) //"Os campos Cliente e Loja são obrigatórios."
+		Return .F.
+	EndIf
+
+	If !Empty( M->TM0_MAT ) .And. Empty( M->TM0_NUMDEP )
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If dbSeek( xFilial( "SRA" ) + M->TM0_MAT )
+			If INCLUI
+				Help( " ", 1, "MSG_JCAMAT" )
+				dbSetOrder( 1 )
+				Return .F.
+			Else
+				If cFichaGrv != TM0->TM0_MAT
+					Help( " ", 1, "MSG_JCAMAT" )
+					dbSetOrder( 1 )
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty( M->TM0_MAT ) .And. !Empty( M->TM0_NUMDEP )
+		dbSelectArea( "TM0" )
+		dbSetOrder( 3 )
+		If dbSeek( xFilial( "SRA" ) + M->TM0_MAT + M->TM0_NUMDEP )
+			If INCLUI
+				Help( " ", 1, "MSG_JCADEP" )
+				dbSetOrder( 1 )
+				Return .F.
+			ElseIf cFichaGrv != TM0->TM0_MAT .Or. cDepenGrv != TM0->TM0_NUMDEP
+				Help( " ", 1, "MSG_JCAMAT" )
+				dbSetOrder( 1 )
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	M->RA_RG  := M->TM0_RG
+	M->RA_MAT := M->TM0_MAT
+	M->RA_CIC := " "
+	M->RA_NOME:= M->TM0_NOMFIC
+	M->RA_NASC:= M->TM0_DTNASC
+	M->RA_ADMISSA := M->TM0_DTIMPL
+	M->RA_CC := M->TM0_CC
+	If NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+		M->RA_DEPTO := M->TM0_DEPTO
+	EndIf
+
+	lValidaRG := .T.
+
+	If Type( "cRG__TM0" ) == "C"
+		If cRG__TM0 == M->TM0_RG
+			lValidaRG := .F.
+		EndIf
+	EndIf
+
+	If cPROGRAMA != 'MDTA005'
+		If Empty( M->TM0_RG )
+			Help( " ", 1, STR0024, STR0024,;//"ATENCAO"
+			 STR0025 + Chr( 13 ) + Chr( 10 ) +;//"O campo R.G. deve ser preenchido, pois "
+			 STR0026 + Chr( 13 ) + Chr( 10 ) +;//"necessita desta informação no cadastro "
+			 STR0027, 3, 4 )//"de funcionário."
+			Return .F.
+		EndIf
+	EndIf
+
+	If cPROGRAMA != 'MDTA005'
+		If Empty( M->TM0_CC )
+			Help( " ", 1, STR0024, STR0024,;//"ATENCAO"
+			 STR0028 + Chr( 13 ) + Chr( 10 ) +;//"O campo Setor deve ser preenchido, pois "
+			 STR0026 + Chr( 13 ) + Chr( 10 ) +;//"necessita desta informação no cadastro "
+			 STR0027, 3, 4 )//"de funcionário."
+			Return .F.
+		EndIf
+		If Empty( M->TM0_CODFUN )
+			Help( " ", 1, STR0024, STR0024,;//"ATENCAO"
+			 STR0029 + Chr( 13 ) + Chr( 10 ) +;//"O campo Funcao deve ser preenchido, pois "
+			 STR0026 + Chr( 13 ) + Chr( 10 ) +;//"necessita desta informação no cadastro "
+			 STR0027, 3, 4 )//"de funcionário."
+			Return .F.
+		EndIf
+		If Empty( M->TM0_DTNASC )
+			Help( " ", 1, STR0024, STR0024,;//"ATENCAO"
+			 STR0030 + Chr( 13 ) + Chr( 10 ) +;//"O campo Data Nasc. deve ser preenchido, pois "
+			 STR0026 + Chr( 13 ) + Chr( 10 ) +;//"necessita desta informação no cadastro "
+			 STR0027, 3, 4 )//"de funcionário."
+			Return .F.
+		EndIf
+		If Empty( M->TM0_SEXO )
+			Help( " ", 1, STR0024, STR0024,;//"ATENCAO"
+			 STR0031 + Chr( 13 ) + Chr( 10 ) +;//"O campo Sexo deve ser preenchido, pois "
+			 STR0026 + Chr( 13 ) + Chr( 10 ) +;//"necessita desta informação no cadastro "
+			 STR0027, 3, 4 )//"de funcionário."
+			Return .F.
+		EndIf
+	EndIf
+
+	lValida002 := .T.
+	//Avisa de funcionario esta duplicado pelo NOME e NASCIMENTO
+	If lValidaRG .And. Type( "aDadIncHis" ) == "A"
+		If Len( aDadIncHis ) > 0
+			lValida002 := .F.
+		EndIf
+	EndIf
+
+	If !Empty( M->TM0_CC )
+		If Substr( M->TM0_CC, 1, nSizeCli + nSizeLoj ) != M->TM0_CLIENT+M->TM0_LOJA
+			Help( " ", 1, STR0024, , STR0032, 4, 5 )//"ATENCAO"###"O centro de custo não pertence ao Cliente/Unidade."
+			RestArea( aAreaTM0 )
+			RestArea( aAreaXXX )
+			Return .F.
+		EndIf
+	EndIf
+
+	If NGSEEK( "SA1", Substr( M->TM0_CC, 1, nSizeCli + nSizeLoj ), 1, 'SA1->A1_MSBLQL' ) == "1"
+		Help( " ", 1, STR0024, , STR0033, 4, 5 )//"ATENCAO"###"O Cliente/unidade informado está inativo."
+		RestArea( aAreaTM0 )
+		RestArea( aAreaXXX )
+		RestArea( aAreaSA1 )
+		return .F.
+	Endif
+	RestArea( aAreaSA1 )
+
+	If CTT->(FieldPos( "CTT_MSBLQL" )) > 0
+		If NGSEEK( "CTT", M->TM0_CC, 1, 'CTT->CTT_MSBLQL' ) == "1"
+			Help( " ", 1, STR0024, , STR0034, 4, 5 )//"ATENCAO"###"O Setor informado está inativo."
+			RestArea( aAreaTM0 )
+			RestArea( aAreaXXX )
+			Return .F.
+		EndIf
+	EndIf
+
+	If !Empty( M->TM0_CODFUN )
+		dbSelectarea( "TOS" )
+		dbSetorder( 1 )
+		If !dbSeek( xFilial( "TOS" ) + M->TM0_CODFUN + M->TM0_CLIENT + M->TM0_LOJA )
+			Help( " ", 1, STR0024, , STR0035, 4, 5 )//"ATENCAO"###"A função não pertence ao Cliente/Unidade."
+			RestArea( aAreaTM0 )
+			RestArea( aAreaXXX )
+			Return .F.
+		EndIf
+	EndIf
+
+	RestArea( aAreaTM0 )
+	RestArea( aAreaXXX )
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005VL01
+Função que realiza a validação das perguntas.
+
+@param nTipo
+
+@author Guilherme Freudenburg
+@since 23/04/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT005VL01( nTipo )
+
+	Local lRet := .T.
+
+	If nTipo == 1
+		If !Empty( Mv_par01 )
+			If Empty( Mv_par02 )
+				dbSelectArea( "SA1" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SA1" ) + Mv_par01 )
+				Mv_par02 := SA1->A1_LOJA
+			EndIf
+			lRet := ExistCpo( 'SA1', Mv_par01 + Mv_par02 )
+			Return lRet
+		EndIf
+	ElseIf !Empty( Mv_par01 + Mv_par02 )
+		If !ExistCpo( 'SA1', Mv_par01 + Mv_par02 )
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fEXAME005
+
+Manipula a tabela de exames
+
+@author  Denis Hyroshi de Souza
+@since   11/11/2004
+/*/
+//-------------------------------------------------------------------
+Function fEXAME005()
+
+	Local aArea := GetArea()
+	Local aCHECKEXC := aClone( aCHKDEL )
+	Local aNgButtonOld := aClone( aNgButton )
+
+	bNGGRAVA  := {}
+	aCHKDEL   := {}
+	aNgButton := {}
+
+	dbSelectArea( "SA1" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "SA1" ) + TM0->TM0_CLIENT + TM0->TM0_LOJA )
+
+	Private cCliMdtPs := SA1->A1_COD + SA1->A1_LOJA
+
+	MDTA120A()
+
+	bNGGRAVA  := { || CHK2TA005() }
+	aCHKDEL  := aClone( aCHECKEXC )
+
+	cCliMdtPs := cCliMdtSv
+	aNgButton := aClone( aNgButtonOld )
+	RestArea( aArea )
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VALTM0CLI
+
+Altera o valor da variavel cCliMdtPs
+
+@author  Denis Hyroshi de Souza
+@since   11/11/2004
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function VALTM0CLI()
+
+	If Type( "cCliMdtPs" ) == "C"
+		If !Empty( cCliMdtPs )
+			If Type( "M->TM0_CLIENT" ) == "C" .And. Type( "M->TM0_LOJA" ) == "C"
+				cCliMdtPs := M->TM0_CLIENT + M->TM0_LOJA
+				M->TM0_NRECLI := NGSEEK( "SA1", M->TM0_CLIENT + M->TM0_LOJA, 1, "A1_NREDUZ" )
+				M->TM0_NOMCLI := NGSEEK( "SA1", M->TM0_CLIENT + M->TM0_LOJA, 1, "A1_NOME" )
+			EndIf
+
+			If Type( "oENCHOICE" ) == "O"
+				nITEM := aScan( oENCHOICE:aGETS, { |X| "TM0_CC" $X } )
+				If nITEM > 0
+					oOBSTJ := oENCHOICE:aENTRYCTRLS[nITEM]
+					oOBSTJ:SETFOCUS( oOBSTJ )
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGRELACTRF
+
+Monta getdados para selecao das tarefas relacionadas a Ficha Medica
+
+@author  Hugo Rizzo Pereira
+@since   02/12/2010
+
+@param   cNumfic, Caracter, Numero da Ficha Medica
+@param   cNomFic, Caracter, Nome do funcionario
+@param   cMatricula, Caracter, Matricula do funcionario na Ficha Medica
+@param   cCandid, Caracter, Numero do candidato
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NGRELACTRF( cNumfic, cNomfic, cMatricula, cCandid )
+
+	Local nCnt         := 0
+	Local nOpc         := IIf( (Inclui .Or. Altera), 4, 2 )
+	Local cAliasTrfOld := cAliasTrf
+	Local aNao         := {}
+	Local nIndic       := 0
+	Local oDlg
+	Local oGetTar
+	Local oPanelAll
+	Local oPanelTop
+	Local oPanelBut
+	Local oGroup
+	Local nInd
+	Local aArea
+
+	Private aCOLS
+	Private oMenu
+
+	If !Empty( cMatricula )
+		cAliasTrf  := "TN6"
+		cLabelNome := STR0043
+		cValidPar  := ".F."
+		cNomfic    := IIf( Empty( cNomfic ), NGSEEK( "SRA", cMatricula, 1, 'SRA->RA_NOME' ), cNomfic )
+	ElseIf !Empty( cCandid )
+		If !NGIFDICIONA( "SX3", "TKD", 1, .F. )
+				If !NGINCOMPDIC( "UPDMDT23", "00000028511/2010" )
+					Return .F.
+				EndIf
+		EndIf
+		cAliasTrf  := "TKD"
+		cLabelNome := STR0044
+		cValidPar  := ".T."
+	Else
+		MsgInfo( STR0039 + CHR( 13 ) + STR0040 )
+		Return .F.
+	EndIf
+
+	If cAliasTrf != cAliasTrfOld
+		aTarefaTKD := {}
+		lFirstTKD  := .T.
+	EndIf
+
+	aArea := ( cAliasTrf )->( GetArea() )
+
+	Private aSize := MsAdvSize( , .F., 430 ), aObjects := {}
+
+	Aadd( aObjects, { 050, 050, .T., .T. } )
+	Aadd( aObjects, { 020, 020, .T., .T. } )
+	Aadd( aObjects, { 100, 100, .T., .T. } )
+	aInfo := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	aPosObj := MsObjSize( aInfo, aObjects, .T. )
+
+	If cAliasTrf == "TN6"
+		aNao  := { 'TN6_MAT', 'TN6_NOME' }
+		nIndic  := 2 //TN6_FILIAL+TN6_MAT
+		cSeek := cMatricula
+		cCond := 'TN6->TN6_FILIAL+TN6->TN6_MAT == "' + xFilial( "TN6" ) + cSeek + '"'
+	Else
+		aNao  := { 'TKD_NUMFIC', 'TKD_NOMFIC' }
+		nIndic  := 1 //TKD_FILIAL+TKD_NUMFIC+TKD_CODTAR+DTOS(TKD_DTINIC)
+		cSeek := cNumfic
+		cCond := 'TKD->TKD_FILIAL+TKD->TKD_NUMFIC == "' + xFilial( "TKD" ) + cSeek + '"'
+	EndIf
+
+	dbSelectArea( cAliasTrf )
+	dbSetOrder( nIndic )
+	dbSeek( xFilial( cAliasTrf ) + cSeek )
+
+	// Monta a entrada de dados do arquivo
+	Private aTELA  := {}
+	Private aGETS  := {}
+	Private nUsado := 0
+	Private aHeader[0]
+
+	// Verifica se existe algum dado no arquivo
+	If lFirstTKD
+		For nInd := 1 To FCount()
+			x   := "M->" + FieldName( nInd )
+			&x. := FieldGet( nInd )
+		Next nInd
+
+		While !Eof() .And. &cCond
+			nCnt++
+			dbSkip()
+		End
+	EndIf
+
+	//Monta o aHeader e o aCols
+	FillGetDados( nOpc, cAliasTrf, nIndic, cSeek, { || }, { ||.T. }, aNao, , , , { | | NGMontaaCols( cAliasTrf, cSeek, cCond, , nIndic ) } )
+
+	If Len( aTarefaTKD ) > 0
+		aCols := aClone( aTarefaTKD )
+	ElseIf nCnt == 0
+		aCols := BlankGetD( aHeader )
+	EndIf
+
+	PutFileInEof( cAliasTrf )
+	nOpca := 0
+
+	DEFINE MSDIALOG oDlg TITLE STR0045 From 0,0 To 0,0 OF oMainWnd Pixel
+		oDlg:lMaximized := .T.
+		oPanelAll := TPanel():New( , , , oDlg, , , , , RGB( 255, 255, 255 ), , aPosObj[1, 3], .F., .F. )
+		oPanelAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPanelTop := TPanel():New( , , , oPanelAll, , , , , RGB( 255, 255, 255 ), , aPosObj[1, 1], .F., .F. )
+			oPanelTop:Align := CONTROL_ALIGN_TOP
+
+			oPanelBut := TPanel():New( , , , oPanelAll, , , , , RGB( 255, 255, 255 ), , aPosObj[1, 3], .F., .F. )
+			oPanelBut:Align := CONTROL_ALIGN_ALLCLIENT
+
+			@ 0.6,.8  SAY OemtoAnsi( STR0042 ) OF oPanelTop
+			@ 0.5, 5  MSGET MDTHideCpo( cNumfic, "TM0_NUMFIC" ) SIZE 20, 10 WHEN .F. OF oPanelTop
+			@ 0.6, 10.5  SAY OemToAnsi( cLabelNome ) OF oPanelTop
+			@ 0.5, 15  MSGET MDTHideCpo( cNomfic, "TM0_NOMFIC" ) SIZE 150, 10 WHEN .F. OF oPanelTop
+			@ 1000, 1000 MsGet oGroup Picture "@!" Size 1, 01 OF oPanelTop
+
+			dbSelectArea( cAliasTrf )
+
+			oGetTar := MSGetDados():New( aPosObj[1, 2], aPosObj[3, 2], aPosObj[2, 3]*1.9, aPosObj[3, 4], nOpc,;
+											"MDT090VLDT( " + cValidPar + ", .T. ) .And. MDT092LOK('" + cAliasTrf + "')", "AllwaysTrue()", "",;
+											.T., , , , 3000, , , , , oPanelBut )
+			oGetTar:ForceRefresh()
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( oDlg, { ||nOpca:=1, IIf( oGetTar:TudoOk(), oDlg:End(), nOpca := 0 ) }, { ||oDlg:End(), nOpca := 0 } )
+
+	//Salva as informações da GetDados
+	If nOpcA == 1 .And. (Inclui .Or. Altera)
+		lFirstTKD := .F.
+
+		aTarefaTKD := {}
+		ASORT( aCols, , , { |x, y| x[Len( x )] .And. !y[Len( y )] } )
+		aTarefaTKD := aClone( aCols )
+		aHeadTar   := aClone( aHeader )
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fIncFic
+Função responsável por criar uma ficha médica ou alterar.
+
+@type   Function
+
+@author Eduardo Mussi
+@since  17/09/2022
+
+@param  lNewMedRec, Lógico , Define se cria uma nova ficha médica
+@param  cFilMat  , Caracter, Valor da filial (TM0_FILFUN) na ficha medica
+
+/*/
+//-------------------------------------------------------------------
+Static Function fIncFic( lNewMedRec, cFilmat )
+
+	Local cNUMFIC := ''
+
+	// Ao alterar o Funcionário e informar o CPF deverá ser verificado
+	// se o funcionário já possui ficha médica inclusa sem o CPF informado
+	// caso possuir deverá alterar os valores da ficha com base na Matricula.
+	nOrder := NGRETORDEM( "TM0", "TM0_FILIAL + TM0_MAT", .F. )
+	dbSelectArea( "TM0" )
+	dbSetOrder( nOrder )
+	If lNewMedRec .And. dbSeek( xFilial( "TM0" ) + SRA->RA_MAT )
+		RecLock( "TM0", .F. )
+	Else
+		cNUMFIC := GETSXENUM( "TM0", "TM0_NUMFIC" )
+		CONFIRMSX8()
+		RecLock( "TM0", .T. )
+			TM0->TM0_FILIAL  := xFilial( "TM0" )
+			TM0->TM0_NUMFIC  := cNUMFIC
+	EndIf
+
+	TM0->TM0_TIPDEF  := SRA->RA_TPDEFFI
+	TM0->TM0_NOMFIC  := SRA->RA_NOME
+
+	If !Empty( SRA->RA_NSOCIAL )
+		TM0->TM0_NOMSOC := SRA->RA_NSOCIAL
+	EndIf
+
+	If TM0->(FieldPos( "TM0_EMPFUN" )) > 0
+		TM0->TM0_EMPFUN := cEmpAnt
+	EndIf
+
+	TM0->TM0_FILFUN  := cFilmat
+	TM0->TM0_MAT     := SRA->RA_MAT
+	TM0->TM0_DTIMPL  := SRA->RA_ADMISSA
+	TM0->TM0_DTNASC  := SRA->RA_NASC
+	If SRA->RA_SEXO == "M"
+		TM0->TM0_SEXO := "1"
+	ElseIf SRA->RA_SEXO == "F"
+		TM0->TM0_SEXO := "2"
+	EndIf
+	If !Empty( SRA->RA_RACACOR )
+		If SRA->RA_RACACOR == "1" //Indigena
+			cOpcComb := "5"
+		ElseIf SRA->RA_RACACOR == "2" //Branco
+			cOpcComb := "1"
+		ElseIf SRA->RA_RACACOR == "4" //Negro
+			cOpcComb := "2"
+		ElseIf SRA->RA_RACACOR == "6" //Amarelo
+			cOpcComb := "4"
+		ElseIf SRA->RA_RACACOR == "8" //Pardo
+			cOpcComb := "3"
+		ElseIf SRA->RA_RACACOR == "9" //Não informado
+			cOpcComb := " "
+		EndIf
+		TM0->TM0_CORPEL := cOpcComb
+	EndIf
+	TM0->TM0_CODFUN  := SRA->RA_CODFUNC
+	TM0->TM0_CC		 := SRA->RA_CC
+	TM0->TM0_NUMCP   := SRA->RA_NUMCP
+	TM0->TM0_SERCP   := SRA->RA_SERCP
+	TM0->TM0_ESTCIV  := SRA->RA_ESTCIVI
+	TM0->TM0_RG      := SRA->RA_RG
+	TM0->TM0_UFCP    := SRA->RA_UFCP
+	TM0->TM0_CPF	 := SRA->RA_CIC
+	TM0->TM0_INDBIO	 := "2"
+	If TM0->(FieldPos( "TM0_CODPOS" )) > 0
+		TM0->TM0_CODPOS := SRA->RA_POSTO
+	EndIf
+	If TM0->(FieldPos( "TM0_DEPTO" )) > 0
+		TM0->TM0_DEPTO   := SRA->RA_DEPTO
+	EndIf
+	If TM0->(FieldPos( "TM0_CTPCD" )) > 0
+		TM0->TM0_CTPCD  := SRA->RA_CTPCD
+	EndIf
+	TM0->(MsUnLock())
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtVldBio
+
+Validar digital comparando com cadastrado no banco
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@sample  MdtVldBio("000000001", .T.)
+
+@param   cId, Caracte, Valor do codigo na tabela de digitais (TKE)
+@param   lMsg, Logico, Define se sera mostrada a mensagem quando nao
+                       ha digitais cadastradas
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MdtVldBio( cId, lmsg )
+
+	Local aDigitais:={}
+	Local cD1
+	Local aAreaTKE := TKE->(GetArea( "TKE" ))
+	Default lmsg:= .T.
+
+	If !BioIsActive()
+		Return .T.
+	EndIf
+	If !BioChkDLL()
+		Return .F.
+	EndIf
+
+	aDigitais := MdtRetBio( cId, "TM0" )
+
+	If Len( aDigitais ) == 0
+		If lMsg
+			MsgStop( STR0053 ) //"Não existem digitais cadastradas."
+			RestArea( aAreaTKE )
+			Return .F.
+		EndIf
+	EndIf
+
+	RestArea( aAreaTKE )
+
+	cD1:= cValToChar( BioFGetFinger() )
+
+	If "ERRO" $ AllTrim( UPPER( cD1 ) )
+		Return .F.
+	EndIf
+
+	nRet := BioChkFingers( cD1, aDigitais )
+
+	If nRet == 0
+		If lMsg
+			MsgStop( STR0054 ) //"Digital não confere."
+		EndIf
+		Return .F.
+	EndIf
+
+	If lMsg
+		Aviso( STR0055, STR0056, { "Ok" } ) //"Digitais"###"Conferencia OK!"
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtRetBio
+
+Carrega digitais de uma usuario
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@sample  MdtRetBio("000000001", "TM0")
+
+@param   cId, Caracter, Valor do codigo na tabela de digitais (TKE)
+@param   cTabTKE, Caracter, Valor do campo Tabela (TKE), atualmente
+                            é sempre alimentado com "TM0"
+
+@return  return, return_type, return_descr
+/*/
+//-------------------------------------------------------------------
+Function MdtRetBio( cId, cTabTKE )
+
+	Local aDigitais := {}
+
+	TKE->(dbSetOrder( 1 ))
+	If TKE->(dbSeek( xFilial( "TKE" ) + cTabTKE + cId ))
+		While TKE->(! Eof() .And. TKE_FILIAL + TKE_TABELA + TKE_CODIGO == xFilial( "TKE" ) + cTabTKE + cId )
+			If !Empty( AllTrim( TKE->TKE_DIG1 ) + AllTrim( TKE->TKE_DIG2 ) )
+				If TKE->( FieldPos( "TKE_DIG5" ) ) > 0
+					aAdd( aDigitais, AllTrim( TKE->TKE_DIG1 ) + AllTrim( TKE->TKE_DIG2 ) + AllTrim( TKE->TKE_DIG5 ) +;
+					AllTrim( TKE->TKE_DIG6 ) + AllTrim( TKE->TKE_DIG7 ) + AllTrim( TKE->TKE_DIG8 ) + AllTrim( TKE->TKE_DIG9 ) +;
+					AllTrim( TKE->TKE_DIG10 ) + AllTrim( TKE->TKE_DIG11 ) + AllTrim( TKE->TKE_DIG12 ) )
+					aAdd( aDigitais, AllTrim( TKE->TKE_DIG3 ) + AllTrim( TKE->TKE_DIG4 ) + AllTrim( TKE->TKE_DIG13 ) +;
+					AllTrim( TKE->TKE_DIG14 ) +	AllTrim( TKE->TKE_DIG15 ) + AllTrim( TKE->TKE_DIG16 ) + AllTrim( TKE->TKE_DIG17 ) +;
+					AllTrim( TKE->TKE_DIG18 ) + AllTrim( TKE->TKE_DIG19 ) + AllTrim( TKE->TKE_DIG20 ) )
+				Else
+					aAdd( aDigitais, AllTrim( TKE->TKE_DIG1 ) + AllTrim( TKE->TKE_DIG2 ) )
+					aAdd( aDigitais, AllTrim( TKE->TKE_DIG3 ) + AllTrim( TKE->TKE_DIG4 ) )
+				EndIf
+			EndIf
+			TKE->(DbSkip())
+		End
+	EndIf
+
+Return( aDigitais )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtGetBio
+
+Leitura das digitais de todos os dedos das maos
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@sample  MdtRetBio("000000001", "TM0", .T.)
+
+@param   cId, Caracter, Valor do codigo na tabela de digitais (TKE)
+@param   cTabTKE, Caracter, Valor do campo Tabela (TKE), atualmente
+                            é sempre alimentado com "TM0"
+@param   lMsgTKE, Logico, Define se sera exibida uma mensagem
+                          questionando sobre incluir digitais
+						  para o funcionario
+
+@return  { aClone(aDigitais),lOk } , Array, Primeira posicao contem um
+                                            array com as digitais
+											Segunda posicao contem o Ok
+											da Dialog
+/*/
+//-------------------------------------------------------------------
+Function MdtGetBio( cID, cTabTKE, lMsgTKE )
+
+	Local oDlg
+	Local oPanel
+	Local oBmp
+	Local lOk:=.F.
+	Local nX
+	Local aButtons := {}
+	Local lAtivo := .T.
+	Local bBotDel:= {|| MdtDelBio( cId, { oDedo1, oDedo2, oDedo3, oDedo4, oDedo5, oDedo6, oDedo7, oDedo8, oDedo9, oDedo10 }, aDigitais, cTabTKE ) }
+	Local aFonts_ := GetFontList()
+	Local cFontX  := 'Arial'
+	Local lAlt := .T.
+
+	Default lMsgTKE := .T.
+
+	// Monta a entrada de dados do arquivo
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private Continua
+	Private nUsado:=0
+	Private aSize := MsAdvSize( , .F., 430 ), aObjects := {}
+
+	aAdd( aObjects, { 050, 050, .T., .T. } )
+	aAdd( aObjects, { 100, 100, .T., .T. } )
+	aInfo   := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	aPosObj := MsObjSize( aInfo, aObjects, .T. )
+
+	Private aDigitais
+
+	If lMsgTKE .And. cTabTKE == "TM0"
+		If M->TM0_INDBIO != "1"
+			If !MsgYesNo( STR0057 ) //"Deseja cadastrar digitais para este funcionário?"
+				M->TM0_INDBIO := "2"
+				Return .F.
+			EndIf
+			M->TM0_INDBIO := "1"
+		EndIf
+	EndIf
+
+	If aScan( aFonts_, { |x| AllTrim( x ) == "Calibri" } ) > 0
+		cFontX := "Calibri"
+	ElseIf aScan( aFonts_, { |x| AllTrim( x ) == "Trebuchet MS" } ) > 0
+		cFontX := "Trebuchet MS"
+	EndIf
+
+	Private oDedo1
+	Private oDedo2
+	Private oDedo3
+	Private oDedo4
+	Private oDedo5
+	Private oDedo6
+	Private oDedo7
+	Private oDedo8
+	Private oDedo9
+	Private oDedo10
+	Private oFont11  := TFont():New( cFontX, , -12, .F., .F. )
+	Private oFont11i := TFont():New( cFontX, , -13, .F., .F. )
+	Private oFont12i := TFont():New( cFontX, , -14, .F., .F. )
+	Private oFont14  := TFont():New( cFontX, , -16, .F., .F. )
+	Private oFont50  := TFont():New( cFontX, , -50, .F., .F. )
+	Private oFont40  := TFont():New( cFontX, , -25, .F., .F. )
+	oFont50:Bold    := .T.
+	oFont14:Bold    := .T.
+	oFont11i:Italic := .T.
+	oFont12i:Italic := .T.
+	oFont11i:Bold   := .T.
+	oFont40:Italic  := .T.
+
+	If !BioChkDLL()
+		Return { {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""} }
+	EndIf
+
+	If cID != NIL .And. aDigitais==NIL
+		aDigitais:={ {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""} }
+		If Empty( cID )
+			Return aDigitais
+		EndIf
+		For nX:= 1 To 10
+			TKE->(dbSetOrder( 1 ))
+			If TKE->(dbSeek( xFilial( "TKE" ) + cTabTKE + cId + StrZero( nX, 2 ) ))
+				aDigitais[nX, 1]:= AllTrim( TKE->TKE_DIG1 ) + AllTrim( TKE->TKE_DIG2 ) + AllTrim( TKE->TKE_DIG5 ) +;
+				AllTrim( TKE->TKE_DIG6 ) + AllTrim( TKE->TKE_DIG7 ) + AllTrim( TKE->TKE_DIG8 ) + AllTrim( TKE->TKE_DIG9 ) +;
+				AllTrim( TKE->TKE_DIG10 ) + AllTrim( TKE->TKE_DIG11 ) + AllTrim( TKE->TKE_DIG12 )
+				aDigitais[nX, 2]:= AllTrim( TKE->TKE_DIG3 ) + AllTrim( TKE->TKE_DIG4 ) + AllTrim( TKE->TKE_DIG13 ) +;
+				AllTrim( TKE->TKE_DIG14 ) + AllTrim( TKE->TKE_DIG15 ) + AllTrim( TKE->TKE_DIG16 ) + AllTrim( TKE->TKE_DIG17 ) +;
+				AllTrim( TKE->TKE_DIG18 ) + AllTrim( TKE->TKE_DIG19 ) + AllTrim( TKE->TKE_DIG20 )
+			EndIf
+		Next
+		If lAtivo := BioIsActive()
+			If !lAlt
+				bBotCon := {|| .T.}
+				bBotDel := {|| .T.}
+			EndIf
+			aadd( aButtons, { "nochecked", bBotDel, STR0058 + cID, STR0059 } ) //"Apaga todas as digitais do código "###"Deletar"
+		Else
+			aadd( aButtons, { "pmsrela", { || Habilita( oDlg ) }, STR0060, STR0061 } ) //"Habilita dipositivo biometrico"###"Habilitar"
+		EndIf
+	Else
+		Default aDigitais := { {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""} }
+	EndIf
+
+	Private aProxDedo := { "5d", "4d", "3d", "2d", "1d", "1e", "2e", "3e", "4e", "5e" }
+
+	nLinDiag := aSize[6]
+	nColDiag := aSize[5]
+	If nLinDiag - aSize[7] > 578
+		nLinDiag := 578 + aSize[7]
+	EndIf
+	If nColDiag > 954
+		nColDiag := 954
+	EndIf
+	lFlatMode := IIf( FindFunction( "FLATMODE" ), FlatMode(), SetMDIChild() )
+
+	DEFINE MSDIALOG oDlg FROM aSize[7], 0 To nLinDiag,nColDiag TITLE STR0062 OF oMainWnd PIXEL //"Cadastro das digitais"
+	oDlg:lEscClose := .F.
+
+	nRef1Linh := nLinDiag - aSize[7]
+	nRef2Linh := nLinDiag - aSize[7]
+	nRefColun := nColDiag
+	If lFlatMode
+		nRef1Linh := nRef1Linh - ( 0.015 * nRef1Linh )
+		nRef2Linh := nRef2Linh - ( 0.015 * nRef2Linh )
+		nRefColun := nRefColun + ( 0.006 * nRefColun )
+	EndIf
+
+	@00, 00 MSPANEL oPanel SIZE 0, 0 of oDlg
+	oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+	nProxDedo := 0
+
+	@ 0, 0 BITMAP oBmp SIZE 0, 0 OF oPanel NOBORDER SCROLL PIXEL //954,561
+	oBmp:Load( '', 'ngbioback.jpg' )
+	oBmp:LAUTOSIZE 		:= .T.
+	oBmp:lStretch 		:= .T.
+	oBmp:lTransparent 	:= .F.
+	oBmp:Align := CONTROL_ALIGN_ALLCLIENT
+
+	cSMCOD := IIf( FindFunction( "FWGrpCompany" ), FWGrpCompany(), SM0->M0_CODIGO )
+	cSMFIL := IIf( FindFunction( "FWCodFil" ), FWCodFil(), SM0->M0_CODFIL )
+
+	@ (nRef1Linh * 0.02768), (nRefColun * 0.00840) BITMAP oDedoLogo SIZE (0.095 * nRefColun), 45 OF oPanel NOBORDER SCROLL PIXEL WHEN .F.
+	oDedoLogo:LAUTOSIZE 	:= .F.
+	oDedoLogo:lStretch 		:= .T.
+	oDedoLogo:lTransparent 	:= .T.
+	If File( 'lgrl' + cSMCOD + cSMFIL + '.bmp' )
+		oDedoLogo:Load( '', 'lgrl' + cSMCOD + cSMFIL + '.bmp' )
+	ElseIf File( 'lgrl' + cSMCOD + '.bmp' )
+		oDedoLogo:Load( '', 'lgrl' + cSMCOD + '.bmp' )
+	EndIf
+
+	@ (nRef1Linh * 0.11937), (nRefColun * 0.11554) BITMAP oDedo1 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[1] := Captura( oDedo1, 1 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo1:lStretch 		:= .F.
+	oDedo1:lTransparent 	:= .T.
+	If aDigitais[1, 1] == ""
+		nProxDedo := 1
+		oDedo1:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo1:Load( '', 'ngbiodig_5d_vd.png' )
+		oDedo1:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.04844), (nRefColun * 0.15546) BITMAP oDedo2 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[2] := Captura( oDedo2, 2 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo2:lStretch 		:= .F.
+	oDedo2:lTransparent 	:= .T.
+	If aDigitais[2, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 2, nProxDedo )
+		oDedo2:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo2:Load( '', 'ngbiodig_4d_vd.png' )
+		oDedo2:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.02768), (nRefColun * 0.18697) BITMAP oDedo3 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[3] := Captura( oDedo3, 3 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo3:lStretch 		:= .F.
+	oDedo3:lTransparent 	:= .T.
+	If aDigitais[3, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 3, nProxDedo )
+		oDedo3:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo3:Load( '', 'ngbiodig_3d_vd.png' )
+		oDedo3:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.04844), (nRefColun * 0.22478) BITMAP oDedo4 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[4] := Captura( oDedo4, 4 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo4:lStretch 		:= .F.
+	oDedo4:lTransparent 	:= .T.
+	If aDigitais[4, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 4, nProxDedo )
+		oDedo4:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo4:Load( '', 'ngbiodig_2d_vd.png' )
+		oDedo4:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.23010), (nRefColun * 0.27521) BITMAP oDedo5 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[5] := Captura( oDedo5, 5 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo5:lStretch 		:= .F.
+	oDedo5:lTransparent 	:= .T.
+	If aDigitais[5, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 5, nProxDedo )
+		oDedo5:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo5:Load( '', 'ngbiodig_1d_vd.png' )
+		oDedo5:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.23010), (nRefColun * 0.30882) BITMAP oDedo6 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[6] := Captura( oDedo6, 6 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo6:lStretch 		:= .F.
+	oDedo6:lTransparent 	:= .T.
+	If aDigitais[6, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 6, nProxDedo )
+		oDedo6:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo6:Load( '', 'ngbiodig_1e_vd.png' )
+		oDedo6:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.04844), (nRefColun * 0.35924) BITMAP oDedo7 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[7] := Captura( oDedo7, 7 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo7:lStretch 		:= .F.
+	oDedo7:lTransparent 	:= .T.
+	If aDigitais[7, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 7, nProxDedo )
+		oDedo7:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo7:Load( '', 'ngbiodig_2e_vd.png' )
+		oDedo7:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.02768), (nRefColun * 0.39495) BITMAP oDedo8 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[8] := Captura( oDedo8, 8 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo8:lStretch 		:= .F.
+	oDedo8:lTransparent 	:= .T.
+	If aDigitais[8, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 8, nProxDedo )
+		oDedo8:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo8:Load( '', 'ngbiodig_3e_vd.png' )
+		oDedo8:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.05017), (nRefColun * 0.42647) BITMAP oDedo9 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[9] := Captura( oDedo9, 9 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo9:lStretch 		:= .F.
+	oDedo9:lTransparent 	:= .T.
+	If aDigitais[9, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 9, nProxDedo )
+		oDedo9:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo9:Load( '', 'ngbiodig_4e_vd.png' )
+		oDedo9:lStretch := .T.
+	EndIf
+
+	@ (nRef1Linh * 0.12110), (nRefColun * 0.46533) BITMAP oDedo10 SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh);
+	 OF oPanel NOBORDER SCROLL PIXEL ON CLICK (aDigitais[10] := Captura( oDedo10, 10 )) WHEN IIf( lAlt, lAtivo, lAlt )
+	oDedo10:lStretch 		:= .F.
+	oDedo10:lTransparent 	:= .T.
+	If aDigitais[10, 1] == ""
+		nProxDedo := IIf( nProxDedo == 0, 10, nProxDedo )
+		oDedo10:Load( '', 'ngbiodig.png' )
+	Else
+		oDedo10:Load( '', 'ngbiodig_5e_vd.png' )
+		oDedo10:lStretch := .T.
+	EndIf
+
+	If nProxDedo >= 1 .And. nProxDedo <= 10
+		&( "oDedo" + Alltrim( Str( nProxDedo, 2 ) ) ):Load( '', 'ngbiodig_' + aProxDedo[nProxDedo] + '_c.png' )
+		&( "oDedo" + Alltrim( Str( nProxDedo, 2 ) ) ):lStretch := .T.
+	EndIf
+
+	cDirDesc := STR0063 //"D: Mão Direita"
+	cEsqDesc := STR0064 //"E: Mão Esquerda"
+
+	@ (nRef2Linh * 0.32179), (nRefColun * 0.02836) SAY STR0052 PIXEL OF oPanel Font oFont40 COLOR RGB( 90, 90, 90 ) //"Biometria"
+
+	@ (nRef2Linh * 0.23875), (nRefColun * 0.18697) SAY SubStr( cDirDesc, 1, 1 ) + "  " PIXEL OF oPanel Font oFont50 COLOR CLR_HGRAY
+	@ (nRef2Linh * 0.23875), (nRefColun * 0.41596) SAY SubStr( cEsqDesc, 1, 1 ) + "  " PIXEL OF oPanel Font oFont50 COLOR CLR_HGRAY
+
+	@ (nRef2Linh * 0.38062), (nRefColun * 0.16386) SAY cDirDesc PIXEL OF oPanel Font oFont12i COLOR RGB( 99, 99, 99 )
+	@ (nRef2Linh * 0.38062), (nRefColun * 0.39915) SAY cEsqDesc PIXEL OF oPanel Font oFont12i COLOR RGB( 99, 99, 99 )
+
+	If nRefColun < 850
+		oFont11 := TFont():New( cFontX, , -10, .F., .F. )
+		oFont14 := TFont():New( cFontX, , -14, .F., .F. )
+	EndIf
+
+	@ (nRef2Linh * 0.42041), (nRefColun * 0.00840) SAY STR0065 PIXEL OF oPanel Font oFont14 COLOR RGB( 90, 90, 90 ) //"CADASTRO DE DIGITAIS:"
+	@ (nRef2Linh * 0.44117), (nRefColun * 0.00840) SAY oMsgDedo1 Prompt Space( 40 ) PIXEL OF oPanel Font oFont11 COLOR RGB( 90, 90, 90 )
+	@ (nRef2Linh * 0.45501), (nRefColun * 0.00840) SAY oMsgDedo2 Prompt Space( 40 ) PIXEL OF oPanel Font oFont11 COLOR RGB( 90, 90, 90 )
+
+	@ (nRef1Linh * 0.44636), (nRefColun * 0.09348) BITMAP oDedoAviso SIZE 20, 20 OF oPanel NOBORDER SCROLL PIXEL WHEN .F.
+	oDedoAviso:lStretch 		:= .F.
+	oDedoAviso:lTransparent 	:= .T.
+	oDedoAviso:Load( '', 'ngbiodig.png' )
+
+	@ (nRef1Linh * 0.42387), (nRefColun * 0.21428) BITMAP oDedoMural SIZE (0.03151 * nRefColun), (0.051903 * nRef1Linh) OF oPanel NOBORDER SCROLL PIXEL WHEN .F.
+	oDedoMural:lStretch 		:= .F.
+	oDedoMural:lTransparent 	:= .T.
+	oDedoMural:Load( '', 'ngbiodigs_3e_c.png' )
+	oDedoMural:lStretch := .T.
+	@ (nRef2Linh * 0.44117), (nRefColun * 0.25210) SAY STR0066 PIXEL OF oPanel Font oFont11i COLOR RGB( 90, 90, 90 ) //"Escolha a digital correspondente à ser cadastrada."
+
+	ACTIVATE DIALOG oDlg ON INIT EnchoiceBar( oDlg, { ||lOk:=.T., oDlg:End() }, { ||lOk:= .F., oDlg:End() }, .F., aButtons ) CENTERED
+
+	If !lOk
+		aDigitais := { {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""} }
+	Else
+		If cID != NIL
+			lOk := MdtGravBio( aDigitais, lAlt, cId, , cTabTKE )
+		EndIf
+	EndIf
+
+Return { aClone( aDigitais ), lOk }
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtGravBio
+
+Gravacao da string biometrica
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@sample  sample
+
+@param   aDigitais, Array, Contem as digitais
+@param   lAlt, Logico, Define se se trata de uma alteracao ou inclusao
+@param   cId, Caracter, Valor do codigo na tabela de digitais (TKE)
+@param   cTabTKE, Caracter, Valor do campo Tabela (TKE), atualmente
+                            é sempre alimentado com "TM0"
+
+@return  lGrv, Logico, Define se as digitais foram gravadas com sucesso
+/*/
+//-------------------------------------------------------------------
+Function MdtGravBio( aDigitais, lAlt, cId, cDedo, cTabTKE )
+
+	Local nX 	 := 0
+	Local lGrv   := .F.
+	Default cDedo:= ""
+
+	For nX:= 1 To Len( aDigitais )
+		If Empty( aDigitais[nX, 1] )
+			TKE->( dbSetOrder( 1 ) )
+			cDedo := StrZero( nX, 2 )
+			If TKE->( dbSeek( xFilial( "TKE" ) + cTabTKE + cId + cDedo ) )
+				TKE->( RecLock( "TKE", .F. ) )
+					TKE->( dbDelete() )
+				TKE->( MsUnLock() )
+			EndIf
+			cDedo := ""
+			Loop
+		EndIf
+		aDigitais[nX, 1] := PadR( AllTrim( aDigitais[nX, 1] ), 2000 )
+		aDigitais[nX, 2] := PadR( AllTrim( aDigitais[nX, 2] ), 2000 )
+		If Empty( cDedo )
+			cDedo := StrZero( nX, 2 )
+		EndIf
+		TKE->( dbSetOrder( 1 ) )
+		If TKE->( dbSeek( xFilial( "TKE" ) + cTabTKE + cId + cDedo ) ) .And. lAlt
+			TKE->( RecLock( "TKE", .F. ) )
+		Else
+			TKE->( RecLock( "TKE", .T. ) )
+			TKE->TKE_FILIAL := xFilial( "TKE" )
+			TKE->TKE_TABELA := cTabTKE
+			TKE->TKE_CODIGO := cId
+			TKE->TKE_DIG    := cDedo
+		EndIf
+		TKE->TKE_DIG1  := Substr( aDigitais[nX, 1], 001, 200 )
+		TKE->TKE_DIG2  := Substr( aDigitais[nX, 1], 201, 200 )
+		TKE->TKE_DIG3  := Substr( aDigitais[nX, 2], 001, 200 )
+		TKE->TKE_DIG4  := Substr( aDigitais[nX, 2], 201, 200 )
+		If TKE->( FieldPos( "TKE_DIG5" ) ) > 0
+			TKE->TKE_DIG5  := Substr( aDigitais[nX, 1], 0401, 200 )
+			TKE->TKE_DIG6  := Substr( aDigitais[nX, 1], 0601, 200 )
+			TKE->TKE_DIG7  := Substr( aDigitais[nX, 1], 0801, 200 )
+			TKE->TKE_DIG8  := Substr( aDigitais[nX, 1], 1001, 200 )
+			TKE->TKE_DIG9  := Substr( aDigitais[nX, 1], 1201, 200 )
+			TKE->TKE_DIG10 := Substr( aDigitais[nX, 1], 1401, 200 )
+			TKE->TKE_DIG11 := Substr( aDigitais[nX, 1], 1601, 200 )
+			TKE->TKE_DIG12 := Substr( aDigitais[nX, 1], 1801, 200 )
+			TKE->TKE_DIG13 := Substr( aDigitais[nX, 2], 0401, 200 )
+			TKE->TKE_DIG14 := Substr( aDigitais[nX, 2], 0601, 200 )
+			TKE->TKE_DIG15 := Substr( aDigitais[nX, 2], 0801, 200 )
+			TKE->TKE_DIG16 := Substr( aDigitais[nX, 2], 1001, 200 )
+			TKE->TKE_DIG17 := Substr( aDigitais[nX, 2], 1201, 200 )
+			TKE->TKE_DIG18 := Substr( aDigitais[nX, 2], 1401, 200 )
+			TKE->TKE_DIG19 := Substr( aDigitais[nX, 2], 1601, 200 )
+			TKE->TKE_DIG20 := Substr( aDigitais[nX, 2], 1801, 200 )
+		EndIf
+		TKE->(MsUnLock())
+		lGrv := .T.
+		cDedo := ""
+	Next
+
+Return lGrv
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtDelBio
+
+Deleta digitais
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@param   cId, Caracter, Valor do codigo na tabela de digitais (TKE)
+@param   aDigitais, Array, Contem as digitais
+@param   cTabTKE, Caracter, Valor do campo Tabela (TKE), atualmente
+                            é sempre alimentado com "TM0"
+/*/
+//-------------------------------------------------------------------
+Static Function MdtDelBio( cId, aBMPDedos, aDigitais, cTabTKE )
+
+	Local nx
+
+	If !ApMsgYesNo( STR0067 + cID + "?", STR0068 ) //"Confirma a exclusão de todas as digitais do código "###"Atenção"
+		Return
+	EndIf
+
+	For nX:= 1 To Len( aBMPDedos )
+		aBMPDedos[nX]:Load( '', 'ngbiodig.png' )
+		aBMPDedos[nX]:lStretch := .F.
+	Next nX
+	aDigitais:={ {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""}, {"", ""} }
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Captura
+
+Captura
+
+@author  Denis Hyroshi de Souza
+@since   10/12/2009
+
+@param   oDedo, Objeto
+@param   nPosDedo, Numerico
+
+@return  {cD1,cD2}, Array
+/*/
+//-------------------------------------------------------------------
+Static Function Captura( oDedo, nPosDedo )
+
+	Local cD1
+	Local nX
+	Local cD2
+	Local aAllDig := {}
+	Local nRet := 0
+
+	If nPosDedo >= 1 .And. nPosDedo <= 10
+		If oDedo:cBmpFile == 'ngbiodig_'+aProxDedo[nPosDedo]+'_vd.png'
+			If !MsgYesNo( STR0069 ) //"Este dedo já foi cadastrado. Deseja cadastrar novamente?"
+				Return { "", "" }
+			EndIf
+		EndIf
+		oDedo:Load( '', 'ngbiodigs_' + aProxDedo[nPosDedo] + '_c.png' )
+		oDedo:lStretch := .T.
+	Else
+		Return { "", "" }
+	EndIf
+
+	oDedoAviso:Load( '', "ngbiodig.png" )
+	oMsgDedo1:SetText( "" )
+	oMsgDedo2:SetText( "" )
+
+	cD1:= cValToChar( BioFGetFinger() )
+	If AllDigit( SubStr( cD1, 1, 12 ) )
+		cD1:=SubStr( cD1, 13 )
+	EndIf
+	If "ERRO" $ AllTrim( UPPER( cD1 ) ) .Or. Len( Alltrim( cD1 ) ) < 60
+		If nPosDedo >= 1 .And. nPosDedo <= 10
+			oDedo:Load( '', 'ngbiodig_' + aProxDedo[nPosDedo] + '_vm.png' )
+			oDedo:lStretch := .T.
+		EndIf
+		oDedoAviso:Load( '', 'ngbioalerta_01.png' )
+		oMsgDedo1:SetText( STR0070 ) //"Falhou captura da impressão"
+		oMsgDedo2:SetText( STR0071 ) //"digital."
+		Return { "", "" }
+	EndIf
+
+	Sleep( 1000 )
+	cD2:= cValToChar( BioFGetFinger() )
+	If AllDigit( SubStr( cD2, 1, 12 ) )
+		cD2:=SubStr( cD2, 13 )
+	EndIf
+
+	If "ERRO" $ AllTrim( UPPER( cD2 ) ) .Or. Len( Alltrim( cD2 ) ) < 60
+		If nPosDedo >= 1 .And. nPosDedo <= 10
+			oDedo:Load( '', 'ngbiodig_' + aProxDedo[nPosDedo] + '_vm.png' )
+			oDedo:lStretch := .T.
+		EndIf
+		oDedoAviso:Load( '', 'ngbioalerta_01.png' )
+		oMsgDedo1:SetText( STR0070 ) //"Falhou captura da impressão"
+		oMsgDedo2:SetText( STR0071 ) //"digital."
+		Return { "", "" }
+	EndIf
+
+	If cD1 == cD2  // nao pode ser exatamente igual, caso seja eh fralde.
+		If nPosDedo >= 1 .And. nPosDedo <= 10
+			oDedo:Load( '', 'ngbiodig_' + aProxDedo[nPosDedo] + '_vm.png' )
+			oDedo:lStretch := .T.
+		Endif
+		oDedoAviso:Load( '', 'ngbioalerta_01.png' )
+		oMsgDedo1:SetText( STR0072 ) //"Digital Inválida."
+		oMsgDedo2:SetText( "" )
+		Return { "", "" }
+	EndIf
+
+	aAdd( aAllDig, cD1 )
+	nRet :=BioChkFingers( cD2, aAllDig )
+
+	If nRet == 0
+		If nPosDedo >= 1 .And. nPosDedo <= 10
+			oDedo:Load( '', 'ngbiodig_' + aProxDedo[nPosDedo] + '_vm.png' )
+			oDedo:lStretch := .T.
+		EndIf
+		oDedoAviso:Load( '', 'ngbioalerta_01.png' )
+		oMsgDedo1:SetText( STR0073 ) //"A 1ª e 2ª leitura não conferem."
+		oMsgDedo2:SetText( STR0074 ) //"Por favor, tente novamente."
+		Return { "", "" }
+	EndIf
+
+	If nPosDedo >= 1 .And. nPosDedo <= 10
+		oDedo:Load( '', 'ngbiodig_' + aProxDedo[nPosDedo] + '_vd.png' )
+		oDedo:lStretch := .T.
+		oDedoAviso:Load( '', 'ngbioalerta_02.png' )
+		oMsgDedo1:SetText( STR0075 ) //"Digital cadastrada"
+		oMsgDedo2:SetText( STR0076 ) //"corretamente."
+		If nPosDedo+1 >= 1 .And. nPosDedo+1 <= 10
+			For nX := 1 To 10
+				If &( "oDedo" + Alltrim( Str( nX, 2 ) ) ):cBmpFile == 'ngbiodig_'+ aProxDedo[nX] + '_c.png'
+					&( "oDedo" + Alltrim( Str( nX, 2 ) ) ):Load( '', "ngbiodig.png" )
+					&( "oDedo" + Alltrim( Str( nX, 2 ) ) ):lStretch := .F.
+				EndIf
+			Next nX
+			For nX := nPosDedo+1 To 10
+				If &( "oDedo" + Alltrim( Str( nX, 2 ) ) ):cBmpFile != 'ngbiodig_' + aProxDedo[nX] + '_vd.png'
+					&( "oDedo" + Alltrim( Str( nX, 2 ) ) ):Load( '', 'ngbiodig_' + aProxDedo[nX] + '_c.png' )
+					&( "oDedo" + Alltrim( Str( nX, 2 ) ) ):lStretch := .T.
+					Exit
+				EndIf
+			Next nX
+		EndIf
+	EndIf
+
+Return { cD1, cD2 }
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAltSalarial
+Funcao que cria a Dialog de Informacoes da Troca de Funcao.
+
+dDtAlt -> Data da alteracao de Funcao do Funcionario.
+cF3Tip -> Retorna o F3 do tipo de alteracao
+
+@author Elynton Fellipe Bazzo
+@since 15/01/2013
+/*/
+//---------------------------------------------------------------------
+Static Function fAltSalarial( dAltFun, cTipoAlt )
+
+	//Variaveis de utilizacao
+	Local dDtAlt  := dDataBase
+	Local cTipAlt := Space( TAMSX3( "RA_TIPOALT" )[1] )
+	Local cF3Tip  := NGSEEKDIC( "SX3", "RA_TIPOALT", 2, "X3_F3" )//Retorna o F3 do tipo de alteracao
+	//Objetos de Tela
+	Local oDlg
+	Local oPnlInf
+	Local oPnlAll
+
+	DEFINE MSDIALOG oDlg FROM 0, 0 To 180, 400 TITLE STR0077 OF oMainWnd PIXEL
+		//Retira saída de tela atraves do botao ESC
+		oDlg:lEscClose := .F.
+
+		//Panel Informativo da Tela
+			oPnlInf := TPanel():New( 0, 0, , oDlg, , , , , , 0, 30, .F., .F. )
+				oPnlInf:Align := CONTROL_ALIGN_TOP
+
+		//Monta o Informativo
+		@ 02, 03 To 25, 200 Of oPnlInf PIXEL
+		TSay():New( 10, 10, { || STR0078 }, oPnlInf, , , .F., .F., .F., .T., , , 220, 010 )
+
+		//Panel Campos da Tela
+			oPnlAll := TPanel():New( , , , oDlg, , , , , , , , .F., .F. )
+			oPnlAll:Align := CONTROL_ALIGN_ALLCLIENT
+		//Criacao dos campos
+
+		//Data de Alteracao
+		TSay():New( 7, 15, { || OemtoAnsi( NGRETTITULO( "RA_DATAALT" ) ) }, oPnlAll, , , .F., .F., .F., .T., CLR_HBLUE, CLR_WHITE, 030, 010 )
+
+			TGet():New( 5, 70, { |u| IIf( PCount() > 0, dDtAlt := u, dDtAlt ) }, oPnlAll, 50, 10, PesqPict( "SRA", "RA_DATAALT" ),;
+					 { || fValASal( dDtAlt, , "1" ) }, , , , , , .T., "", , , .F., .F., , .F., .F., , , , , , .T. )
+
+			//Tipo de Alteracao
+			TSay():New( 22, 15, { || OemtoAnsi( NGRETTITULO( "RA_TIPOALT" ) ) }, oPnlAll, , , .F., .F., .F., .T., CLR_HBLUE, CLR_WHITE, 030, 010 )
+
+			TGet():New( 20, 70, { |u| IIf( PCount() > 0, cTipAlt := u, cTipAlt ) }, oPnlAll, 50, 10, PesqPict( "SRA", "RA_TIPOALT" ),;
+					 { || fValASal( , cTipAlt, "2" ) }, , , , , , .T., "", , , .F., .F., , .F., .F., cF3Tip, , , , , .T. )
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( oDlg, { || IIf( fValASal( dDtAlt, cTipAlt, "3" ), oDlg:End(), .F. ) },;
+		 {|| ShowHelpDlg( STR0081, {STR0080}, 2, {STR0079}, 2 ) } ) CENTERED
+
+	//Como nao é possivel cancelar a tela, joga direto o valor para os campos de data e tipo
+	dAltFun := dDtAlt
+	cTipoAlt := cTipAlt
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValASal
+Validação de data e tipo de alteração da função do funcionário na confirmação
+da tela de Informacoes da Troca de Funcao.
+
+
+@param date dAltFun - data de alteração da função.
+@param string cTipoAlt - Tipo de alteração da função do funcion´rio.
+@param string cVal  - 1 = Indica o tipo de validacao Data.
+							 2 = Tipo de Alteracao.
+							 3 = Tudo Ok.
+@author Elynton Fellipe Bazzo
+@since 15/01/2013
+@return .T. ou .F. Conforme resultado da validação
+/*/
+//---------------------------------------------------------------------
+Static Function fValASal( dAltFun, cTipoAlt, cVal )
+
+	Local aDtBkp1, aDtBkp2
+	Local lRet   := .T.
+	Local aArea  := GetArea()//Salva a area em uso
+
+	Default cVal := '0'//Inicializa com zero para nao validar caso nao passe
+
+	If cVal $ "1/3" .And. Empty( dAltFun )//Valida se a data vazia
+		Help( 1, " ", "OBRIGAT2", , NGRETTITULO( "RA_DATAALT" ), 3, 0 )//Mensagem de Help padrao de campo obrigatorio
+		lRet := .F.
+	Else
+		//Caso não seja nula a memória do campo, salva para depois restaurar
+		aDtBkp1       	:= IIf( Type( "M->RA_DATAALT" ) != "U", M->RA_DATAALT, Nil )
+		aDtBkp2       	:= IIf( Type( "M->RA_ADMISSA" ) != "U", M->RA_ADMISSA, Nil )
+		M->RA_DATAALT 	:= dAltFun
+		M->RA_ADMISSA 	:= SRA->RA_ADMISSA
+		If !RaDtAltVld()//Verificacao padrao do GPE (GPEA010)
+			lRet := .F.
+		EndIf
+		M->RA_DATAALT := aDtBkp1
+		M->RA_ADMISSA := aDtBkp2
+	EndIf
+
+	If lRet
+		If cVal $ "2/3" .And. Empty( cTipoAlt )//Valida se tipo vazio
+			Help( 1, " ", "OBRIGAT2", , NGRETTITULO( "RA_TIPOALT" ), 3, 0 ) //Mensagem de Help padrao de campo obrigatorio
+			lRet := .F.
+		ElseIf cVal $ "2/3" .And. !EXISTCPO( "SX5", "41" + cTipoAlt ) //Valida se existe na tabela estrangeira
+			lRet := .F.
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} AllDigit
+
+Função para teste de Biometria.
+
+@author Rodrigo Soledade
+@since 24/06/2013
+/*/
+//------------------------------------------------------------------
+Static Function AllDigit( cVar )
+
+	Local lRet	:= .T.
+	Local nX	:= 0
+
+	For nX := 1 To Len( cVar )
+		If !IsDigit( SubStr( cVar, nX, 1 ) )
+			lRet := .F.
+			Exit
+		EndIf
+	Next nX
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005Mark
+Chama MarkBrowser com todas as ficha médicas que contem o meso CPF.
+
+@author Guilherme Freudenburg
+@since 17/02/2014
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MDT005Mark()
+
+	Local lOk := .F.
+	Local cNumFic	:= ""
+	Local oPnlTop
+	Local oMark
+	Local oDialog
+	Local cAliasTRB:=""
+	Local aDBF:={}
+	Local aTRB:={}
+	Local lINVERTE:=.F.
+	Local oTempTable
+
+	Private cMarca
+
+	fMontaTRB( @cAliasTRB, @oTempTable, @aDBF, @aTRB )
+
+	cMarca := GetMark()
+
+	DEFINE MSDIALOG oDialog TITLE OemToAnsi( STR0042 ) From 150, 0 To 690, 565 PIXEL OF oMainWnd //"Ficha Médica"
+
+		oPnlTop := TPanel():New(0, 0, Nil, oDialog, Nil, .T., .F., Nil, Nil, 0, 55, .T., .F. )
+			oPnlTop:Align := CONTROL_ALIGN_TOP
+
+			@ 8, 9.6 To 45, 328 OF oPnlTop PIXEL
+			TSay():New( 19, 12, { || OemtoAnsi( STR0087 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"Estas são as Fichas Médicas que contem o mesmo número de CPF,"
+			TSay():New( 29, 12, { || OemtoAnsi( STR0088 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"selecione qual delas será vinculada ao funcionário."
+
+		oMark := MsSelect():New( cAliasTRB, "TM0_OK", , aTRB, @lInverte, @cMarca, { 0, 0, 1000, 1000 }, , , oDialog )
+			oMark:bMark := { | | fInvertMark( cMarca, cAliasTRB, oMark )}
+			oMark:oBrowse:lHasMark := .T.
+			oMark:oBrowse:lCanAllMark := .F.
+			oMark:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	ACTIVATE MSDIALOG oDialog ON INIT EnchoiceBar( oDialog,;
+												 { | | lOk := .T., oDialog:End() },;//Ação do Botão Confirmar
+												 { | | oDialog:End() } ) Centered //Ação do Botão cancelar
+ 	If lOk
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		While ( cAliasTRB )->( !Eof() )
+			If !Empty( ( cAliasTRB )->TM0_OK )
+				cNumFic := ( cAliasTRB )->TM0_NUMFIC
+			EndIf
+			dbSkip()
+		End
+ 	EndIf
+
+	oTempTable:Delete()
+
+Return cNumFic
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInvertMark
+Chama MarkBrowser com todas as ficha médicas que contem o mesmo CPF.
+
+@author Guilherme Freudenburg
+@since 17/02/2014
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function fInvertMark( cMarca, cAliasTRB, oMark )
+
+	Local nCntLin	:= 0
+	Local aArea		:= ( cAliasTRB )->( GetArea() )
+	Local cValPos	:= IIf( Empty( ( cAliasTRB )->TM0_OK ), Space( Len( cMarca ) ), cMarca )
+
+	If !Empty( cValPos )
+		dbSelectArea( cAliasTRB )
+		dbGoTop()
+		While ( cAliasTRB )->( !Eof() )
+			nCntLin++
+			RecLock( cAliasTRB, .F. )
+				( cAliasTRB )->TM0_OK := Space( Len( cMarca ) )
+			( cAliasTRB )->( MsUnLock() )
+			( cAliasTRB )->( dbSkip() )
+		End
+	EndIf
+
+   	RestArea( aArea )
+
+   	RecLock( cAliasTRB, .F. )
+   		( cAliasTRB )->TM0_OK := cValPos
+   	( cAliasTRB )->( MsUnLock() )
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMontaTRB
+Carrega TRB para utilização em MarkBrowser.
+
+@author Guilherme Freudenburg
+@since 17/02/2014
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function fMontaTRB( cAliasTRB, oTempTable, aDBF, aTRB )
+
+	//Define os campos da Montagem do TRB
+	aDBF := {}
+	aAdd( aDBF, { "TM0_OK", "C", 02, 0 } )
+	aAdd( aDBF, { "TM0_NUMFIC", "C", TamSX3( "TM0_NUMFIC" )[ 1 ], 0 } )
+	aAdd( aDBF, { "TM0_NOMFIC", "C", TamSX3( "RA_NOME" )[ 1 ], 0 } )
+	aAdd( aDBF, { "TM0_CPF", "C", TamSX3( "RA_CIC" )[ 1 ], 0 } )
+
+	//Define os campos que irão ser apresentados no Mark
+	aTRB := {}
+	aAdd( aTRB, { "TM0_OK", NIL, " ", } )
+	aAdd( aTRB, { "TM0_NUMFIC", NIL, STR0042, } )  //"Ficha Médica"
+	aAdd( aTRB, { "TM0_NOMFIC", NIL, STR0085, } )  //"Nome"
+	aAdd( aTRB, { "TM0_CPF", NIL, STR0086, } )  //"CPF"
+
+	//Cria TRB
+	cAliasTRB	:= GetNextAlias()
+	oTempTable := FWTemporaryTable():New( cAliasTRB, aDBF )
+	oTempTable:AddIndex( "1", { "TM0_CPF" } )
+	oTempTable:Create()
+
+	//Alimenta o TRB
+	dbSelectArea( "TM0" )
+	dbSetOrder( 10 )
+	dbSeek( xFilial( "TM0" ) + M->RA_CIC )
+	While TM0->( !Eof() ) .And. xFilial( "TM0" ) = TM0->TM0_FILIAL .And. M->RA_CIC == TM0->TM0_CPF
+
+		dbSelectArea( cAliasTRB )
+		RecLock( cAliasTRB, .T. )
+			( cAliasTRB )->TM0_NUMFIC	:= TM0->TM0_NUMFIC
+			( cAliasTRB )->TM0_NOMFIC	:= SRA->RA_NOME
+			( cAliasTRB )->TM0_CPF		:= SRA->RA_CIC
+		( cAliasTRB )->( MsUnlock() )
+
+		dbSelectArea( "TM0" )
+		TM0->( dbSkip() )
+	End
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005DT
+Função para validar campos da Ficha Médica.
+
+@author Guilherme Freudenburg
+@since 27/05/2014
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MDT005DT( dData )
+
+	Local lRet:=.T.
+
+	If( dData > dDataBase )
+		ShowHelpDlg( STR0081, { STR0093 }, 1, { STR0094 }, 2 )//"ATENÇÂO" "A data informada deve ser menor ou igual a data atual." "Favor informar uma data menor."
+		lRet:=.F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005Ope
+
+Função realizar execução após a confirmação/cancelamento das telas de
+Inclusão/Alteração/Exclusão da ficha médica
+
+@Obs Função utilizada no MDTA005/MDTA410
+
+@author Guilherme Benkendorf
+@since 22/07/2015
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT005Ope( nOperacao, lConfirm )
+
+	Local dDtAlt, cTipAlt
+	Local nInd
+	Local aNgButtonOld	:= IIf( Type( "aNgButton" ) != "U", aClone( aNgButton ), Nil )
+	Local lTM0Depto		:= NGCADICBASE( "TM0_DEPTO", "A", "TM0", .F. )
+
+	Default lConfirm := .T.
+
+	If nOperacao == 3
+		If lConfirm
+			If lSigaMdtps
+				dbSelectArea( "SRA" )
+				dbSetOrder( 1 )
+				If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT )
+					If Empty( SRA->RA_CC )
+						RecLock( "SRA", .F. )
+							SRA->RA_CC := TM0->TM0_CC
+						MsUnlock( "SRA" )
+					EndIf
+					If Padr( M->TM0_CODFUN, TAMSX3( "RA_CODFUNC" )[1] ) != SRA->RA_CODFUNC
+						fAltSalarial( @dDtAlt, @cTipAlt )
+						M->RA_DATAALT := dDtAlt
+						M->RA_TIPOALT := cTipAlt
+						M->RA_CARGO   := NGSEEK( "TOS", TM0->TM0_CODFUN + TM0->TM0_CLIENT + TM0->TM0_LOJA, 1, 'TOS->TOS_CARGO' )
+						M->RA_CC      := TM0->TM0_CC
+						M->RA_CODFUNC := M->TM0_CODFUN
+						M->RA_TIPOPGT := SRA->RA_TIPOPGT
+						M->RA_CATFUNC := SRA->RA_CATFUNC
+						fGravaSr3( dDtAlt, cTipAlt, SRA->RA_SALARIO )
+						RecLock( "SRA", .F. )
+							SRA->RA_CODFUNC := M->TM0_CODFUN
+						MsUnlock( "SRA" )
+					EndIf
+				EndIf
+			EndIf
+
+			//Se estiver integrado ao GPE
+			If SuperGetMv( "MV_MDTGPE", .F., "N" ) == "S"
+				dbSelectArea( "SRA" )
+				dbSetOrder( 1 )
+				//atualiza os campos Tipo de Deficiencia e Cota Deficiente
+				If dbSeek( xFilial( "SRA", TM0->TM0_FILFUN ) + TM0->TM0_MAT )
+					RecLock( "SRA", .F. )
+						SRA->RA_TPDEFFI := TM0->TM0_TIPDEF
+						If TM0->( FieldPos( "TM0_CTPCD" ) ) > 0
+							SRA->RA_CTPCD := TM0->TM0_CTPCD
+						EndIf
+					MsUnlock( "SRA" )
+				EndIf
+			EndIf
+
+		    //Incrementa tarefas relacionadas a ficha medica
+			If Len( aTarefaTKD ) > 0
+				If !Empty( TM0->TM0_MAT )
+					For nInd := 1 To Len( aTarefaTKD )
+						fGrvTarefa( "TN6", TM0->TM0_MAT, aTarefaTKD[nInd] )
+					Next nInd
+				ElseIf !Empty( TM0->TM0_CANDID )
+					For nInd := 1 To Len( aTarefaTKD )
+						fGrvTarefa( "TKD", TM0->TM0_NUMFIC, aTarefaTKD[nInd] )
+					Next nInd
+				EndIf
+			EndIf
+			// Na rotina de Ficha Médica, após confirmar a inclusão de um registro, o ponto de entrada será chamado
+			If ExistBlock( "MDTA0052" )
+				ExecBlock( "MDTA0052", .F., .F. )
+			EndIf
+
+			If Empty( TM0->TM0_MAT ) .And. !Empty( TM0->TM0_CANDID ) .And. !IsInCallStack( "MDTA075" )
+				//verifica se é o MDTA076, se for ñ devera perguntar, pois ja esta sendo feito o agendamento
+				If !IsInCallStack( "MDTA076" )
+					If msgYesNo( STR0011 ) //"Deseja Registrar a Consulta Médica?"
+
+						aNgButton := {}
+
+						mdta076()
+
+						If ValType( aNgButtonOld ) != "U"
+							aNgButton := aClone( aNgButtonOld )
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		Else
+			If IsInCallStack( "MDTA005" )
+				RollBackSX8()
+			EndIf
+			If SuperGetMv( "MV_NG2BIOM", .F., "2" ) == "1" .And. NGCADICBASE( "TM0_INDBIO", "A", "TM0", .F. )
+				TKE->( dbSetOrder( 1 ) )
+				While TKE->( dbSeek( xFilial( "TKE" ) + "TM0" + M->TM0_NUMFIC ) )
+					TKE->( RecLock( "TKE", .F. ) )
+						TKE->( dbDelete() )
+					TKE->( MsUnLock() )
+				End
+			EndIf
+		EndIf
+
+	ElseIf nOperacao == 4 .And. lConfirm
+		If lSigaMdtPs
+			dbSelectArea( "SRA" )
+			dbSetOrder( 1 )
+			If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT ) .And. !Empty( TM0->TM0_MAT )
+				//Salva SRA
+				aAreaFUN := SRA->( GetArea() )
+				If cFuncaGrv != TM0->TM0_CODFUN
+					fAltSalarial( @dDtAlt, @cTipAlt )
+					M->RA_CODFUNC := TM0->TM0_CODFUN
+					M->RA_TIPOPGT := SRA->RA_TIPOPGT
+					M->RA_CATFUNC := SRA->RA_CATFUNC
+					M->RA_CARGO   := NGSEEK( "TOS", TM0->TM0_CODFUN + TM0->TM0_CLIENT + TM0->TM0_LOJA, 1, 'TOS->TOS_CARGO' )
+					M->RA_CC      := TM0->TM0_CC
+					If lTM0Depto
+						M->RA_DEPTO   := TM0->TM0_DEPTO
+					EndIf
+					M->RA_DATAALT := dDtAlt
+					M->RA_TIPOALT := cTipAlt
+					fGravaSr3( dDataBase, "001", SRA->RA_SALARIO )
+					RestArea( aAreaFUN )//Restaura SRA
+				EndIf
+
+				If cSetorGrv != TM0->TM0_CC .Or. ( lTM0Depto .And. cDeptoGrv != TM0->TM0_DEPTO )
+					dbSelectArea( "SRE" )
+					dbSetOrder( 1 )
+					RecLock( "SRE", .T. )
+						SRE->RE_FILIAL  := xFilial( "SRE" )
+						SRE->RE_DATA    := dDataBase
+						SRE->RE_EMPD    := SM0->M0_CODIGO
+						SRE->RE_FILIALD := SM0->M0_CODFIL
+						SRE->RE_MATD    := SRA->RA_MAT
+						SRE->RE_CCD     := SRA->RA_CC
+						If lTM0Depto
+							SRE->RE_DEPTOD  := SRA->RA_DEPTO
+						EndIf
+						SRE->RE_EMPP    := SM0->M0_CODIGO
+						SRE->RE_FILIALP := SM0->M0_CODFIL
+						SRE->RE_MATP    := SRA->RA_MAT
+						SRE->RE_CCP     := TM0->TM0_CC
+						If lTM0Depto
+							SRE->RE_DEPTOP  := TM0->TM0_DEPTO
+						EndIf
+					MsUnlock( "SRE" )
+					//Restaura SRA
+					RestArea( aAreaFUN )
+				EndIf
+
+				SRA->( RecLock( "SRA", .F. ) )
+					SRA->RA_NOME	:= TM0->TM0_NOMFIC
+					SRA->RA_SEXO	:= IIf( TM0->TM0_SEXO != "2", "M", "F" )
+					SRA->RA_ESTCIVI	:= IIf( !Empty( TM0->TM0_ESTCIV ), TM0->TM0_ESTCIV, SRA->RA_ESTCIVI )
+					SRA->RA_NASC	:= IIf( !Empty( TM0->TM0_DTNASC ), TM0->TM0_DTNASC, SRA->RA_NASC )
+					SRA->RA_CC		:= TM0->TM0_CC
+					If lTM0Depto
+						SRA->RA_DEPTO:= TM0->TM0_DEPTO
+					EndIf
+					SRA->RA_CODFUNC	:= TM0->TM0_CODFUN
+					SRA->RA_RG  	:= IIf( !Empty( TM0->TM0_RG ), TM0->TM0_RG, SRA->RA_RG )
+					SRA->RA_NUMCP  	:= IIf( !Empty( TM0->TM0_NUMCP ), TM0->TM0_NUMCP, SRA->RA_NUMCP )
+					SRA->RA_SERCP	:= IIf( !Empty( TM0->TM0_SERCP ), TM0->TM0_SERCP, SRA->RA_SERCP )
+					SRA->RA_UFCP	:= IIf( !Empty( TM0->TM0_UFCP ), TM0->TM0_UFCP, SRA->RA_UFCP )
+				SRA->(MsUnlock())
+			EndIf
+			cCliMdtPs := cCliMdtSv
+		EndIf
+		//Se estiver integrado ao GPE
+		If SuperGetMv( "MV_MDTGPE", .F., "N" ) == "S"
+			//atualiza os campos Tipo de Deficiencia e Cota Deficiente
+			dbSelectArea( "SRA" )
+			dbSetOrder( 1 )
+			If dbSeek( TM0->TM0_FILFUN + TM0->TM0_MAT ) .And. !Empty( TM0->TM0_MAT )
+				SRA->( RecLock( "SRA", .F. ) )
+					SRA->RA_TPDEFFI := TM0->TM0_TIPDEF
+					If TM0->( FieldPos( "TM0_CTPCD" ) ) > 0
+						SRA->RA_CTPCD := TM0->TM0_CTPCD
+					EndIf
+				SRA->(MsUnlock())
+			EndIf
+		EndIf
+
+		//---------------------------------------------------------------------------
+        // Atualiza consultas medicas, diagnosticos, acidentes e exames do candidato 
+        //---------------------------------------------------------------------------
+		dbSelectArea( 'TM5' )
+		dbSetOrder( 1 )
+
+        If ( 'TM5' )->( DbSeek( xFilial( 'TM5' ) + TM0->TM0_NUMFIC ) )
+
+			If Empty( TM5->TM5_MAT ) .And. !Empty( TM0->TM0_MAT )
+
+				While ( 'TM5' )->( !Eof() ) .And. TM5->TM5_NUMFIC == TM0->TM0_NUMFIC
+
+					RecLock( 'TM5', .F. )
+						TM5->TM5_MAT    := TM0->TM0_MAT
+						TM5->TM5_FILFUN := TM0->TM0_FILFUN
+					( 'TM5' )->( MsUnLock() )
+
+					( 'TM5' )->( DbSkip() )
+
+				End
+
+			EndIf
+
+		EndIf
+
+		dbSelectArea( 'TMJ' )
+        dbSetOrder( 2 )
+
+        If ( 'TMJ' )->( DbSeek( xFilial( 'TMJ' ) + TM0->TM0_NUMFIC ) )
+
+			If Empty( TMJ->TMJ_MAT ) .And. !Empty( TM0->TM0_MAT )
+
+				While ( 'TMJ' )->( !Eof() ) .And. TMJ->TMJ_NUMFIC == TM0->TM0_NUMFIC .And. Empty( TMJ->TMJ_MAT )
+
+					RecLock( 'TMJ', .F. )
+						TMJ->TMJ_MAT := TM0->TM0_MAT
+					( 'TMJ' )->( MsUnLock() )
+
+					( 'TMJ' )->( DbSkip() )
+
+				End
+
+			EndIf
+
+        EndIf
+
+        dbSelectArea( 'TMT' )
+        dbSetOrder( 1 )
+
+        If ( 'TMT' )->( DbSeek( xFilial( 'TMT' ) + TM0->TM0_NUMFIC ) )
+
+			If Empty( TMT->TMT_MAT ) .And. !Empty( TM0->TM0_MAT )
+
+            	While ( 'TMT' )->( !Eof() ) .And. TMT->TMT_NUMFIC == TM0->TM0_NUMFIC .And. Empty( TMT->TMT_MAT )
+
+                	RecLock( 'TMT', .F. )
+                        TMT->TMT_MAT := TM0->TM0_MAT
+                    ( 'TMT' )->( MsUnLock() )
+
+                    ( 'TMT' )->( DbSkip() )
+
+                End
+
+            EndIf
+
+		EndIf
+
+        dbSelectArea( 'TNC' )
+        dbSetOrder( 7 )
+
+        If ( 'TNC' )->( DbSeek( xFilial( 'TNC' ) + TM0->TM0_NUMFIC ) )
+
+			If Empty( TNC->TNC_MAT ) .And. !Empty( TM0->TM0_MAT )
+
+                While ( 'TNC' )->( !Eof() ) .And. TNC->TNC_NUMFIC == TM0->TM0_NUMFIC .And. Empty( TNC->TNC_MAT )
+
+                    RecLock( 'TNC', .F. )
+                        TNC->TNC_MAT    := TM0->TM0_MAT
+						TNC->TNC_FILFUN := TM0->TM0_FILFUN
+                    ( 'TNC' )->( MsUnLock() )
+
+                    ( 'TNC' )->( DbSkip() )
+
+                End
+
+            EndIf
+
+		EndIf
+
+		//Verifica tarefas relacionadas a ficha medica
+		If Len( aTarefaTKD ) > 0
+			nLenTar := Len( aTarefaTKD[1] )
+			If !Empty( TM0->TM0_MAT )
+				For nInd := 1 To Len( aTarefaTKD )
+					fGrvTarefa( "TN6", TM0->TM0_MAT, aTarefaTKD[nInd] )
+				Next nInd
+
+				dbSelectArea( "TN6" )
+				dbSetOrder( 2 )
+				While !Eof() .And. ;
+						TN6->TN6_FILIAL == xFilial( "TN6" ) .And. ;
+						TN6->TN6_MAT == TM0->TM0_MAT
+
+					If aScan( aTarefaTKD, { |x| X[1] + DTOS( X[3] ) + DTOS( X[4] ) == TN6->TN6_CODTAR +;
+					   DTOS( TN6->TN6_DTINIC ) + DTOS( TN6->TN6_DTTERM ) .And. !X[nLenTar] } ) == 0
+						RecLock( "TN6", .F. )
+							dbDelete()
+						TN6->(MsUnlock())
+					EndIf
+					dbSelectArea( "TN6" )
+					dbSkip()
+				End
+
+			ElseIf !Empty( TM0->TM0_CANDID )
+				For nInd := 1 To Len( aTarefaTKD )
+					fGrvTarefa( "TKD", TM0->TM0_NUMFIC, aTarefaTKD[nInd] )
+				Next nInd
+
+				dbSelectArea( "TKD" )
+				dbSetOrder( 1 )
+				While !Eof() .And. ;
+						TKD->TKD_FILIAL == xFilial( "TKD" ) .And. ;
+						TKD->TKD_NUMFIC == TM0->TM0_NUMFIC
+
+					If aScan( aTarefaTKD, { |x| X[1] + DTOS( X[3] ) + DTOS( X[4] ) == TKD->TKD_CODTAR +;
+						DTOS( TKD->TKD_DTINIC ) + DTOS( TKD->TKD_DTTERM ) .And. !X[nLenTar] } ) == 0
+
+						RecLock( "TKD", .F. )
+							dbDelete()
+						TKD->(MsUnlock())
+					EndIf
+					dbSelectArea( "TKD" )
+					dbSkip()
+				End
+
+			EndIf
+		EndIf
+
+		// Na rotina de Ficha Médica, após confirmar a inclusão de um registro, o ponto de entrada será chamado
+		If ExistBlock( "MDTA0052" )
+			ExecBlock( "MDTA0052", .F., .F. )
+		EndIf
+	ElseIf nOperacao == 5 .And. lConfirm
+		If SuperGetMv( "MV_NG2BIOM", .F., "2" ) == "1" .And. NGCADICBASE( "TM0_INDBIO", "A", "TM0", .F. )
+			TKE->( dbSetOrder( 1 ) )
+			While TKE->( dbSeek( xFilial( "TKE" ) + "TM0" + M->TM0_NUMFIC ) )
+				TKE->( RecLock( "TKE", .F. ) )
+					TKE->( dbDelete() )
+				TKE->( MsUnLock() )
+			End
+		EndIf
+	EndIf
+
+	//------------------------------------------------------------------
+	// Realiza a integração das informações do evento S-2240 ao Governo
+	//------------------------------------------------------------------
+	If lConfirm .And. FindFunction( "MDTIntEsoc" ) .And. nOperacao <> 5
+		fTarS2240( nOperacao )
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005VALC
+Função responsável por realizar validações de campos que não devem
+ser alterados, caso ocorra algum relacionamento com a ficha médica.
+
+@param cCampo - Recebe valor do campo
+@param cMemoria - Recebe o valor da memória do campo.
+
+@Obs Função utilizada no MDTA005
+
+@author Guilherme Freudenburg
+@since 30/10/2015
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MDT005VALC( cCampo, cMemoria )
+
+	Local lRet := .T.
+
+	If ValType( cCampo ) == "C" //Verifica se variavel está com valor.
+		If Altera .And. cCampo != cMemoria .And. !Empty( cCampo ) .And. !Empty( M->TM0_MAT )
+			lRet:= NGVALSX9( "TM0", , .T., , .F. )//Verifica os relacionamentos.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005WHEN
+
+Função para WHEN da tabela TM0.
+
+@Obs Função utilizada no X3_WHEN - TM0_DEPTO
+
+@author Guilherme Benkendorf
+@since 29/10/2015
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT005WHEN( nCampo )
+
+	Local lRet := .T.
+
+	Default nCampo := 0
+
+	If nCampo == 1 //TM0_DEPTO
+
+		If IsInCallStack( "MDTA410" ) .And. Type( "oEncTM0" ) != "U"
+			lRet := oEncTM0:lActive .And. ( Empty( M->TM0_MAT ) .Or. Empty( M->TM0_DEPTO ) )
+		Else
+			lRet := Empty( M->TM0_MAT ) .Or. Empty( M->TM0_DEPTO )
+		EndIf
+
+	ElseIf nCampo == 2 //TM0_CODFUN, TM0_DTNASC, TM0_CPF
+
+		If !Empty( M->TM0_MAT ) .And. SuperGetMv( "MV_MDTGPE", .F., "N" ) == "S"
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT005INIC
+
+Função para os inicializadores padrão dos campos da TN0.
+
+@Obs Função utilizada no X3_RELACAO - TM0_CCDESC, TM0_DESCFU e TM0_DESCDP
+
+@param nCampo, Numerico, Indica para qual campo está sendo chamada a função.
+@author Julia Kondlatsch
+@since 28/12/2017
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT005INIC( nCampo )
+
+	If nCampo == 1 //TM0_CCDESC
+		cResult := Posicione( 'CTT', 1, xFilial( 'CTT' ) + IIf( IsInCallStack( 'MDTC990' ), TM0->TM0_CC, M->TM0_CC ), 'CTT_DESC01' )
+	ElseIf nCampo == 2 //TM0_DESCFU
+		cResult := Posicione( 'SRJ', 1, xFilial( 'SRJ' ) + IIf( IsInCallStack( 'MDTC990' ), TM0->TM0_CODFUN, M->TM0_CODFUN ), 'RJ_DESC' )
+	Else //TM0_DESCDP
+		cResult := Posicione( 'SQB', 1, xFilial( 'SQB' ) + IIf( IsInCallStack( 'MDTC990' ), TM0->TM0_DEPTO, M->TM0_DEPTO ), 'QB_DESCRIC' )
+	EndIf
+
+Return cResult
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGrvTarefa
+Grava informações do aCols nas tabelas de Tarefa do Funcionário ou
+Candidatos
+@author  Milena Leite de Oliveira
+
+@since   03/03/2020
+@sample  fGrvTarefa( "TKD", TM0->TM0_NUMFIC, aTarefaTKD[nInd] )
+
+@param   cAlias,  Caractere, Tabela a ser gravada
+@param   cMatOrFic, Caractere, Matrícula ou ficha médica do
+                             funcionário ou candidato
+@param   aTasks,    array,  Array contendo a linha do acols a ser
+                            avaliada e gravada.
+
+@return  Nil, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fGrvTarefa( cAlias, cMatOrFic, aTasks )
+
+	Local n := 0
+	Local nTarPos := aScan( aHeadTar, {|x| "_CODTAR" $ x[2]} )
+	Local nIniPos := aScan( aHeadTar, {|x| "_DTINIC" $ x[2]} )
+	Local nTerPos := aScan( aHeadTar, {|x| "_DTTERM" $ x[2]} )
+	Local nRecPos := aScan( aHeadTar, {|x| "_REC_" $ x[2]} )
+	Local lRec := aTasks[nRecPos] == 0
+
+	dbSelectArea( cAlias )
+	dbSetOrder( 1 )
+	If !lRec
+		(cAlias)->( dbGoTo(aTasks[nRecPos]) )
+	EndIf
+
+	If !aTail( aTasks )
+		RecLock( cAlias, lRec )
+			For n := 1 To FCount()
+				cField := FieldName( n )
+				Do Case
+					Case "_FILIAL" $ cField
+						&( cAlias + "->" + cField ) := xFilial( cAlias )
+					Case ("_MAT" $ cField .Or. "_NUMFIC" $ cField)
+						&( cAlias + "->" + cField ) := cMatOrFic
+					Case "_CODTAR" $ cField
+						&( cAlias + "->" + cField ) := aTasks[nTarPos]
+					Case "_DTINIC" $ cField
+						&( cAlias + "->" + cField ) := IIf( aTasks[nIniPos] >= TM0->TM0_DTIMPL, aTasks[nIniPos], TM0->TM0_DTIMPL )
+					Case "_DTTERM" $ cField
+						&( cAlias + "->" + cField ) := aTasks[nTerPos]
+					OtherWise
+						&( cAlias + "->" + cField ) := aTasks[n-1] // Diminui o n usado pra filial e pega o conteúdo do array caso possua campo de usuário
+				EndCase
+			Next n
+		(cAlias)->(MsUnlock())
+	Else
+		RecLock( cAlias, .F. )
+			dbDelete()
+		(cAlias)->(MsUnlock())
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTarS2240
+Realiza a validação e envio das informações do evento S-2240 ao Governo
+
+@param nOpcx, Numerico, Indica a operação que está sendo realizada (3- Inclusão, 4- Alteração ou 5- Exclusão)
+@param lEnvio, Boolean, Indica se é envio de informações, caso contrário trata como validação
+
+@sample fTarS2240( 3, .F. )
+
+@return lRet, Boolean, .T. caso não existam inconsistências no envio
+
+@author Luis Fellipy Bett
+@since	18/03/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fTarS2240( nOper, lEnvio )
+
+	//Variáveis de busca das informações
+	Local leSocial := IIf( FindFunction( "MDTVldEsoc" ), MDTVldEsoc(), .F. )
+	Local dDtExp   := SToD( "" )
+	Local dDtInic  := SToD( "" )
+	Local dDtTerm  := SToD( "" )
+	Local lRet	   := .T.
+	Local cCodTar  := ""
+	Local aFuncs   := {}
+	Local nCont	   := 0
+
+	//Variável private utilizada dentro da função MDTDtExpAtu
+	Private lMiddleware := IIf( cPaisLoc == 'BRA' .And. Findfunction( "fVerMW" ), fVerMW(), .F. )
+
+	//Define por padrão como sendo envio de informações
+	Default lEnvio := .T.
+
+	//Caso houver integração com o eSocial
+	If leSocial
+
+		//Busca a data de exposição atual do funcionário
+		dDtExp := MDTDtExpAtu( IIf( lEnvio, TM0->TM0_MAT, M->TM0_MAT ) )
+
+		//Ordena o array das tarefas pela data de início das tarefas
+		aSort( aTarefaTKD, , , { | x, y | x[3] < y[3] } )
+
+		//Percorre as tarefas pra validar
+		For nCont := 1 To Len( aTarefaTKD )
+
+			//Caso a linha não estiver excluída
+			If !aTail( aTarefaTKD[ nCont ] )
+
+				//Pega as informações da linha que ta sendo validada
+				cCodTar := aTarefaTKD[ nCont, 1 ]
+				dDtInic := aTarefaTKD[ nCont, 3 ]
+				dDtTerm := aTarefaTKD[ nCont, 4 ]
+
+				//Valida se deve considerar ou não o funcionário para envio
+				If aScan( aFuncs, { |x| x[ 4 ] == cCodTar } ) == 0 .Or. ;
+					( ( Empty( dDtExp ) .Or. dDtInic > dDtExp ) .And. ( dDtTerm > dDtExp ) .And. ;
+					dDtInic <= dDataBase )
+
+					//Adiciona os registros no array pra integrar
+					aAdd( aFuncs, { IIf( lEnvio, TM0->TM0_MAT, M->TM0_MAT ), , , cCodTar, dDtInic, dDtTerm } )
+
+				EndIf
+
+			EndIf
+
+		Next nCont
+
+		//Caso houverem funcionários a serem integrados
+		If Len( aFuncs ) > 0
+
+			lRet := MDTIntEsoc( "S-2240", nOper, , aFuncs, lEnvio ) //Realiza a integração com o Governo
+
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTRegBio
+Registra biometria do funcionário
+
+@author Bruno Souza
+@since	02/06/2022
+
+@param cMedRec, caracter, código da ficha médica 
+@param cTable, caracter, tabela posicionada no momento 
+
+/*/
+//---------------------------------------------------------------------
+Function MDTRegBio()
+
+	Local cTable 	:= 'TM0'
+	Local cMedRec	:= IIf( FwIsInCallStack( 'MDTA410' ), M->TM0_NUMFIC, cMedRec := TM0->TM0_NUMFIC )
+
+	If ( SuperGetMv( 'MV_NG2BIOM', .F., '2' ) != '1' .Or. IIf( FwIsInCallStack( 'MDTA410' ), M->TM0_INDBIO, TM0->TM0_INDBIO ) != '1' )
+
+			//-----------------------------------------------------------------------------------------------------------------------
+            // Mensagens:
+            // "Atenção"
+            // "O funcionário não utiliza biometria"
+            // "Configure o parâmetro MV_NG2BIOM ou altere o campo Biometria (TM0_INDBIO) para 1-Sim na ficha médica do funcionário"
+            //-----------------------------------------------------------------------------------------------------------------------
+            Help( Nil, Nil, STR0068, Nil, STR0104 + '.', 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0105 + '.' } )
+
+            Return .F.
+
+	EndIf
+
+	If SuperGetMV('MV_BIOMDT', .F., '1') == '1'
+		//registro de biometria utilizando totvsBio (legado)
+		MdtGetBio(cMedRec, cTable)
+	Else
+		If Empty(Posicione( cTable, 1, xFilial( cTable ) + cMedRec, 'TM0_REGBIO' )) .Or.;
+			MsgYesNo( STR0101 ) //"Este colaborador já possui digitais cadastradas, deseja refazer o cadastro?"
+		
+			//registro de biometria utilizando fingerTech web
+			MdtBio(cMedRec)
+		EndIf
+	EndIf
+
+Return

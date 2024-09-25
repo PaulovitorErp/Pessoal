@@ -1,0 +1,526 @@
+#INCLUDE "MNTA290.ch"
+#Include "Protheus.ch"
+#INCLUDE "FWMVCDEF.CH"
+
+//-----------------------------------------------------------
+/*/{Protheus.doc} MNTA290
+Programa Fechamento Solicitacao Servico
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP11
+@return Nil
+/*/
+//-----------------------------------------------------------
+Function MNTA290( cTipoSS , cCodBem )
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local cFiltroTQB := fFiltroTQB( cTipoSS , cCodBem )
+	Local oBrowse
+
+	Private aRotina := MenuDef()
+
+	//Verifica se o update de facilities foi aplicado
+	If FindFunction("MNTUPDFAC") .And. MNTUPDFAC(.F.)
+		ShowHelpDlg(STR0040, {STR0078},1,{STR0079}) //"ATENÇÃO" ## "O sistema está utilizando o Módulo Facilities. Desta forma, o fechamento deve ser realizado através do Atendimento." ## "Será redirecionado para a rotina de Atendimento."
+		MNTA291()
+		Return .F.
+	Endif
+
+	oBrowse := FWMBrowse():New()
+	oBrowse:SetAlias( "TQB" ) // Alias da tabela utilizada
+	oBrowse:SetFilterDefault( cFiltroTQB ) //Filtro do Alias
+	oBrowse:SetDescription( STR0007 ) // Descrição do browse // Fechamento Solicitacao Servico"
+	oBrowse:Activate()
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//-----------------------------------------------------------
+/*/{Protheus.doc} fFiltroTQB
+Fechamento de solicitacao de servico
+
+@author Lucas Guszak
+@since 24/11/2003
+@version MP11
+@return cCondicao
+/*/
+//-----------------------------------------------------------
+Static Function fFiltroTQB( cTipoSS , cCodBem )
+
+	Local cCondicao := ''
+
+	cCondicao := 'TQB->TQB_FILIAL == "'+ xFilial("TQB")+'"'+'.And. '
+	cCondicao += 'TQB->TQB_SOLUCA == "D"'
+
+	If ValType(cCodBem) == "C" .And. ValType(cTipoSS) == "C"
+		cCondicao += " .And. TQB->TQB_TIPOSS == '"+cTipoSS
+		cCondicao += "' .And. Trim(TQB->TQB_CODBEM) == '"+cCodBem+"'"
+	EndIf
+
+	If (ExistBlock("MNTA2901"))
+		cCondicao += ExecBlock("MNTA2901",.F.,.F.)
+	EndIf
+
+Return cCondicao
+
+//-----------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Interface da rotina
+
+@author Lucas Guszak
+@since 04/07/2014
+@version MP11
+@return aRotina
+/*/
+//-----------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	ADD OPTION aRotina TITLE STR0002 ACTION 'MNTA280IN(2)' OPERATION 2 ACCESS 0 //"Visualizar"
+	ADD OPTION aRotina TITLE STR0004 ACTION 'MNTA290FEC()' OPERATION 4 ACCESS 0 //"Fechamento"
+	ADD OPTION aRotina TITLE STR0005 ACTION 'MNTA290CAN()' OPERATION 5 ACCESS 3 //"Cancelar"
+
+	If ExistBlock( 'MNTA290B' )
+
+		aRotina := ExecBlock( "MNTA290B",.F.,.F.,{aRotina} )
+
+	EndIf
+
+Return aRotina
+
+//-----------------------------------------------------------
+/*/{Protheus.doc} MNTA290FEC
+Fechamento de solicitacao de servico
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP11
+@param cTitulo , caractere, Titulo da Solicitação de Serviço
+@param nChamada, numérico,  Indica qual rotina está chamando a função
+
+@return lRetorno
+/*/
+//-----------------------------------------------------------
+Function MNTA290FEC(cTitulo, nChamada)
+
+	// Salva as áreas atuais
+	Local aAreaTQB := TQB->( GetArea() )
+
+	// Variável do Retorno
+	Local lRetorno := .F.
+
+	Default nChamada := 1
+
+	//----------
+	// Executa
+	//----------
+	dbSelectArea("TQB")
+	lRetorno := MNTA280IN( 4, 3, cTitulo, nChamada )
+	If ValType(lRetorno) == "C"
+		lRetorno := .T.
+	ElseIf ValType(lRetorno) <> "L"
+		lRetorno := .F.
+	EndIf
+
+	// Devolve as áreas
+	RestArea(aAreaTQB)
+
+Return lRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290CAN
+Cancelamento de Solicitação de Serviço.
+
+@author Wagner Sobral de Lacerda
+@since 08/10/2012
+@version MP10/MP11
+@return lRetorno
+/*/
+//---------------------------------------------------------------------
+Function MNTA290CAN(cTitulo)
+
+	Local aAreaTQB := TQB->(GetArea()) // Salva as áreas atuais
+	Local lRetorno := .F. // Variável do Retorno
+
+	// Executa o cancelamento
+	dbSelectArea("TQB")
+	lRetorno := MNTA280IN(4,5,cTitulo)
+	If ValType(lRetorno) == "C"
+		lRetorno := .T.
+	ElseIf ValType(lRetorno) <> "L"
+		lRetorno := .F.
+	EndIf
+
+	RestArea(aAreaTQB) // Restaura a área de trabalho anterior da TQB
+
+Return lRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290FCH
+Consistencia final
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP10/MP11
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA290FCH()
+
+Local lRet         := .T., lErro := .F.
+Local aRet         := {}, aRetShow := {}, aErro := {}
+Local nCont        := 0
+Local cMsg         := ""
+Local lFacilit     := MNTINTFAC()
+Local aCposObrigat := {"TQB_CDSERV", "TQB_TPSERV"}
+Local nCpo         := 0
+
+lRet := MNTA290TEM(M->TQB_TEMPO) .and. MNTA290HOF()
+
+If lRet .And. lFacilit
+	For nCpo := 1 To Len(aCposObrigat)
+		If Empty( &("M->"+aCposObrigat[nCpo]) )
+			lRet := .F.
+			Help(Nil, Nil, STR0040, Nil, STR0071 + " '" + AllTrim(RetTitle(aCposObrigat[nCpo])) + "'.", 1, 0) //"ATENCAO" ## "Para o Fechemanto da S.S. é obrigatório informar o campo"
+			Exit
+		EndIf
+	Next nCpo
+EndIf
+
+If lRet
+	If ExistBlock("MNTA2908")
+		aRet := ExecBlock("MNTA2908",.F.,.F.)
+		If Len(aRet) > 0
+			If ValType(aRet[1]) == "A"
+				For nCont := 1 To Len(aRet[1])
+					If !NGCADICBASE(aRet[1][nCont],"A","TQB",.F.)
+						lErro := .T.
+						aAdd(aErro, aRet[1][nCont])
+					Else
+						If Empty( &("M->"+aRet[1][nCont]) )
+							aAdd(aRetShow, aRet[1][nCont])
+						EndIf
+					EndIf
+				Next nCont
+			Else
+				If !NGCADICBASE(aRet[1],"A","TQB",.F.)
+					lErro := .T.
+					aAdd(aErro, aRet[1])
+				Else
+					If Empty( &("M->"+aRet[1]) )
+						aAdd(aRetShow, aRet[1])
+					EndIf
+				EndIf
+			EndIf
+
+			If lErro .And. Len(aErro) > 0
+				If Len(aErro) == 1
+					cMsg := "1"+STR0066 //" campo não foi encontrado:"
+				Else
+					cMsg := AllTrim(Str(Len(aErro)))+STR0067 //" campos não foram encontrados:"
+				EndIf
+				For nCont := 1 To Len(aErro)
+					cMsg += Chr(13)+Chr(10)+"- "+aErro[nCont]
+				Next nCont
+				MsgStop(cMsg,STR0040) //"ATENCAO"
+			EndIf
+
+			If Len(aRetShow) > 0
+				If aRet[4]
+					cMsg := aRet[2]+Chr(13)+Chr(10)+Chr(13)+Chr(10)
+					cMsg += STR0069+Chr(13)+Chr(10) //"Inconsistência:"
+					For nCont := 1 To Len(aRetShow)
+						cMsg += "- "+aRetShow[nCont]+Chr(13)+Chr(10)
+					Next nCont
+
+					Do Case
+						Case Upper(aRet[3]) == "I"
+							MsgInfo(cMsg,STR0068+"MNTA2908") //"Inconsistência - P.E. "
+							Return .F.
+						Case Upper(aRet[3]) == "S"
+							MsgStop(cMsg,STR0068+"MNTA2908") //"Inconsistência - P.E. "
+							Return .F.
+						Case Upper(aRet[3]) == "YN"
+							cMsg += Chr(13)+Chr(10)+STR0070 //"Deseja continuar?"
+							If !MsgYesNo(cMsg,STR0068+"MNTA2908") //"Inconsistência - P.E. "
+								Return .F.
+							EndIf
+						OtherWise
+							Alert(cMsg)
+							Return .F.
+					EndCase
+				EndIf
+			EndIf
+
+		EndIf
+	EndIf
+Endif
+
+If lRet .And. Empty(M->TQB_DESCSO)
+	Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_DESCSO","X3Titulo()")) + " (TQB_DESCSO)" + STR0082,3,1 )
+	lRet := .F.
+//Adicionada condição para validar somente se obrigatório no dicionário (SIGACFG)
+ElseIf lRet .And. (X3Obrigat('TQB_PRIORI') .And. Empty(M->TQB_PRIORI))
+	Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_PRIORI","X3Titulo()")) + " (TQB_PRIORI)" + STR0082,3,1 )
+	lRet := .F.
+ElseIf lRet .And. Empty(M->TQB_DTFECH)
+	Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_DTFECH","X3Titulo()")) + " (TQB_DTFECH)" + STR0082,3,1 )
+	lRet := .F.
+ElseIf lRet .And. Empty(M->TQB_HOFECH)
+	Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_HOFECH","X3Titulo()")) + " (TQB_HOFECH)" + STR0082,3,1 )
+	lRet := .F.
+ElseIf lRet .And. Empty(M->TQB_TEMPO)
+	Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_TEMPO","X3Titulo()")) + " (TQB_TEMPO)" + STR0082,3,1 )
+	lRet := .F.
+EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290CNC
+Validação do Cancelamento de Solicitação de Serviço.
+
+@author Wagner Sobral de Lacerda
+@since 08/10/2012
+@version MP10/MP11
+@return lRetorno
+/*/
+//---------------------------------------------------------------------
+Function MNTA290CNC(cTitulo)
+
+	// Variável do Retorno
+	Local lRetorno := .T.
+
+	// Variáveis de Memória facilitadas
+	Local cTempoSS := TQB->TQB_TEMPO
+	Local cPriori := IIf(MNTINTFAC(), M->TQB_PRIORI, TQB->TQB_PRIORI)
+
+	Local lRPORel17 := IIf(GetRPORelease() <= '12.1.017', .T., .F.) // Release menor ou igual a 17
+
+	//----------
+	// Valida
+	//----------
+	// Verifica se já existe Atendimento para a S.S.
+	If !Empty(cTempoSS) .And. Val(StrTran(cTempoSS,":","")) > 0
+		If !MsgYesNo(STR0072 + CRLF + CRLF + STR0073 , STR0040) //"Já existe reporte de Atendimento para esta S.S." ## "Deseja realmente cancelá-la?" ## "ATENCAO"
+			lRetorno := .F.
+		EndIf
+	EndIf
+
+	If lRPORel17
+		//Verifica o Campo Prioridade
+		If lRetorno .And. (Empty(cPriori) .And. X3Obrigat('TQB_PRIORI'))
+			Help( " ",1, STR0080,, STR0081 + Alltrim(Posicione("SX3",2,"TQB_PRIORI","X3Titulo()")) + " (TQB_PRIORI)" + STR0082,3,1 )
+			lRetorno := .F.
+		EndIf
+	EndIf
+
+Return lRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290HOF
+Consistencia da hora de fechamento
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP10/MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNTA290HOF(nOpc)
+
+	Local lRet := NGVALHORA(M->TQB_HOFECH,.T.)
+	Local cMsg := ""
+	Default nOpc := 0
+
+	If lRet
+		If M->TQB_DTFECH == dDataBase .and. M->TQB_HOFECH > Substr(Time(),1,5)
+			cMsg := STR0041+chr(13)+chr(10)+chr(13)+chr(10);     //"Hora de fechamento devera ser menor ou igual a hora atual"
+						+STR0031+Substr(time(),1,5)+chr(13)+chr(10);//"Hora Atual.........: "
+						+STR0032+M->TQB_HOFECH                      //"Hora Informada.: "
+
+		ElseIf M->TQB_DTFECH == TQB->TQB_DTABER .And. M->TQB_HOFECH < TQB->TQB_HOABER
+			cMsg := STR0042+chr(13)+chr(10)+chr(13)+chr(10);  //"Hora de fechamento devera ser maior ou igual a hora de abertura"
+						+STR0034+tqb->tqb_hoaber+chr(13)+chr(10);//"Hora Abertura...: "
+						+STR0032+M->TQB_HOFECH                   //"Hora Informada.: "
+		Endif
+	Endif
+
+	If !Empty(cMsg)
+		MsgInfo(cMsg,STR0014) //"NAO CONFORMIDADE"
+		lRet := .F.
+		If nOpc > 0
+			M->TQB_HOFECH := "  :  "
+			lRet := .T.
+		Endif
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290TEM
+Consistencia do tempo de servico
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP10/MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNTA290TEM(cVHora)
+
+	Local nHora, nMinuto, nSegundo, nPos, nPos2, xh, xm, xs
+	Local cHora, cMinuto, cSegundo, cCaracHor, cCaracMin, cCaracSeg
+	Local cAuxStr := ""
+	Local lRet := .T.
+
+	If (nPos := At(":",cVHora)) == 0
+		lRet := .F.
+	Else
+		cHora   := SubStr(cVHora,1,(nPos-1))
+		cMinuto := SubStr(cVHora,(nPos+1),2)
+		cAuxStr := SubStr(cVHora,(nPos+1))
+		nPos2    := AT(":",cAuxStr)
+		cSegundo := If(nPos2 > 0, SubStr(cAuxStr,(nPos2+1),2), "00")
+		If Empty(cHora) .Or. Empty(cMinuto) .Or. Empty(cSegundo) .Or. Len(Alltrim(cMinuto)) < 2 .Or. Len(AllTrim(cSegundo)) < 2
+			lRet := .F.
+		Else
+			For xh := 1 To Len(cHora)
+				cCaracHor := Substr(cHora,xh,1)
+				If Empty(cCaracHor) .Or. !Isdigit(cCaracHor)
+					lRet := .F.
+					Exit
+				Endif
+			Next xh
+			If lRet
+				For xm := 1 To Len(cMinuto)
+					cCaracMin := Substr(cMinuto,xm,1)
+					If Empty(cCaracMin) .Or. !Isdigit(cCaracMin)
+						lRet := .F.
+						Exit
+					Endif
+				Next xm
+			Endif
+			If lRet
+				For xs := 1 To Len(cSegundo)
+					cCaracSeg := Substr(cSegundo,xs,1)
+					If Empty(cCaracSeg) .Or. !Isdigit(cCaracSeg)
+						lRet := .F.
+						Exit
+					Endif
+				Next xs
+			EndIf
+
+			If lRet
+				nHora    := Val(cHora)
+				nMinuto  := Val(cMinuto)
+				nSegundo := Val(cSegundo)
+				If nMinuto > 59 .Or. nSegundo > 59 .Or. (nHora == 0 .And. nMinuto == 0 .And. nSegundo == 0)
+					lRet := .F.
+				Endif
+			Endif
+		Endif
+	Endif
+
+	If !lRet
+		ShowHelpDlg(STR0040,{STR0074},2,{STR0075},2) // "ATENCAO" ## "S.S. não possui tempo de atendimento reportado." ## "Favor realizar o Reporte de Horas para a S.S."
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA290DTF
+Consistencia da data de fechamento
+
+@author Inacio Luiz Kolling
+@since 24/11/2003
+@version MP10/MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNTA290DTF(cVDtFec)
+
+	Local cMsg := ""
+	Local lRet := NaoVazio(cVDtFec)
+
+	If lRet
+		If cVDtFec < TQB->TQB_DTABER
+			cMsg := STR0062+chr(13)+chr(10);                           //"Data de fechamento devera ser maior ou igual"
+							+STR0044+chr(13)+chr(10);                      //"a data de abertura da solicitacao"
+							+STR0028+Dtoc(TQB->TQB_DTABER)+chr(13)+chr(10);//"Data abertura...: "
+							+STR0029+Dtoc(cVDtFec)                         //"Data Informada.: "
+		ElseIf cVDtFec > dDataBase
+			cMsg := STR0043+chr(13)+chr(10);                  //"Data de fechamento devera ser menor ou igual"
+						+STR0045+chr(13)+chr(10);                //"a data atual"
+						+STR0046+Dtoc(dDataBase)+chr(13)+chr(10);//"Data atual........: "
+						+STR0029+Dtoc(cVDtFec)                   //"Data Informada.: "
+		Endif
+	Endif
+
+	If !Empty(cMsg)
+		MsgInfo(cMsg,STR0014) //"NAO CONFORMIDADE"
+		lRet := .F.
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG290BEMLOC
+Consistencia do bem/localizacao
+
+@author Inacio Luiz Kolling
+@since 17/02/2004
+@version MP10/MP11
+@return
+/*/
+//---------------------------------------------------------------------
+Function NG290BEMLOC(cTIPOS)
+
+	Local cMENSAT := Space(10)
+
+	oDLGA:REFRESH()
+
+	If !lTEMFACI
+		If !ExistCpo("ST9",cBEMSOLI)
+			Return .f.
+		Endif
+
+		cNOMBEMS := NGSEEK("ST9",cBEMSOLI,1,"T9_NOME")
+		cCCUSTOQ := NGSEEK("ST9",cBEMSOLI,1,"T9_CCUSTO")
+		cNOMBCUS := NGSEEK("CTT",cCCUSTOQ,1,"CTT_DESC01")
+	Else
+		If cTIPOS = "B"
+			nORDTAF := 6
+			cCODBEM := "X1"+cBEMSOLI
+			cMENSAT := STR0050
+			If !ExistCpo("ST9",cBEMSOLI)
+				Return .f.
+			Endif
+
+			cNOMBEMS := NGSEEK("ST9",cBEMSOLI,1,"T9_NOME")
+			cCCUSTOQ := NGSEEK("ST9",cBEMSOLI,1,"T9_CCUSTO")
+			cNOMBCUS := NGSEEK("CTT",cCCUSTOQ,1,"CTT_DESC01")
+		Else
+			nORDTAF := 7
+			cCODBEM := "X2"+Substr(cBEMSOLI,1,3)
+			cMENSAT := STR0051
+		Endif
+
+		Dbselectarea("TAF")
+		Dbsetorder(nORDTAF)
+		If !Dbseek(xFILIAL("TAF")+cCODBEM)
+			Msginfo(STR0052+cMENSAT+STR0053,STR0014)
+			Return .f.
+		Endif
+		If cTIPOS = "L"
+			cNOMBEMS := taf->taf_nomniv
+			cCCUSTOQ := taf->taf_ccusto
+			cNOMBCUS := NGSEEK("CTT",cCCUSTOQ,1,"CTT_DESC01")
+		Endif
+		cTIPOSSM := If(cTIPOS = "B",STR0048,STR0049)
+	Endif
+
+Return .t.

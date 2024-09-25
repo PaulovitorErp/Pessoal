@@ -1,0 +1,990 @@
+#Include "MDTA020.ch"
+#Include "Protheus.ch"
+#Include "Topconn.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA020
+
+Programa de Cadastro de Exames
+
+@type    function
+
+@author  Paulo Pego
+@since   11/12/1999
+
+@return .T., boolean, sempre retorna verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA020
+
+	Local aNGBEGINPRM := NGBEGINPRM(,,{"TM4",{"TM8"}}) //Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+
+	//Array que recebe as opcoes do campo, ja identificando as respectivas cores
+	Local aCores := {{"TM4->TM4_INDRES = '1'", 'BR_VERDE'    },;
+					{"TM4->TM4_INDRES = '2'", 'BR_AMARELO'  },;
+					{"TM4->TM4_INDRES = '3'", 'BR_AZUL'     },;
+					{"TM4->TM4_INDRES = '4'", 'BR_VERMELHO' },;
+					{"TM4->TM4_INDRES = '5'", 'BR_LARANJA'  }}
+	/*/
+	+---------------------------------------------------------------+
+	| Define Array contendo as Rotinas a executar do programa       |
+	| ----------- Elementos contidos por dimensao ------------      |
+	| 1. Nome a aparecer no cabecalho                               |
+	| 2. Nome da Rotina associada                                   |
+	| 3. Usado pela rotina                                          |
+	| 4. Tipo de Transa‡„o a ser efetuada                           |
+	|     1 - Pesquisa e Posiciona em um Banco de Dados             |
+	|     2 - Simplesmente Mostra os Campos                         |
+	|     3 - Inclui registros no Bancos de Dados                   |
+	|     4 - Altera o registro corrente                            |
+	|     5 - Remove o registro corrente do Banco de Dados          |
+	+---------------------------------------------------------------+
+	/*/
+	Private aRotina   := MenuDef()
+	Private cMenu
+
+	// Define o cabecalho da tela de atualizacoes
+
+	Private cCadastro	:= OemtoAnsi(STR0006) //"Exames"
+	Private aCHKDEL		:= {}, bNGGRAVA := {}
+	Private LEITEM		:= .T.
+	Private LELIMMAX	:= .T.
+	Private LELIMMIN	:= .T.
+	Private LENOMITE	:= .T.
+	Private cPROGRAMA	:= 'MDTA020'
+	Private aMemos		:= {}
+
+	If FindFunction("MDTRESTRI") .AND. !MDTRESTRI(cPrograma)
+		NGRETURNPRM(aNGBEGINPRM) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+		Return .F.
+	Endif
+
+	dbSelectArea( "SX3" )
+	dbSetOrder( 2 )
+
+	If dbSeek("TM4_PREPAR")
+		aAdd(aMemos,{"TM4_PREPAR","TM4_MEMOPR"})
+	Endif
+
+	aCHOICE	:= {}
+	aVARNAO	:= {}
+
+	aGETNAO	:= { { "TM8_EXAME"  , "M->TM4_EXAME"},;
+					{ "TM8_NOMEXA" , " " } }
+
+	cGETWHILE	:= "TM8_FILIAL == xFilial('TM8') .and. TM8_EXAME == M->TM4_EXAME"
+	cGETMAKE	:= "TM4->TM4_EXAME"
+	cGETKEY	:= "M->TM4_EXAME + M->TM8_ITEM"
+	cGETALIAS	:= "TM8"
+	cTUDOOK	:= "AllwaysTrue()"
+	cLINOK		:= "AllwaysTrue()"
+
+	#IFNDEF WINDOWS
+		// Recupera o desenho padrao de atualizacoes
+		ScreenDraw("SMT050", 3, 0, 0, 0)
+
+		// Display de dados especificos deste Programa
+		SetColor("b/w,,,")
+		@ 3, 1 Say STR0006 //"Exames"
+	#ENDIF
+
+	/*/
+	+--------------------------------------------------------------+
+	| aCHKDEL array que verifica a INTEGRIDADE REFERENCIAL na      |
+	| exclusão do registro.                                        |
+	| 1 - Chave de pesquisa                                        |
+	| 2 - Alias de pesquisa                                        |
+	| 3 - Ordem de pesquisa                                        |
+	+--------------------------------------------------------------+
+	/*/
+	aCHKDEL := { {'TM4->TM4_EXAME', "TM5", 2},;
+				 {'TM4->TM4_EXAME', "TMD", 2},;
+				 {'TM4->TM4_EXAME', "TMB", 2},;
+				 {'TM4->TM4_EXAME', "TN2", 2},;
+				 {'TM4->TM4_EXAME', "TN9", 1},;
+				 {'TM4->TM4_EXAME', "TN8", 2} }
+
+	If NGCADICBASE("TKN_EXAME","A","TKN",.F.)
+		Aadd(aCHKDEL, {'TM4->TM4_EXAME', "TKN", 2})
+	Endif
+
+	// Endereca a funcao de BROWSE
+	DbSelectArea( "TM4" )
+	DbSetOrder( 1 )
+	mBrowse( 6, 1,22,75,"TM4",,,,,,aCores)
+
+	NGRETURNPRM(aNGBEGINPRM) // Devolve variaveis armazenadas (NGRIGHTCLICK)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT020EXC
+
+Função de exclusão
+
+@type    function
+
+@author  Denis Hyroshi de Souza
+@since   some time ago
+
+@param   cAlias, char, arquivo de dados do qual as opções serão excluidas
+@param   nReg, numeric, número do registro posicionado (recno), no alias ativo
+@param   nOpcX, numeric, tipo de operação (5 - Exclusão)
+
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Function MDT020EXC(cAlias,nReg,nOpcX)
+
+	Local cExam := TM4->TM4_EXAME
+	Local lSigaMdtPS := If(SuperGetMv("MV_MDTPS",.F.,"N") == "S", .T. , .F. )
+
+	cMenu    := If(nOpcX != 5, '1', '3')
+	bNGGrava := {|| CHKTA020() }
+
+	If NGCAD01(cAlias, nReg, nOpcX) == 1
+		If lSigaMdtPS
+			dbSelectArea( "SB1" )
+			aCab := {{"B1_COD", "MDTE" + cExam, NIL} }
+			lMsErroAuto := .F.
+			MSExecAuto({ |x,y| mata010(x, y)}, aCab, 5) //Exclusao
+			If lMsErroAuto
+				Mostraerro()
+			EndIf
+		EndIf
+		fMDTA0201(nOpcX)
+	EndIf
+
+	bNGGrava := {}
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} function
+
+Validação no momento da exclusão
+
+@type    function
+
+@author  Denis Hyroshi de Souza
+@since   some time ago
+
+@return lRet, boolean, caso sejam cumpridos os requisitos, retorna verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function CHKTA020()
+
+	Local lRet  := .T.
+	Local aArea := GetArea()
+
+	If !Altera .and. !Inclui
+		Dbselectarea( "TMV" )
+		Dbsetorder( 1 )
+		Dbseek(xFilial("TMV"))
+		While !eof() .and. xFilial( "TMV" ) == TMV->TMV_FILIAL
+			If M->TM4_EXAME == TMV->TMV_EXAME
+				lRet := .F.
+				SX2->(DbSeek( "TMV" ))
+				cError := AllTrim(X2Nome()) + " (TMV)"
+				HELP(" ",1,"MA10SC",,cError,5,1)
+				Exit
+			Endif
+			Dbskip()
+		End
+
+		If lRet
+			Dbselectarea("TMJ")
+			Dbsetorder(1)
+			Dbseek(xFilial("TMJ"))
+			While !Eof() .And. xFilial("TMJ") == TMJ->TMJ_FILIAL
+				If M->TM4_EXAME == TMJ->TMJ_EXAME
+					lRet := .F.
+					SX2->(DbSeek("TMJ"))
+					cError := AllTrim(X2Nome()) + " (TMJ)"
+					HELP(" ", 1, "MA10SC",, cError, 5, 1)
+					Exit
+				EndIf
+				Dbskip()
+			End
+		EndIf
+
+		If AllTrim(M->TM4_INDRES) == "3"
+			dbSelectArea("TM8")
+			dbSetOrder(1)
+			While !Eof()
+
+				If dbSeek(xFilial("TM8") + M->TM4_EXAME)
+					RecLock("TM8", .F.)
+					dbDelete()
+					MsUnLock("TM8")
+				EndIf
+
+				dbSelectArea("TM8")
+				dbSkip()
+			End
+		EndIf
+	Endif
+
+	RestArea(aArea)
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+
+Utilizacao de Menu Funcional.
+
+@type    static function
+
+@author  Rafael Diogo Richter
+@since   29/11/2006
+
+@return aRotina, array, Array com opcoes da rotina.
+@obs Parametros do array a Rotina:
+		1. Nome a aparecer no cabecalho
+		2. Nome da Rotina associada
+		3. Reservado
+		4. Tipo de Transa‡„o a ser efetuada:
+		    1 - Pesquisa e Posiciona em um Banco de Dados
+		    2 - Simplesmente Mostra os Campos
+		    3 - Inclui registros no Bancos de Dados
+		    4 - Altera o registro corrente
+		    5 - Remove o registro corrente do Banco de Dados
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+	Local aRotina :=  { { STR0001, "AxPesqui"       , 0 , 1}   ,; //"Pesquisar"
+                    	{ STR0002, "NGCAD01"        , 0 , 2}   ,; //"Visualizar"
+                    	{ STR0003, "MDT020PROC"     , 0 , 3}   ,; //"Incluir"
+                    	{ STR0004, "MDT020PROC"     , 0 , 4}   ,; //"Alterar"
+                    	{ STR0005, "MDT020EXC"      , 0 , 5, 3},; //"Excluir"
+                    	{ STR0015, "MDT020LEGE"     , 0 , 6}   ,; //"Legenda"
+                    	{ STR0007, "MDT020ITEM('2')", 0 , 6}  }   //"Itens do Exame"
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT020PROC
+
+Inclui e altera exame
+
+@type    type
+
+@author  Denis Hyroshi de Souza
+@since   some time ago
+
+@param   cALIAT, char, arquivo de dados do qual as opções serão excluidas
+@param   nREG1, numeric, número do registro posicionado (recno), no alias ativo
+@param   nOpcx, numeric, tipo de operação (3 - inclusão, 4 - Alteração)
+
+@return nil
+/*/
+//-------------------------------------------------------------------
+Function MDT020PROC(cALIAT,nREG1,nOpcx)
+
+	Local aArea		:= GetArea()
+	Local oldInc	:= Inclui
+	Local oldAlt	:= Altera
+	Local bCampo	:= {|nCPO| Field(nCPO) }
+	Local cSql		:= ""
+	Local cAliasRC8 := GetNextAlias()
+	Local lSigaMdtPS, ix
+
+	Private aColsTM8	:= {}
+	Private aHeaderTM8	:= {}
+	Private cExame		:= ""
+	Private lExistExa	:= .F.
+	Private bNGGRAVA	:= { || MDTObriEsoc( "TM4" , !(Inclui .Or. Altera) ) }
+
+	DbSelectArea("RC8")
+	If ALTERA //para tratamento do when do campo descrição de exame
+
+		//RC8 - Exames do módulo gestão pessoal
+		#IFDEF TOP
+			cSql := "SELECT RC8_TIPOEX FROM "+RetSqlName("RC8")+" RC8 "
+			cSql += "WHERE RC8_FILIAL = '"+xFilial("RC8")+"' AND RC8_TIPOEX = '"+TM4->TM4_EXAME+"' AND D_E_L_E_T_ <> '*' "
+			cSql := ChangeQuery(cSql)
+
+			MPSysOpenQuery( cSql , cAliasRC8 )
+
+			DbselectArea(cAliasRC8)
+			(cAliasRC8)->(DbGoTop())
+
+			lExistExa := (cAliasRC8)->(!Eof())
+			(cAliasRC8)->(DbCloseArea())
+		#ELSE
+			RC8->(DbgoTo())
+			While(RC8->(!Eof())) .AND. !lExistRC8
+				If RC8->RC8_TIPOEX == TM4->TM4_EXAME
+					lExistExa := .T.
+				EndIf
+				RC8->(DbSkip())
+			EndDo
+		#ENDIF
+	EndIf
+
+	cMenu := If(nOpcx != 5, '1', '3')
+
+	If NGCAD01(cALIAT,nREG1,nOpcx) == 1
+		NG020GRAV(aColsTM8,aHeaderTM8,cExame)
+
+		fMDTA0201( nOpcx )
+	Endif
+
+	Inclui := oldInc
+	Altera := oldAlt
+
+	RestArea(aArea)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT020ITEM
+
+Monta a tela de Itens do Exame
+
+@type    function
+
+@author  Andrey Martim Pegorini
+@since   26/08/2010
+
+@param   cMenu, char, obsoleto
+@param   nOpcx, numeric, tipo de operação do 'aRotina'
+
+@return .T., boolean, sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function MDT020ITEM(cMenu, nOpcx)
+
+	Local oDlg
+	Local oMenu
+	Local oPnlTop
+	Local aNoFields := {}
+
+	Default nOpcx := 4
+
+	If cMenu == '2'
+		M->TM4_EXAME  := TM4->TM4_EXAME
+		M->TM4_NOMEXA := TM4->TM4_NOMEXA
+		M->TM4_DESEXA := TM4->TM4_DESEXA
+		M->TM4_INDRES := TM4->TM4_INDRES
+	EndIf
+
+	If AllTrim(M->TM4_INDRES) != "3"
+		MsgInfo(STR0014,STR0013) //"O Tipo de Resultado deve ser igual a Itens do Exame para poder acessar o Cadastro de Itens do Exames"##"ATENÇÃO"
+		Return .F.
+	ElseIf Empty(M->TM4_EXAME) .or. Empty(M->TM4_NOMEXA)
+		MsgInfo(STR0019,STR0013) //"Alguns campos obrigatórios não foram informados"##"ATENÇÃO"
+		Return .F.
+	EndIf
+
+	dbSelectArea("TM4")
+	dbSetOrder(1)
+
+	nOpcx	:= IIf( cMenu == '2' .or. (cMenu != '3' .And. AllTrim(M->TM4_INDRES) == "3") , 4 , 2 )
+
+	cAlias := "TM8"
+
+	// Monta a entrada de dados do arquivo
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private nUsado := 0
+	Private aCols[0]
+
+	aAdd(aNoFields, 'TM8_EXAME')
+	aAdd(aNoFields, 'TM8_NOMEXA')
+
+	cQuery := "SELECT * FROM "+RetSqlName("TM8")+" TM8 WHERE TM8.TM8_FILIAL = '"+xFilial("TM8")+"' AND TM8.TM8_EXAME = '"+M->TM4_EXAME+"' AND TM8.D_E_L_E_T_ = ' '"
+	FillGetDados( nOpcx, "TM8", 1, xFilial("TM8")+M->TM4_EXAME, {|| "TM8->TM8_FILIAL + TM8->TM8_EXAME"}, {|| .T.},aNoFields,,,cQuery)
+
+	If Empty(aCols)
+		aCols := BlankGetd(aHeader)
+	EndIf
+
+	nOpcao := 0
+	DEFINE MSDIALOG oDlg TITLE cCadastro From 9,12 To 40,109 OF oMainWnd
+		//Panel criado para correta disposicao da tela
+		oPnlPai := TPanel():New( , , , oDlg , , , , , , , , .F. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+			oPnlTop := TPanel():New(00,00,,oPnlPai,,,,,,0,50,.F.,.F.)
+				oPnlTop:Align := CONTROL_ALIGN_TOP
+
+			@ 0.5 ,0.8  SAY OemToAnsi(STR0011)  Of oPnlTop Color CLR_HBLUE //"Exame"
+			@ 0.5 ,5.0  MSGET M->TM4_EXAME  Picture "@!" SIZE 40,10 WHEN .F. Of oPnlTop
+			@ 1.4 ,0.8  SAY OemToAnsi(STR0010) Of oPnlTop  Color CLR_HBLUE //"Nome Exame"
+			@ 1.4 ,5.0  MSGET M->TM4_NOMEXA Picture "@!" SIZE 250,10 WHEN .F. Of oPnlTop
+			@ 2.3 ,0.8  SAY OemToAnsi(STR0009) Of oPnlTop //"Desc. Exame"
+			@ 2.3 ,5.0  MSGET M->TM4_DESEXA Picture "@!" SIZE 250,10 WHEN .F. Of oPnlTop
+
+			dbSelectArea("TM8")
+
+			oGet:= MSGetDados():New(60,5,230,380,nOpcx,"A020CHKLIN()","AllwaysTrue()","",If(nOpcx==4,.T.,.F.),,,,300,,,,,oPnlPai)
+			oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+			If (!Altera .And. !Inclui) .And. cMenu <> "2"
+				oGet:Disable()
+			EndIf
+
+		NgPopUp(asMenu,@oMenu)
+		oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{||nOpcao:=1, If(fCheckCols() .AND. oGET:TudoOK(),If(!Obrigatorio(aGets,aTela),nOpca := 0,oDlg:End()), nOpca := 0)},{||oDlg:End()}) CENTERED
+
+	If nOpcao == 1
+		aColsTM8	:= aClone(aCols)
+		aHeaderTM8	:= aClone(aHeader)
+		cExame		:= M->TM4_EXAME
+		If cMenu == "2"
+			NG020GRAV(aColsTM8,aHeaderTM8,cExame)
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG020GRAV
+
+ Grava os dados no TM8
+
+@type    function
+
+@author  Andrey Martim Pegorini
+@since   26/08/2010
+
+@param   aColsTM8, array, Dados dos Itens do Exame
+@param   aHeaderTM8, array, Nome dos campos da GetDados
+@param   cExame, array, Codigo do Exame
+
+@return .T., boolean, sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG020GRAV(aColsTM8, aHeaderTM8, cExame)
+
+	Local nx ,nMaxArray
+	Local aBACK  := aCLONE(aColsTM8)
+	Local cAlias := Alias()
+
+
+	// verifica se o ultimo elemento do array esta em branco
+	aCOLS     := {}
+	aEVAL(aBACK, {|x| If( !Empty(x[1]),  AAdd(aCOLS,x), NIL) })
+	nMaxArray := Len(aCols)
+
+	nITEM := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_ITEM"   })
+	nDESC := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_NOMITE" })
+	nUNID := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_UNIDAD" })
+	nLMIN := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMIN" })
+	nLMAX := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMAX" })
+	nSEXO := aSCAN(aHeaderTM8, {|x| AllTrim(Upper(X[2])) == "TM8_SEXO" })
+
+	For nx = 1 to nMaxArray
+		If !empty(aCols[nx][nITEM]) .and. !aCols[nx][Len(aCols[nx])]
+
+			Dbselectarea( "TM8" )
+			Dbsetorder( 1 )
+			If !Dbseek(xFilial( "TM8" )+cExame+aCols[nx][nITEM])
+				RecLock( "TM8",.T.)
+			Else
+				RecLock("TM8",.f.)
+			EndIf
+			TM8->TM8_FILIAL	:= xFilial("TM8")
+			TM8->TM8_EXAME	:= cExame
+			TM8->TM8_ITEM	:= aCols[nx][nITEM]
+			TM8->TM8_NOMITE	:= aCols[nx][nDESC]
+			TM8->TM8_UNIDAD	:= aCols[nx][nUNID]
+			TM8->TM8_LIMMIN	:= aCols[nx][nLMIN]
+			TM8->TM8_LIMMAX	:= aCols[nx][nLMAX]
+			TM8->TM8_SEXO		:= aCols[nx][nSEXO]
+			Msunlock("TM8")
+
+		ElseIf !Empty(aCols[nx][nITEM]) .and. aCols[nx][Len(aCols[nx])]
+
+			Dbselectarea( "TM8" )
+			Dbsetorder( 1 )
+			If Dbseek(xFilial("TM8")+cExame+aCols[nx][nITEM])
+				RecLock( "TM8",.F. )
+				DbDelete()
+				MsUnLock( "TM8" )
+			EndIf
+		Endif
+	Next nx
+	dbSelectArea( cAlias )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} A020CHKLIN
+
+Verifica se o conteudo LIMMIN é memor que o LIMAX
+
+@type    function
+
+@author  Andrey Martim Pegorini
+@since   26/08/2010
+
+@param   lFim, boolean, indica se está sendo chamado pela validação final da getdados
+@return returno,return_type, return_description
+/*/
+//-------------------------------------------------------------------
+Function A020CHKLIN(lFim)
+
+	Local nX
+	Local nItem
+	Local nNome
+
+	Default n		:= 1
+	Default lFim	:= .F.
+
+	If acols[n][len(Acols[n])]
+		Return .T.
+	EndIf
+
+	If (nItem := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_ITEM" })) < 1
+		Return .T.
+	Endif
+	If (nNome := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_NOMITE" })) < 1
+		Return .T.
+	Endif
+	If (nMIN := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMIN" })) < 1
+		Return .T.
+	Endif
+	If (nMAX := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMAX" })) < 1
+		Return .T.
+	Endif
+	If (nSEX := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_SEXO" })) < 1
+		Return .T.
+	Endif
+
+	If Empty(aCols[n][nItem])
+		ShowHelpDlg(STR0013,{STR0019},1,{aHEADER[nItem][1]},2) //"ATENÇÃO"##"Alguns campos obrigatórios não foram informados"
+		Return .F.
+	EndIf
+	If Empty(aCols[n][nNome])
+		ShowHelpDlg(STR0013,{STR0019},1,{aHEADER[nNome][1]},2) //"ATENÇÃO"##"Alguns campos obrigatórios não foram informados"
+		Return .F.
+	EndIf
+	If Empty(aCols[n][nSEX])
+		ShowHelpDlg(STR0013,{STR0019},1,{aHEADER[nSEX][1]},2) //"ATENÇÃO"##"Alguns campos obrigatórios não foram informados"
+		Return .F.
+	EndIf
+
+
+	If aCols[n][nMAX] < aCols[n][nMIN]
+		ShowHelpDlg(STR0013,{STR0012},1,{STR0020},2) //"ATENÇÃO"##"O Limite Máximo não pode ser menor que o Limite Mínimo."##"Informe o Limite de forma que o Limite Mínimo seja menor que o Limite Máximo"
+		Return .F.
+	Endif
+
+	If !lFim
+		For nX := 1 To Len(aCols)
+			If !aCols[ n , Len( aCols[ n ] ) ]
+				If n <> nX .and. !aCols[ nX , Len( aCols[ nX ] ) ]
+					If ( aCols[ n , nItem ] == aCols[ nX , nItem ] .Or. ;
+							( aCols[ n , nNome ] == aCols[ nX , nNome ] .And. aCols[ n , nSEX ] == aCols[ nX , nSEX ] .Or. ;
+							aCols[ n , nNome ] == aCols[ nX , nNome ] .And. aCols[ nX , nSEX ] == "3"  .Or. ;
+							aCols[ n , nNome ] == aCols[ nX , nNome ] .And. aCols[ n , nSEX ] == "3" .And. ( aCols[ nX , nSEX ] == "1" .Or. aCols[ nX , nSEX ] == "2" ) ) )
+							Help(" ",1,"JAEXISTINF")
+						Return .F.
+					Endif
+				Endif
+			Endif
+		Next nX
+	Endif
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT020LEGE
+
+Função que determina as cores e os nomes da Legenda
+
+@type    function
+
+@author  Andrey Martim Pegorini
+@since   26/08/2010
+
+@return nil
+/*/
+//-------------------------------------------------------------------
+Function MDT020LEGE()
+
+	Local aLegendas := {}
+	Local cCBox		:= Posicione("SX3",2,'TM4_INDRES',"X3CBox()")
+	Local cOfta     := STR0021 //Oftalmológico
+
+	aAdd( aLegendas, {"ENABLE"     , STR0016 } ) //"Normal"
+	aAdd( aLegendas, {"BR_AMARELO" , STR0017 } ) //"IBMP"
+    aAdd( aLegendas, {"BR_AZUL"    , STR0008 } ) //"Itens Exame"
+    aAdd( aLegendas, {"BR_VERMELHO", STR0018 } ) //"Audiometrico"
+
+	If cOfta $ cCBox //Se tiver o tipo Oftalmológico no combobox do campo Ind. Result.
+		aAdd( aLegendas, {"BR_LARANJA" , STR0021 } ) //"Oftalmológico"
+	EndIf
+
+	BrwLegenda( cCadastro, STR0015, aLegendas ) //"Legenda"
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} function
+
+Chama a rotina de Inclusao de Exames
+
+@type    function
+
+@author  Andrey Martim Pegorini
+@since   28/10/2010
+
+@return nil
+/*/
+//-------------------------------------------------------------------
+Function MDT020SXB()
+
+	Local nOpcao   := 3
+	Local aOldMemo := {}
+
+	Default aRotina := {}
+
+	If FindFunction("MDTRESTRI") .And. !MDTRESTRI("MDTA020")
+		Return .F.
+	EndIf
+
+	If Type("aMemos") == "A"
+		aOldMemos := aClone(aMemos)
+	EndIf
+
+	aMemos := {}
+
+	dbSelectArea("SX3")
+	dbSetOrder(2)
+
+	If dbSeek("TM4_PREPAR")
+		aAdd(aMemos, {"TM4_PREPAR", "TM4_MEMOPR"})
+	EndIf
+
+	OldRot := aCLONE(aROTINA)
+	aRotina := Menudef()
+
+	AxInclui("TM4", TM4->(Recno()), nOpcao)
+
+	aRotina := aCLONE(OldRot)
+	aMemos := aClone(aOldMemo)
+
+	lRefresh := .T.
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCheckCols
+Verifica se o aCols esta correto
+
+@return Nil
+
+@sample
+fCheckCols()
+
+@author Jackson Machado
+@since 04/07/2012
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fCheckCols()
+
+	Local nX
+	Local nOld := n
+	Local nItem := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_ITEM" })
+
+	For nX := 1 To Len(aCols)
+		If !aCols[nX][Len(aCols[nX])]
+			If nOld <> nX .and. !aCols[nX][Len(aCols[nX])]
+				If aCols[nOld][nItem] == aCols[nX][nItem]
+					Help(" ",1,"JAEXISTINF")
+					Return .F.
+				Endif
+			Endif
+		Endif
+		n := nX
+		If !A020CHKLIN(.T.)
+			Return .F.
+		Endif
+	Next nX
+
+	n := nOld
+
+Return .T.
+
+//---------------------------------------------------------------------------------------
+/*/{Protheus.doc} fMDTA0201
+Verifica ponto de entrada após confirmar tela de inclusão, alteração ou exclusão.
+
+@author Pedro Henrique Soares de Souza
+@since 12/07/2013
+@version MP11
+@param nOpcx: Indica se é inclusão, alteração ou exclusão
+
+@return Nil
+/*/
+//---------------------------------------------------------------------------------------
+Static Function fMDTA0201( nOpcx )
+
+	If ExistBlock("MDTA0201")
+		ExecBlock("MDTA0201",.F.,.F., { nOpcx })
+	Endif
+
+Return
+
+//---------------------------------------------------------------------------------------
+/*/{Protheus.doc} vldLimMxMn(nLimMax, nLimMin)
+Verifica o limite maximo e mínimo.
+
+@author Kawan tácito Osório do Prado Soares
+@since 26/08/2013
+@version 1
+
+@param nLimMax - Obrigatório - Limite máximo.
+@param nLimMin - Ibrigatório - Limite Mínimo.
+
+@sample
+vldLimMxMn(15,20)
+
+@return Nil
+/*/
+//---------------------------------------------------------------------------------------
+Function vldLimMxMn(nLimMax, nLimMin)
+
+	If (nMIN := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMIN" })) < 1
+		Return .T.
+	Endif
+	If (nMAX := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TM8_LIMMAX" })) < 1
+		Return .T.
+	Endif
+
+	Default nLimMax := aCols[n][nMAX]
+	Default nLimMin := aCols[n][nMIN]
+
+	IF nLimMax < nLimMin .And. (!Empty(nLimMax) .And. !Empty(nLimMax))
+		ShowHelpDlg(STR0013,{STR0012},1,{STR0020},2) //"ATENÇÃO"##"O Limite Máximo não pode ser menor que o Limite Mínimo."##"Informe o Limite de forma que o Limite Mínimo seja menor que o Limite Máximo"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT020WHEN
+Verifica propriedade WHEN do campo passado como parâmetro.
+
+@param cCpo - Campo a ser verificado a propriedade WHEN
+@return lRet - .T. se permitir edição, .F. caso contrário
+
+@author Thiago Henrique dos Santos
+@since 23/04/2013
+/*/
+//---------------------------------------------------------------------
+Function MDT020WHEN(cCpo)
+
+	Local lRet := .T.
+
+
+	If SuperGetMV("MV_NG2SEG",.F.,"2") == "1" .And. ALTERA .AND. Alltrim(cCpo) == "TM4_NOMEXA"
+
+		If Type("lExistExa") <> "U"
+			lRet := !lExistExa
+		Endif
+
+		If lRet
+
+			//TM5 - Exames por funcionários
+			DbSelectArea("TM5")
+			TM5->(DbSetOrder(2))
+			If TM5->(DbSeek(xFilial("TM5")+M->TM4_EXAME))
+
+				lRet := .F.
+
+			Else
+				//TM6 - Resultado Exame Quantitativo
+				DbSelectArea("TM6")
+				TM6->(DbSetOrder(3))
+				If TM6->(DbSeek(xFilial("TM6")+M->TM4_EXAME))
+
+					lRet := .F.
+
+				Else
+					//TM8 - Normalidade Exame
+					DbSelectArea("TM8")
+					TM8->(DbSetOrder(1))
+					IF TM8->(DbSeek(xFilial("TM8")+M->TM4_EXAME))
+
+						lRet := .F.
+
+					Else
+						//TM9 - Resultado Exame Auditivo
+						DbSelectArea("TM9")
+						TM9->(DbSetOrder(4))
+						IF TM9->(DbSeek(xFilial("TM9")+M->TM4_EXAME))
+
+							lRet := .F.
+
+						Else
+							//TMB - Exames Por Agente
+							DbSelectArea("TMB")
+							TMB->(DbSetOrder(2))
+							If TMB->(DbSeek(xFilial("TMB")+M->TM4_EXAME))
+
+								lRet := .F.
+
+							Else
+								//TMD - Preços dos Exames
+								DbSelectArea("TMD")
+								TMD->(DbSetOrder(2))
+								If TMD->(DbSeek(xFilial("TMD")+M->TM4_EXAME))
+
+									lRet := .F.
+
+								Else
+									//TMJ - Agenda de Consultas Médicas
+									DbSelectArea("TMJ")
+									TMJ->(DbSetOrder(10))
+									If TMJ->(DbSeek(xFilial("TMJ")+M->TM4_EXAME))
+
+										lRet := .F.
+
+									Else
+										//TMV - Param Gerar Convocações exames
+										DbSelectArea("TMV")
+										TMV->(DbSetOrder(7))
+										If TMV->(DbSeek(xFilial("TMV")+M->TM4_EXAME))
+
+											lRet := .F.
+
+										Else
+											//TMY - Atestado de Saúde Ocupacional
+											DbSelectArea("TMY")
+											TMY->(DbSetOrder(5))
+											If TMY->(DbSeek(xFilial("TMY")+M->TM4_EXAME))
+
+												lRet := .F.
+
+											Else
+												//TN2 - Exames por Risco
+												DbSelectArea("TN2")
+												TN2->(DbSetOrder(2))
+												If TN2->(DbSeek(xFilial("TN2")+M->TM4_EXAME))
+
+													lRet := .F.
+
+												Else
+													//TN8 - Exames por Programa Especial
+													DbSelectArea("TN8")
+													TN8->(DbSetOrder(2))
+													If TN8->(DbSeek(xFilial("TN8")+M->TM4_EXAME))
+
+														lRet := .F.
+
+													Else
+														//TN9 - Exames Gerais por filial
+														DbSelectArea("TN9")
+														TN9->(DbSetOrder(1))
+														If TN9->(DbSeek(xFilial("TN9")+M->TM4_EXAME))
+
+															lRet := .F.
+
+														Else
+															//TON - Exames por Função
+															DbSelectArea("TON")
+															TON->(DbSetOrder(2))
+															If TON->(DbSeek(xFilial("TON")+M->TM4_EXAME))
+
+																lRet := .F.
+
+															Else
+																//TKN - Brigadas x Exame
+																DbSelectArea("TKN")
+																TKN->(DbSetOrder(2))
+																lRet := !TKN->(DbSeek(xFilial("TKN")+M->TM4_EXAME))
+
+															Endif
+														Endif
+													Endif
+												Endif
+											Endif
+										Endif
+									Endif
+								Endif
+							Endif
+						Endif
+					Endif
+				Endif
+			Endif
+		Endif
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} MDTFILEXA
+Função responsável por realizar o filtro do F3  - NGE - Fornecedor de Exames
+
+@author Guilherme Freudenburg
+@since 22/02/2016
+@version MP12
+@return lRet - Retorno lógico.
+
+/*/
+//--------------------------------------------------------------------------
+Function MDTFILEXA()
+
+	Local lRet := .F.  //Variavel de controle
+
+	If TMD->TMD_EXAME = M->TM5_EXAME
+		lRet := .T.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------------------------
+/*/{Protheus.doc} MDT020OFW
+Realiza o travamente do campo 'TM4_OFTIPO', caso o campo
+'TM4_INDRES' não esteja como '5-Oftálmico'
+
+@author Guilherme Freudenburg
+@since 22/08/2017
+
+@sample
+MDT020OFW()
+
+@return lRet, Lógico, Quando .T. destrava o campo, caso .F. trava campo.
+/*/
+//---------------------------------------------------------------------------------------
+Function MDT020OFW()
+
+	Local lRet := .F.
+
+	If !Empty(M->TM4_INDRES) .And. M->TM4_INDRES == "5"
+		lRet := .T.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------------------------
+/*/{Protheus.doc} MDT020OFV
+Responsavel por validar o campo 'TM4_INDRES'.
+
+@author Guilherme Freudenburg
+@since 22/08/2017
+
+@sample
+MDT020OFV()
+
+@return
+/*/
+//---------------------------------------------------------------------------------------
+Function MDT020OFV()
+
+	If !Empty(M->TM4_INDRES) .And. M->TM4_INDRES == "5" //Caso seja do tipo '5=Oftálmico'.
+		If Empty(M->TM4_OFTIPO) //Se estiver vazio
+			M->TM4_OFTIPO := '1' //Prenche com calor padrão 1
+		EndIf
+	Else
+		M->TM4_OFTIPO := ''
+	EndIf
+
+Return .T.

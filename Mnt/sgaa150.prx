@@ -1,0 +1,1457 @@
+#Include "SGAA150.ch"
+#Include "Protheus.ch"
+#Include "DbTree.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA150
+Programa para cadastrar as ocorrencias do resíduo.
+
+@type    function
+@author  Thiago Olis Machado
+@since   20/12/2004
+@sample  SGAA150()
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SGAA150()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( )
+
+	Private aRotina := MenuDef()
+	Private cCadastro := OemtoAnsi(STR0006) //"Ocorrencia de Residuos"
+
+	If !NGCADICBASE("TB4_LOTECT","A","TB4",.F.) .And. AllTrim(GetMv("MV_NGSGAES")) <> "N"
+		// Devolve variaveis armazenadas (NGRIGHTCLICK)
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	EndIf
+
+	DbSelectArea("TB0")
+	DbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TB0")
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Pro
+Programa para cadastrar Ocorrencias/Destino/Resp. Crit. Con.
+@type    function
+@author  Thiago Olis Machado
+@since   20/12/2004
+@sample  Sg150Pro( cAlias, nRecno, nOpcx, cCodRes, nQuant, cDepto )
+
+@param   cAlias, Caractere, Alias da tabela utilizada
+@param   nRecno, Caractere, Número do registro
+@param   nOpcx, Numérico, Opção selecionada
+@param   cCodRes, Caractere, Código do resíduo
+@param   nQuant, Numérico, Quntidade do resíduo
+@param   cDepto, Caractere, Departamento
+
+@return  lOk, Lógico, Verdadeiro se inclusão ocorreu normalmente
+/*/
+//-------------------------------------------------------------------
+Function Sg150Pro( cAlias, nRecno, nOpcx, cCodRes, nQuant, cDepto )
+
+	Local cTitulo := cCadastro//Titulo da janela
+	Local oDlg150
+	Local lOK := .F.
+	Local lDepto := Valtype(cDepto) == "C" .And. !Empty(cDepto)
+	Local aOldRot := {}
+	Local aNGBEGINPRM := {}
+	Local cMsgBottom
+	Local oPanelPai
+	Local nIdx := 0
+
+	//Variaveis de Folder
+	Local aPages:= {}, aTitles:= {}
+
+	//Variaveis de tamanho de tela e objetos
+	Local aSize := {}, aObjects := {}, aInfo := {}, aPosObj := {}
+
+	//Varáveis utilizadas quando fonte chamado pela FMR
+	Default cCodRes	:= Space(Len(TB0->TB0_CODRES))
+	Default nQuant	:= 0.00
+	Default cDepto	:= Space(Len(TAF->TAF_CODNIV))
+	Private lFMR 		:= IsInCallStack("SG510ALT") //Variavel que verifica se o programa está sendo chamado pela FMR
+
+	aNGBEGINPRM := If(lFMR,NGBEGINPRM(),{})
+
+	//Variaveis de Enchoice
+	Private aTela := {}, aGets := {}
+	Private oEnc150
+	Private oMenu
+	Private oFolder150
+	Private oPnlLgnd
+
+	//Variaveis da GetDados
+	Private oGet150
+	Private aCols := {}, aHeader := {}
+	Private cGetTB4 := ""
+
+	//Variaveis para Estrutura Organizacional e TRB
+	Private aLocal := {}, aMarcado := {}
+	Private oTree
+	Private aVETINR := {}, aTRB := SGATRBEST()
+	Private aItensCar := {}, nNivel := 0,nMaxNivel := 0
+	Private cCodEst := "001", cDesc := NGSEEK("TAF","001000",1,"TAF->TAF_NOMNIV")
+	Private lRateio := NGCADICBASE("TAF_RATEIO"	,"D","TAF",.F.)
+	Private lRetS 	:= NGCADICBASE("TAF_ETAPA"	,"A","TAF",.F.)
+
+	Private lSg150WRes := !IsInCallStack("SgaOprOcR") .Or. Empty(cCodRes)
+
+	aTRB := SGATRBEST(.T.)//Define estrutura do TRB
+	cTRBSGA := aTRB[3]
+	oTempSGA := FWTemporaryTable():New( cTRBSGA, aTRB[1] )
+	For nIdx := 1 To Len( aTRB[2] )
+		oTempSGA:AddIndex( RETASC( cValToChar( nIdx ) , 1 , .T. ), aTRB[2,nIdx] )
+	Next nIdx
+	oTempSGA:Create()
+
+	//Definicao de tamanho de tela e objetos
+	aSize := MsAdvSize(,.F.,430)
+	Aadd(aObjects,{030,030,.T.,.T.})
+	Aadd(aObjects,{100,100,.T.,.T.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.T.)
+
+	Aadd(aTitles,OemToAnsi(STR0007))//"Localizacao do Residuo"
+	Aadd(aPages,"Header 1")
+	Aadd(aTitles,OemToAnsi(STR0008))//"Destino"
+	Aadd(aPages,"Header 2")
+
+	If nOpcx == 4
+		nOpcx := 5
+	EndIf
+	aOldRot	:= aClone(aRotina)
+	aRotina :=	{ 	{ STR0001 , "AxPesqui"  , 0 , 1},; //"Pesquisar"
+					{ STR0002 , "Sg150Pro"  , 0 , 2},; //"Visualizar"
+					{ STR0003 , "Sg150Pro"  , 0 , 3},; //"Incluir"
+					{ STR0004 , "Sg150Pro"  , 0 , 4},; //"Alterar"
+					{ STR0005 , "Sg150Pro"  , 0 , 5, 3}} //"Excluir"
+
+	Inclui := (nOpcx == 3)
+	Altera := (nOpcx == 4)
+
+	If Inclui
+		cOco := GetSxeNum("TB0","TB0_CODOCO")
+	Else
+		cOco := TB0->TB0_CODOCO
+	EndIf
+
+	Define MsDialog oDlg150 Title cTitulo From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel
+
+	oPanelPai:= TPanel():New(00,00,,,,,,,,0,0,.F.,.F.)
+	oPanelPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	dbSelectArea("TB0")
+	RegToMemory("TB0",(nOpcx == 3))
+	oEnc150:= MsMGet():New("TB0",nRecno,nOpcx,,,,,aPosObj[1],,,,,,oPanelPai,,,.F.)
+	oEnc150:oBox:bGotFocus := {|| NgEntraEnc("TB0")}
+	oEnc150:oBox:Align := CONTROL_ALIGN_TOP
+
+	//Parte de baixo da tela
+	oPanelBot := TPanel():New(0,0,,oPanelPai,,,,,,0,aPosObj[2,4],.F.,.F.)
+	oPanelBot:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oFolder150 := TFolder():New(0,0,aTitles,aPages,oPanelBot,,,,.T.,.F.)
+	oFolder150:aDialogs[1]:oFont := oDlg150:oFont
+	oFolder150:aDialogs[2]:oFont := oDlg150:oFont
+	oFolder150:bSetOption := ( {|nNewOption| Sg150Option( nNewOption ) })
+	oFolder150:Align := CONTROL_ALIGN_ALLCLIENT
+
+	// Residuos x Localizacao
+	//Carrega todos niveis selecionados
+	If !Inclui
+		dbSelectArea("TBJ")
+		dbSetOrder(1)
+		dbSeek(xFilial("TBJ")+TB0->TB0_CODOCO)
+		While !EoF() .And. xFilial("TBJ")+TB0->TB0_CODOCO == TBJ->TBJ_FILIAl+TBJ->TBJ_CODOCO
+			If aScan(aLocal,{|x| Trim(Upper(x[1])) == TBJ->TBJ_CODNIV}) == 0
+				aAdd(aLocal, {TBJ->TBJ_CODNIV, .T.} )
+			EndIf
+			dbSelectArea("TBJ")
+			dbSkip()
+		End
+	ElseIf lFMR .Or. lDepto
+		aAdd( aLocal,{ cDepto,.T. } )
+	EndIf
+	aMarcado := aClone(aLocal)
+
+	oTree := DbTree():New(005, 022, 170, 302, oFolder150:aDialogs[1],,, .T.)
+	oTree:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Padronizacao de carregamento de estrutura
+	SG150TREE( 1, aMarcado )
+
+	If Str(nOpcx,1) $ "2/5" .Or. lDepto
+		oTree:bChange	:= {|| SG150TREE(2)}
+		oTree:BlDblClick:= {||}
+	Else
+		oTree:bChange	 := {|| SG150TREE(2)}
+		oTree:blDblClick := {|| SG150DBL()}
+	EndIf
+
+	If !Empty(cCodRes)
+		M->TB0_CODRES := cCodRes
+		M->TB0_UNIMED := NGSEEK("SB1",cCodRes,1,"B1_UM")
+	EndIf
+
+	If !Empty(nQuant)
+		M->TB0_QTDE := nQuant
+	EndIf
+
+	If lFMR .Or. lDepto
+		oTree:BlDblClick := {||}
+	EndIf
+
+	// Painel de Legenda
+	oPnlLgnd := TPanel():New(00,00,,oFolder150:aDialogs[1],,,,,RGB(67,70,87),200,200,.F.,.F.)
+	oPnlLgnd:Align := CONTROL_ALIGN_BOTTOM
+	oPnlLgnd:nHeight := 40
+
+	cMsgBottom := If(!lDepto,STR0028,STR0045) //"A seleção de áreas está desabilitada"
+
+	@ 002,004 Say OemToAnsi(cMsgBottom) Size 207,27 Of oPnlLgnd Pixel Color CLR_WHITE //"Escolha a localização clicando duas vezes sobre a pasta"
+
+	// Folder 02
+	cGetTB4 := "TB4->TB4_FILIAL == '"+xFilial("TB4")+"' .And. TB4->TB4_CODOCO = '"+TB0->TB0_CODOCO+"'"
+	FillGetDados( nOpcx, "TB4", 1, "TB4->TB4_CODOCO", {|| }, {|| .T.},{"TB4_CODOCO","TB4_CODRES"},,,,{|| NGMontaAcols("TB4", TB0->TB0_CODOCO,cGetTB4)})
+
+	If Empty(aCols) .Or. nOpcx == 3
+		aCols := BlankGetd(aHeader)
+	EndIf
+
+	n := Len(aCols)
+	oGet150 := MsGetDados():New(005, 005, 190, 327,nOpcx,"SG150LIN()","SG150LIN(.T.)",,!Str(nOpcx,1) $ "2/5",,1,,,,,,,oFolder150:aDialogs[2])
+	oGet150:oBrowse:Default()
+	oGet150:oBrowse:Refresh()
+	oGet150:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	If Empty(aCols) .Or. nOpcx == 3
+		aCols := BlankGetd(aHeader)
+	EndIf
+
+	//Click da Direita
+	If Len(aSMenu) > 0
+		NGPOPUP(asMenu,@oMenu)
+		oDlg150:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg150)}
+		oEnc150:oBox:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg150)}
+	EndIf
+
+	Activate Dialog oDlg150 On Init (EnchoiceBar(oDlg150,{|| lOk:=.T.,If(Sg150Obrig(nOpcx),oDlg150:End(),lOk := .F.)},{|| lOk:= .F.,oDlg150:End()})) Centered
+
+	If lOk
+		If Inclui
+			//Confirmando a Numeracao Automatica
+			dbSelectArea("TB0")
+			ConfirmSX8()
+		EndIf
+		lOk := Sg150Grava(nOpcx)
+
+		If lOk
+			If ExistBlock("SGAA1501")
+				ExecBlock("SGAA1501",.F.,.F.,{M->TB0_CODOCO,nOpcx})
+			EndIf
+
+			Sg150CControle(nOpcx)
+		EndIf
+	ElseIf !lOk .And. Inclui
+		dbSelectArea("TB0")
+		RollBackSx8()
+	EndIf
+
+	aRotina := aClone(aOldRot)
+
+	If lFMR
+		NGRETURNPRM(aNGBEGINPRM)
+	EndIf
+
+	//Deleta o arquivo temporario fisicamente
+	oTempSGA:Delete()
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Obrig
+Valida preenchidmento de campos obrigatórios.
+
+@type    function
+@author  Microsiga
+@since   03/24/2011
+@sample  Sg150Obrig( 5 )
+@param   nOpcx, Numérico, Opção selecionada
+
+@return  Lógico, Verdadeiro se todos os campos estiverem válidos
+/*/
+//-------------------------------------------------------------------
+Function Sg150Obrig( nOpcx )
+
+	Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+
+	Local lEstAuto := SuperGetMv( 'MV_NGSGAES', .F., 'N' ) == 'S'
+
+	Local nDESTINO := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_CODDES"})
+	Local nQUANTID := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_QUANTI"})
+	Local i, nPeso:= 0, nTotal := 0, nEstoque := 0, nTolera := 0
+
+	If lEstAuto .And. !SgaCodMov() // Verifica o preenchimento dos parâmtros MV_SGADEV e MV_SGAREQ
+		Return .F.
+	EndIf
+
+	If Inclui .And. (aScan(aLocal,{|x| x[2] }) == 0)
+		ShowHelpDlg(STR0014,{STR0027},1,{STR0028})//"ATENÇÃO"##"Por favor, selecione uma Pasta da Estrutura." //"Escolha a localização clicando duas vezes sobre a pasta"
+		Return .F.
+	EndIf
+
+	If AllTrim( Str( nOpcx ) )$ "3/4"
+		If !Obrigatorio(aGets,aTela)
+			Return .F.
+		EndIf
+		dbSelectArea("TAX")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TAX")+M->TB0_CODRES)
+			If TAX->TAX_ESTADO == "1" .And. M->TB0_FATOR == 0
+				ShowHelpDlg(STR0014,{STR0026}) //"ATENÇÃO"##"Quando o residuo for solido o campo fator de conversão deve ser informado!"
+				Return .F.
+			EndIf
+		EndIf
+		If !SG150LIN(.T.)
+			Return .F.
+		EndIf
+		For i:= 1 To Len(aCols)
+			dbSelectArea("TB2")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TB2")+aCols[i][nDESTINO])
+				nTolera := TB2->TB2_QUANTI * (TB2->TB2_TOLERA / 100)
+				nTotal  := TB2->TB2_QUANTI - nTolera
+				dbSelectArea("SB2")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SB2")+M->TB0_CODRES+TB2->TB2_CODALM)
+					nEstoque := SB2->B2_QATU + aCols[i][nQUANTID]
+					If nEstoque > nTotal .And. nEstoque <= TB2->TB2_QUANTI
+						If !MsgYesNo(STR0010+TB2->TB2_CODALM+STR0011+TB2->TB2_CODDES+CHR(13)+CHR(13);  //"O Almoxarifado "###"do destino "
+							+STR0012+CHR(13)+CHR(13);  //"esta no limite de tolerancia"
+							+STR0013,STR0014)  //"Deseja enviar mesmo assim ?"###"ATENCAO"
+							Return .F.
+						EndIf
+					ElseIf nEstoque > nTotal .And. nEstoque > TB2->TB2_QUANTI
+						MsgStop(STR0010+TB2->TB2_CODALM+STR0011+TB2->TB2_CODDES+CHR(13)+CHR(13);  //"O Almoxarifado "###"do destino "
+						+STR0015) //"ultrapassou o limite maximo de armazenamento"
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+			If !aCols[i][len(aCols[i])]
+				nPeso += aCols[i][nQUANTID]
+			EndIf
+		Next i
+
+		If nPeso <> M->TB0_QTDE
+			ShowHelpDlg(STR0014,{STR0017}) //"ATENÇÃO"###"Total enviado para Destino difere do total gerado"
+			Return .F.
+		EndIf
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Grava
+Grava as informacoes.
+
+@type    function
+@author  Thiago Olis Machado
+@since   07/12/2004
+@sample  Sg150Grava( 5 )
+@param   nOpcx, Numérico, Opção selecionada
+
+@return  Lógico, Verdadeiro se asinformações foram gravadas corretamente
+/*/
+//-------------------------------------------------------------------
+Function Sg150Grava( nOpcx )
+
+	Local i
+	Local j
+	Local nPos
+	Local nLOTECTL  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_LOTECT"})
+	Local nNUMLOTE  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_NUMLOT"})
+	Local nDTVALID  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_DTVALI"})
+	Local nDESTINO  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_CODDES"})
+	Local nQUANTID  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_QUANTI"})
+	Local nUNIMEDI  := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_UNIMED"})
+	Local cCustoSD3 := ""
+	Local cLocal	:= ""
+
+	//Seleciona o Local marcado
+	nPos := aScan( aLocal , { | x | x[2] } )
+	cLocal := aLocal[ nPos , 1 ]
+
+	//Incluindo entrada do produto no estoque
+	If AllTrim(GetMv("MV_NGSGAES")) <> "N"
+		For j:= 1 To Len(aCols)
+			dbSelectArea("TB2")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TB2")+aCols[j][nDESTINO])
+				If nOpcx == 3
+					If aCols[j][nQUANTID] > 0
+						dbSelectArea("SB1")
+						dbSetOrder(1)
+						dbSeek(xFilial("SB1")+M->TB0_CODRES)
+
+						cDocumSD3 := NextNumero("SD3",2,"D3_DOC",.T.)
+
+						If !Empty(NGSEEK("TAF",cLocal,8,"TAF->TAF_CCUSTO"))
+							cCCusto   := NGSEEK("TAF",cLocal,8,"TAF->TAF_CCUSTO")
+						Else
+							cCCusto   := SB1->B1_CC
+						EndIf
+						aNumSeqD  := SgMovEstoque('DE0',TB2->TB2_CODALM,M->TB0_CODRES,"TB0->TB0_NUMSEQ",SB1->B1_UM,aCols[j][nQUANTID],M->TB0_DATA,cDocumSD3,aCols[j][nLOTECTL],aCols[j][nNumLote],aCols[j][nDtValid],.T.,,cCCusto)
+						If aNumSeqD[2]
+							Return .F.
+						EndIf
+
+						DbSelectArea("TB0")
+						M->TB0_NUMSEQ := aNumSeqD[1]
+					EndIf
+				ElseIf nOpcx == 5
+					cDocumSD3 := ""
+					dbSelectArea("SD3")
+					dbSetOrder(04)
+					If dbSeek(xFilial("SD3")+TB0->TB0_NUMSEQ+"E0")
+						cDocumSD3 := SD3->D3_DOC
+					EndIf
+
+					dbSelectArea("SB1")
+					dbSetOrder(1)
+					dbSeek(xFilial("SB1")+TB0->TB0_CODRES)
+					If !Empty(NGSEEK("TAF",cLocal,8,"TAF->TAF_CCUSTO"))
+						cCCusto   := NGSEEK("TAF",cLocal,8,"TAF->TAF_CCUSTO")
+					Else
+						cCCusto   := SB1->B1_CC
+					EndIf
+					aNumSeqD  := SgMovEstoque('RE0',TB2->TB2_CODALM,M->TB0_CODRES,"TB0->TB0_NUMSEQ",SB1->B1_UM,aCols[j][nQUANTID],M->TB0_DATA,cDocumSD3,aCols[j][nLOTECTL],aCols[j][nNumLote],aCols[j][nDtValid],.T.,,cCCusto)
+					If aNumSeqD[2]
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		Next j
+	EndIf
+
+	//Manipula a tabela TB1
+	If nOpcx == 5//Deleta Criterios de Controle
+		dbSelectArea("TB1")
+		dbSetOrder(1)
+		dbSeek(xFilial("TB1")+M->TB0_CODOCO)
+		While !EoF() .And. xFilial("TB1")+M->TB0_CODOCO == TB1->(TB1_FILIAL+TB1_CODOCO)
+			RecLock("TB1",.F.)
+			dbDelete()
+			MsUnlock("TB1")
+			dbSelectArea("TB1")
+			dbSkip()
+		End
+	EndIf
+
+	//Manipula a tabela TB0
+	dbSelectArea("TB0")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TB0")+M->TB0_CODOCO)
+		RecLock("TB0",.F.)
+	Else
+		RecLock("TB0",.T.)
+	EndIf
+	If nOpcx <> 5
+		For i:=1 to FCount()
+			If "_FILIAL"$Upper(FieldName(i))
+				FieldPut(i, xFilial("TB0"))
+			ElseIf "_FATOR"$Upper(FieldName(i))
+				FieldPut(i, If(Empty(M->TB0_FATOR),1,M->TB0_FATOR))
+			ElseIf "_ORIGEM"$Upper(FieldName(i))
+				FieldPut(i, "1")
+			Else
+				FieldPut(i, &("M->"+AllTrim(FieldName(i))))
+			EndIf
+		Next i
+	Else
+		DbDelete()
+	EndIf
+	MsUnLock("TB0")
+
+	//Manipula a tabela TB4
+	If nOpcx == 5
+		dbSelectArea("TB4")
+		dbSetOrder(1)
+		dbSeek(xFilial("TB4")+M->TB0_CODRES)
+		While !EoF() .And. xFilial("TB4")+M->TB0_CODOCO == TB4->TB4_FILIAL+TB4->TB4_CODOCO
+			RecLock("TB4",.F.)
+			DbDelete()
+			MsUnLock("TB4")
+			dbSelectArea("TB4")
+			dbSkip()
+		End
+	Else
+		If Len(aCols) > 0
+			aSORT(aCols,,, { |x, y| x[Len(aCols[1])] .And. !y[Len(aCols[1])] } )
+		EndIf
+		For i:=1 to Len(aCols)
+			If !aCols[i][Len(aCols[i])] .And. !Empty(aCols[i][nDESTINO])
+				dbSelectArea("TB4")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TB4")+M->TB0_CODOCO+aCols[i][nDESTINO])
+					RecLock("TB4",.F.)
+				Else
+					RecLock("TB4",.T.)
+				EndIf
+				For j:=1 to FCount()
+					If "_FILIAL"$Upper(FieldName(j))
+						FieldPut(j, xFilial("TB4"))
+					ElseIf "_CODOCO"$Upper(FieldName(j))
+						FieldPut(j, M->TB0_CODOCO)
+					ElseIf "_CODRES"$Upper(FieldName(j))
+						FieldPut(j, M->TB0_CODRES)
+					ElseIf (nPos := aScan(aHeader, {|x| Trim(Upper(x[2])) == Trim(Upper(FieldName(j))) }) ) > 0
+						FieldPut(j, aCols[i][nPos])
+					EndIf
+				Next j
+				MsUnlock("TB4")
+			Elseif !Empty(aCols[i][nDESTINO])
+				dbSelectArea("TB4")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TB4")+M->TB0_CODOCO+aCols[i][nDESTINO])
+					RecLock("TB4",.F.)
+					dbDelete()
+					MsUnlock("TB4")
+				EndIf
+			EndIf
+		Next i
+	EndIf
+
+	//Manipula a tabela TBJ
+	If nOpcx == 5
+		dbSelectArea("TBJ")
+		dbSetOrder(1)
+		dbSeek(xFilial("TBJ")+M->TB0_CODOCO+cCodEst)
+		While !EoF() .And. xFilial("TBJ")+M->TB0_CODOCO+cCodEst == TBJ->TBJ_FILIAL+TBJ->TBJ_CODOCO+TBJ->TBJ_CODEST
+			RecLock("TBJ",.F.)
+			DbDelete()
+			MsUnLock("TBJ")
+			dbSelectArea("TBJ")
+			DbSkip()
+		End
+	Else
+		For i:= 1 To Len( aLocal )
+			dbSelectArea("TBJ")
+			dbSetOrder(1)
+			If !dbSeek(xFilial("TBJ")+M->TB0_CODOCO+cCodEst+aLocal[i][1])
+				If aLocal[i][2]
+					RecLock("TBJ",.T.)
+					TBJ->TBJ_FILIAL := xFilial("TBJ")
+					TBJ->TBJ_CODOCO := M->TB0_CODOCO
+					TBJ->TBJ_CODEST := cCodEst
+					TBJ->TBJ_CODNIV := aLocal[i][1]
+					MsUnLock("TBJ")
+				EndIf
+			Else
+				RecLock("TBJ",.F.)
+				If !aLocal[i][2]
+					DbDelete()
+				Else
+					TBJ->TBJ_FILIAL := xFilial("TBJ")
+					TBJ->TBJ_CODOCO := M->TB0_CODOCO
+					TBJ->TBJ_CODEST := cCodEst
+					TBJ->TBJ_CODNIV := aLocal[i][1]
+				EndIf
+				MsUnLock("TBJ")
+			EndIf
+		Next
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG150LIN
+Valida linhas da getdados.
+
+@type    function
+@author  Roger Rodrigues
+@since   24/03/2011
+@sample  SG150LIN( .T. )
+@param   lFim, Lógico, param_descr
+
+@return  Lógico, Verdadeiro se as linhas foresm válidas
+/*/
+//-------------------------------------------------------------------
+Function SG150LIN( lFim )
+
+	Local f
+	Local nPosDest := aScan(aHeader, {|x| Trim(Upper(x[2])) == "TB4_CODDES"})
+	Local nPosQtde := aScan(aHeader, {|x| Trim(Upper(x[2])) == "TB4_QUANTI"})
+	Default lFim := .F.
+
+	//Percorre aCols
+	For f:= 1 to Len(aCols)
+		If !aCols[f][Len(aCols[f])]
+			If lFim .or. f == n
+				//VerIfica se os campos obrigatórios estão preenchidos
+				If Empty(aCols[f][nPosDest])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeader[nPosDest][1],3,0)
+					Return .F.
+				ElseIf Empty(aCols[f][nPosQtde])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeader[nPosQtde][1],3,0)
+					Return .F.
+				EndIf
+			EndIf
+			//Verifica se é somente LinhaOk
+			If f <> n .And. !aCols[n][Len(aCols[n])]
+				If aCols[f][nPosDest] == aCols[n][nPosDest]
+					Help(" ",1,"JAEXISTINF",,aHeader[nPosDest][1])
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	Next f
+
+	PutFileInEoF("TB4")
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Gatilho
+Retorna conteudo do gatilho do campo de Destino.
+
+@type    function
+@author  Microsiga
+@since   03/24/2011
+@sample  Sg150Gatilho()
+
+@return  cValor, Carcatere, Valor do retorno do gatilho do campo
+/*/
+//-------------------------------------------------------------------
+Function Sg150Gatilho()
+
+	Local cValor := ""
+
+	dbSelectArea("TB2")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TB2")+M->TB4_CODDES)
+		If TB2->TB2_TIPO == "1"
+			cValor := TB2->TB2_DESLOC
+		Else
+			cValor := SA2->A2_NOME
+		EndIf
+	EndIf
+
+Return cValor
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150RELAC
+Relacao do campo Nome do Destino.
+@type    function
+@author  Microsiga
+@since   03/24/2011
+@sample  Sg150RELAC()
+
+@return  cDesc, Caractere, Descrição do conteúdo do campo
+/*/
+//-------------------------------------------------------------------
+Function Sg150RELAC()
+
+	Local cDesc := NGSEEK("TB2",TB4->TB4_CODDES,1,"TB2->TB2_DESLOC")
+
+	If Inclui
+	cDesc := ""
+	EndIf
+
+Return cDesc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Gatkey
+Retorna chave de pesquisa do gatilho do campo de Destino.
+
+@type    function
+@author  Microsiga
+@since   03/24/2011
+@sample  Sg150Gatkey()
+
+@return  cValor, Caractere, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg150Gatkey()
+
+	Local cValor := ''
+
+	If TB2->(DbSeek(xFilial("TB2")+M->TB4_CODDES))
+		If TB2->TB2_TIPO == "1"
+			cValor := "xFilial('TB2')+M->TB4_CODDES"
+		Else
+			cValor := "xFilial('SA2')+TB2->TB2_FORNEC"
+		EndIf
+	EndIf
+
+Return cValor
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Option
+Verifica se eh possivel trocar de folder.
+
+@type    function
+@author  Microsiga
+@since   03/24/2011
+@sample  Sg150Option( 1 )
+@param   nNewOption, Numérico,
+
+@return  lRet, Lógico, Verdadeiro se puder trocar de folder
+/*/
+//-------------------------------------------------------------------
+Function Sg150Option( nNewOption )
+
+	Local lRet := .T.
+	//Verifica se eh ou nao possivel trocar de folder.
+	If oFolder150:nOption == 1
+
+		If Empty( M->TB0_CODRES )
+			Help(" ",1,STR0016,,STR0020,3,1)//"ATENÇÃO"###"Informe o codigo do residuo antes de informar o destino"
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150CControle
+Programa para Retorno dos Critérios de Controle do Resíduo.
+
+@type    function
+@author  Thiago Olis Machado
+@since   12/01/2005
+@sample  Sg150CControle( 5 )
+@param   nOpcx, Numérico, Opção selecionada
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg150CControle( nOpcx )
+
+	Local i, nx
+	Local nPosOk, nPosCod, nPosDes, nPosUn
+	Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+	Local nConf, nComple
+	Local aColsCon := {}, aHeadCon := {}
+	Local oPnlWnd, oPnlCrit
+
+	//Variaveis da tela
+	Private oDlgCon, oPnlTop, cResiduo, cDesRes := Space(60)
+
+	//Variaveis da GetDados
+	Private oGetCon
+
+	If AllTrim( Str( nOpcx ) ) $ "1/2/5"
+		Return
+	EndIf
+
+	cResiduo := M->TB0_CODRES
+
+	dbSelectArea("SB1")
+	dbSetOrder(1)
+	If dbSeek(xFilial("SB1")+cResiduo)
+		cDesRes := AllTrim(SB1->B1_DESC)
+	EndIf
+	dbSelectArea("TAZ")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TAZ")+cResiduo)
+
+		//Monta aHeader e aCols
+		nOpcx:=3
+		aHeadCon := CabecGetd("TB1",{"TB1_CODOCO","TB1_CODPLA"},2)
+		aColsCon := {}
+
+		nPosOk := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_OK" })
+		nPosCod:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CODCRI" })
+		nPosDes:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_DESCRI" })
+		nPosUn := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_UNIMED" })
+		nConf	:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CONFOR"	 })
+		nComple:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_COMPLE"	 })
+
+		dbSelectArea("TAZ")
+		dbSetOrder(1)
+		dbSeek(xFilial("TAZ")+cResiduo)
+		While !EoF() .And. TAZ->TAZ_FILIAL == xFilial("TAZ") .And. cResiduo == TAZ->TAZ_CODRES
+			aAdd(aColsCon, BlankGetd(aHeadCon)[1])
+			If nPosCod > 0
+				aColsCon[Len(aColsCon)][nPosCod]:= TAZ->TAZ_CODCRI
+			EndIf
+			If nPosDes > 0
+				aColsCon[Len(aColsCon)][nPosDes]:= TAZ->TAZ_DESCRI
+			EndIf
+			If nPosUn > 0
+				aColsCon[Len(aColsCon)][nPosUn] := TAZ->TAZ_UNIMED
+			EndIf
+
+			dbSelectArea("TAZ")
+			dbSkip()
+		End
+
+		// Define tela
+		cTitulo:= STR0021 //"Resposta dos Criterios de Controle"
+
+		nOpcao := 1
+		DEFINE MSDIALOG oDlgCon TITLE OemToAnsi(cTitulo) From 6.5,10 To 26,100 OF oMainWnd
+
+		oPnlWnd:= TPanel():New(00,00,,oDlgCon,,,,,,0,0,.F.,.F.)
+		oPnlWnd:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oPnlTop := TPanel():New(00,00,,oPnlWnd,,,,,,200,200,.F.,.F.)
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+		oPnlTop:nHeight := 40
+
+		oPnlCrit:= TPanel():New(00,00,,oPnlWnd,,,,,,0,0,.F.,.F.)
+		oPnlCrit:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@ 0.6,0.8  Say OemToAnsi(STR0022) Of oPnlTop//"Resíduo"
+		@ 0.4,3.8  MsGet cResiduo Size 100,8 When .F. Of oPnlTop
+		@ 0.6,18.0 Say OemToAnsi(STR0023) Of oPnlTop//"Descrição"
+		@ 0.4,21.6 MsGet cDesRes When .F. Of oPnlTop Size 110,8
+
+		oGetCon := MsNewGetDados():New(0,0,0,0,(GD_UPDATE),"AllwaysTrue()","AllwaysTrue()",,,,Len(aColsCon),,,,oPnlCrit,aHeadCon, aColsCon)
+		oGetCon:oBrowse:Default()
+		oGetCon:oBrowse:Refresh()
+		oGetCon:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+		ACTIVATE MSDIALOG oDlgCon ON INIT EnchoiceBar(oDlgCon,{||nopca:=1,If(!Sg150Tudo(),nOPCAO := 0,oDlgCon:End())},{||oDlgCon:End()}) Centered
+	EndIf
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Ok
+Marca / Desmarca Opção.
+@type    function
+@author  Thiago Olis Machado
+@since   12/01/2005
+@sample  Sg150Ok()
+
+@return  Lógico, Sempre falso
+/*/
+//-------------------------------------------------------------------
+Function Sg150Ok()
+
+	Local nPosOk := aScan(oGetCon:aHeader, {|x| AllTrim(Upper(X[2])) == "TB1_OK" })
+
+	If !Empty(oGetCon:aCols[oGetCon:nAt][nPosOk])
+	M->TB1_OK := Space(TAMSX3("TB1_OK")[1])
+	Else
+	M->TB1_OK := "X"
+	EndIf
+
+	oGetCon:aCols[oGetCon:nAt][nPosOk] := M->TB1_OK
+	Refresh := .T.
+
+Return .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150Tudo
+Gravação das respostas dos critérios.
+@type    function
+@author  Thiago Olis Machado
+@since   12/01/2005
+@sample  Sg150Tudo()
+
+@return  Lógico, Verdadeiro se gravou as respostas corretamente
+/*/
+//-------------------------------------------------------------------
+Function Sg150Tudo()
+
+	Local i, j
+	Local aColsCon 	:= oGetCon:aCols
+	Local aHeadCon 	:= oGetCon:aHeader
+	Local cCriterios	:= ""
+	Local nPosOk 		:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_OK" })
+	Local nPosCod		:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CODCRI" })
+	Local nPosDes		:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_DESCRI" })
+	Local nPosQtd		:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_QTDE" })
+	Local lErro 		:= .F.
+	Local nComple
+	Local nConf
+	// Se o Campo complemento não estiver preenchido quando o critério estiver marcado
+	// e com seu campo de conformidade igual a Não, o mesmo se torna obrigatório.
+	If NGCADICBASE("TB1_CONFOR","A","TB1",.F.)
+		nConf		:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CONFOR" })
+		nComple	:= aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_COMPLE" })
+		For i:=1 To Len(aColsCon)
+			If !Empty(aColsCon[i][nPosOk]) .And. Empty(aColsCon[i][nComple]) .And. (aColsCon[i][nConf]) == "2"
+				ShowHelpDlg( STR0031 , { STR0043 } , 2 , { STR0044 } , 2 ) // "Atenção" ## "O preenchimento do campo Complemento é obrigatório!" ## "Preencha o campo com o detalhamento da Conformidade."
+				lErro := .T.
+				Exit
+			EndIf
+		Next i
+	EndIf
+
+	If lErro
+		Return .F.
+	EndIf
+
+	For i:=1 To Len(aColsCon)
+		If !Empty(aColsCon[i][nPosOk])
+			dbSelectArea("TAZ")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TAZ")+cResiduo+aColsCon[i][nPosCod])
+				If aColsCon[i][nPosQtd] < TAZ->TAZ_LIMMIN .or. aColsCon[i][nPosQtd] > TAZ->TAZ_LIMMAX
+					cCriterios += CHR(13)
+					cCriterios += Trim(Upper(aColsCon[i][nPosDes]))
+				EndIf
+			EndIf
+		EndIf
+	Next i
+	If !Empty(cCriterios)
+		If !MsgYesNo(STR0029+cCriterios+CHR(13)+STR0030,STR0031) //"Os seguintes critérios de controle estão fora dos limites de controle:"###"Deseja continuar?"###"Atenção"
+			Return .F.
+		EndIf
+	EndIf
+
+	If NGCADICBASE("TB1_CONFOR","A","TB1",.F.)
+		If GetNewPar("MV_SGAWFCR", "2") == "1" .And. !SgAvEnvWf(cResiduo)
+			Return .F.
+		EndIf
+	EndIf
+
+	For i:=1 to Len(aColsCon)
+		If !aColsCon[i][Len(aColsCon[i])] .And. !Empty(aColsCon[i][nPosOk])
+			dbSelectArea("TB1")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TB1")+M->TB0_CODOCO+aColsCon[i][nPosCod])
+				RecLock("TB1",.F.)
+			Else
+				RecLock("TB1",.T.)
+			EndIf
+			For j:=1 to FCount()
+				If "_FILIAL"$Upper(FieldName(j))
+					FieldPut(j, xFilial("TB1"))
+				ElseIf "_CODOCO"$Upper(FieldName(j))
+					FieldPut(j, M->TB0_CODOCO)
+				ElseIf (nPos := aScan(aHeadCon, {|x| Trim(Upper(x[2])) == Trim(Upper(FieldName(j))) }) ) > 0
+					FieldPut(j, aColsCon[i][nPos])
+				EndIf
+			Next j
+			MsUnlock("TB1")
+		EndIf
+	Next i
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@sample  MenuDef()
+@Obs     Conteúdo do array a Rotina:
+		1. Nome a aparecer no cabecalho
+		2. Nome da Rotina associada
+		3. Reservado
+		4. Tipo de Transação a ser efetuada:
+			1 - Pesquisa e Posiciona em um Banco de Dados
+			2 - Simplesmente Mostra os Campos
+			3 - Inclui registros no Bancos de Dados
+			4 - Altera o registro corrente
+			5 - Remove o registro corrente do Banco de Dado
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+
+@return  aRotina, Array, Contem as opções da rotina
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina :=	{ 	{ STR0001 , "AxPesqui"  , 0 , 1    },;  //"Pesquisar"
+							{ STR0002 , "Sg150Pro"  , 0 , 2    },;  //"Visualizar"
+							{ STR0003 , "Sg150Pro"  , 0 , 3    },;  //"Incluir"
+							{ STR0005 , "Sg150Pro"  , 0 , 5, 3 } }  //"Excluir"
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150VRa
+Função para validar os campos de Numero do Lote.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   29/05/2009
+@sample  Sg150VRa()
+@return  Lógico, Verdadeiro se os campos forem válidos
+/*/
+//-------------------------------------------------------------------
+Function Sg150VRa()
+
+	Local cVar     :=ReadVar()
+	Local cCODIGO  := M->TB0_CODRES
+	Local nLOTECTL := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_LOTECT"})
+	Local nNUMLOTE := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_NUMLOT"})
+	Local nDTVALID := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_DTVALI"})
+	Local nDESTINO := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TB4_CODDES"})
+	Local cLOCALT  := NGSEEK("TB2",aCOLS[n][nDESTINO],1,"TB2->TB2_CODALM")
+	Local cLOTCTL  := aCOLS[n][nLOTECTL]
+	Local cNUMLOT  := aCOLS[n][nNUMLOTE]
+
+	If !Rastro(cCODIGO)
+		Help(" ",1,"NAORASTRO")
+		Return .F.
+	EndIf
+
+	If cVar == "M->TB4_LOTECT"   //Campo que esta sendo digitado
+
+		If Empty(M->TB4_LOTECT)
+			Return .T.
+		EndIf
+		cLOTCTL := M->TB4_LOTECT
+		//Valida controle por sub-lote
+		If Rastro(cCODIGO,"S")
+			If !Empty(cNUMLOT)
+				DbSelectArea("SB8")
+				DbSetOrder(02)
+				If DbSeek(xFilial("SB8")+cNUMLOT) .And. cCODIGO+cLOCALT == SB8->B8_PRODUTO+SB8->B8_LOCAL
+					If cLOTCTL != SB8->B8_LOTECTL
+						Help(" ",1,"A240LOTCTL")
+						Return .F.
+					Else
+						If NGCONDTSB8(SB8->B8_DTVALID)
+							If nDTVALID > 0
+								aCOLS[n][nDTVALID] := SB8->B8_DTVALID
+							Else
+								M->TB4_DTVALI := SB8->B8_DTVALID
+							EndIf
+						Else
+							Return .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		Else
+			//Valida controle por lote
+			If !Empty(cLOTCTL)
+				DbSelectArea("SB8")
+				DbSetOrder(03)
+				If !(DbSeek(xFilial()+cCODIGO+cLOCALT+cLOTCTL))
+					Help(" ",1,"NGATENCAO",,STR0032+Chr(13)+Chr(10)+; //"Número do lote não corresponde ao produto que foi "
+										STR0033,3,1) //"informado. Digite um lote correspondente."
+					Return .F.
+				Else
+					If NGCONDTSB8(SB8->B8_DTVALID)
+						If nDTVALID > 0
+							aCOLS[n][nDTVALID] := SB8->B8_DTVALID
+						Else
+							M->TB4_DTVALI := SB8->B8_DTVALID
+						EndIf
+					Else
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	ElseIf cVar == "M->TB4_NUMLOT"
+
+		If Empty(M->TB4_NUMLOT)
+			Return .T.
+		EndIf
+		cNUMLOT := M->TB4_NUMLOT
+		If Rastro(cCODIGO,"S")
+			If !Empty(cNUMLOT)
+				DbSelectArea("SB8")
+				DbSetOrder(2)
+				If DbSeek(xFilial("SB8")+cNUMLOT) .And. cCODIGO+cLOCALT == SB8->B8_PRODUTO+SB8->B8_LOCAL
+					If NGCONDTSB8(SB8->B8_DTVALID)
+						If nLOTECTL > 0 .And. nDTVALID > 0
+							aCOLS[n][nLOTECTL] := SB8->B8_LOTECTL
+							aCOLS[n][nDTVALID] := SB8->B8_DTVALID
+						Else
+							M->TB4_LOTECT := SB8->B8_LOTECTL
+							M->TB4_DTVALI := SB8->B8_DTVALID
+						EndIf
+					Else
+						Return .F.
+					EndIf
+				Else
+					Help(" ",1,"NGATENCAO",,STR0034+Chr(13)+Chr(10)+; //"Número do sub-lote não corresponde ao produto que foi "
+									STR0035,3,1) //"informado. Digite um sub-lote correspondente."
+					Return .F.
+				EndIf
+			EndIf
+		Else
+			M->TB4_NUMLOT := CriaVar("TB4_NUMLOT")
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg150WRa
+Função para validar o When dos campos de Número do Lote.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   29/05/2009
+@sample  Sg150WRa()
+@return  Lógico, Verdadeiro se puder alterar a campo
+/*/
+//-------------------------------------------------------------------
+Function Sg150WRa()
+
+Return If(Alltrim(GetMv("MV_RASTRO"))="S" .And. Alltrim(GetMv("MV_NGSGAES"))<>"N",.T.,.F.)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG150TREE
+Realiza carregamento da estrutura organizacional.
+
+@type    function
+@author  Roger Rodrigues
+@since   23/03/2011
+@sample  SG150TREE( 5, {} )
+
+@param   nOpcao, Numérico, Opção selecionada
+@param   aNivMrk, Array, Níveis marcados da estrutura
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG150TREE( nOpcao, aNivMrk )
+
+	Local cLocal := ""
+	Local nPos := 0
+
+	If nOpcao == 1//Opcao 1 Carrega tudo e 2 bChange
+
+		//Posiciona no nivel pai da estrutura
+		dbSelectArea("TAF")
+		dbSetOrder(1)
+		dbSeek(xFilial("TAF")+cCodest+"000")
+
+		Processa({|lEnd| Sg100Tree(.F.,cCodest,3,aNivMrk)},STR0036,STR0037,.T.) //"Aguarde..."###"Carregando Estrutura..."
+
+		If (nPos := aScan(aLocal,{|x| x[2]})) > 0
+			fPosicLoc( aLocal[nPos][1], aNivMrk )
+		EndIf
+
+	Else
+
+		dbSelectArea(oTree:cArqTree)
+		cLocal := SubStr( oTree:getCargo(), 1, 3 )
+		SG100VChg( 3, {} )
+
+	EndIf
+
+	SG150COR(cLocal)//Troca cor das pastas
+
+	If nPos > 0
+		oTree:TreeSeek(aLocal[nPos][1])
+	ElseIf nOpcao == 1//Se estiver abrindo a tela, fecha a estrutura
+		dbSelectArea(cTRBSGA)
+		dbSetOrder(1)
+		dbSeek("001001")
+		While !EoF() .And. (cTRBSGA)->NIVSUP == cCodest
+			oTree:TreeSeek((cTRBSGA)->CODPRO)
+			oTree:PtCollapse()
+			dbSelectArea(cTRBSGA)
+			dbSkip()
+		End
+		oTree:TreeSeek(cCodest)
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG150COR
+Altera cor dos itens que foram previamente marcados.
+
+@type    function
+@author  Roger Rodrigues
+@since   23/03/2011
+@sample  SG150COR( '' )
+@param   cLocal, Caractere, Código do local marcado
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function SG150COR( cLocal )
+
+	Local i
+	Local aArea := GetArea()
+
+	For i:=1 to Len(aMarcado)
+		If aMarcado[i][Len(aMarcado[i])]
+			dbSelectArea(cTRBSGA)
+			dbSetOrder(2)
+			If dbSeek(cCodest+aMarcado[i][1])
+				dbSelectArea(oTree:cArqTree)
+				dbSetOrder(4)
+				If dbSeek(aMarcado[i][1])
+					If SubStr( (oTree:cArqTree)->T_CARGO, 1, 3 ) == aMarcado[i][1] .And. SubStr( (oTree:cArqTree)->T_CARGO, 7, 1 ) != "2"//Desmraca
+						oTree:TreeSeek(aMarcado[i][1])
+						oTree:ChangeBmp("Folder7","Folder8")
+						(oTree:cArqTree)->T_CARGO := SubStr(oTree:getCargo(),1,6)+"2"
+						aMarcado[i][Len(aMarcado[i])] := .F.
+						//Caso nao seja nivel clicado, fecha o mesmo
+						If (cTRBSGA)->NIVSUP != cLocal .And. (cTRBSGA)->CODPRO != cCodest
+							oTree:TreeSeek((cTRBSGA)->NIVSUP)
+							oTree:PtCollapse()
+						EndIf
+						oTree:TreeSeek(cLocal)
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	Next i
+	RestArea(aArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} nome_function
+Posiciona na localizacao a ser marcada.
+
+@type    function
+@author  Roger Rodrigues
+@since   29/03/2011
+@sample  fPosicLoc( '', {} )
+@param   cCodigo, Caractere, Código do local marcado
+@param   aNivMrk, Array, Níveis marcados na estrutura
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fPosicLoc( cCodigo, aNivMrk )
+
+	Local i
+	Local cSupNiv  := cCodEst
+	Local aLocPais := {}
+
+	//Carrega itens pais
+	If !Empty(cCodigo)
+
+		aAdd(aLocPais, cCodigo)
+		cSupNiv := NGSEEK("TAF",cCodigo,8,"TAF->TAF_NIVSUP")
+
+		dbSelectArea("TAF")
+		dbSetOrder(2)
+		dbSeek(xFilial("TAF")+cCodEst+cCodigo)
+		While !EoF() .And. Found() .And. cSupNiv != "000"
+
+			dbSelectArea("TAF")
+			dbSetOrder(2)
+			If dbSeek(xFilial("TAF")+cCodEst+cSupNiv)
+				aAdd(aLocPais, TAF->TAF_CODNIV)
+				cSupNiv := TAF->TAF_NIVSUP
+			EndIf
+
+		End
+
+	Else
+		Return .F.
+	EndIf
+
+	//Encontra item na arvore
+	For i:=Len(aLocPais) to 1 Step -1
+		oTree:TreeSeek(aLocPais[i]+"LOC")
+		SG100VChg( 3, aNivMrk )
+	Next i
+
+Return .T.
+
+//-----------------------------------------------------------------------
+/*{Protheus.doc} SgAvEnvWf
+Função para mensagem de envio de Workflow.
+
+@param cResiduo Codigo do Residuo relacionado.
+
+@author Juliani Schlickmann Damasceno
+@since 25/02/2014
+@version 1.0
+*/
+//-----------------------------------------------------------------------
+Static Function SgAvEnvWf( cResiduo )
+
+	Local nAcao	 := 0
+	Local aWfRes	 := {}
+	Local aWfCri	 := {}
+	Local nWfCri	 := 0
+	Local aColsCon	 := oGetCon:aCols
+	Local aHeadCon	 := oGetCon:aHeader
+	Local nPosOk	 := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_OK" 	  })
+	Local nPosCod	 := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CODCRI" })
+	Local nConf	 := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_CONFOR" })
+	Local nPosQtd	 := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_QTDE" 	  })
+	Local nComple	 := aScan(aHeadCon, {|x| AllTrim(Upper(X[2])) == "TB1_COMPLE" })
+
+	// Se o Critério estiver marcado e com o campo de conformidade igual a "2-Não"
+	// armazena no array.
+	For nWfCri:=1 to Len(aColsCon)
+		If !Empty(aColsCon[nWfCri][nPosOk]) .And. (aColsCon[nWfCri][nConf]) == "2"
+			aAdd(aWfCri, {aColsCon[nWfCri][nPosCod], aColsCon[nWfCri][nPosQtd], aColsCon[nWfCri][nComple], M->TB0_CODOCO })
+		EndIf
+	Next nWfCri
+
+	If !Empty(aWfCri)
+		nAcao := AVISO(STR0031,STR0039,; // "Atenção" ## "Deseja enviar o Workflow referente as Não Conformidades aos responsáveis pelos critérios de controle?"
+		{ STR0040, STR0041,STR0042 }, 1) // "Sim" ## "Não" ## "Voltar"
+
+		If nAcao == 1 // Se a opção da mensagem for Sim, envia o workflow aos responsáveis.
+			aWfRes := {{ cResiduo, aClone(aWfCri) }} // Array para o armazenamento dos critérios de controle.
+			SGAW100(aWfRes)
+		ElseIf nAcao == 3  // Se for Voltar ele volta a tela de Retorno dos Critérios.
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//-----------------------------------------------------------------------
+/*{Protheus.doc} SGA150WHRE
+
+@author Juliani Schlickmann Damasceno
+@since 25/02/2014
+@version 1.0
+*/
+//-----------------------------------------------------------------------
+Function SGA150WHRE()
+Return Type("lSg150WRes") <> "L" .Or. lSg150WRes
+
+//-----------------------------------------------------------------------
+/*{Protheus.doc} SGA150WFMR
+
+@author Juliani Schlickmann Damasceno
+@since 25/02/2014
+@version 1.0
+*/
+//-----------------------------------------------------------------------
+Function SGA150WFMR()
+Return Type("lFMR") <> "L" .Or. !lFMR
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG150VALDT
+Valida campo de data, não permitindo que a data seja maior do que a atual.
+
+@author Gabriel Augusto Werlich
+@since 26/11/2014
+@version MP11/12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function SG150VALDT()
+
+	If(dDataBase < M->TB0_DATA)
+		MsgStop(STR0046) //"Data inválida, a data não pode ser maior do que a data atual."
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG140VLHOR
+Valida hora do campo TB0_HORA
+
+@author Gabriel Augusto Werlich
+@since 26/11/2014
+@version 11/12
+@return .T. / .F.
+/*/
+//---------------------------------------------------------------------
+Function SG140VLHOR()
+
+	If DTOS(M->TB0_DATA) + M->TB0_HORA < DTOS(dDataBase) + Substr(Time(),1,5)
+		Return .T.
+	EndIf
+
+	MsgStop(STR0047)//"Hora Inválida! Deve ser informado uma hora menor ou igual a atual."
+
+Return .F.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG150DBL
+Realiza marcação da estrutura
+
+@param lCallValid - .F. Quando é chamado pelo valid SG140CLNIV.
+@author Gabriel Augusto Werlich
+@since 18/06/2015
+@version 11/12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Static Function SG150DBL( lCallValid )
+
+	Local lRet := .T.
+	Local lTAV := .F.
+	Local cCargo := oTree:GetCargo()
+
+	Default lCallValid := .T.  //Se .F. é porque esta sendo chamado pela validação do campo de resíduo TB0_CODRES)
+
+	dbSelectArea("TAV")
+	dbSetOrder(1)
+	lTAV := dbSeek(xFilial("TAV")+M->TB0_CODRES+"001"+SubStr( oTree:GetCargo(), 1, 3 ))
+
+	If !Empty(M->TB0_CODRES) //Se a memória do campo estiver vazio, retorna falso.
+		dbSelectArea(oTree:cArqTree)
+		If ((oTree:cArqTree)->T_BMP001 == 3 .And. (oTree:cArqTree)->T_BMP002 == 4) .And. lCallValid
+			lRet := .T.
+		ElseIf aScan(aLocal,{|x| x[2] }) == 0 .Or. ;
+				SubStr( oTree:GetCargo(), 7, 1 ) == "2" .Or. ;
+				((oTree:cArqTree)->T_BMP001 == 3 .And. (oTree:cArqTree)->T_BMP002 == 4) //Verifica na estrutura se já existe um nível marcado.
+			If !lTAV //Verifica se existe resíduo na tabela relacional entre resíduo e localização
+				If lCallValid
+					lRet := MsgYesNo(STR0048 +" '"+ AllTrim(M->TB0_CODRES) +"' "+ STR0049) //"O resíduo"###"não está definido, deseja realmente marcar este nível?"
+				Else
+					lRet := !MsgYesNo(STR0048 +" '"+ AllTrim(M->TB0_CODRES) +"' "+ STR0050)//"O resíduo"###"não está definido, deseja manter este nível selecionado?"
+				EndIf
+			ElseIf ((oTree:cArqTree)->T_BMP001 == 3 .And. (oTree:cArqTree)->T_BMP002 == 4)
+				lRet := !MsgYesNo(STR0048 +" '"+ AllTrim(M->TB0_CODRES) +"' "+ STR0052)//"O resíduo"###"está definido, deseja manter este nível selecionado?"
+			EndIf
+		Else
+			lRet := .F.
+			ShowHelpDlg(STR0014,{STR0038})//"ATENÇÃO" //"Só é possível marcar uma localização por ocorrência."
+		EndIf
+	Else
+		lRet := .F.
+		MsgStop(STR0051) //"É necessário que o campo de Resíduo esteja preenchido para marcar uma localização."
+	EndIf
+
+	If lRet
+		Sg030ChangeBmp()
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SG140CLNIV
+Valida hora do campo TB0_HORA
+
+@author Gabriel Augusto Werlich
+@since 26/11/2014
+@version 11/12
+@return .T. / .F.
+/*/
+//---------------------------------------------------------------------
+Function SG140VLNIV()
+
+	Local lRet := .T.
+	Local lNivMark := .F.  //Variavel que verifica se existe algum nível marcado na Tree
+
+	dbSelectArea(oTree:cArqTree)
+	dbGoTop()
+	While !EoF() .And. !lNivMark //Se encontrar um nível marcado na estrutura, seta o lNivMark para true e saí do while
+		If (T_BMP001 == 3 .And. T_BMP002 == 4)
+			lNivMark := .T.
+		EndIf
+	dbSkip()
+	EndDo
+	If lNivMark //Se existir algum nível marcado, será necessario validar o codigo residuo.
+		SG150DBL(.F.) //Chama a função para marcar níveis
+	EndIf
+
+Return lRet

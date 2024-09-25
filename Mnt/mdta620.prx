@@ -1,0 +1,1904 @@
+#Include "MDTA620.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA620
+Programa de Cadastro dos Fornecedores de EPI. Os fornecedores são os
+mesmos do sistema de compras, tabela (SA2) e os EPI's são produtos
+da tabela (SB1).
+
+@type    function
+@author  Paulo Pego
+@since   11/12/1999
+@sample  MDTA620()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA620()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+
+	Private aRotina := MenuDef( .F. )
+
+	Set( _SET_EPOCH, 2000 ) //Define época para que quando o ano da entrega for inputado como "50", joga para 2050
+
+	If ExistBlock( "MDTA6201" )
+		ExecBlock( "MDTA6201", .F., .F. )
+	EndIf
+
+	If lSigaMdtps
+		cCadastro := OemtoAnsi( STR0012 )  //"Clientes"
+
+		dbSelectArea( "SA1" )
+		dbSetOrder( 1 )
+		mBrowse( 6, 1, 22, 75, "SA1" )
+
+		dbSelectArea( "SA1" )
+	Else
+
+		// Define o cabecalho da tela de atualizacoes
+		cCadastro := OemtoAnsi( STR0004 ) //"Fornecador de EPIs"
+
+		Private aCHKDEL := {}
+		Private bNGGRAVA
+
+		// Endereca a funcao de BROWSE
+		dbSelectArea( "SA2" )
+		dbSetOrder( 1 )
+		mBrowse( 6, 1, 22, 75, "SA2" )
+
+		dbSelectArea( "SA2" )
+	EndIf
+
+	Set Filter To
+
+	Set( _SET_EPOCH, 1950 ) //Volta para o padrão do sistema, quando o ano for inputado como "50", joga 1950
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGEPIS620
+Programa de Incluisao, alteração e exclusão
+
+@param ExpTM = Alias do arquivo
+@param ExpN1 = Numero do registro
+@param ExpN2 = Opcao selecionada no menu
+
+@author Inacio Luiz Kolling
+@sample MDTA620()
+/*/
+//---------------------------------------------------------------------
+Function NGEPIS620( cAlias, nReg, nOpcx )
+
+	Local aFind     := { STR0033, STR0035, STR0037, STR0039 }
+	Local aNoFields := {}
+	Local bCampo
+	Local nCnt
+	Local oDlg
+	Local oPanelMid
+	Local oPanelTOT
+	Local i
+	Local nCODEPI
+
+	Private aChoice   := {}
+	Private aColsTN3  := {}
+	Private aTrocados := {}//Array com Epis com C.A. trocado
+	Private cTime620  := "99:99:99"
+	Private cEpie620  := Space( 15 )
+	Private oFont11   := TFont():New( "Arial", , -11, .T., .T. )
+	Private lEpiGen   := .F. // When dos campos TN3_NUMCAP e TN3_DTVENC
+	Private lPrimExc  := .F. //Controla as duas execuções da função de exclusão
+	Private aButtons  := { {"EDITWEB", { || ShellExecute( "open", "http://caepi.mte.gov.br/internet/ConsultaCAInternet.aspx", "", "", 5 ) },;
+		STR0023, STR0024 } }//"Pesquisar C.A. no MTE"##"MTE"
+
+	Private aCOLS
+	Private oMenu
+	Private oGet
+	Private lFlag
+	Private cMemPesq
+	Private oValPesq
+	Private oTitle
+
+	//Variaveis de tamanho de tela e objetos
+	Private aSize := MsAdvSize( , .F., 430 ), aObjects := {}
+
+	aAdd( aObjects, { 030, 030, .T., .T. } )
+	aAdd( aObjects, { 030, 030, .T., .T. } )
+	aAdd( aObjects, { 030, 030, .T., .T. } )
+	aAdd( aObjects, { 100, 100, .T., .T. } )
+	aInfo := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	aPosObj := MsObjSize( aInfo, aObjects, .T. )
+
+	// Verifica qual tipo de produto eh o tipo EPI
+	// e atualiza a consulta padrao de EPI's de acordo com isso
+	Private cTipo := SuperGetMv( "MV_MDTPEPI", .F., "" )
+	Private lSX5  := !Empty( cTipo )  //Variaveis utilizadas na validacao do campo TNX_EPI
+
+	// Verifica se existe algum dado no arquivo
+	dbSelectArea( cAlias )
+	dbSetOrder( 1 )
+
+	For i := 1 To FCount()
+		x   := "m->" + FieldName( i )
+		&x. := FieldGet( i )
+	Next i
+
+	cALIAS := "TN3"
+
+	If lSigaMdtps
+		nIndTN3 := 5   //"TN3_FILIAL+TN3_CLIENT+TN3_LOJACL+TN3_FORNEC+TN3_LOJA+TN3_CODEPI+TN3_NUMCAP"
+		cSeekTN3 := xFilial( "TN3" )+cCliMdtps+TOU->TOU_FORNEC+TOU->TOU_LOJAF
+		cCondTN3 := "TN3_FILIAL+TN3_CLIENT+TN3_LOJACL+TN3_FORNEC+TN3_LOJA"
+	Else
+		nIndTN3 := 1   //"TN3_FILIAL+TN3_FORNEC+TN3_LOJA+TN3_CODEPI+TN3_NUMCAP"
+		cSeekTN3 := xFilial( "TN3" )+SA2->A2_COD+SA2->A2_LOJA
+		cCondTN3 := "TN3_FILIAL+TN3_FORNEC+TN3_LOJA"
+	EndIf
+
+
+	dbSelectArea( "TN3" )
+	dbSetorder( nIndTN3 )
+	dbSeek( cSeekTN3 )
+
+	nCnt := 0
+	While !Eof() .And. &cCondTN3. == cSeekTN3
+		nCnt++
+		dbSkip()
+	End
+
+	// Monta a entrada de dados do arquivo
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+	Private nUsado:=0
+	bCampo := { |nCPO| Field( nCPO ) }
+
+	// Monta o cabecalho
+
+	dbSelectArea( "SX2" )
+	dbSetOrder( 1 )
+	dbSeek( "TN3" )
+
+	aAdd( aNoFields, 'TN3_FORNEC' )
+	aAdd( aNoFields, 'TN3_LOJA' )
+	aAdd( aNoFields, 'TN3_NREDUZ' )
+
+	If lSigaMdtps
+
+		aAdd( aNoFields, 'TN3_CLIENT' )
+		aAdd( aNoFields, 'TN3_LOJACL' )
+
+		#IFDEF TOP
+			cQuery := "SELECT * FROM "+RetSqlName( "TN3" )+" TN3 WHERE TN3.TN3_FILIAL = '"+xFilial( "TN3" )+"' AND TN3.TN3_CLIENT = '"+SA1->A1_COD+"'"+;
+				" AND TN3.TN3_LOJACL = '"+SA1->A1_LOJA+"'"+;
+				" AND TN3.TN3_FORNEC = '"+TOU->TOU_FORNEC+"'"+;
+				" AND TN3.TN3_LOJA = '"+TOU->TOU_LOJAF+"' AND TN3.D_E_L_E_T_ = ' '"
+			FillGetDados( 4, "TN3", 5, xFilial( "TN3" )+cCliMdtps+TOU->TOU_FORNEC+TOU->TOU_LOJAF,;
+				{|| "TN3_FILIAL + TN3_CLIENT + TN3_LOJACL + TN3_FORNEC + TN3_LOJA"}, {|| .T.}, aNoFields, , , cQuery )
+		#ELSE
+			cKEY := "SA1->A1_COD+SA1->A1_LOJA+TOU->TOU_FORNEC+TOU->TOU_LOJAF"
+			cGET := "TN3->TN3_FILIAL == '"+xFilial( "TN3" )+"' .And. TN3->TN3_CLIENT+TN3->TN3_LOJACL+TN3->TN3_FORNEC+TN3->TN3_LOJA == '" +;
+				SA1->A1_COD+SA1->A1_LOJA+TOU->TOU_FORNEC+TOU->TOU_LOJAF + "'"
+			FillGetDados( 4, "TN3", 5, cKey, {|| }, {|| .T.}, aNoFields, , , , {|| NGMontaAcols( "TN3", &cKEY, cGET )} )
+		#ENDIF
+
+	Else
+
+		#IFDEF TOP
+			cQuery := "SELECT * FROM "+RetSqlName( "TN3" )+" TN3 WHERE TN3.TN3_FILIAL = '"+xFilial( "TN3" )+"' AND TN3.TN3_FORNEC = '"+SA2->A2_COD+"'"+;
+				" AND TN3.TN3_LOJA = '"+SA2->A2_LOJA+"' AND TN3.D_E_L_E_T_ = ' '"
+			FillGetDados( 4, "TN3", 1, xFilial("TN3")+SA2->A2_COD+SA2->A2_LOJA, {|| "TN3_FILIAL + TN3_FORNEC + TN3_LOJA"}, {|| .T.}, aNoFields, , , cQuery )
+		#ELSE
+			cKEY := "SA2->A2_COD+SA2->A2_LOJA"
+			cGET := "TN3->TN3_FILIAL == '"+xFilial( "TN3" )+"' .And. TN3->TN3_FORNEC+TN3->TN3_LOJA == '" + SA2->A2_COD+SA2->A2_LOJA + "'"
+			FillGetDados( 4, "TN3", 1, cKey, {|| }, {|| .T.}, aNoFields, , , , {|| NGMontaAcols( "TN3", &cKEY, cGET )} )
+		#ENDIF
+
+	EndIf
+
+	If Empty( aCols )
+		aCols := BlankGetd( aHeader )
+	EndIf
+
+	PutFileInEof( "TN3" )
+	M->TN3_DTAVAL := CToD( "  /  /  " )
+	M->TN3_DTVENC := CToD( "  /  /  " )
+
+	nOpca := 0
+	lPrimeiro := .F.
+	lFlag := .F.
+	DEFINE MSDIALOG oDlg TITLE cCadastro From aSize[7], 0 To aSize[6], aSize[5] OF oMainWnd Pixel
+
+	//Monta aChoice
+	aAdd( aChoice, "A2_COD" )
+	aAdd( aChoice, "A2_LOJA" )
+	aAdd( aChoice, "A2_NOME" )
+	aAdd( aChoice, "A2_EST" )
+	aAdd( aChoice, "A2_MUN" )
+	aAdd( aChoice, "A2_END" )
+	aAdd( aChoice, "A2_CEP" )
+	aAdd( aChoice, "A2_TEL" )
+
+	//Panel para ajuste de tela.
+	oPanelTOT := TPanel():New( 0, 0, , oDlg, , .T., .F., , , 0, 55, .T., .F. )
+	oPanelTOT:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Monta enchoice de fornecedor
+	oEnchoice := Msmget():New( "SA2", SA2->(Recno()), 2, , , , aCHOICE, {0, 0, 85, aPosObj[1, 4]}, , 3, , , , oPanelTOT, , , , , .T., )
+	oEnchoice:oBox:Align := CONTROL_ALIGN_TOP
+
+	oPanelTmp := TPaintPanel():New( -2, -2, aPosObj[2, 4], 11, oPanelTOT, .T. )
+	oPanelTmp:addShape( "id=1;type=1;left=0;top=0;width="+cValToChar( Str( aPosObj[4, 4]*2.2, 5 ) )+";height=25;"+;
+		"gradient=1,0,0,0,36,0.0,#434657,0.1,#434657,1.0,#434657;pen-width=1;"+;
+		"pen-color=#434657;can-move=0;can-mark=0;is-blinker=1;" )
+	oPanelTmp:Align := CONTROL_ALIGN_TOP
+	@ 2, 2 SAY oTitle Prompt STR0041 PIXEL OF oPanelTmp Font oFont11 COLOR CLR_WHITE
+
+	oPanelMid := TPanel():New( 0, 0, , oPanelTOT, , , , , RGB( 255, 255, 255 ), 0, aPosObj[3, 4], .F., .F. )
+	oPanelMid:Align := CONTROL_ALIGN_TOP
+	oPanelMid:nHeight := 138
+
+	cFind := aFind[1]
+	cValPesq := Space( 30 )
+
+	@ 2, 3 To 63, 138 LABEL STR0028 OF oPanelMid PIXEL
+
+	@ 14, 9 say OemtoAnsi( STR0029 ) OF oPanelMid Pixel
+	@ 12.8, 62 COMBOBOX oCbx VAR cFind ITEMS aFind SIZE 70, 3 OF oPanelMid Pixel Valid MDT620VEP()
+	@ 31, 9 say OemtoAnsi( STR0030 ) OF oPanelMid Pixel
+	@ 29.8, 62 Msget oValPesq VAR cValPesq Picture "@!" SIZE 70, 6 When .T. OF oPanelMid Pixel
+
+	@ 45.7, 9 BUTTON STR0031 OF oPanelMid SIZE 55, 12 PIXEL ACTION MDTP620EPI( 1 )
+	@ 45.7, 74.2 BUTTON STR0032 OF oPanelMid SIZE 55, 12 PIXEL ACTION MDTP620EPI( 2 )
+
+	oCbx:bHelp  := { | | ShowHelpCpo( STR0065,; //"Objeto de Pesquisa"
+	{ STR0063 }, 5,;  //"Informe o objeto de pesquisa que deseja para a pesquisa. Opções: Código, Descrição, Num. C.A. e Dt. Vencto. C.A."
+	{ }, 5 )  }
+
+	oValPesq:bHelp  := { | | ShowHelpCpo( STR0066,; //"Valor a Procurar"
+	{ STR0064 }, 5,;  //"Informe o código de acordo com o objeto de pesquisa utilizado para pesquisar."
+	{ }, 5 )  }
+
+	oGet := MSGetDados():New( aPosObj[4, 1], aPosObj[4, 2], 1000, aPosObj[4, 4], nOpcx, "NGEPILinOk()", "NGEPITudOk", "", .T., , , , 3000, , , , "NG620EXCC()", oPanelTOT )
+	oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Implementa Click da Direita
+	If Len( aSMenu ) > 0
+		NGPOPUP( aSMenu, @oMenu )
+		oPanelTOT:bRClicked	:= { |o, x, y| oMenu:Activate( x, y, oPanelTOT )}
+		oPanel:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oPanelTOT )}
+	EndIf
+	nCODEPI := aScan( aHEADER, {|x| AllTrim( Upper( X[2] ) ) == "TN3_CODEPI" } )
+	If Len( aCols ) >= 1 .And. !Empty( aCols[1][nCODEPI] )
+		aColsTN3 := aClone( aCols )
+	EndIf
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( oDlg, {||nOpca:=1, IIf( NG620GRAV( "TN3", oGet ), oDlg:End(), nOpca := 0 )}, { || oDlg:End()}, , aButtons )
+
+	If nOpcA == 1
+
+		//Processa Gatilhos
+		EvalTrigger()
+
+		//P.E. após a gravação
+		If 	ExistBlock( "MDTA6203" )
+			ExecBlock( "MDTA6203", .F., .F., { aCols, aHeader } )
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG620GRAV
+Grava os dados no TN3
+@type    function
+@author  Inacio Luiz Kolling
+@since
+@sample  NG620GRAV( 'XXX', 1 )
+
+@param   cAlias, Caractere, Tabela utilizada
+@param   nOpcao, Numérico, Opção do menu
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG620GRAV( cAlias, oGet )
+
+	Local cNumCAP := ""
+	Local lDeleta := .F.
+	Local nScan   := 0
+	Local nCODEPI := aScan( aHEADER, {|x| AllTrim( Upper( X[2] ) ) == "TN3_CODEPI" } )
+	Local nNUMCAP := aScan( aHEADER, {|x| AllTrim( Upper( X[2] ) ) == "TN3_NUMCAP" } )
+	Local lRet	  := .T.
+	Local i
+	Local j
+	Local k
+	Local nIndTNF
+	Local cSeekTNF
+
+	If oGet:TudoOk()
+
+		For i := 1 To Len( aCols )
+			If i <= Len( aColsTN3 ) .And. Len( aColsTN3 ) > 0
+				cNumCAP := aColsTN3[i][nNUMCAP]
+			Else
+				cNumCAP := aCols[i][nNUMCAP]
+			EndIf
+			If !aCols[i][Len( aCols[i] )] .And. !Empty( aCols[i][nCODEPI] )
+				dbSelectArea( "TN3" )
+				dbSetOrder( nIndTN3 )
+				If dbSeek( cSeekTN3 + aCols[i][nCODEPI] + cNumCAP )
+					RecLock( "TN3", .F. )
+				Else
+					RecLock( "TN3", .T. )
+				EndIf
+				For j:=1 To FCount()
+					If "_FILIAL" $ Upper( FieldName( j ) )
+						FieldPut( j, xFilial( "TN3" ) )
+					ElseIf "_FORNEC" $ Upper( FieldName( j ) )
+						FieldPut( j, SA2->A2_COD )
+					ElseIf "_LOJACL" $ Upper( FieldName( j ) )
+						FieldPut( j, SA1->A1_LOJA )
+					ElseIf "_LOJA" $ Upper( FieldName( j ) )
+						FieldPut( j, SA2->A2_LOJA )
+					ElseIf "_CLIENT" $ Upper( FieldName( j ) )
+						FieldPut( j, SA1->A1_COD )
+					Else
+						If (nPos := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == AllTrim( Upper( FieldName( j ) ) ) } ) ) > 0
+							FieldPut( j, aCols[i][nPos] )
+						EndIf
+					EndIf
+				Next j
+				MsUnlock( "TN3" )
+				//Atualiza TNF - Entrega ao Funcionario
+				If (nScan := aScan( aTrocados, {|x| x[1] == aCols[n, nCODEPI]+cNumCAP } ) ) > 0 .And. aTrocados[nScan, 2] == i
+
+					If lSigaMdtps
+						nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+						nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+						cSeekTNF := xFilial( "TNF" )+TOU->TOU_FORNEC+TOU->TOU_LOJAF+cCliMdtps
+					Else
+						nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+						cSeekTNF := xFilial( "TNF" )+SA2->A2_COD+SA2->A2_LOJA
+					EndIf
+					dbSelectArea( "TNF" )
+					dbSetOrder( nIndTNF )
+					While dbSeek( cSeekTNF+aTrocados[nScan, 1] ) .And. !eof()
+						RecLock( "TNF", .F. )
+						TNF->TNF_NUMCAP := TN3->TN3_NUMCAP
+						MsUnlock( "TNF" )
+
+						dbSelectArea( "TNF" )
+						dbSkip()
+					End
+
+				EndIf
+			ElseIf !Empty( aCols[i][nCODEPI] )
+				lDeleta := .T.
+				//Verifica a existencia de outro igual na GetDados
+				For j := 1 To Len( aCols )
+					If aCols[i][nCODEPI]+aCols[i][nNUMCAP] == aCols[j][nCODEPI]+aCols[j][nNUMCAP] .And. j!=i .And. !aCols[j][Len( aCols[j] )]
+						lDeleta := .F.
+						Exit
+					EndIf
+				Next j
+				If lDeleta
+					dbSelectArea( "TN3" )
+					dbSetOrder( nIndTN3 )
+					If dbSeek( cSeekTN3+aCols[i][nCODEPI]+cNumCAP )
+						RecLock( "TN3", .F. )
+						dbDelete()
+						MsUnlock( "TN3" )
+					EndIf
+				EndIf
+			EndIf
+		Next i
+	Else
+		lRet := .F.
+	EndIf
+
+	dbSelectArea( "SA2" )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGEPILinOk
+Critica se a linha digitada esta' Ok
+@type    function
+@author  Inacio Luiz Kolling
+@since
+@sample  NGEPILinOk()
+
+@return  Lógico, Verdadeiro se a linha estiver OK
+/*/
+//-------------------------------------------------------------------
+Function NGEPILinOk()
+
+	Local lRet := .T.
+	Local lGener := .F. // Indica a obrigatoriedade do campo TN3_NUMCAP
+
+	Local nInd := 1
+
+	nCODEPI := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_CODEPI" } )
+	nDTAVAL := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_DTAVAL" } )
+	nDTVENC := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_DTVENC" } )
+	nDURABI := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_DURABI" } )
+	nTPDURA := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_TPDURA" } )
+	nNUMCAP := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TN3_NUMCAP" } )
+
+	If !Empty( aCols[n][nDTVENC] ) .And. !Empty( aCols[n][nDTAVAL] ) .And. aCols[n][nDTAVAL] > aCols[n][nDTVENC]
+		msgStop( STR0020 )  //"A data de avaliação do EPI precisa menor ou igual à data de vencimento."
+		Return .F.
+	EndIf
+
+	//Obriga campo de produto
+	If Empty( aCols[n][nCODEPI] ) .And. !aCols[n, Len( aCols[n] )]
+		Help( 1, " ", "OBRIGAT2", , aHeader[nCODEPI][1], 3, 0 )
+		Return .F.
+	EndIf
+
+	//Verifica o preenchimento do campo TN3_GENERI
+	If NGCADICBASE( "TN3_GENERI", "D", "TN3", .F. )
+		nGENERI := aScan( aHEADER, {|x| AllTrim( Upper( X[2] ) ) == "TN3_GENERI" } )
+		If Empty( aCols[n][nGENERI] ) .And. !aCols[n, Len( aCols[n] )]
+			ShowHelpDlg( STR0016, {STR0042}, 1,; //"ATENÇÃO" ### "O campo 'Generico ?' está em branco."
+			{STR0043}, 1 ) //"Preencha o campo para prosseguir os cadastros."
+			Return .F.
+		ElseIf aCols[n][nGENERI] == '2'
+			lGener := .T.
+		EndIf
+	EndIf
+
+	//Somente obriga o preenchimento de novos registros
+	If nNUMCAP > 0
+		lAlterou := .F.
+		If n <= Len( aColsTN3 )
+			If aCols[n, nNUMCAP] != aCOLSTN3[n, nNUMCAP]
+				lAlterou := .T.
+			EndIf
+		Else
+			lAlterou := .T.
+		EndIf
+		If !aCols[n, Len( aCols[n] )] .And. !lGener
+			If lAlterou .And. Empty( aCols[n][nNUMCAP] )
+				Help( 1, " ", "OBRIGAT2", , aHeader[nNUMCAP][1], 3, 0 )
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If nDURABI > 0 .Or. nTPDURA > 0
+		lAlterou := .F.
+		If n <= Len( aColsTN3 )
+			For nInd := 1 To Len( aCols[n] )
+				If aCols[n, nInd] != aCOLSTN3[n, nInd]
+					lAlterou := .T.
+					Exit
+				EndIf
+			Next nInd
+		Else
+			lAlterou := .T.
+		EndIf
+		If !aCols[n, Len( aCols[n] )]
+			If nTPDURA > 0
+				If aCols[n, nDURABI] > 0
+					If lAlterou .And. ( aCols[n, nTPDURA] != "U" .And. aCols[n, nTPDURA] != "G")
+						MsgStop( STR0022 )//"Favor informar o tipo de Durabilidade do EPI."
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	// Verifica por linhas duplicadas
+	For nInd := 1 To Len( aCOLS )
+
+		If nInd != n .And. !aCols[ nInd, Len( aCols[ nInd ] ) ] .And. !aCols[ n, Len( aCols[ n ] ) ]
+
+			If aCOLS[ nInd, nCODEPI ] == aCOLS[ n, nCODEPI ] .And. aCols[ nInd, nNUMCAP ] == aCols[ n, nNUMCAP ]
+
+				Help( ' ', 1, 'JAEXISTINF' )
+				Return .F.
+
+			EndIf
+
+		EndIf
+
+	Next
+
+	//Ponto de Entrada após a validação da linha
+	If ExistBlock( "MDTA6204" )
+		lRet := ExecBlock( "MDTA6204" )
+		If ValType( lRet ) != "L"
+			lRet := .T.
+		EndIf
+	EndIf
+
+	PutFileInEof( "TN3" )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGEPITudOk
+Critica se a nota toda está Ok
+
+@type    function
+@author  Inacio Luiz Kolling
+@since
+@sample  NGEPITudOk( o )
+@param   o, Objeto, Grid a ser verificada
+
+@return  Lógico, Verdadeiro se a grid estiver OK
+/*/
+//-------------------------------------------------------------------
+Function NGEPITudOk( o )
+
+	Local lRet := .T.
+
+	//Ponto de Entrada após a validação da grid
+	If ExistBlock( "MDTA6205" )
+		lRet := ExecBlock( "MDTA6205" )
+		If ValType( lRet ) != "L"
+			lRet := .T.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} D620CHK
+Consiste a existencia de outro codigo na GetDados.
+@type function
+
+@author Marcio Costa
+@since 03/01/2000
+
+@param nCampo, Numérico, Indica a ordem dos campos.
+
+@return lRet, Lógico, Falso se existir código duplicado na getdados.
+/*/
+//-------------------------------------------------------------------
+Function D620CHK( nCampo )
+
+	Local lRet := .T.
+
+	Local nX
+	Local nPos
+	Local nPos1
+	Local nPos2
+
+	Default nCampo := 1
+
+	If nCampo != 3
+
+		nPos  := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TN3_CODEPI" } )
+		nPos1 := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TN3_NUMCAP" } )
+		nPos2 := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TN3_DTVENC" } )
+
+	Else
+
+		nPos  := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TL0_EPIFIL" } )
+		nPos1 := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TL0_NUMCAP" } )
+		nPos2 := aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TL0_DTVENC" } )
+
+	EndIf
+
+
+	If nPos > 0 .And. nPos1 > 0
+
+		For nX := 1 To Len( aCols )
+
+			If nx != n .And. !aCols[ nx, Len( aCols[ nx ] ) ] .And. !aCols[ n, Len( aCols[ n ] ) ]
+
+				If aCols[ nX, nPos ] == IIf( nCampo == 3, M->TL0_EPIFIL, M->TN3_CODEPI )
+
+					If aCols[ nx, nPos2 ] > Date()
+
+						lRet := MsgYesNo( STR0086 ) // "EPI já cadastrado com C.A. não vencido para esse fornecedor. Deseja cadastrar mesmo assim?"
+						Exit
+
+					EndIf
+
+				ElseIf aCols[ nX, nPos ] == aCols[ n, nPos ]
+
+					If aCols[ nX, nPos1 ] == IIf( nCampo == 3, M->TL0_NUMCAP, M->TN3_NUMCAP )
+
+						Help( ' ', 1, 'JAEXISTINF' )
+						lRet := .F.
+						Exit
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		Next
+
+	EndIf
+
+	If nCampo == 3 .And. !Empty( M->TL0_NUMCAP )
+
+		aCols[ n, nPos2 ] := aCols[ n, aScan( aHeader, { | x | Trim( Upper( x[ 2 ] ) ) == "TL0_DTINIC" } ) ]
+
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG620EXCC
+Valida a exclusão dos registros de EPI
+@type    function
+@author
+@since
+@sample  NG620EXCC
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG620EXCC()
+
+	Local aArea := GetArea()
+	Local nPOS  := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_CODEPI" } )
+	Local nPOS1 := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_NUMCAP"} )
+	Local i
+
+	Local nIndTNB
+	Local cSeekTNB
+
+	Local nIndTOH
+	Local cSeekTOH
+
+	Local nIndTNF
+	Local cSeekTNF
+
+	If n > Len( aColsTN3 )
+		Return .T.
+	EndIf
+
+	If lSigaMdtps
+		nIndTNB := 5  //TNB_FILIAL+TNB_CLIENT+TNB_LOJA+TNB_CODEPI+TNB_CODFUN
+		cSeekTNB := xFilial( "TNB" )+cCliMdtps
+
+		nIndTOH := 3  //TOH_FILIAL+TOH_CLIENT+TOH_LOJA+TOH_CODEPI
+		cSeekTOH := xFilial( "TOH" )+cCliMdtps
+	Else
+		nIndTNB := 3  //TNB_FILIAL+TNB_CODEPI
+		cSeekTNB := xFilial( "TNB" )
+
+		nIndTOH := 2  //TOH_FILIAL+TOH_CODEPI
+		cSeekTOH := xFilial( "TOH" )
+	EndIf
+
+	//A comparacao do tempo eh utilizada, pois a funcao e chamada 2 vezes ao excluir (P.O.G.)
+
+	dbSelectArea( "TNB" )
+	dbSetOrder( nIndTNB )
+	If dbSeek( cSeekTNB + aCols[n, nPOS] )
+		If ( cTime620 != Time() .And. (cTime620 >= A620SOMSEG( Time(), + 1 ) .Or. cTime620 <= A620SOMSEG( Time(), - 1 ) ) ) .Or.;
+				cEpie620 != aCols[n, nPOS] + aCols[n, nPOS1]
+			MsgStop( STR0013 )  //"Este dado não poderá ser excluído, pois este Epi consta no cadastro de Epi x Função","ATENÇÃO"
+		EndIf
+		RestArea( aArea )
+		cTime620 := Time()
+		cEpie620 := aCols[n, nPOS] + aCols[n, nPOS1]
+		Return .F.
+	EndIf
+
+	dbSelectArea( "TOH" )
+	dbSetOrder( nIndTOH )
+	If dbSeek( cSeekTOH + aCols[n, nPOS] )
+		If ( cTime620 != Time() .And. ( cTime620 >= A620SOMSEG( Time(), + 1 ) .Or. cTime620 <= A620SOMSEG( Time(), - 1 ) ) ) .Or.;
+				cEpie620 != aCols[n, nPOS] + aCols[n, nPOS1]
+			MsgStop( STR0014 +;  //"Este dado não poderá ser excluído, pois este Epi consta no cadastro de Epi x "
+			STR0015, STR0016 )  //"Centro de Custo"  //"ATENÇÃO"
+		EndIf
+		RestArea( aArea )
+		cTime620 := Time()
+		cEpie620 := aCols[n, nPOS] + aCols[n, nPOS1]
+		Return .F.
+	EndIf
+	If NGCADICBASE( "TIK_TAREFA", "A", "TIK", .F. ) .And. !lSigaMdtps
+		dbSelectArea( "TIK" )
+		dbSetOrder( 2 )//TIK_FILIAL+TIK_EPI+TIK_TAREFA
+		If dbSeek( xFilial( "TIK" ) + aCols[n, nPOS] )
+			If (cTime620 != Time() .And. ( cTime620 >= A620SOMSEG( Time(), + 1 ) .Or. cTime620 <= A620SOMSEG( Time(), - 1 ) ) ) .Or.;
+					cEpie620 != aCols[n, nPOS] + aCols[n, nPOS1]
+				MsgStop( STR0014 +;  //"Este dado não poderá ser excluído, pois este Epi consta no cadastro de Epi x "
+				STR0067, STR0016 )  //"Tarefa"  //"ATENÇÃO"
+			EndIf
+			RestArea( aArea )
+			cTime620 := Time()
+			cEpie620 := aCols[n, nPOS] + aCols[n, nPOS1]
+			Return .F.
+		EndIf
+	EndIf
+
+	If lSigaMdtps
+		nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+		nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+		cSeekTNF := xFilial( "TNF" )+TOU->TOU_FORNEC+TOU->TOU_LOJAF+cCliMdtps
+	Else
+		nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+		cSeekTNF := xFilial( "TNF" )+SA2->A2_COD+SA2->A2_LOJA
+	EndIf
+
+	dbSelectArea( "TNF" )
+	dbSetOrder( nIndTNF )
+	If dbSeek( cSeekTNF+aCols[n, nPOS]+aCols[n, nPOS1] )
+
+		If ( cTime620 != Time() .And. ( cTime620 >= A620SOMSEG( Time(), + 1 ) .Or. cTime620 <= A620SOMSEG( Time(), - 1 ) ) ) .Or.;
+				cEpie620 != aCols[n, nPOS] + aCols[n, nPOS1]
+			MsgStop( STR0017 +;  //"Este dado não poderá ser excluído, pois este Epi consta nos Epi's entregues "
+			STR0018, STR0016 )  //"de algum funcionário."  //"ATENÇÃO"
+		EndIf
+		RestArea( aArea )
+		cTime620 := Time()
+		cEpie620 := aCols[n, nPOS] + aCols[n, nPOS1]
+		Return .F.
+	EndIf
+
+	If NGCADICBASE( "TN3_GENERI", "D", "TN3", .F. )
+		If aCols[n, aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_GENERI"} )] == '2'
+			dbSelectArea( "TL0" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TL0" ) + aCols[n, nPOS] + SA2->A2_COD + SA2->A2_LOJA ) .And. !lPrimExc
+				MsgStop( STR0061 ) //"Esse é um EPI genérico e possuí EPI filhos relacionados, desvincule os EPIs filhos antes de excluir."
+				lPrimExc := .T.
+				Return .F.
+			ElseIf lPrimExc
+				lPrimExc := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+description
+@type    function
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@sample  MenuDef(.F.)
+@param   lMdi, Lógico,
+
+@Obs Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+	5. Nivel de acesso
+	6. Habilita Menu Funcional
+
+@return  aRotina, Array, Contém as opcoes da rotina.
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef( lMdi )
+
+	Local lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+	Local aAdItens   := {}
+	Local aRotina
+
+	Default lMdi := .T.
+
+	If lSigaMdtps
+		aRotina := { { STR0001, "AxPesqui", 0, 1 },;  //"Pesquisar"
+		{ STR0002, "NGCAD01", 0, 2 },;   //"Visualizar"
+		{ STR0019, "MDT620FOR", 0, 4 } } //"Credenciados"
+	Else
+		aRotina := { { STR0001, "AxPesqui", 0, 1 },;   //"Pesquisar"
+		{ STR0002, "NGCAD01", 0, 2 },;    //"Visualizar"
+		{ STR0003, "NGEPIS620", 0, 4 } }  //"EPIs"
+
+		If !lMdi .And. NGCADICBASE( "TN3_GENERI", "D", "TN3", .F. )
+			aAdd( aRotina, { STR0044, "NGRPEPI620", 0, 4 } ) //"Grupo de EPIs"
+		EndIf
+
+		If ExistBlock( "MDTA6206" )
+			aAdItens := ExecBlock( "MDTA6206", .F., .F., { aRotina } )
+
+			If ValType( aAdItens ) == "A"
+				aRotina := aClone( aAdItens )
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT620FOR
+Monta um browse dos credenciados do cliente.
+
+@type    function
+@author  Andre Perez Alvarez
+@since   04/10/2007
+@sample  MDT620FOR()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT620FOR()
+
+	Local aArea	    := GetArea()
+	Local oldROTINA := aCLONE( aROTINA )
+	Local oldCad    := cCadastro
+
+	cCliMdtPs := SA1->A1_COD + SA1->A1_LOJA
+
+	aRotina := { { STR0001, "AxPesqui", 0, 1 },;  //"Pesquisar"
+	{ STR0002, "NGCAD01", 0, 2 },;   //"Visualizar"
+	{ STR0003, "NGEPIS620", 0, 4 } } //"EPIs"
+
+	If NGCADICBASE( "TN3_GENERI", "D", "TN3", .F. )
+		aAdd( aRotina, { STR0044, "NGRPEPI620", 0, 4 } ) //"Grupo de EPIs"
+	EndIf
+
+
+	// Define o cabecalho da tela de atualizacoes
+
+	Private cCadastro := OemtoAnsi( STR0004 ) //"Fornecador de EPIs"
+	Private aCHKDEL   := {}
+	Private bNGGRAVA
+
+
+	// Endereca a funcao de BROWSE
+
+	dbSelectArea( "TOU" )
+	Set Filter To TOU->(TOU_CLIENT+TOU_LOJAC) == cCliMdtps
+	dbSetOrder( 2 ) //TOU_FILIAL+TOU_CLIENT+TOU_LOJAC+TOU_FORNEC+TOU_LOJAF
+	mBrowse( 6, 1, 22, 75, "TOU" )
+
+	dbSelectArea( "TOU" )
+	Set Filter To
+
+	aROTINA := aCLONE( oldROTINA )
+	RestArea( aArea )
+	cCadastro := oldCad
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT620EPWH
+Valida se ja existe Epi entregue, se sim, nao permite alterar
+@type    function
+@author  Denis Hyroshi de Souza
+@since   07/10/2010
+@sample  MDT620EPWH()
+
+@return  Lógico, Falso se já existir um EPI entregue
+/*/
+//-------------------------------------------------------------------
+Function MDT620EPWH()
+
+	Local nPOS		:= aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_CODEPI" } )
+	Local nPOS1		:= aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_NUMCAP"} )
+	Local nPOS2		:= aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_GENERI"} )
+	Local nScan		:= 0
+	Local cReadVar	:= ReadVar()
+	Local lDtVenc   := ( "TN3_DTVENC" $ cReadVar )
+	Local lCbxGen	:= ( "TN3_GENERI" $ cReadVar )
+	Local lRet		:=.T.
+	Local aArea		:= GetArea()
+	Local i
+	Local nIndTNF
+	Local cSeekTNF
+
+	If !lCbxGen .And. !lDtVenc .And. ExistBlock( "MDTA6202" ) //Ponto de Entrada para alteração de Numero do CA
+		lRet := ExecBlock( "MDTA6202", .F., .F. )
+	Else
+		If !lCbxGen .And. NGCADICBASE( "TN3_GENERI", "D", "TN3", .F. )
+			If aCols[n][nPOS2] == '2'
+				lRet:= .F.
+			EndIf
+		EndIf
+		If !lDtVenc .And. !Empty( aCols[n, nPOS] ) .And. lRet
+			If lSigaMdtps
+				nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+				nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+				cSeekTNF := xFilial( "TNF" )+TOU->TOU_FORNEC+TOU->TOU_LOJAF+cCliMdtps
+			Else
+				nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+				cSeekTNF := xFilial( "TNF" )+SA2->A2_COD+SA2->A2_LOJA
+			EndIf
+			dbSelectArea( "TNF" )
+			dbSetOrder( nIndTNF )
+			If dbSeek( cSeekTNF+aCols[n, nPOS]+aCols[n, nPOS1] )
+				nScan := 0
+				If Empty( aCols[n, nPOS1] ) .And. ( nScan := aScan( aTrocados, {|x| x[1] == aCols[n, nPOS]+aCols[n, nPOS1]} ) ) == 0
+					If MsgYesNo( STR0026+;//"Este Epi já foi entregue a funcionários com o C.A. em branco."
+						STR0027, STR0016 )//" Deseja atualizar o C.A. nos registros lançados, com o que for preenchido em seguida?"##"ATENÇÃO"
+						aAdd( aTrocados, {aCols[n, nPOS]+aCols[n, nPOS1], n} )
+						RestArea( aArea )
+						lRet:= .T.
+					Else
+						RestArea( aArea )
+						lRet:= .F.
+					EndIf
+				ElseIf nScan <= 0
+					MsgStop( STR0025, STR0016 ) //"Este Epi não poderá ser alterado, pois já foi entregue para algum funcionário."#"ATENÇÃO"
+					RestArea( aArea )
+					lRet:= .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} A620SOMSEG
+Soma/Subtrai segundos de uma hora (99:99:99)
+@type    function
+@author  Roger Rodrigues
+@since   15/12/2010
+@sample  A620SOMSEG( '10:20', 125 )
+
+@param   cHora, Caractere, param_descr
+@param   nSegs, Numérico, param_descr
+
+@return  cHora, Caractere, Hora resoltante da soma/subtração
+/*/
+//-------------------------------------------------------------------
+Function A620SOMSEG( cHora, nSegs )
+
+	Local nHoras	:= Val( Substr( cHora, 1, 2 ) )
+	Local nMins		:= Val( Substr( cHora, 4, 2 ) )
+	Local nSegundo	:= IIf( Len( cHora ) < 6, 0, Val( Substr( cHora, 7, 2 ) ) )
+
+	nSegundo := nSegundo + nSegs
+
+	//Trata segundos
+	While nSegundo > 59
+		nSegundo -= 60
+		nMins++
+	End
+	While nSegundo < 0
+		nSegundo += 60
+		nMins--
+	End
+	//Trata Minutos
+	While nMins > 59
+		nMins -= 60
+		nHoras++
+	End
+	While nMins < 0
+		nMins += 60
+		nHoras--
+	End
+	//Trata Horas
+	While nHoras > 23
+		nHoras-= 24
+	End
+	While nHoras < 0
+		nHoras+= 24
+	End
+	cHora := StrZero( nHoras, 2 ) + ":" + StrZero( nMins, 2 ) + ":" + StrZero( nSegundo, 2 )
+
+Return cHora
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTP620EPI
+Realiza pesquisa pelo EPI
+
+@type    function
+@author  Hugo Rizzo Pereira
+@since   05/01/11
+@sample  MDTP620EPI(1)
+@param   nOpt, Numérico, Se deve procurar o póximo EPI
+
+@return  Nil, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function MDTP620EPI( nOpt )
+
+	Local nX
+	Local nStart  := 1
+	Local nLinha  := 0
+	Local lChange := .F.
+	Local nCOD    := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_CODEPI" } )
+	Local nDSC    := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_DESC" } )
+	Local nNCA    := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_NUMCAP" } )
+	Local nDTV    := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_DTVENC" } )
+
+	If !lFlag .And. n == 1 //Se for a primeira busca e estiver setado na primeira linha da get
+		cMemPesq := AllTrim( cValPesq )
+		lFlag 	:= .T.
+	EndIf
+
+	If nOpt == 2  //Localizar proximo
+
+		If cMemPesq != AllTrim( cValPesq ) //Se variavel de pesquisa foi alterada
+			cMemPesq := AllTrim( cValPesq )
+			lChange  := .T.
+		EndIf
+
+		If n > 1 //Se esta setada em uma linha da getdados, que nao a primeira
+			If !lChange //Se houve nao houve alteracao na variavel de pesquisa
+				nStart := n + 1
+			Else
+				nStart := 1
+			EndIf
+		ElseIf n == 1 .And. lPrimeiro
+			nStart := 2
+			lPrimeiro := .F.
+		EndIf
+
+		If cFind == STR0033  //"Codigo"
+
+			nLinha := aScan( aCols, { |x| AllTrim( cValPesq ) $ AllTrim( x[nCOD] ) }, nStart )
+
+			If nLinha >= nStart
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0034, STR0016 )  //"Não foram localizados EPI's com este codigo."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0035  //"Descricao"
+
+			nLinha := aScan( aCols, { |x| AllTrim( cValPesq ) $ AllTrim( x[nDSC] ) }, nStart )
+
+			If nLinha >= nStart
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0036, STR0016 )  //"Não foram localizados EPI's com esta descricao."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0037  //"Num. C.A."
+
+			If !Empty( AllTrim( cValPesq ) )
+				nLinha := aScan( aCols, { |x| AllTrim( cValPesq ) $ AllTrim( x[nNCA] ) }, nStart )
+			Else
+				nLinha := aScan( aCols, { |x| Empty( AllTrim( x[nNCA] ) ) }, nStart )
+			EndIf
+
+			If nLinha >= nStart
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0038, STR0016 )  //"Não foram localizados EPI's com este certificado de aprovacao."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0039  //"Dt. Vencto C.A."
+
+			nLinha := aScan( aCols, { |x| x[nDTV] == CTOD( cValPesq )}, nStart )
+
+			If nLinha >= nStart
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0040, STR0016 )  //"Não foram localizados EPI's com esta data de vencimento para o certificado de aprovacao."//"ATENÇÃO"
+			EndIf
+
+		EndIf
+
+	Else
+
+		If n > 1 //Se esta setada em uma linha da get dados, que nao a primeira
+			nStart := n - 1
+		ElseIf n == 1 .And. lPrimeiro
+			nStart := 1
+			lPrimeiro := .F.
+		EndIf
+
+		If cFind == STR0033  //"Código"
+
+			nLinha := 0
+			For nX := nStart To 1 Step -1
+				If AllTrim( cValPesq ) $ AllTrim( aCols[nX][nCOD] )
+					nLinha := nX
+					Exit
+				EndIf
+			Next nX
+
+			If nLinha > 0
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0034, STR0016 )  //"Não foram localizados EPI's com este codigo."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0035  //"Descricao"
+
+			nLinha := 0
+			For nX := nStart To 1 Step -1
+				If AllTrim( cValPesq ) $ AllTrim( aCols[nX][nDSC] )
+					nLinha := nX
+					Exit
+				EndIf
+			Next nX
+
+			If nLinha > 0
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0036, STR0016 )  //"Não foram localizados EPI's com esta descricao."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0037  //"Num. C.A."
+
+			nLinha := 0
+			For nX := nStart To 1 Step -1
+				If !Empty( AllTrim( cValPesq ) )
+					If AllTrim( cValPesq ) $ AllTrim( aCols[nX][nNCA] )
+						nLinha := nX
+						Exit
+					EndIf
+				Else
+					If Empty( aCols[nX][nNCA] )
+						nLinha := nX
+						Exit
+					EndIf
+				EndIf
+			Next nX
+
+			If nLinha > 0
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0038, STR0016 )  //"Não foram localizados EPI's com este Certificado de Aprovacao."//"ATENÇÃO"
+			EndIf
+
+		ElseIf cFind == STR0039  //"Dt. Vencto C.A."
+
+			nLinha := 0
+			For nX := nStart To 1 Step -1
+				If aCols[nX][nDTV] == CTOD( cValPesq )
+					nLinha := nX
+					Exit
+				EndIf
+			Next nX
+
+			If nLinha > 0
+				oGet:oBrowse:nAt := nLinha
+				oGet:oBrowse:Refresh()
+				oGet:oBrowse:SetFocus()
+				If n == 1
+					lPrimeiro := .T.
+				EndIf
+			Else
+				Msgstop( STR0040, STR0016 )  //"Não foram localizados EPI's com esta data de vencimento para o Certificado de Aprovacao."//"ATENÇÃO"
+			EndIf
+		EndIf
+
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT620VEP
+Define o tamanho da variavel de pesquisa
+
+@type    function
+@author  Hugo Rizzo Pereira
+@since   05/01/2011
+@sample  MDT620VEP()
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT620VEP()
+
+	If cFind == STR0033  //"Código"
+		cValPesq := Space( 30 )
+		oValPesq:Picture := "@!"
+	ElseIf cFind == STR0035  //"Descricao"
+		cValPesq := Space( 30 )
+		oValPesq:Picture := "@!"
+	ElseIf cFind == STR0037  //"Num. C.A."
+		cValPesq := Space( 12 )
+		oValPesq:Picture := "@!"
+	ElseIf cFind == STR0039  //"Dt. Vencto C.A."
+		cValPesq := Space( 8 )
+		oValPesq:Picture := "99/99/99"
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG620VEPIF
+Função de validação do campo TL0_EPIFIL.
+
+@type    function
+@author  Cezar Augusto Padilha
+@since   05/04/2013,
+@sample  NG620VEPIF( '0111' )
+@param   cCodEPI, Caractere, Código do EPI
+@return  Lógico, Verdadeiro se o valor do campo for válido
+/*/
+//---------------------------------------------------------------------
+Function NG620VEPIF( cCodEPI )
+
+	Local lRet    := .T.
+	Local cTipEpi := SuperGetMV( "MV_MDTPEPI", .F., " " )
+	Local lTemX5  := !Empty( cTipEpi )
+	Local nPosCd  := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_EPIFIL" } )
+	Local nPosNm  := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DESCRI" } )
+	Local nPosDF  := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTFIM" } )
+	Local nPosDI  := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTINIC" } )
+	Local nX      := 0
+
+	If !Empty( cCodEPI )
+		If cEpiRel != cCodEPI
+			If MDTProEpi( cCodEPI, cTipEPI, lTemX5 )
+				lRet := .T.
+			Else
+				lRet := .F.
+			EndIf
+		Else
+			ShowHelpDlg( STR0016, {STR0045}, 1,; //"ATENÇÃO" ### "O EPI informado é o mesmo EPI genérico."
+			{STR0046+cEpiRel }, 1 ) //"Informe um EPI filho diferente para ser relacionado ao EPI: "
+			lRet := .F.
+		EndIf
+		For nX := 1 To Len( aCols ) // Verifica se já foi relacionado ao fornec. e EPI pai, para não ocorrer chave duplicada.
+			If !aCols[nX][Len( aCols[nX] )]
+				If cCodEPI == aCols[nX][nPosCd]
+					If !Empty( aCols[nX][nPosDF] )
+						aCols[oBrw1:nAt][nPosDI] := aCols[nX][nPosDF]
+					Else
+						Help( " ", 1, "JAEXISTINF" )
+						lRet := .F.
+					EndIf
+				EndIf
+			EndIf
+		Next
+	EndIf
+	If lRet .And. nPosNm > 0
+		aCols[oBrw1:nAt][nPosNm] := NGSEEK( 'SB1', cCodEPI, 1, 'B1_DESC' )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG620TN3G
+Função de validação do campo "TN3_GENERI".
+
+@type   function
+@source MDTA620.prx
+@author Cezar Augusto Padilha
+@since  05/04/2013
+@sample NG620TN3G()
+
+@return Lógico, Indica se todas validações estão corretas.
+/*/
+//---------------------------------------------------------------------
+Function NG620TN3G()
+
+	Local cFornec
+	Local cLoja
+	Local cQuery    := ""
+	Local cAliasTN3 := GetNextAlias()
+	Local nPosNCA   := 0
+	Local nPosDtV   := 0
+	Local nPosEPI   := 0
+	Local lRet      := .T.
+	Local aAreaTN3  := GetArea()
+
+	If IsInCallStack( "MDTA620" )
+		nPosNCA := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_NUMCAP" } )
+		nPosDtV := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_DTVENC" } )
+		nPosEPI := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_CODEPI" } )
+		cFornec := SA2->A2_COD
+		cLoja   := SA2->A2_LOJA
+	EndIf
+
+	If M->TN3_GENERI == '2'	//É Genérico
+		//Se epi for genérico irá limpar o campo do Num CA e Data CA
+		//pois deverá informar no EPI filho
+		If nPosNCA > 0
+			aCols[n][nPosNCA] := Space( Len( aCols[n][nPosNCA] ) )
+			aCols[n][nPosDtV] := CTOD( "" )
+		EndIf
+		lEpiGen := .T.
+		lRet := .T.
+	Else //Não é Genérico
+		If nPosEPI > 0
+			dbSelectArea( "TL0" )
+			dbSetOrder( 1 )//TL0_FILIAL+TL0_EPIGEN+TL0_FORNEC+TL0_LOJA+TL0_EPIFIL
+			If dbSeek( xFilial( "TL0" ) + aCols[n][nPosEPI] + cFornec + cLoja )
+				ShowHelpDlg( STR0068, { STR0069 }, 1, { STR0070 }, 1 ) //"Atenção"##"Este EPI Genérico, já possui filhos cadastrados."##"Você deverá primeiro excluir os EPIs filhos."
+				lRet := .F.
+			EndIf
+		EndIf
+		lEpiGen := .F.
+	EndIf
+
+	If nPosEPI > 0 .And. lRet
+		//Verifica se o Epi já existe como Genérico
+		cQuery := "SELECT COUNT(*) AS CONT FROM " + RetSqlName( "TN3" ) +" TN3 WHERE "
+		cQuery += "TN3.TN3_FILIAL = " + ValToSql( xFilial( "TN3" ) ) + " "
+		cQuery += "AND TN3.TN3_CODEPI = " + ValToSql( aCols[n, nPosEPI] )
+		If M->TN3_GENERI == '1' //Verifica se epi não é genérico
+			cQuery += " AND TN3.TN3_GENERI = '2' "
+		Else //Caso seja genérico
+			cQuery += " AND TN3.TN3_GENERI = '1' "
+		EndIf
+		cQuery += " AND TN3.D_E_L_E_T_ <> '*' "
+
+		cQuery := ChangeQuery( cQuery )
+		MPSysOpenQuery( cQuery, cAliasTN3 )
+
+		If ( cAliasTN3 )->CONT > 0
+			If M->TN3_GENERI == '1' //Verifica se epi não é genérico
+				ShowHelpDlg( STR0068, { STR0073}, 1, { STR0074 }, 1 ) //Atenção ##"Este EPI está cadastrado como genérico."##"Favor informa-lo como genérico ou informar outro EPI."
+			Else
+				ShowHelpDlg( STR0068, { STR0075 }, 1, { STR0076 }, 1 ) //Atenção ##"Este EPI está cadastrado como não genérico."##"Favor informa-lo como não genérico ou informar outro EPI."
+			EndIf
+			lRet := .F.
+		EndIf
+		( cAliasTN3 )->( dbCloseArea() )
+	EndIf
+
+	RestArea( aAreaTN3 )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGRPEPI620
+Função que monta tela para relacionar EPIs filhos a um EPI pai.
+
+@type   function
+@author Cezar Augusto Padilha
+@since  05/04/2013
+@sample NG620TN3G( 'XXX', 3, 1)
+
+@param  cAlias, Caractere, Alias da Tabela ulizada
+@param  nReg, Numérico, Número do registro
+@param  nOpcx, Numérico, Opção selecionada do menu
+
+@return Lógico, Sempre verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function NGRPEPI620( cAlias, nReg, nOpcx )
+
+	Local cForn     := SA2->A2_COD
+	Local cLoja     := SA2->A2_LOJA
+	Local aEpisG    := {} //Guarda informações do EPIs genéricos relacionados ao fornecedor
+	Local aNoFields := {} //Indica campos que não devem aparecer na getdados
+	Local nOpca     := 0 //Retorno da tela de selecão de EPIs filhos
+	Local lOldIncl  := Inclui
+	Local k         := 0
+	Local cEpiFil   := ''
+	Local cNumCap   := ''
+	Local nIndTL0   := 0
+	Local nIndTN3
+	Local nX
+	Local j
+	Local cSeekTN3
+	Local cSeekTL0
+	Local cCondTN3
+
+	Private aDadoTL0 := {} // Informações da getdados
+	Private oBrw1          //objeto MsNewGetDados
+	Private cEpiRel  := '' //Indica para qual EPI genérico os filhos serão relacionados
+	Private aTrocs   := {} // Array alimentado na função NG620EPIWN, utilizado para atualizar campo TNF_NUMCAP
+	Private cTimeTL0 := "99:99:99"
+	Private cEpieTL0 := Space( 15 )
+
+	cAlias := "TN3"
+
+	nIndTN3 := 1 //TN3_FILIAL+TN3_FORNEC+TN3_LOJA+TN3_CODEPI+TN3_NUMCAP
+	cSeekTN3 := xFilial( "TN3" )+SA2->A2_COD+SA2->A2_LOJA
+	cCondTN3 := "TN3->TN3_FILIAL+TN3->TN3_FORNEC+TN3->TN3_LOJA"
+	nIndTL0 := 1 //TL0_FILIAL+TL0_EPIGEN+TL0_FORNEC+TL0_LOJA+TL0_EPIFIL
+
+	dbSelectArea( "TN3" )
+	dbSetOrder( nIndTN3 )
+	dbSeek( cSeekTN3 )
+	While TN3->(!Eof()) .And. cSeekTN3 == &cCondTN3
+		If TN3->TN3_GENERI == '2'
+			aAdd( aEpisG, {TN3->TN3_CODEPI, NGSEEK( 'SB1', TN3->TN3_CODEPI, 1, 'SB1->B1_DESC' )} )
+		EndIf
+		dbSelectArea( "TN3" )
+		dbSkip()
+	End
+	If Len( aEpisG ) == 0
+		MsgAlert( STR0048 ) //"Não há EPI genérico relacionado ao fornecedor."
+		Return .T.
+	EndIf
+	If Len( aEpisG ) > 1
+		cEpiRel := f620SELEPI( aEpisG )
+	ElseIf Len( aEpisG ) == 1
+		cEpiRel := aEpisG[1, 1]
+	EndIf
+
+	cSeekTL0 := xFilial( "TL0" )+cEpiRel+SA2->A2_COD+SA2->A2_LOJA
+
+	//Filtra informações
+	aNoFields := {'TL0_EPIGEN', 'TL0_FORNEC', 'TL0_LOJA'}
+	aAlterCol := {'TL0_EPIFIL', 'TL0_NUMCAP', 'TL0_DTVENC', 'TL0_DTINIC', 'TL0_DTFIM'}
+	cKEY := cEpiRel+SA2->A2_COD+SA2->A2_LOJA
+	cGET := "TL0->TL0_FILIAL == '"+xFilial( "TL0" )+"' .And. TL0->TL0_EPIGEN == '"+cEpiRel+"' .And. TL0->TL0_FORNEC+TL0->TL0_LOJA == '"+SA2->A2_COD+SA2->A2_LOJA+"'"
+	aCols := {}
+	aHeader := {}
+	FillGetDados( nOpcx, "TL0", 1, cKey, {|| }, {|| .T.}, aNoFields, , , , {|| NGMontaAcols( "TL0", cKEY, cGET )}, .T. )
+
+	Inclui := .T. //Altera variável global
+
+	// Tela para relacionar os EPIs filhos
+	Define Font oFontB Name "Arial" Size 07, 17 Bold
+	Define Font oFontN Name "Arial" Size 07, 17
+
+	Define msDialog oDlgP Title STR0049 From 000, 000 To 450, 800 Pixel //"Seleção do EPI genérico"
+
+	oPnlAll := TPanel():New( 00, 100, , oDlgP, , , , , , 800, 450, .F., .F. )
+	oPnlAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlTopo := TPanel():New( 00, 00, , oPnlAll, , , , , , 800, 30, .F., .F. )
+	oPnlTopo:Align := CONTROL_ALIGN_TOP
+
+	oPnlGet := TPanel():New( 00, 100, , oPnlAll, , , , , , 800, 420, .F., .F. )
+	oPnlGet:Align := CONTROL_ALIGN_ALLCLIENT
+
+	@ 03, 008 Say OemToAnsi( STR0050 ) Font oFontN Size 300, 10 Of oPnlTopo Pixel //"EPI genérico:"
+	@ 03, 051 Say OemToAnsi( AllTrim( cEpiRel ) ) Font oFontB Size 300, 10 Of oPnlTopo Pixel
+	@ 14, 008 Say OemToAnsi( STR0005+":" ) Font oFontN Size 300, 10 Of oPnlTopo Pixel //"Fornecedor"
+	@ 14, 048 Say OemToAnsi( AllTrim( SA2->A2_COD ) ) Font oFontB Size 300, 10 Of oPnlTopo Pixel
+	@ 14, 200 Say OemToAnsi( STR0007+":" ) Font oFontN Size 300, 10 Of oPnlTopo Pixel //"Loja"
+	@ 14, 218 Say OemToAnsi( AllTrim( SA2->A2_LOJA ) ) Font oFontB Size 300, 10 Of oPnlTopo Pixel
+
+	oBrw1 := MsNewGetDados():New( 25, 05, 212, 398, GD_INSERT+GD_UPDATE+GD_DELETE, 'MNT620TL0(1)', 'MNT620TL0(2)', , , , 2000, 'AllwaysTrue()',;
+		'', 'MNT620TL0(3)', oPnlGet, aHeader, aCols )
+	oBrw1:oBrowse:Refresh()
+	oBrw1:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+	Activate MsDialog oDlgP On Init EnchoiceBar( oDlgP,{|| IIf( MNT620TL0( 2 ), ( nOpca:=1, oDlgP:End() ), )}, {||nOpca:=0, oDlgP:End()} ) Center
+
+	If nOpca == 1
+
+		nCODEPI := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_EPIFIL"} )
+		nNUMCAP := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_NUMCAP"} )
+		nMsblql := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_MSBLQL"} )
+		nDtVali := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTVALI"} )
+		For nX := 1 To Len( aDadoTL0 )
+			cEpiFil := aDadoTL0[nX][nCODEPI]
+			cNumCap := aDadoTL0[nX][nNUMCAP]
+			If !aDadoTL0[nX][Len( aDadoTL0[nX] )]
+				dbSelectArea( "TL0" )
+				dbSetOrder( nIndTL0 )
+				If dbSeek( cSeekTL0+cEpiFil+cNumCap )
+					RecLock( "TL0", .F. )
+				Else
+					RecLock( "TL0", .T. )
+				EndIf
+				TL0->TL0_FILIAL := xFilial( "TL0" )
+				TL0->TL0_EPIGEN := cEpiRel
+				TL0->TL0_FORNEC := SA2->A2_COD
+				TL0->TL0_LOJA   := SA2->A2_LOJA
+				TL0->TL0_EPIFIL := cEpiFil
+				TL0->TL0_NUMCAP := cNumCap
+				TL0->TL0_DTVENC := aDadoTL0[nX][aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTVENC" } )]
+				TL0->TL0_DTINIC := aDadoTL0[nX][aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTINIC" } )]
+				TL0->TL0_DTFIM  := aDadoTL0[nX][aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTFIM" } )]
+				If TL0->( FieldPos( "TL0_DTVALI" ) ) > 0 .And. ValType( nDtVali ) == "N" .And. nDtVali > 0
+					TL0->TL0_DTVALI := aDadoTL0[nX][nDtVali]
+				EndIf
+				If TL0->( FieldPos( "TL0_MSBLQL" ) ) > 0 .And. ValType( nMsblql ) == "N" .And. nMsblql > 0
+					TL0->TL0_MSBLQL := aDadoTL0[nX][nMsblql]
+				EndIf
+				MsUnLock( "TL0" )
+				//Atualiza TNF - Entrega ao Funcionario
+				If ( nScan := aScan( aTrocs, {|x| x[1] == aDadoTL0[nX, nCODEPI]+cNumCAP } ) ) > 0 .And. aTrocs[nScan, 2] == i
+					If lSigaMdtps
+						nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+						nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+						cSeekTNF := xFilial( "TNF" )+TOU->TOU_FORNEC+TOU->TOU_LOJAF+cCliMdtps
+					Else
+						nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+						cSeekTNF := xFilial( "TNF" )+SA2->A2_COD+SA2->A2_LOJA
+					EndIf
+					dbSelectArea( "TNF" )
+					dbSetOrder( nIndTNF )
+					While dbSeek( cSeekTNF+aTrocs[nScan, 1] ) .And. !EoF() .And.  Alltrim( TNF->TNF_NUMCAP ) != Alltrim( TL0->TL0_NUMCAP )
+						RecLock( "TNF", .F. )
+						TNF->TNF_NUMCAP := TN3->TN3_NUMCAP
+						MsUnlock( "TNF" )
+
+						dbSelectArea( "TNF" )
+						dbSkip()
+					End
+				EndIf
+			Else
+				lDeleta := .T.
+				//Verifica a existencia de outro igual na GetDados
+				For j := 1 To Len( aCols )
+					If cEpiFil + cNumCap == aDadoTL0[j][nCODEPI] + aDadoTL0[j][nNUMCAP] .And. j != nX .And. !aDadoTL0[j][Len( aDadoTL0[j] )]
+						lDeleta := .F.
+						Exit
+					EndIf
+				Next j
+				If lDeleta
+					dbSelectArea( "TL0" )
+					dbSetOrder( nIndTL0 )
+					If dbSeek( xFilial( "TL0" )+cKEY+cEpiFil+cNumCAP )
+						RecLock( "TL0", .F. )
+						dbDelete()
+						MsUnlock( "TL0" )
+					EndIf
+				EndIf
+			EndIf
+		Next
+
+		//Verifica se todas as linhas gravas existem no aCols
+		dbSelectArea( "TL0" )
+		dbSetOrder( 1 )
+		dbSeek( cSeekTL0 )
+		While TL0->( !Eof() ) .And. cSeekTL0 == TL0->TL0_FILIAL+TL0->TL0_EPIGEN+TL0_FORNEC+TL0_LOJA//Percorre toda a tabela de EPI's genérico daquele EPI Pai
+			//Verifica se o EPI filho gravo existe no aCols e se seu status está ativo
+			If aScan( aDadoTL0, { | x | x[ nCODEPI ] == TL0->TL0_EPIFIL .And. x[ nNUMCAP ] == TL0->TL0_NUMCAP .And. !x[ Len( x ) ] } ) == 0
+				RecLock( "TL0", .F. )
+				TL0->( dbDelete() )
+				TL0->( MsUnLock() )
+			EndIf
+			TL0->( dbSkip() )
+		End
+	EndIf
+
+	Inclui := lOldIncl
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f620SELEPI
+Função que monta tela de seleção de EPI genéricos relacionados ao
+fornecedor
+
+@type   function
+@author Cezar Augusto Padilha
+@since  06/04/2013
+@sample f620SELEPI( {} )
+@param  aOpsEpi, Array, Opções de EPI
+
+@return cEpi, Caractere, Código do EPI selecionado
+/*/
+//---------------------------------------------------------------------
+Static Function f620SELEPI( aOpsEpi )
+
+	Local cEpi := '' //Código do EPI para retorno
+	Local lRet := .F.
+
+	Define Font oFontN Name "Arial" Size 07, 17
+
+	Define msDialog oDlgP Title STR0049 From 000, 000 To 450, 660 Pixel //"Seleção do EPI genérico"
+
+	oPnlTopo := TPanel():New( 00, 00, , oDlgP, , , , , , 400, 30, .F., .F. )
+	oPnlTopo:Align := CONTROL_ALIGN_TOP
+
+	@ 07, 008 Say OemToAnsi( STR0051 ) Font oFontN Size 300, 10 Of oPnlTopo Pixel //"Indique para qual EPI genérico vinculado ao fornecedor que deseja relacionar os EPIs Filhos."
+
+	oPnlSel := TPanel():New( 15, 00, , oDlgP, , , , , , 400, 50, .F., .F. )
+	oPnlSel:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oBrwEPI := TCBrowse():New( 2, 5, 323, 157, , , , oPnlSel, , , , {||}, {||}, , , , , , , .F., , .T., , .F., , .T., .T. )
+	oBrwEPI:AddColumn( TCColumn():New( STR0052, {|| aOpsEpi[oBrwEPI:nAt, 1] }, , , , , , .F., .F., , , , , ) ) //"Epi"
+	oBrwEPI:AddColumn( TCColumn():New( STR0035, {|| aOpsEpi[oBrwEPI:nAt, 2] }, , , , , , .F., .F., , , , , ) ) //"Descrição"
+	oBrwEPI:SetArray( aOpsEpi ) // Seta vetor para a browse
+	oBrwEPI:bLine := {|| {aOpsEpi[oBrwEPI:nAt][1], aOpsEpi[oBrwEPI:nAt][2]}}
+	oBrwEPI:bChange := {|| (cEpi := aOpsEpi[oBrwEPI:nAt][1])}
+
+	oDlgP:lEscClose := .F. //Desabilita fechar a tela com o botão ESC
+	oBrnOk := tButton():New( 180, 307, STR0053, oPnlSel, {|| (lRet := .T., oDlgP:End())}, 20, 11, , , , .T. ) //"Ok"
+
+	Activate MsDialog oDlgP Valid lRet Centered
+
+Return cEpi
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT620TL0
+Função que valiada informações da GetDados da TL0.
+
+@type   function
+@author Cezar Augusto Padilha
+@since  10/04/2013
+@sample MNT620TL0( 2 )
+@param  nOpc, Numérico, Opção selecionada do menu
+
+@return Lógico, Verdadeiro se as informações forem válidas
+/*/
+//---------------------------------------------------------------------
+Function MNT620TL0( nOpc )
+
+	Local aArea   := GetArea()
+	Local nPosEpi := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_EPIFIL"} )
+	Local nPosDIn := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTINIC"} )
+	Local nPosCAP := aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_NUMCAP"} )
+	Local nCont   := 0 //Variavel para controle, para verificar numero do CA
+	Local lRet    := .T.
+	Local i
+	Local nPosAtu
+	Local aColsAtu
+	Local nIndTNB
+	Local cSeekTNB
+	Local nIndTOH
+	Local cSeekTOH
+	Local nIndTNF
+	Local cSeekTNF
+
+	If nOpc == 1 //LinOk
+		nPosAtu := oBrw1:nAt
+		If !aCols[nPosAtu][Len( aCols[nPosAtu] )] //Verifica se linha não foi excluida
+			If Empty( aCols[nPosAtu][nPosEpi] )
+				MsgAlert( STR0054 ) //"Não foi informado o código do EPI."
+				lRet := .F.
+			ElseIf Empty( aCols[nPosAtu][nPosCAP] )
+				MsgAlert( STR0055 ) //"Não foi informado o número do certificado de aprovação."
+				lRet := .F.
+			ElseIf Empty( DTOS( aCols[nPosAtu][nPosDIn] ) )
+				MsgAlert( STR0056 ) //"Não foi informada a data inicial do fornecimento do EPI para esse forncedor."
+				lRet := .F.
+			EndIf
+
+			If lRet
+				aColsAtu := aClone( oBrw1:aCols )
+				For i := 1 To Len( aColsAtu )
+					If i != nPosAtu
+						If aColsAtu[ nPosAtu, nPosEPI ] == aColsAtu[ i, nPosEPI ] .And. ;
+								aColsAtu[ nPosAtu, nPosCAP ] == aColsAtu[ i, nPosCAP ] .And. !aColsAtu[ i, Len( aColsAtu[ i ] ) ]
+							ShowHelpDlg( STR0068, { STR0071 }, 1, { STR0072 }, 1 )//"Atenção"##"EPI Filho já cadastrado."##"Informe outro código de EPI ou outro número de CA."
+							lRet := .F.
+							Exit
+						EndIf
+					EndIf
+				Next i
+			EndIf
+
+		EndIf
+	ElseIf nOpc == 2 //TudoOk
+		aDadoTL0 := aClone( oBrw1:aCols )
+		For i := 1 To Len( aDadoTL0 )
+			If !aDadoTL0[i][Len( aDadoTL0[i] )] //Se não estwiver excluida a linha
+				If Empty( aDadoTL0[i][nPosEpi] )
+					lRet := .F.
+				ElseIf Empty( aDadoTL0[i][nPosCAP] )
+					MsgAlert( STR0055 ) //"Não foi informado o número do certificado de aprovação."
+					lRet := .F.
+				ElseIf Empty( DToS( aDadoTL0[i][nPosDIn] ) )
+					lRet := .F.
+				EndIf
+				If lRet
+					aColsAtu := aClone( oBrw1:aCols )
+					For nPosAtu := 1 To Len( aColsAtu )
+						If !aColsAtu[i][Len( aColsAtu[i] )] .And. !aColsAtu[nPosAtu][Len( aColsAtu[nPosAtu] )] .And. i != nPosAtu
+							If aColsAtu[ nPosAtu, nPosEPI ] == aColsAtu[ i, nPosEPI ] .And. ;
+									aColsAtu[ nPosAtu, nPosCAP ] == aColsAtu[ i, nPosCAP ] .And. !aColsAtu[ i, Len( aColsAtu[ i ] ) ]
+								ShowHelpDlg( STR0068, { STR0071 }, 1, { STR0072 }, 1 )//"Atenção"##"EPI Filho já cadastrado."##"Informe outro código de EPI ou outro número de CA."
+								lRet := .F.
+								Exit
+							EndIf
+						EndIf
+					Next nPosAtu
+				EndIf
+
+			EndIf
+		Next
+	ElseIf nOpc == 3 //Exclusão de uma linha
+		If n > Len( aCols )
+			Return .T.
+		EndIf
+
+		If lSigaMdtps
+			nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+			nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+			cSeekTNF := xFilial( "TNF" ) + TOU->TOU_FORNEC + TOU->TOU_LOJAF + cCliMdtps
+		Else
+			nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+			cSeekTNF := xFilial( "TNF" ) + SA2->A2_COD + SA2->A2_LOJA
+		EndIf
+
+		dBSelectArea( "TNF" )
+		dbSetOrder( nIndTNF )
+		If dbSeek( cSeekTNF + aCols[oBrw1:nAt][nPosEpi] + aCols[oBrw1:nAt][nPosCAP] )
+			If ( cTimeTL0 != Time() .And. ( cTimeTL0 >= A620SOMSEG( Time(), + 1 ) .Or. cTimeTL0 <= A620SOMSEG( Time(), - 1 ) ) ) .Or.;
+					cEpieTL0 != aCols[oBrw1:nAt][nPosEpi] + aCols[oBrw1:nAt][nPosCAP]
+				MsgStop( STR0017 + ;  //"Este dado não poderá ser excluído, pois este Epi consta nos Epi's entregues "
+				STR0018, STR0016 )  //"de algum funcionário."  //"ATENÇÃO"
+			EndIf
+			RestArea( aArea )
+			cTimeTL0 := Time()
+			cEpieTL0 := aCols[oBrw1:nAt][nPosEpi]+aCols[oBrw1:nAt][nPosCAP]
+			Return .F.
+		EndIf
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG620DTTL0
+Função de validação da data fim do epi filho TL0_DTFIM.
+
+@type   function
+@author Cezar Augusto Padilha
+@since  10/04/2013
+@sample NG620DTTL0( 2 )
+@param  nOpc, Numérico, Opção selecionada do menu
+
+@return Lógico, Sempre verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function NG620DTTL0( nOpc )
+
+	Local dDtIni := aCols[oBrw1:nAt][aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTINIC"} )]
+	Local dDtFim := aCols[oBrw1:nAt][aScan( aHeader, { |x| Trim( Upper( x[2] ) ) == "TL0_DTFIM" } )]
+
+	If nOpc == 1
+		If !Empty( dDtFim ) .And. M->TL0_DTINIC > dDtFim
+			ShowHelpDlg( STR0016, {STR0057}, 1,; //"ATENÇÃO" ###"Data de inicio superior a data encerramento do fornecimento do EPI."
+			{STR0058}, 1 ) //"Informe uma data igual ou menor a data final."
+			Return .F.
+		EndIf
+	ElseIf nOpc == 2
+		If !Empty( M->TL0_DTFIM ) .And. M->TL0_DTFIM  < dDtIni
+			ShowHelpDlg( STR0016, { STR0059 }, 1,; //"ATENÇÃO" ### "Data de termino inferior a data de inicio do fornecimento do EPI."
+			{ STR0060 }, 1 )          //"Informe uma data igual ou maior a data inicial."
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG620EPIWN
+Função de validação o when dos campos da TL0.
+
+@type   function
+@author Cezar Augusto Padilha
+@since  11/04/2013
+@sample NG620EPIWN()
+
+@return Lógico, Verdadeiro se o campo puder ser modificado
+/*/
+//---------------------------------------------------------------------
+Function NG620EPIWN()
+
+	Local aArea := GetArea()
+	Local nPOS  := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TL0_EPIFIL" } )
+	Local nPOS1 := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TL0_NUMCAP" } )
+	Local nPOS2 := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TL0_DTFIM" } )
+	Local nScan := 0
+	Local i
+	Local nIndTNF
+	Local cSeekTNF
+	Local lRet := .T.
+
+	If !Empty( aCols[oBrw1:nAt][nPOS] ) .And. Empty( aCols[oBrw1:nAt][nPOS2] )
+
+		If lSigaMdtps
+			nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .T. )
+			nIndTNF := IIf( nIndTNF == 0, 11, nIndTNF )
+			cSeekTNF := xFilial( "TNF" ) + TOU->TOU_FORNEC + TOU->TOU_LOJAF + cCliMdtps
+		Else
+			nIndTNF := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+			cSeekTNF := xFilial( "TNF" ) + SA2->A2_COD + SA2->A2_LOJA
+		EndIf
+		dbSelectArea( "TNF" )
+		dbSetOrder( nIndTNF )
+		If dbSeek( cSeekTNF + aCols[oBrw1:nAt][nPOS] + aCols[oBrw1:nAt][nPOS1] )
+			nScan := 0
+			If Empty( aCols[oBrw1:nAt][nPOS1] ) .And. ( nScan := aScan( aTrocs, { |x| x[1] == aCols[oBrw1:nAt][nPOS]+aCols[oBrw1:nAt][nPOS1] } ) ) == 0
+				If MsgYesNo( STR0026 + ;       //"Este Epi já foi entregue a funcionários com o C.A. em branco."
+					STR0027, STR0016 ) //" Deseja atualizar o C.A. nos registros lançados, com o que for preenchido em seguida?"##"ATENÇÃO"
+					aAdd( aTrocs, { aCols[oBrw1:nAt][nPOS] + aCols[oBrw1:nAt][nPOS1], n } )
+					RestArea( aArea )
+					lRet := .T.
+				Else
+					RestArea( aArea )
+					lRet := .F.
+				EndIf
+			ElseIf nScan <= 0
+				If !(oBrw1:lEditLine) //Se for edição por linha não mostra a mensagem
+					MsgStop( STR0025, STR0016 ) //"Este Epi não poderá ser alterado, pois já foi entregue para algum funcionário."#"ATENÇÃO"
+				EndIf
+				RestArea( aArea )
+				lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf !Empty( aCols[oBrw1:nAt][nPOS2] )
+		MsgStop( STR0062 ) //"O Registro do EPI filho não pode ser alterado pois a data fim já foi informada."
+		RestArea( aArea )
+		lRet := .F.
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT620GEN
+Validação responsavel por verificar a existencia do Epi em outros
+fornecedor sendo cadastrado como Genérico ou Não.
+
+@type function
+@source MDTA620.prx
+@author Guilherme Freudenburg
+@since 11/11/2016
+@sample MDT620GEN()
+
+@return lRet,Lógico, Retorna verdadeiro quando função estiver correta
+/*/
+//---------------------------------------------------------------------
+Function MDT620GEN()
+
+	Local cAliasTN3 := GetNextAlias()
+	Local cQuery    := ""
+	Local lRet      := .T.
+	Local nPosGen   := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TN3_GENERI"} )
+	Local aAreaTN3  := GetArea()
+
+	If IsInCallStack( "MDTA620" ) .And. !Empty( aCols[ n, nPosGen ] )
+		//Verifica se o Epi já existe como Genérico
+		cQuery := "SELECT COUNT(*) AS CONT FROM " + RetSqlName( "TN3" ) +" TN3 WHERE "
+		cQuery += "TN3.TN3_FILIAL = " + ValToSql( xFilial( "TN3" ) ) + " "
+		cQuery += "AND TN3.TN3_CODEPI = " + ValToSql( M->TN3_CODEPI )
+		If aCols[ n, nPosGen ] == '1' //Verifica se epi não é genérico
+			cQuery += " AND TN3.TN3_GENERI = '2' "
+		Else //Caso seja genérico
+			cQuery += " AND TN3.TN3_GENERI = '1' "
+		EndIf
+		cQuery += " AND TN3.D_E_L_E_T_ <> '*' "
+
+		cQuery := ChangeQuery( cQuery )
+		MPSysOpenQuery( cQuery, cAliasTN3 )
+
+		If ( cAliasTN3 )->CONT > 0
+			If aCols[ n, nPosGen ] == '1' //Verifica se epi não é genérico
+				ShowHelpDlg( STR0068, { STR0073 }, 1, { STR0074 }, 1 ) //Atenção ## "Este EPI está cadastrado como genérico." ## "Favor informa-lo como genérico ou informar outro EPI."
+			Else
+				ShowHelpDlg( STR0068, { STR0075 }, 1, { STR0076 }, 1 ) //Atenção ## "Este EPI está cadastrado como não genérico." ##  "Favor informa-lo como não genérico ou informar outro EPI."
+			EndIf
+			lRet := .F.
+		EndIf
+		( cAliasTN3 )->( dbCloseArea() )
+	EndIf
+
+	RestArea( aAreaTN3 )
+
+Return lRet

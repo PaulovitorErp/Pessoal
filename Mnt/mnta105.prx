@@ -1,0 +1,1291 @@
+#INCLUDE "MNTA105.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 1 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA105
+Gera o cadastro de bens (ST9) a partir de um arquivo texto (*.txt)
+
+@Refeito 07/05/13
+@author Guilherme Benkendorf
+
+@Refeito 20/04/16
+@author Maicon André Pinheiro
+
+@author Thiago Olis Machado
+@since 09/07/01
+@version MP10,MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTA105()
+
+	Local aNGBeginPRM := NGBeginPRM( _nVERSAO )
+	Local lBarCode 	  := .F.
+	Local nHdlArq 	  := 0
+	Local oTmpTbl105
+	Local cArqVal 	  := Space( 20 )
+	Local cArquivo 	  := Space( 20 )
+	Local aCampos  	  := {}
+	Local aInd		  := { "LINHA" }
+	Local lImp1       := .F.
+
+	Private cNewAlias := GetNextAlias()
+	Private cCadastro := ""
+
+	Private _nCODBEM_  := 1
+	Private _nCODFAM_  := 2
+	Private _nNOME_    := 3
+	Private _nCUSTO_   := 4
+	Private _nCALEND_  := 5
+	Private _nTIPMOD_  := 6
+	Private _nCATBEM_  := 7
+	Private _nPADRAO_  := 8
+	Private _nESTRUT_  := 9
+	Private _nPRIORI_  := 10
+	Private _nINDPON_  := 11
+	Private _nSITMAN_  := 12
+	Private _nSITBEM_  := 13
+	Private _nFABRICA_ := 14
+	Private _nSTATUS_  := 15
+	Private _nCENTTRA_ := 16
+	Private _nFORNECE_ := 17
+	Private _nLOJA_    := 18
+	Private _nMODELO_  := 19
+	Private _nSERIE_   := 20
+	Private _nDTCOMPR_ := 21
+	Private _nPRGARAN_ := 22
+	Private _nUNGARAN_ := 23
+	Private _nDTGARAN_ := 24
+	Private _nCODESTO_ := 25
+	Private _nTEMCONT_ := 26
+	Private _nTPCONTA_ := 27
+	Private _nPOSCONT_ := 28
+	Private _nDTULTAC_ := 29
+	Private _nCONTACU_ := 30
+	Private _nVARDIA_  := 31
+	Private _nLIMICON_ := 32
+	Private _nPERACOM_ := 33
+	Private _nUNIACOM_ := 34
+	Private _nVALODES_ := 35
+	Private _nUNIDDES_ := 36
+	Private _nCLIENTE_ := 37
+	Private _nLOJACLI_ := 38
+	Private _nVALCPA_  := 39
+	Private _nCUSTOHO_ := 40
+	Private _nMOVIBEM_ := 41
+	Private _nDTINSTA_ := 42
+	Private _nCONTGAR_ := 43
+	Private _nITEMCTA_ := 44
+	Private _nVALVENA_ := 45
+	Private _nLUBRIFI_ := 46
+	Private _nPARTEDI_ := 47
+	Private _nBARCODE_ := 48
+
+	Private cArquivo1
+	Private nRegLi     := 0
+	Private nBemImp    := 0
+
+	Private lUsaPartD  := NGCADICBASE("T9_PARTEDI","A","ST9",.F.)
+
+	cType := "Texto     | *.TXT"
+
+	//Realiza a montagem do TRB
+	aAdd(aCampos,{"LINHA" ,"C",05,0})
+	aAdd(aCampos,{"DESCR" ,"C",77,0})
+	aAdd(aCampos,{"CONTEU","C",30,0})
+
+	If MsgYesNo(STR0089) //"Deseja importar o arquivo de Bens?"
+
+		lBarCode := MsgYesNo(STR0115) //"O campo T9_BARCODE foi adicionado no Layout Padrão (48) de importação. Deseja utilizar importação de bens com o novo layout?"
+
+		lImp1     := .T.
+		cArquivo1 := cGetFile(cType, OemToAnsi(STR0090),,,.T.,GETF_ONLYSERVER) //"Selecione o Arquivo (Bens)."
+		nPos      := Rat("\",cArquivo1)
+
+		If nPos > 0
+			cArqLoc := AllTrim(Subst(cArquivo1, nPos+1,25 ))
+		Else
+			cArqLoc := cArquivo1
+		EndIf
+
+		cPath := GETTEMPPATH()
+
+		If Right( AllTrim(cPath), 1 ) != "\"
+			cPath += "\"
+		EndIf
+
+		If File(cPath+cArqLoc)
+			Ferase(cPath+cArqLoc)
+		EndIf
+
+		If !CpyS2T(cArquivo1, cPath, .T.)
+			MsgStop(STR0091+cPath) //"Não foi possível copiar o arquivo para a pasta temporária: "
+			Return
+		EndIf
+
+		cArquivo1 := cPath+cArqLoc
+
+		If !file(cPath+cArqLoc)
+			MsgYesNo(STR0092 + cArquivo1 + STR0093 + Chr(13) + Chr(13) + ; //"Arquivo "##" não encontrado."
+			STR0094)                                              //"O processo sera cancelado."
+			Return
+		EndIf
+		
+	EndIf
+
+	oTmpTbl105 := FWTemporaryTable():New( cNewAlias, aCampos )
+	oTmpTbl105:AddIndex( "Ind01" , aInd )
+	oTmpTbl105:Create()
+
+	If lImp1
+		Processa({|lEnd|fTextProc(cArquivo, lBarCode)},STR0096) //"Aguarde...Importanto Bens"
+
+		fClose(nHdlArq)
+		dbSelectArea(cNewAlias)
+		dbGoTop()
+
+		If RecCount() > 0
+			If MsgYesNo(STR0098+Str(nRegLi,10)+Chr(13)    + ; //"Quantidade de registros lidos........... "
+			STR0099+Str(nBemImp,10)+CRLF+CRLF + ; //"Quantidade de registros importados.. "
+			STR0100,STR0101)                      //"Foram encontrados erros na importacao... Deseja Imprimir?"###"Fim da importacao"
+				fPrintInc( cArqVal )
+			EndIf
+		Else
+			MsgInfo(STR0098+Str(nRegLi,10)  + Chr(13) + ; //"Quantidade de registros lidos........... "
+			STR0099+Str(nBemImp,10) + Chr(13) + ; //"Quantidade de registros importados.. "
+			STR0101)                              //"Fim da importacao"
+		EndIf
+
+	EndIf
+
+	oTmpTbl105:Delete()
+	NGRETURNPRM(aNGBeginPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTextProc
+Faz a leitura do arquivo texto e grava no ST9
+
+@Refeito 07/05/13
+@author Guilherme Benkendorf
+
+@param cArquivo , caracter, path do arquivo
+@param lBarCode , lógico, Indica se utiliza o campo barcode (48)
+
+@author Elisangela Costa
+@since 08/02/02
+@version MP10,MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+Static Function fTextProc( cArquivo, lBarCode )
+
+	Local nCmps      := 0
+	Local lOk		 := .T.
+	Local aInfos	 := {}
+	Local aCmpST9	 := {}
+	Local nRecno     := 0
+
+	nHdlArq := fOpen(cArquivo1,0)
+	nTamArq := fSeek(nHdlArq,0,2)
+
+	FT_FUSE(cArquivo1)
+	FT_FGOTOP()
+
+	ProcRegua(Int(nTamArq/299))
+
+	While (!FT_FEOF())
+
+		cLinha := FT_FREADLN()
+
+		If Empty(cLinha)
+			Exit
+		EndIf
+
+		++nRecno
+		aInfos  := {}
+		aCmpST9 := {}
+
+		IncProc(STR0097+ AllTrim(Str(nRecno))) //"Importando Registro: "
+
+		nRegLi += 1
+
+		TEXLINHA  := SubStr(cLinha,1,400)
+		nPosIni   := 1
+		nPosAtu   := 1
+		cTexLinha := TEXLINHA
+		aPosicao  := {}
+
+		While At(Chr(9),cTexLinha) > 0
+
+			nPos      := At(CHR(9),cTexLinha)
+			aAdd(aPosicao,AllTrim(SubStr(cTexLinha,nPosIni,nPos-1)))
+			cTexLinha := SubStr(cTexLinha,nPos+Len(Chr(9)),400)
+
+		End
+		aAdd(aPosicao,AllTrim(cTexLinha))
+
+		lGrava  := .T.
+		lBanda  := .T.
+		lTipMod := .T.
+		lMedida := .T.
+		
+		fPrepCampos(@aCmpST9, lBarCode)
+		ProcRegua(nRegLi)
+		IncProc()
+
+		// Carrega Valores
+		If fSepCampo( @aInfos , aCmpST9 , aPosicao[1], lBarCode )
+
+			// GRAVA NO ST9
+			lOk := .T.
+
+			//Valida o registro para importacao
+			lOk := fValImport( nRegLi , @aInfos, aCmpST9, lBarCode)
+		Else
+			lOk := .F.
+		EndIf
+
+		If lOk
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			If !dbSeek( xFilial( "ST9" ) + aInfos[ _nCODBEM_ ] )
+				RecLock( "ST9" , .T. )
+				ST9->T9_FILIAL	:= xFilial( "ST9" )
+				For nCmps := 1 To Len( aCmpST9 )
+
+					aInfos[ nCmps ] := fConCampos(aInfos[ nCmps ],nCmps)
+					If nCmps == _nPARTEDI_
+						If lUsaPartD
+							&("ST9->" + aCmpST9[nCmps]) := aInfos[nCmps]
+						EndIf
+					Else
+						&("ST9->" + aCmpST9[nCmps]) := aInfos[nCmps]
+					EndIf
+
+				Next nCmps
+				ST9->T9_PROPRIE := "1"
+				ST9->( MsUnLock() )
+				nBemImp += 1
+			Else
+				fGravaTrb(nRegLi,STR0015,aInfos[_nCODBEM_])  //"Codigo do bem ja cadastrado"
+			EndIf
+		EndIf
+		FT_FSKIP()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrepCampos
+Carrega array aCampos, definindo os campos da ST9, que serão importados;
+
+@author Guilherme Benkendorf
+@since 07/05/13
+@param aCampos , array   , Array passado como referência.
+@param lBarCode , lógico, Indica se utiliza o campo barcode (48)
+
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPrepCampos( aCampos, lBarCode )
+
+	aAdd(aCampos,"T9_CODBEM"  ) //1Bem
+	aAdd(aCampos,"T9_CODFAMI" ) //2Familia
+	aAdd(aCampos,"T9_NOME"    ) //3Nome do Bem
+	aAdd(aCampos,"T9_CCUSTO"  ) //4Centro Custo
+	aAdd(aCampos,"T9_CALENDA" ) //5Turno
+	aAdd(aCampos,"T9_TIPMOD"  ) //6Tipo Modelo
+	aAdd(aCampos,"T9_CATBEM"  ) //7Categ. Bem
+	aAdd(aCampos,"T9_PADRAO"  ) //8Padrao Famil
+	aAdd(aCampos,"T9_ESTRUTU" ) //9Estrutura
+	aAdd(aCampos,"T9_PRIORID" ) //10Prioridade
+	aAdd(aCampos,"T9_INDPOND" ) //11Muda Pondera
+	aAdd(aCampos,"T9_SITMAN"  ) //12Situacao Manutencao
+	aAdd(aCampos,"T9_SITBEM"  ) //13Situacao Bem
+
+	//--inicio--SS 018218 //
+	aAdd(aCampos,"T9_FABRICA" ) //14Fabricante.
+	aAdd(aCampos,"T9_STATUS"  ) //15Status.
+	aAdd(aCampos,"T9_CENTRAB" ) //16Centro Trabalho.
+	aAdd(aCampos,"T9_FORNECE" ) //17Fornecedor.
+	aAdd(aCampos,"T9_LOJA"    ) //18Loja do Fornecedor.
+	aAdd(aCampos,"T9_MODELO"  ) //19Modelo do Bem.
+	aAdd(aCampos,"T9_SERIE"   ) //20Serie do Bem.
+	aAdd(aCampos,"T9_DTCOMPR" ) //21Data da Compra.
+	aAdd(aCampos,"T9_PRGARAN" ) //22Prazo de Garantia.
+	aAdd(aCampos,"T9_UNGARAN" ) //23Unidade de Garantia.
+	aAdd(aCampos,"T9_DTGARAN" ) //24Dt. Limite da Garantia.
+	aAdd(aCampos,"T9_CODESTO" ) //25Cód. Estoque.
+	aAdd(aCampos,"T9_TEMCONT" ) //26Possui contador.
+	aAdd(aCampos,"T9_TPCONTA" ) //27Tp. do Contador.
+	aAdd(aCampos,"T9_POSCONT" ) //28Pos. Atual do Contador.
+	aAdd(aCampos,"T9_DTULTAC" ) //29Dt. Ult. Acompanhamento.
+	aAdd(aCampos,"T9_CONTACU" ) //30Contador Acumulado.
+	aAdd(aCampos,"T9_VARDIA"  ) //31Variação Dia.
+	aAdd(aCampos,"T9_LIMICON" ) //32Limite do contador.
+	aAdd(aCampos,"T9_PERACOM" ) //33Período de Acompanhamento.
+	aAdd(aCampos,"T9_UNIACOM" ) //34Unidade do Período de Acompanhamento.
+	aAdd(aCampos,"T9_VALODES" ) //35Valor vida Útil.
+	aAdd(aCampos,"T9_UNIDDES" ) //36Unidade Vida Útil.
+	aAdd(aCampos,"T9_CLIENTE" ) //37Cliente do Bem.
+	aAdd(aCampos,"T9_LOJACLI" ) //38Loja Cliente.
+	aAdd(aCampos,"T9_VALCPA"  ) //39Valor Compra do Bem.
+	aAdd(aCampos,"T9_CUSTOHO" ) //40Custo Hora do Bem.
+	aAdd(aCampos,"T9_MOVIBEM" ) //41Indica bem Movimentado.
+	aAdd(aCampos,"T9_DTINSTA" ) //42Data Instalação.
+	aAdd(aCampos,"T9_CONTGAR" ) //43Contador da Garantia.
+	aAdd(aCampos,"T9_ITEMCTA" ) //44Item da conta contábil
+	aAdd(aCampos,"T9_VALVENA" ) //45Valor Venal do Bem
+	aAdd(aCampos,"T9_LUBRIFI" ) //46Aceita Lubrificação
+	aAdd(aCampos,"T9_PARTEDI" ) //47Indica parte diaria
+	//---fim----SS 018218 //
+	If lBarCode
+		aAdd(aCampos,"T9_BARCODE" ) //48Código de Barra
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravaTrb
+Carrega TRB com inconssistencias;
+
+@Refeito Guilherme Benkendorf
+@since 07/05/13
+
+@author
+@since
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fGravaTrb( nItem , cDes , nConteu )
+
+	//GRAVACAO NA TABELA TRB DOS REGISTROS ERRADOS ENCONTRADOS NO ARQUIVO TXT
+	dbSelectArea( cNewAlias )
+	( cNewAlias )->( DbAppend() )
+	( cNewAlias )->LINHA	:= Str( nItem , 5 )
+	( cNewAlias )->DESCR	:= cDes
+	( cNewAlias )->CONTEU	:= nConteu
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSepCampo
+Separa os campo da linha do arquivo *.TXT
+
+@Refeito 07/05/13
+@author Guilherme Benkendorf
+
+@param aInfos , array   , Array passado como referência.
+@param aCampos , array   , Array com os campos da importação.
+@param cTexLine , caracter, String com a linha no arquivo da importação.
+@param lBarCode , lógico, Indica se utiliza o campo barcode (48)
+
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fSepCampo( aInfos , aCampos , cTexLine, lBarCode )
+
+	Local nCampo	:= 0
+	Local nTotCampo := Len( aCampos )
+	Local lRet      := .T.
+
+	//Faz o Texto da Linha trocar todas as virgulas, por " , "
+	cTexLine := StrTran( cTexLine , "," , " , " )
+
+	//Realiza o tratamento no texto para que a cada existencia de ",", vire uma posicao de array
+	aInfos   := StrTokArr( cTexLine , "," )
+
+	//Verifica se há divergencia no tamanho dos campos
+	If Len(aInfos) < nTotCampo
+
+		If lBarCode
+			fGravaTrb(nRegLi,STR0113,aInfos[_nCODBEM_]) //"Registro não importado pois existem menos campos que o Layout Padrão(48)."
+			lRet := .F.
+		Else
+			fGravaTrb(nRegLi,STR0102,aInfos[_nCODBEM_]) //"Registro não importado pois existem menos campos que o Layout Padrão(47)."
+			lRet := .F.
+		EndIf
+
+	ElseIf Len(aInfos) > nTotCampo
+
+		If lBarCode
+			fGravaTrb(nRegLi,STR0114,aInfos[_nCODBEM_]) //"Registro não importado pois existem mais campos que o Layout Padrão(48)."
+			lRet := .F.
+		Else
+			fGravaTrb(nRegLi,STR0103,aInfos[_nCODBEM_]) //"Registro não importado pois existem mais campos que o Layout Padrão(47)."
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+	//Retira os Espacos e Coloca para Maiusculas as Posicoes para nao adicionar errado os campos
+	If lRet
+
+		For nCampo := 1 To Len( aInfos )
+			aInfos[nCampo] := AllTrim( Upper( aInfos[ nCampo ] ) )
+			If TAMSX3(aCampos[nCampo])[1] - Len(aInfos[nCampo]) < 0 .And. !fRetTipo(aInfos[nCampo],nCampo,"Data")
+				fGravaTrb(nRegLi,STR0109,aInfos[nCampo]) //"Registro com mais caracteres que o padrão."
+				lRet := .F.
+			Else
+				aInfos[nCampo] := aInfos[nCampo] + Space(Len(Space(TAMSX3(aCampos[nCampo])[1])) - Len(aInfos[nCampo]) )
+			EndIf
+		Next nCampo
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValImport
+Valida importancao do arquivo txt
+
+@param nlin - Valor de i no fTextProc()
+@param aInfos , array   , Array com os dados de cada linha do arquivo.
+@param aCmpST9 , array   , Array com os campos da importação.
+@param lBarCode , lógico, Indica se utiliza o campo barcode (48)
+
+@author Guilherme Benkendorf
+@since 06/05/2013
+@version MP10,MP11
+@Return lOk
+/*/
+//---------------------------------------------------------------------
+Static Function fValImport( nLin , aInfos, aCmpST9, lBarCode )
+
+	Local lOk    := .T.
+	Local lRet   := .F.
+	Local lFrota := NGVERUTFR()//Verifica se eh ambiente Frota
+	Local aArea  := GetArea()
+
+	//Verifica se os códigos obrigatório estão preenchidos.
+
+	//Verifica se o codigo do bem esta preenchido
+	If Empty(aInfos[_nCODBEM_])
+		fGravaTrb(nLin,STR0004) //"Bem nao informado"
+		lOk := .F.
+	EndIf
+
+	//Verifica se o codigo da familia esta preenchido
+	If Empty(aInfos[_nCODFAM_])
+		fGravaTrb(nLin,STR0005) //"Familia nao informada"
+		lOk := .F.
+	EndIf
+
+	//Verifica se o categoria do bem não esta preenchido
+	If Empty(aInfos[_nNOME_])
+		fGravaTrb(nLin,STR0027) //"Nome não informado"
+		lOk := .F.
+	EndIf
+
+	//Verifica se o codigo do centro de custo esta preenchido
+	If Empty(aInfos[_nCUSTO_])
+		fGravaTrb(nLin,STR0006) //"Centro de Custo nao Informado"
+		lOk := .F.
+	EndIf
+
+	//Verifica se o codigo do turno esta preenchido
+	If Empty(aInfos[_nCALEND_])
+		fGravaTrb(nLin,STR0007) //"Calendario nao Informado"
+		lOk := .F.
+	EndIf
+
+	//Caso for Frota verifica se o codigo do tipo modelo esta preenchido
+	If lFrota
+		If Empty(aInfos[_nTIPMOD_])
+			fGravaTrb(nLin,STR0016) //"Tipo Modelo não informado"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se os códigos são válidos.
+
+	//Verifica se o código da familia é válido
+	If !Empty(aInfos[_nCODFAM_])
+		If !NGSEEKCPO("ST6",aInfos[_nCODFAM_],1,,.F.)
+			fGravaTrb(nLin,STR0008,aInfos[_nCODFAM_])  //"Familia Invalida"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	// Verifica se o Centro de Custo é válido.
+	If !Empty(aInfos[_nCUSTO_])
+		If !NGSEEKCPO( "CTT", aInfos[_nCUSTO_], 1,,.F. )
+			fGravaTrb(nLin,STR0009,aInfos[_nCUSTO_]) //"Centro de Custo Invalido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o Calendário é válido.
+	If !Empty(aInfos[_nCALEND_])
+		If !NGSEEKCPO("SH7",aInfos[_nCALEND_],1,,.F.)
+			fGravaTrb(nLin,STR0010,aInfos[_nCALEND_]) //"Calendario Invalido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o tipo modelo é válido
+	If !Empty(aInfos[_nTIPMOD_])
+		If !NGSEEKCPO("TQR",aInfos[_nTIPMOD_],1,,.F.)
+			fGravaTrb(nLin,STR0017,aInfos[_nTIPMOD_]) //"Tipo Modelo Invalido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o fabricante é válido
+	If !Empty(aInfos[_nFABRICA_])
+		If !NGSEEKCPO("ST7",aInfos[_nFABRICA_],1,,.F.)
+			fGravaTrb(nLin,STR0024,aInfos[_nFABRICA_]) //"Fabricante Inválido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o categoria do bem é válido.
+	If !Empty(aInfos[_nCATBEM_])
+		If Empty(NGRETSX3BOX(aCmpST9[_nCATBEM_],aInfos[_nCATBEM_]))
+			fGravaTrb(nLin,STR0018,aInfos[_nCATBEM_])      //"Categoria do Bem Inválido"
+			lOk := .F.
+		Else
+			If aInfos[_nCATBEM_] $ "234"
+				fGravaTrb(nLin,STR0026,aInfos[_nCATBEM_])  //"Categoria inválida, só é permitido a importação de bens."
+				lOk := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	//Verifica se o padrão familia é válido
+	If !Empty(aInfos[_nPADRAO_])
+		If aInfos[_nPADRAO_] != "N"
+			fGravaTrb(nLin,STR0019,aInfos[_nPADRAO_]) //"Familia padrão Inválida"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se a estrutura é válida
+	If !Empty(aInfos[_nESTRUT_])
+		If aInfos[_nESTRUT_] != "N"
+			fGravaTrb(nLin,STR0020,aInfos[_nESTRUT_]) //"Estrutura Inválida"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o Status é válido
+	If !Empty(aInfos[_nSTATUS_])
+		If !NGSEEKCPO("TQY",aInfos[_nSTATUS_],1,,.F.)
+			fGravaTrb(nLin,STR0082,aInfos[_nSTATUS_]) //"Status não existe"
+			lOk := .F.
+		Else
+			lRet := .F.
+			If !Empty(SuperGetMv("MV_NGSTARI",.F.," "))
+				If aInfos[_nSTATUS_] == GETMV('MV_NGSTARI')
+					lRet := .T.
+				EndIf
+			EndIf
+
+			If !lRet
+				NGIFdbSeek('TQY',aInfos[_nSTATUS_],1)
+				While !EoF() .And. TQY->TQY_STATUS == aInfos[_nSTATUS_]
+					If aInfos[_nCATBEM_] == TQY->TQY_CATBEM .Or. Empty(TQY->TQY_CATBEM)
+						lRet := .T.
+						Exit
+					EndIf
+					dbSkip()
+				EndDo
+
+				If !lRet
+					fGravaTrb(nLin,STR0028,aInfos[_nSTATUS_]) //"Status inválido para a categoria do bem!"
+					lOk := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	//Verifica se o Centro de trabalho é válido
+	If !Empty(aInfos[_nCENTTRA_])
+		If !NGSEEKCPO("SHB",aInfos[_nCENTTRA_],1,,.F.)
+			fGravaTrb(nLin,STR0029,aInfos[_nCENTTRA_]) //"Centro de Trabalho Inválido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se o Fornecedor é válido
+	If !Empty(aInfos[_nFORNECE_])
+
+		If !NGSEEKCPO("SA2",aInfos[_nFORNECE_],1,,.F.)
+			fGravaTrb(nLin,STR0030,aInfos[_nFORNECE_]) //"Fornecedor Inválido"
+			lOk := .F.
+		Else
+
+			If Empty(aInfos[_nLOJA_])
+				fGravaTrb(nLin,STR0031,aInfos[_nLOJA_]) //"Loja não pode ser Vazia quando houver fornecedor."
+				lOk := .F.
+			Else
+				If !NGSEEKCPO("SA2",aInfos[_nFORNECE_]+aInfos[_nLOJA_],1,,.F.)
+					fGravaTrb(nLin,STR0032,aInfos[_nLOJA_]) //"Loja Inválida para o fornecedor."
+					lOk := .F.
+				EndIf
+			EndIf
+
+		EndIf
+
+	Else
+		If !Empty(aInfos[_nLOJA_])
+			fGravaTrb(nLin,STR0033,aInfos[_nFORNECE_]) //"Fornecedor não pode ser Vazio quando houver Loja."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se a data de compra é válida
+	If !Empty(aInfos[_nDTCOMPR_])
+		If Empty(cToD(aInfos[_nDTCOMPR_]))
+			fGravaTrb(nLin,STR0034,aInfos[_nDTCOMPR_]) //"Data de compra inválida"
+			lOk := .F.
+		Else
+			If cToD(aInfos[_nDTCOMPR_]) > DDATABASE
+				fGravaTrb(nLin,STR0035,aInfos[_nDTCOMPR_]) //"A data de compra deve ser igual ou anterior a data do processamento."
+				lOk := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	//Verifica se a unidade do prazo de garantia é válida.
+	If !Empty(aInfos[_nDTGARAN_])
+
+		If aInfos[_nUNGARAN_] != 'H'
+			fGravaTrb(nLin,STR0039,aInfos[_nDTGARAN_]) //"Só é permitido informar uma data de garantia, se a unidade for em horas."
+			lOk := .F.
+		Else
+			If Empty(cToD(aInfos[_nDTGARAN_]))
+				fGravaTrb(nLin,STR0083,aInfos[_nDTGARAN_]) //"Data de garantia inválida"
+				lOk := .F.
+			EndIf
+		EndIf
+
+	EndIf
+
+	//Valida preenchimento do prazo de garantia e sua unidade.
+	If !Empty(aInfos[_nPRGARAN_])
+		If Empty(aInfos[_nUNGARAN_])
+			fGravaTrb(nLin,STR0036,aInfos[_nUNGARAN_]) //"É necessário preencher a unidade do prazo de garantia"
+			lOk := .F.
+		EndIf
+	Else
+		If !Empty(aInfos[_nUNGARAN_])
+			fGravaTrb(nLin,STR0037,aInfos[_nPRGARAN_]) //"É necessário informar o prazo da garantia."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se a unidade do prazo de garantia é válida.
+	If !Empty(aInfos[_nUNGARAN_])
+		If Empty(NGRETSX3BOX(aCmpST9[_nUNGARAN_],aInfos[_nUNGARAN_]))
+			fGravaTrb(nLin,STR0038,aInfos[_nUNGARAN_]) //"Unidade do Prazo de garantia é inválida."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica necessidade de calcular o prazo de garantia.
+	If !Empty(aInfos[_nPRGARAN_]) .And. !Empty(aInfos[_nUNGARAN_]) .And. Empty(aInfos[_nDTGARAN_]) .And. lOk
+		aInfos[_nDTGARAN_] := fCalGarant(cToD(aInfos[_nDTCOMPR_]),aInfos[_nUNGARAN_],Val(aInfos[_nPRGARAN_]))
+	EndIf
+
+	//Valida se o código de Estoque é válido
+	If !Empty(aInfos[_nCODESTO_])
+		If !NGSEEKCPO("SB1",aInfos[_nCODESTO_],1,,.F.)
+			fGravaTrb(nLin,STR0040,aInfos[_nCODESTO_]) //"Código de Estoque inválido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Validações do Contador
+	If !Empty(aInfos[_nTEMCONT_])
+
+		If aInfos[_nTEMCONT_] != 'N'
+
+			If Val(aInfos[_nPOSCONT_]) < 0
+				fGravaTrb(nLin,STR0043,aInfos[_nPOSCONT_]) //"A posição do contador não pode ser menor que zero."
+				lOk := .F.
+			EndIf
+
+			If !Empty(aInfos[_nLIMICON_]) .And. Val(aInfos[_nPOSCONT_]) > Val(aInfos[_nLIMICON_])
+				fGravaTrb(nLin,STR0044,aInfos[_nPOSCONT_]) //"A posição do contador não pode ser maior que o limite do contador"
+				lOk := .F.
+			EndIf
+
+			If Empty(aInfos[_nTPCONTA_])
+				fGravaTrb(nLin,STR0067,aInfos[_nTPCONTA_]) //"Tipo contador não pode ser vazio"
+				lOk := .F.
+			EndIf
+
+			If Empty(aInfos[_nPOSCONT_]) .Or. Val(aInfos[_nPOSCONT_]) <= 0
+				fGravaTrb(nLin,STR0068,aInfos[_nPOSCONT_]) //"Posição Contador não pode ser menor/igual a zero ou nulo"
+				lOk := .F.
+			EndIf
+
+			If Empty(aInfos[_nDTULTAC_])
+				fGravaTrb(nLin,STR0070,aInfos[_nDTULTAC_]) //"Data Ultimo acompanhamento não pode ser nulo"
+				lOk := .F.
+			ElseIf Empty(cToD(aInfos[_nDTULTAC_]))
+				fGravaTrb(nLin,STR0084,aInfos[_nDTULTAC_]) //"Data Ultimo acompanhamento inválida"
+				lOk := .F.
+			ElseIf cToD(aInfos[_nDTULTAC_]) > DDATABASE
+				fGravaTrb(nLin,STR0045,aInfos[_nDTULTAC_]) //"A data do ultimo acompanhamento deve ser igual/menor a data do processamento."
+				lOk := .F.
+			EndIf
+
+			If Empty(aInfos[_nCONTACU_]) .Or. Val(aInfos[_nCONTACU_]) <= 0
+				fGravaTrb(nLin,STR0071,aInfos[_nCONTACU_]) //"Contador acumulado não pode ser menor/igual ou nulo"
+				lOk := .F.
+			EndIf
+
+			If Empty(aInfos[_nVARDIA_]) .Or. Val(aInfos[_nVARDIA_])   <= 0
+				fGravaTrb(nLin,STR0072,aInfos[_nVARDIA_])  //"Variação dia não pode ser menor/igual a zero ou nulo"
+				lOk := .F.
+			EndIf
+
+			If aInfos[_nTEMCONT_] $ 'P/I'
+				If !Empty(aInfos[_nLIMICON_])
+					fGravaTrb(nLin,STR0073,aInfos[_nLIMICON_]) //"Limite Contador deve ser nulo"
+					lOk := .F.
+				Else
+					aInfos[_nLIMICON_] := Val(Replicate("9",TAMSX3("T9_LIMICON")[1]))
+					aInfos[_nLIMICON_] := cValToChar(aInfos[_nLIMICON_])
+				EndIf
+			Else
+				If !Empty(aInfos[_nLIMICON_])
+					If Val(aInfos[_nLIMICON_]) < 0 .Or. Empty(aInfos[_nLIMICON_])
+						fGravaTrb(nLin,STR0049,aInfos[_nLIMICON_]) //"O Limite do contador não pode ser menor que zero."
+						lOk := .F.
+					EndIf
+
+					If aInfos[_nTEMCONT_] == 'S' .And. Val(aInfos[_nLIMICON_]) < Val(aInfos[_nPOSCONT_])
+						fGravaTrb(nLin,STR0050,aInfos[_nLIMICON_]) //"O Limite do contador não pode ser menor que a posição do contador"
+						lOk := .F.
+					EndIf
+				Else
+					fGravaTrb(nLin,STR0108,aInfos[_nLIMICON_]) //"O Limite do contador não pode ser nulo."
+					lOk := .F.
+				EndIf
+			EndIf
+
+			If !Empty(aInfos[_nPERACOM_]) .And. aInfos[_nPERACOM_] != '0'
+				If Val(aInfos[_nPERACOM_]) < 0
+					fGravaTrb(nLin,STR0051,aInfos[_nPERACOM_]) //"Se informado, o período do acompanhamento não pode ser menor que zero"
+					lOk := .F.
+				EndIf
+
+				If Empty(aInfos[_nUNIACOM_])
+					fGravaTrb(nLin,STR0052,aInfos[_nUNIACOM_]) //"Unidade de Acompanhamento não informado"
+					lOk := .F.
+				EndIf
+			Else
+				If !Empty(aInfos[_nUNIACOM_])
+					fGravaTrb(nLin,STR0081,aInfos[_nUNIACOM_]) //"Unidade de acompanhamento deve ser nulo"
+					lOk := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	//Validações do Contador
+	If Empty(aInfos[_nTEMCONT_]) .Or. aInfos[_nTEMCONT_] == 'N'
+		If !Empty(aInfos[_nTPCONTA_])
+			fGravaTrb(nLin,STR0074,aInfos[_nTPCONTA_]) //"Tipo contador deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nPOSCONT_]) .And. aInfos[_nPOSCONT_] != '0'
+			fGravaTrb(nLin,STR0075,aInfos[_nPOSCONT_]) //"Posição Contador deve ser Zero ou nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nDTULTAC_])
+			fGravaTrb(nLin,STR0076,aInfos[_nDTULTAC_]) //"Data Ultimo acompanhamento deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nCONTACU_]) .And. aInfos[_nCONTACU_] != '0'
+			fGravaTrb(nLin,STR0077,aInfos[_nCONTACU_]) //"Contador acumulado deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nVARDIA_]) .And. aInfos[_nVARDIA_] != '0'
+			fGravaTrb(nLin,STR0078,aInfos[_nVARDIA_])  //"Variação dia deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nLIMICON_]) .And. aInfos[_nLIMICON_] != '0'
+			fGravaTrb(nLin,STR0079,aInfos[_nLIMICON_]) //"Limite Contador deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nPERACOM_]) .And. aInfos[_nPERACOM_] != '0'
+			fGravaTrb(nLin,STR0080,aInfos[_nPERACOM_]) //"Período de acompanhamento deve ser nulo"
+			lOk := .F.
+		EndIf
+
+		If !Empty(aInfos[_nUNIACOM_])
+			fGravaTrb(nLin,STR0081,aInfos[_nUNIACOM_]) //"Unidade de acompanhamento deve ser nulo"
+			lOk := .F.
+		EndIf
+
+	EndIf
+
+	//Validação do Valor de controle de vida útil
+	If !Empty(aInfos[_nVALODES_]) .And. aInfos[_nVALODES_] != '0'
+		If Val(aInfos[_nVALODES_]) < 0
+			fGravaTrb(nLin,STR0053,aInfos[_nVALODES_]) //"Valor de controle de vida útil não pode ser menor que zero."
+			lOk := .F.
+		Else
+			If Empty(aInfos[_nUNIDDES_])
+				fGravaTrb(nLin,STR0054,aInfos[_nUNIDDES_]) //"É necessário informar Unidade de medida de controle de vida útil do bem"
+				lOk := .F.
+			EndIf
+		EndIf
+	Else
+		If !Empty(aInfos[_nUNIDDES_])
+			fGravaTrb(nLin,STR0055,aInfos[_nUNIDDES_]) //"Unidade de Medida de controle da vida útil do bem deve ser nulo"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Validação do cliente.
+	If !Empty(aInfos[_nCLIENTE_])
+		If !NGSEEKCPO("SA1",aInfos[_nCLIENTE_],1,,.F.)
+			fGravaTrb(nLin,STR0056,aInfos[_nCLIENTE_]) //"Cliente Inválido"
+			lOk := .F.
+		Else
+
+			If Empty(aInfos[_nLOJACLI_])
+				fGravaTrb(nLin,STR0057,aInfos[_nLOJACLI_]) //"Loja Cliente não pode ser vázia quando houver Cliente."
+				lOk := .F.
+			Else
+				If !NGSEEKCPO("SA1",aInfos[_nCLIENTE_]+aInfos[_nLOJACLI_],1,,.F.)
+					fGravaTrb(nLin,STR0058,aInfos[_nLOJACLI_]) //"Loja Cliente inválida para o Cliente."
+					lOk := .F.
+				EndIf
+			EndIf
+
+		EndIf
+	Else
+		If !Empty(aInfos[_nLOJACLI_])
+			fGravaTrb(nLin,STR0059,aInfos[_nCLIENTE_]) //"Cliente não pode ser Vazio quando houver Loja cliente."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Validação do Valor de comprar
+	If !Empty(aInfos[_nVALCPA_])
+		If Val(aInfos[_nVALCPA_]) < 0
+			fGravaTrb(nLin,STR0060,aInfos[_nVALCPA_]) //"Valor de compra não pode ser menor que zero"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Validação do custo do bem
+	If !Empty(aInfos[_nCUSTOHO_])
+		If Val(aInfos[_nCUSTOHO_]) < 0
+			fGravaTrb(nLin,STR0087,aInfos[_nCUSTOHO_]) //"Valor do custo do bem deve ser maior/igual a zero."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Valor da data de instalação
+	If !Empty(aInfos[_nDTINSTA_])
+
+		If Empty(cToD(aInfos[_nDTINSTA_]))
+			fGravaTrb(nLin,STR0088,aInfos[_nDTINSTA_])     //"Data de instalação inválida."
+			lOk := .F.
+		Else
+			If cToD(aInfos[_nDTINSTA_]) > DDATABASE
+				fGravaTrb(nLin,STR0061,aInfos[_nDTINSTA_]) //"A data de instalação deve ser igual/menor a data do processamento."
+				lOk := .F.
+			EndIf
+
+			If cToD(aInfos[_nDTINSTA_]) < cToD(aInfos[_nDTCOMPR_])
+				fGravaTrb(nLin,STR0062,aInfos[_nDTINSTA_]) //"Data de instação não pode ser menor que a data da compra."
+				lOk := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	//Validação do contador de garantia
+	If !Empty(aInfos[_nCONTGAR_])
+		If aInfos[_nTEMCONT_] == 'N'
+			fGravaTrb(nLin,STR0063,aInfos[_nCONTGAR_]) //"O contador da garantia não deve ser informado, quando não houver contador"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Validação do item contábil
+	If !Empty(aInfos[_nITEMCTA_])
+		If !NGSEEKCPO("CTD",aInfos[_nITEMCTA_],1,,.F.)
+			fGravaTrb(nLin,STR0104,aInfos[_nITEMCTA_]) //"Item contábil inválido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se é necessário preencher os códigos padrões
+
+	//Verifica se o categoria do bem não esta preenchido
+	If Empty(aInfos[_nCATBEM_])
+		aInfos[_nCATBEM_] := "1"
+	EndIf
+
+	//Verifica se o categoria do bem não está preenchida
+	If Empty(aInfos[_nPADRAO_])
+		//define como 'N = Nao' caso nao preenchido
+		aInfos[_nPADRAO_] := "N"
+	EndIf
+
+	//Verifica se a estrutura do bem está preenchida
+	If Empty(aInfos[_nESTRUT_])
+		//define como 'N = Nao' caso nao preenchido
+		aInfos[_nESTRUT_] := "N"
+	EndIf
+
+	//Verifica se a lubrificação não está preenchida
+	If Empty(aInfos[_nLUBRIFI_])
+		//define como '1 = Sim' caso nao preenchido
+		aInfos[_nLUBRIFI_] := "1"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nLUBRIFI_],aInfos[_nLUBRIFI_]))
+		fGravaTrb(nLin,STR0064,aInfos[_nLUBRIFI_])              //"Aceita lubrificação Inválida"
+		lOk := .F.
+	EndIf
+
+	//Verifica se a prioridade foi preenchida
+	If Empty(aInfos[_nPRIORI_])
+		//define como 'ZZZ' caso nao preenchido
+		aInfos[_nPRIORI_] := Replicate("Z",Len(ST9->T9_PRIORID))
+	EndIf
+
+	//Verifica se foi preenchido a indicação de ponderação
+	If Empty(aInfos[_nINDPON_])
+		//define como 'N = Nao' caso nao preenchido
+		aInfos[_nINDPON_] := "N"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nINDPON_],aInfos[_nINDPON_]))
+		fGravaTrb(nLin,STR0021,aInfos[_nINDPON_]) //"Muda Pondera Inválido"
+		lOk := .F.
+	EndIf
+
+	//Verifica se a situação da manutençaõ foi preenchida
+	If Empty(aInfos[_nSITMAN_])
+		//define como 'A = Ativo' caso nao preenchido
+		aInfos[_nSITMAN_] := "A"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nSITMAN_],aInfos[_nSITMAN_]))
+		fGravaTrb(nLin,STR0022,aInfos[_nSITMAN_]) //"Situação Manutenção Inválido"
+		lOk := .F.
+	EndIf
+
+	//Verifica se a situação do bem foi preenchida
+	If Empty(aInfos[_nSITBEM_])
+		//define como 'A = Ativo' caso nao preenchido
+		aInfos[_nSITBEM_] := "A"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nSITBEM_],aInfos[_nSITBEM_]))
+		fGravaTrb(nLin,STR0023,aInfos[_nSITBEM_]) //"Situação do Bem Inválido"
+		lOk := .F.
+	EndIf
+
+	//Verifica se a indicação do contador foi preenchido
+	If Empty(aInfos[_nTEMCONT_])
+		//define como 'N = Nao' caso nao preenchido
+		aInfos[_nTEMCONT_] := "N"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nTEMCONT_],aInfos[_nTEMCONT_]))
+		fGravaTrb(nLin,STR0065,aInfos[_nTEMCONT_])              //"Indica contador Inválida"
+		lOk := .F.
+	EndIf
+
+	//Verifica se a movimentação do bem foi preenchido.
+	If Empty(aInfos[_nMOVIBEM_])
+		//define como 'N = Nao' caso nao preenchido
+		aInfos[_nMOVIBEM_] := "N"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nMOVIBEM_],aInfos[_nMOVIBEM_]))
+		fGravaTrb(nLin,STR0066,aInfos[_nMOVIBEM_])              //"Movimentação do bem Inválida"
+		lOk := .F.
+	EndIf
+
+	//Verifica a existencia do combo de unidade de acomp.
+	If !Empty(aInfos[_nUNIACOM_])
+		If Empty(NGRETSX3BOX(aCmpST9[_nUNIACOM_],aInfos[_nUNIACOM_]))
+			fGravaTrb(nLin,STR0085,aInfos[_nUNIACOM_])              //"Unidade de acompanhamento inválido."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica a existencia do combo de unidade de acomp.
+	If !Empty(aInfos[_nUNIDDES_])
+		If Empty(NGRETSX3BOX(aCmpST9[_nUNIDDES_],aInfos[_nUNIDDES_]))
+			fGravaTrb(nLin,STR0086,aInfos[_nUNIDDES_])              //"Unidade de Medida de controle da vida útil do bem inválido"
+			lOk := .F.
+		EndIf
+	EndIf
+
+	//Verifica se a movimentação do bem foi preenchido.
+	If Empty(aInfos[_nPARTEDI_])
+		//define como '2 = Nao' caso nao preenchido
+		aInfos[_nPARTEDI_] := "2"
+		//Verifica a existencia do Combo
+	ElseIf Empty(NGRETSX3BOX(aCmpST9[_nPARTEDI_],aInfos[_nPARTEDI_]))
+		fGravaTrb(nLin,STR0107,aInfos[_nPARTEDI_])                  //"Parte diaria Inválida"
+		lOk := .F.
+	EndIf
+
+	If 	lBarCode;
+		.And. !Empty(aInfos[_nBARCODE_]);
+		.And. FindFunction( 'MntBarCode' );
+		.And. !MntBarCode( aInfos[_nCODBEM_], aInfos[_nBARCODE_], .F. )
+
+		fGravaTrb(nLin,STR0112,aInfos[_nBARCODE_]) //"Código de barras/QRCode duplicado."
+		lOk := .F.
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lOk
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintInc
+Impressao de inconssistencias da importacao
+
+@author
+@since
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPrintInc( cArqErro )
+
+	Local cString     := "SA1"
+
+	Private cDesc1    := STR0011 //"Geracao de Erros encontrados durante a importacao de bens para a tabela ST9"
+	Private cDesc2    := " "
+	Private cDesc3    := " "
+	Private wnrel     := "MNTA105"
+	Private aReturn   := { "Zebrado" , 1 , "Administracao" , 1 , 2 , 1 , "" , 1 }
+	Private nLastKey  := 0
+	Private cTamanho  := "M"
+	Private cNomeProg := "MNTA105"
+	Private Titulo    := STR0012 + " " + cArqErro //"Erros Encontrados na Importacao de Bens no"
+
+	//---------------------------------------------
+	// Envia controle para a funcao SETPRINT
+	//---------------------------------------------
+	wnrel := SetPrint( cString , wnrel , , Titulo , cDesc1 , cDesc2 , cDesc3 , .F. , "" )
+
+	If nLastKey == 27
+		Set Filter To
+		Return
+	EndIf
+
+	SetDefault( aReturn , cString )
+	If nLastKey == 27
+		Set Filter To
+		Return
+	EndIf
+
+	RptStatus( { | lEnd | fPrintRel( @lEnd , wnRel , Titulo , cTamanho ) } , Titulo )
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintInc
+Chamada do Relat¢rio
+
+@Refeito 07/05/13
+@author Guilherme Benkendorf
+
+@author Elisangela Costa
+@since 08/02/02
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPrintRel
+
+	// Monta os Cabecalhos
+	Local Cabec1	:= STR0013 //"Linha    Mensagem                                                                       Conteudo"
+	Local Cabec2	:= " "
+	Local nTipo		:= 0
+
+	//Define variaveis basicas de impressao
+	Private Li		:= 80
+	Private lEnd	:= .F.
+	Private m_pag	:= 1
+
+	// Verifica se deve comprimir ou nao
+	nTipo  := If( aReturn[4] == 1 , 15 , 18 )
+
+	/*/
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         0         1         2
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	*************************************************************************************************************************************
+	xxxxx.:   xx
+	xxx/xxxxxxx/xxxxx                     Erros Encontrados na Importacao de Bens                                         xxxxx: xx/xx/xx
+	xxxx...: xx:xx:xx                                                                                                    xxxxxx: xx/xx/xx
+	*************************************************************************************************************************************
+	Linha    Mensagem                                                                       Conteudo
+	*************************************************************************************************************************************
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxx
+	xxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxx
+	*/
+
+	dbSelectArea( cNewAlias )
+	dbGoTop()
+	SetRegua( LastRec() )
+	While !Eof()
+		If lEnd
+			@ PROW() + 1 , 001 PSAY STR0014 //"CANCELADO PELO OPERADOR"
+			Exit
+		EndIf
+		IncRegua()
+		SomaLinha(Cabec1,Cabec2,nTipo)
+		@Li , 001 PSAY ( cNewAlias )->LINHA
+		@Li , 009 PSAY ( cNewAlias )->DESCR
+		@Li , 088 PSAY ( cNewAlias )->CONTEU
+		dbSelectArea( cNewAlias )
+		dbSkip()
+	EndDo
+
+	RetIndex( "SA1" )
+	Set Filter To
+	Set Device To Screen
+	If aReturn[ 5 ] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool( wnrel )
+	EndIf
+	MS_FLUSH()
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SomaLinha
+Chamada do Relat¢rio
+
+@Refeito 07/05/13
+@author Guilherme Benkendorf
+
+@author Inacio Kolling
+@since 08/02/02
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function SomaLinha( Cabec1 , Cabec2 , nTipo )
+
+	Li++
+	If Li > 58
+		Cabec(Titulo,Cabec1,Cabec2,cNomeProg,cTamanho,nTipo)
+	EndIf
+
+Return .T.
+
+//--inicio--SS 018218 //
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fConCampos
+Converte campos
+@author Maicon André Pinheiro
+@since 25/04/2016
+@version MP11
+@Return cString
+/*/
+//---------------------------------------------------------------------
+Static Function fConCampos(xCampo,nIndice)
+
+	//Verifica campos datas
+	If nIndice == _nDTCOMPR_ .Or. nIndice == _nDTGARAN_ .Or. nIndice == _nDTULTAC_ .Or. nIndice == _nDTINSTA_
+		xCampo := cToD(xCampo)
+	EndIf
+
+	//Verifica campos float
+	If nIndice == _nPRGARAN_ .Or. nIndice == _nPOSCONT_ .Or. nIndice == _nCONTACU_ .Or. nIndice == _nVARDIA_  .Or. nIndice == _nLIMICON_ .Or.;
+	nIndice == _nPERACOM_ .Or. nIndice == _nVALODES_ .Or. nIndice == _nVALCPA_  .Or. nIndice == _nCUSTOHO_ .Or. nIndice == _nCONTGAR_ .Or.;
+	nIndice == _nVALVENA_
+		xCampo := Val(xCampo)
+	EndIf
+
+Return xCampo
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCalGarant
+Calcula data de Garantia
+
+Obs: Essa função é cópia da CALCGARAN(MNTA080)
+
+@author Maicon André Pinheiro
+@since 26/04/2016
+@version MP11
+@Return dRetorno
+/*/
+//---------------------------------------------------------------------
+Static Function fCalGarant(dDATA,vUNIDADE,vINCREM)
+
+	Local dRetorno := sToD(Space(8))
+
+	If vUNIDADE == 'K'
+		If !Empty(aInfos[_nVARDIA_])
+			dRetorno := NGPROXMDT(cToD(aInfos[_nDTCOMPR_]),'D',(vINCREM / Val(aInfos[_nVARDIA_])) )
+		Else
+			dRetorno := sToD(Space(8))
+		EndIf
+
+	ElseIf vUNIDADE == 'H'
+		If !Empty(aInfos[_nDTINSTA_])
+			dRetorno := NGPROXMDT(cToD(aInfos[_nDTINSTA_]),'D',(vINCREM / 24) )
+		Else
+			dRetorno := sToD(Space(8))
+		EndIf
+
+	Else
+		dRetorno := NGPROXMDT(dDATA,vUNIDADE,vINCREM)
+	EndIf
+
+Return dToC(dRetorno)
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetTipo
+Verifica se o tipo do registro é igual ao perguntado.
+@author Maicon André Pinheiro
+@since 29/04/2016
+@version MP11
+@Return Logico
+/*/
+//---------------------------------------------------------------------
+Static Function fRetTipo(xCampo,nIndice,cTipo)
+	Local lRet := .F.
+	Do Case
+		Case cTipo == "Data"
+		If nIndice == _nDTCOMPR_ .Or. nIndice == _nDTGARAN_ .Or. nIndice == _nDTULTAC_ .Or. nIndice == _nDTINSTA_
+			lRet := .T.
+		EndIf
+		Case cTipo == "Numerico"
+		If nIndice == _nPRGARAN_ .Or. nIndice == _nPOSCONT_ .Or. nIndice == _nCONTACU_ .Or. nIndice == _nVARDIA_  .Or. nIndice == _nLIMICON_ .Or.;
+		nIndice == _nPERACOM_ .Or. nIndice == _nVALODES_ .Or. nIndice == _nVALCPA_  .Or. nIndice == _nCUSTOHO_ .Or. nIndice == _nCONTGAR_ .Or.;
+		nIndice == _nVALVENA_
+			lRet := .T.
+		EndIf
+		Case cTipo == "Caracter"
+		If nIndice ==  _nCODBEM_ .Or. nIndice ==  _nCODFAM_ .Or. nIndice ==    _nNOME_ .Or. nIndice ==   _nCUSTO_ .Or. nIndice ==  _nCALEND_ .Or.;
+		nIndice ==  _nTIPMOD_ .Or. nIndice ==  _nCATBEM_ .Or. nIndice ==  _nPADRAO_ .Or. nIndice ==  _nESTRUT_ .Or. nIndice ==  _nPRIORI_ .Or.;
+		nIndice ==  _nINDPON_ .Or. nIndice ==  _nSITMAN_ .Or. nIndice ==  _nSITBEM_ .Or. nIndice == _nFABRICA_ .Or. nIndice ==  _nSTATUS_ .Or.;
+		nIndice == _nCENTTRA_ .Or. nIndice == _nFORNECE_ .Or. nIndice ==    _nLOJA_ .Or. nIndice ==  _nMODELO_ .Or. nIndice ==   _nSERIE_ .Or.;
+		nIndice == _nUNGARAN_ .Or. nIndice == _nCODESTO_ .Or. nIndice == _nTEMCONT_ .Or. nIndice == _nTPCONTA_ .Or. nIndice == _nUNIACOM_ .Or.;
+		nIndice == _nUNIDDES_ .Or. nIndice == _nCLIENTE_ .Or. nIndice == _nLOJACLI_ .Or. nIndice == _nMOVIBEM_ .Or. nIndice == _nITEMCTA_ .Or.;
+		nIndice == _nLUBRIFI_ .Or. nIndice == _nPARTEDI_
+			lRet := .T.
+		EndIf
+	EndCase
+Return lRet
+//---fim----SS 018218 //

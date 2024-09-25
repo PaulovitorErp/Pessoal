@@ -1,0 +1,594 @@
+#INCLUDE "MNTA815.ch"
+#include "Protheus.ch"
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MNTA815  ³ Autor ³ Marcos Wagner Junior  ³ Data ³ 22/03/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Geracao Automatica de Documentos								 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+/*/
+Function MNTA815()
+	
+	Local aNGBEGINPRM := {}
+	Local n,i,y, nXX
+	
+	// Utilizada na verificação do número sequencia da TRX
+	Local cCvSE2 := ''
+	Local lExSE2 := .T.
+
+	// Variaveis de controle para a geração dos documentos
+	Local dVencimen := CTOD("")
+	Local dDtEmiss  := CTOD("")
+	Local xIndParc
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 95 )
+
+		aNGBeginPrm := NGBeginPrm()
+		cCvSE2      := NGSEEKDIC( 'SX2', 'SE2', 1, 'X2_ARQUIVO' )
+		lExSE2      := NGSX2MODO( 'SE2' ) == 'C'
+
+		Private aRotina,aChkDel
+		Private aRelatorio := {}
+		Private aBem       := {}
+		Private aAnoModelo := {}
+		Private nMes
+		Private lIntegTMS  := If(Alltrim(GetMv('MV_NGMNTMS')) <> 'N',.T.,.F.)
+		Private lIntFin    := SuperGetMv("MV_NGMNTFI",.F.,"N") == "S"
+		Private lConPag    := NGCADICBASE('TS1_CONPAG',"A",'TS1',.F.)
+		Private cCadastro  := OemtoAnsi(STR0001) //"Geração Automática de Documentos"
+		Private cPerg      := "MNA815"
+		Private aPerg      := {}
+		Private cTRBB
+		Private cNumSE2    := ''
+		Private cParSE2Doc
+
+		// Consiste conteudo do parametro MV_1DUP
+		If !NGFIV1DUP()
+			Return .F.
+		Endif
+
+		If Pergunte(cPerg,.T.)
+
+			If MV_PAR07 == 1
+				nMes := 1
+			ElseIf MV_PAR07 == 2
+				nMes := 12
+			Endif
+
+			cAliasQry2 := GetNextAlias()
+			cQuery2 := " SELECT ST9.T9_CODBEM, ST9.T9_NOME, ST9.T9_ANOMOD, ST9.T9_PLACA, ST9.T9_CCUSTO, ST9.T9_CODTMS, ST9.T9_UFEMPLA, "
+			cQuery2 += "		  ST9.T9_CODFAMI, ST9.T9_TIPMOD "
+			cQuery2 += " FROM " + RetSqlName("ST9")+" ST9 "
+			cQuery2 += " WHERE ST9.T9_CODFAMI >=  '" + MV_PAR01 + "'"
+			cQuery2 += " AND   ST9.T9_CODFAMI <=  '" + MV_PAR02 + "'"
+			cQuery2 += " AND   ST9.T9_TIPMOD  >=  '" + MV_PAR03 + "'"
+			cQuery2 += " AND   ST9.T9_TIPMOD  <=  '" + MV_PAR04 + "'"
+			cQuery2 += " AND   (ST9.T9_CATBEM  =  '2' OR ST9.T9_CATBEM = '4') "
+
+			cQuery2 += " AND   ST9.D_E_L_E_T_ <>  '*' "
+			cQuery2 += " ORDER BY ST9.T9_ANOMOD "
+			cQuery2 := ChangeQuery(cQuery2)
+			dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery2),cAliasQry2, .F., .T.)
+			dbGotop()
+			
+			If !Eof()
+				
+				While !Eof()
+					cUfEmis := (cAliasQry2)->T9_UFEMPLA
+					If lIntegTMS
+						dbSelectArea("DA3")
+						dbSetOrder(01)
+						If dbSeek(xFilial("DA3")+(cAliasQry2)->T9_CODTMS)
+							cUfEmis := DA3->DA3_ESTPLA
+						Endif
+					Endif
+					
+					AADD(aBem,{(cAliasQry2)->T9_ANOMOD,(cAliasQry2)->T9_CODBEM,(cAliasQry2)->T9_NOME,;
+							(cAliasQry2)->T9_PLACA ,(cAliasQry2)->T9_CCUSTO,cUfEmis,(cAliasQry2)->T9_CODFAMI,;
+							(cAliasQry2)->T9_TIPMOD})
+
+					nPOS := aSCAN(aAnoModelo,(cAliasQry2)->T9_ANOMOD)
+					If nPOS = 0 .AND. !Empty((cAliasQry2)->T9_ANOMOD)
+						Aadd(aAnoModelo,(cAliasQry2)->T9_ANOMOD)
+					Endif
+
+					dbSelectArea(cAliasQry2)
+					dbSkip()
+				
+				End
+
+			Endif
+
+			(cAliasQry2)->(dbCloseArea())
+
+			If Len(aAnoModelo) != 0
+
+				ProcRegua(Len(aAnoModelo))
+				For n := 1 to Len(aAnoModelo)
+					
+					IncProc(STR0014) //"Selecionando Registros..."
+					cAliasQry := GetNextAlias()
+					cQuery := " SELECT TS7.TS7_VALOR, TS7.TS7_ANO, TS7.TS7_DOCTO, TS7.TS7_CODFAM, TS7.TS7_TIPMOD "
+					cQuery += " FROM " + RetSqlName("TS7")+" TS7 "
+					cQuery += " WHERE TS7.TS7_CODFAM >=  '" + MV_PAR01 + "'"
+					cQuery += " AND   TS7.TS7_CODFAM <=  '" + MV_PAR02 + "'"
+					cQuery += " AND   TS7.TS7_TIPMOD >=  '" + MV_PAR03 + "'"
+					cQuery += " AND   TS7.TS7_TIPMOD <=  '" + MV_PAR04 + "'"
+					cQuery += " AND   TS7.TS7_DOCTO  >=  '" + MV_PAR05 + "'"
+					cQuery += " AND   TS7.TS7_DOCTO  <=  '" + MV_PAR06 + "'"
+					cQuery += " AND   TS7.TS7_FILIAL  =  '" + xFilial("TS7") + "'"
+					cQuery += " AND   TS7.TS7_ANO     =  '" + aAnoModelo[n] + "'"
+					cQuery += " AND   TS7.D_E_L_E_T_ <> '*' "
+					cQuery := ChangeQuery(cQuery)
+					dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+					dbGotop()
+
+					If !Eof()
+						
+						While !Eof()
+							
+							For i := 1 to Len(aBem)
+								
+								If aBem[i][1] == (cAliasQry)->TS7_ANO .And. aBem[i][7] == (cAliasQry)->TS7_CODFAM .And. aBem[i][8] == (cAliasQry)->TS7_TIPMOD
+
+									cAliasVenc := GetNextAlias()
+									cQueryVenc := " SELECT TS1.TS1_DTEMIS, TS1.TS1_DTVENC "
+									cQueryVenc += " FROM " + RetSqlName("TS1") + " TS1 "
+									cQueryVenc += " WHERE TS1.TS1_CODBEM =  '" + aBem[i][2] + "' "
+									cQueryVenc += " AND TS1.TS1_DOCTO    =  '" + (cAliasQry)->TS7_DOCTO + "' "
+									cQueryVenc += " AND TS1.TS1_FILIAL   =  '" + xFilial("TS1") + "' "
+									cQueryVenc += " AND D_E_L_E_T_   <> '*' "
+									cQueryVenc += " ORDER BY TS1.TS1_DTEMIS , TS1.TS1_DTVENC DESC "
+									cQueryVenc := ChangeQuery(cQueryVenc)
+									dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQueryVenc),cAliasVenc, .F., .T.)
+									(cAliasVenc)->(dbGotop())
+
+									If !Eof() .And. !Empty((cAliasVenc)->TS1_DTEMIS)
+
+										dDtEmiss  := STOD((cAliasVenc)->TS1_DTEMIS)
+										dVencimen := STOD((cAliasVenc)->TS1_DTVENC)
+										lDataVen  := .f.
+										aParcelas := {}
+										nXX        := 1
+
+										dbSelectArea("TS0")
+										dbSetOrder(01)
+										If dbSeek(xFilial("TS0")+(cAliasQry)->TS7_DOCTO)
+											If TS0->TS0_UNIDAD = '1'
+												dDtEmiss += TS0->TS0_VALID
+												If dDtEmiss <= NGSomaMes(dDATABASE,nMes)
+													dVencimen += TS0->TS0_VALID
+													lDataVen := .t.
+												Endif
+											Else
+												dDtEmiss := NGSomaMes(dDtEmiss,TS0->TS0_VALID)
+												If dDtEmiss <= NGSomaMes(dDATABASE,nMes)
+													dVencimen := NGSomaMes(dVencimen,TS0->TS0_VALID)
+													lDataVen := .t.
+												Endif
+											Endif
+
+											dGrEmiss  := dDtEmiss
+
+											If lConPag .AND. lDataVen
+												If !Empty(TS0->TS0_CONPAG)
+													If (lDataVen := NGFICONDP(.F.,.F.,(cAliasQry)->TS7_VALOR,TS0->TS0_CONPAG,dDtEmiss))
+													dVencimen := aParcelas[1][1]
+													Else
+														If aScan(aRelatorio, {|x| x[1]+x[2] == '1'+AllTrim(TS0->TS0_DOCTO)}) == 0
+															AADD(aRelatorio,{'1',TS0->TS0_DOCTO,TS0->TS0_NOMDOC})
+														Endif
+													Endif
+												Else
+													lDataVen := .f.
+													If aScan(aRelatorio, {|x| x[1]+x[2] == '1'+AllTrim(TS0->TS0_DOCTO)}) == 0
+														AADD(aRelatorio,{'1',TS0->TS0_DOCTO,TS0->TS0_NOMDOC})
+													Endif
+												Endif
+											Endif
+										Endif
+
+										While lDataVen
+											cGerSeq := ""
+											If lIntFin
+												If Empty(cNumSE2)
+													cNumSE2 := NGSEQSE2()
+												Else
+												If FindFunction("Soma1Old")
+													cNumSE2 := PADL(Soma1Old(cNumSE2),9)
+												Else
+													cNumSE2 := PADL(Soma1(cNumSE2),9)
+												EndIf
+												While !LockByName(cNumSE2+cCvSE2,.T.,lExSE2)
+														cNumSE2 := If(FindFunction("Soma1Old"),PADL(Soma1Old(cSeqSE2),9),PADL(Soma1(cSeqSE2),9))
+													EndDo
+												Endif
+											Endif
+
+											cGerSeq := cNumSE2
+											lDataVen	:= .f.
+
+											dVenciTS1 := dVencimen
+
+											// Retorna conteudo do parametro MV_1DUP
+											cParSE2Doc := NGFI1DUP()
+
+											lGo := .T.
+
+											If lIntFin
+												
+												SetInclui() // TODO: Remover quando for implementada no Genérico
+												
+												If !lConPag
+													dOldVencim := dVencimen
+													aParc := {}
+													For y := 1 To MV_PAR08
+														aAdd(aParc,{dVencimen, (cAliasQry)->TS7_VALOR/MV_PAR08, cParSE2Doc})
+														dVencimen := NGSomaMes(dVencimen,1)
+														cParSE2Doc := MNTPARCELA(cParSE2Doc)
+													Next y
+													dVencimen := dOldVencim
+													cParSE2Doc := NGFI1DUP()
+													aParcelas := aClone(aParc)
+												EndIf
+
+												oIntFIN := NGIntFin():New()
+												oIntFIN:setOperation(3)
+												oIntFIN:setRelated("TS2")
+												oIntFIN:setValue("E2_PREFIXO",TS0->TS0_PREFIX)
+												oIntFIN:setValue("E2_NUM",cNumSE2)
+												oIntFIN:setValue("E2_TIPO",TS0->TS0_TIPO)
+												oIntFIN:setValue("E2_NATUREZ",TS0->TS0_NATURE)
+												oIntFIN:setValue("E2_FORNECE",TS0->TS0_FORNEC)
+												oIntFIN:setValue("E2_LOJA",TS0->TS0_LOJA)
+												oIntFIN:setValue("E2_EMISSAO",;
+															If(AllTrim(GetNewPar("MV_NGINTER","N")) == "M",dDataBase,dGrEmiss)) //Mensagem Unica
+												oIntFIN:setValue("E2_ORIGEM",FunName())
+												oIntFIN:setValue("E2_MOEDA",1)
+												oIntFIN:setValue("E2_CCD",aBem[i][5])
+												oIntFIN:setValue("E2_ITEMD",'')
+
+												oIntFIN:setParcelas(aParcelas)
+
+												If !oIntFIN:geraTitulo()
+													Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+													lGo := .F.
+													If !Empty(cGerSeq)
+														UnLockByName(cGerSeq+cCvSE2,.T.,lExSE2)
+													Endif
+												EndIf
+											EndIf
+
+
+
+											If lGo
+
+												dbSelectArea("TS1")
+											dbSetOrder(01)
+											If !dbSeek(xFilial("TS1")+aBem[i][2]+(cAliasQry)->TS7_DOCTO+DTOS(dVencimen))
+													
+													RecLock("TS1",.T.)
+													
+													TS1->TS1_FILIAL := xFilial("TS1")
+													TS1->TS1_CODBEM := aBem[i][2]
+													TS1->TS1_PLACA  := aBem[i][4]
+													TS1->TS1_DOCTO  := (cAliasQry)->TS7_DOCTO
+													TS1->TS1_VALOR  := (cAliasQry)->TS7_VALOR
+													TS1->TS1_DTVENC := dVencimen
+													TS1->TS1_UFEMIS := aBem[i][6]
+													TS1->TS1_DTEMIS := dGrEmiss
+													TS1->TS1_QTDPAR := IIF(lConPag,Len(aParcelas),MV_PAR08)
+													If NGCADICBASE("TS1_PREFIX","A","TS1",.F.)
+														TS1->TS1_NUMSE2 := cNumSE2
+														TS1->TS1_TIPO   := TS0->TS0_TIPO
+														TS1->TS1_NATURE := TS0->TS0_NATURE
+														TS1->TS1_PREFIX := TS0->TS0_PREFIX
+														TS1->TS1_FORNEC := TS0->TS0_FORNEC
+														TS1->TS1_LOJA   := TS0->TS0_LOJA
+														TS1->TS1_CONPAG := TS0->TS0_CONPAG
+													Endif
+
+													If FieldPos( 'TS1_DTVALI' ) > 0
+
+														TS1->TS1_DTVALI := MNTA805DtV( (cAliasQry)->TS7_DOCTO, dGrEmiss )
+
+													EndIf
+
+													MsUnLock()
+
+												EndIf
+
+												For y := 1 to IIF(lConPag,Len(aParcelas),MV_PAR08)
+													dbSelectArea("TS2")
+												dbSetOrder(01)
+												If !dbSeek(xFilial("TS2")+aBem[i][2]+(cAliasQry)->TS7_DOCTO+DTOS(dVencimen)+cParSE2Doc)
+
+													// Verifica tipo do campo TS2_PARCEL [Numerico / Caracter]
+													xIndParc := If(Valtype(TS2->TS2_PARCEL) == "C",If(lConPag ,aParcelas[y][3],cParSE2Doc),y)
+
+														RecLock("TS2",.T.)
+														TS2->TS2_FILIAL := xFilial("TS2")
+														TS2->TS2_PLACA  := aBem[i][4]
+														TS2->TS2_CODBEM := aBem[i][2]
+														TS2->TS2_DOCTO  := (cAliasQry)->TS7_DOCTO
+														TS2->TS2_DTVENC := dVencimen
+														TS2->TS2_DTEMIS := dGrEmiss
+														TS2->TS2_UFEMIS := aBem[i][6]
+														TS2->TS2_PARCEL := xIndParc
+														TS2->TS2_VALOR  := IIF(lConPag,aParcelas[y][2],((cAliasQry)->TS7_VALOR/MV_PAR08))
+														TS2->TS2_CCUSTO := aBem[i][5]
+														MsUnLock("TS2")
+
+
+														AADD(aRelatorio,{'2',aBem[i][2],aBem[i][3],(cAliasQry)->TS7_DOCTO,TS0->TS0_NOMDOC,cValToChar(xIndParc),TS2->TS2_VALOR,dGrEmiss,dVencimen,cNumSE2})
+
+														cParSE2Doc := MNTPARCELA(cParSE2Doc)
+
+													Endif
+
+													If lConPag
+														nXX++
+														If nXX == Len(aParcelas)+1
+															nXX := 0
+															Exit
+														Else
+															dVencimen := aParcelas[nXX][1]
+														Endif
+													Else
+														dVencimen := NGSomaMes(dVencimen,1)
+													Endif
+
+												Next
+
+												If TS0->TS0_UNIDAD = '1'
+													dVenciTS1 := dVenciTS1 + TS0->TS0_VALID
+													dGrEmiss  := dGrEmiss + TS0->TS0_VALID
+												Else
+													dVenciTS1 := NGSomaMes(dVenciTS1,TS0->TS0_VALID)
+													dGrEmiss  := NGSomaMes(dGrEmiss,TS0->TS0_VALID)
+												Endif
+
+												If dVenciTS1 <= NGSomaMes(dDATABASE,nMes)
+													lDataVen  := .t.
+
+													If lConPag
+														nXX 		  := 1
+														NGFICONDP(.F.,.F.,(cAliasQry)->TS7_VALOR,TS0->TS0_CONPAG,dGrEmiss)
+														dVencimen := aParcelas[1][1]
+													Else
+														dVencimen := dVenciTS1
+													Endif
+
+												Endif
+
+											EndIf
+
+											If !Empty(cGerSeq)
+												UnLockByName(cGerSeq+cCvSE2,.T.,lExSE2)
+											Endif
+
+										End
+
+									Endif
+
+									(cAliasVenc)->(dbCloseArea())
+
+								Endif
+
+							Next
+
+							dbSelectArea(cAliasQry)
+							dbSkip()
+
+						End
+
+					Endif
+
+					(cAliasQry)->(dbCloseArea())
+
+				Next
+
+			Endif
+
+			If Len(aRelatorio) > 0
+				If MsgYesNo(STR0015) //"Deseja imprimir o resultado da geração?"
+					MNTA815REL()
+				Endif
+			Else
+				MsgInfo(STR0012,STR0013) //"Não foram gerados Documentos!"###"Atenção"
+			Endif
+
+		EndIf
+
+		NGRETURNPRM( aNGBeginPrm )
+
+	EndIf
+
+Return .t.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    | MNR815PAR| Autor ³Marcos Wagner Junior   ³ Data ³ 22/03/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o | Valida codigos De... Ate  											  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR815                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNR815PAR(nOpc,cParDe,cParAte,cTabela)
+
+If (Empty(cParDe) .AND. nOpc == 1) .OR. (cParAte == 'ZZZZZZ' .AND. nOpc == 2) .OR.;
+	      (cParAte == 'ZZZZZZZZZZ' .AND. nOpc == 2)
+	Return .t.
+Else
+	If nOpc == 1
+		If Empty(cParDe)
+			Return .t.
+		Else
+			lRet := IIf(Empty(cParDe),.t.,ExistCpo(cTabela,cParDe))
+		   If !lRet
+		      Return .f.
+		   EndIf
+		   If !Empty(cParAte)
+			   lRet := IIF(ATECODIGO(cTabela,cParDe,cParAte,12),.T.,.F.)
+		      If !lRet
+		         Return .f.
+		      EndIf
+		   Endif
+		Endif
+	ElseIf nOpc == 2
+		If (cParAte == 'ZZZZZZ') .OR. (cParAte == 'ZZZZZZZZZZ')
+			Return .t.
+		Else
+	      lRet := IIF(ATECODIGO(cTabela,cParDe,cParAte,12),.T.,.F.)
+	      If !lRet
+	         Return .f.
+	      EndIf
+	   EndIf
+	EndIf
+Endif
+
+Return .t.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    |MNTA815REL| Autor ³Marcos Wagner Junior   ³ Data ³ 22/03/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o | Relatorio da Geracao de Documentos								  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR815                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA815REL()
+	
+	WNREL   := "MNTA815"
+	LIMITE  := 80
+	cDESC1     := STR0016 //"O relatorio apresentará os bens que foram transferidos entre as filiais."
+	cDESC2     := STR0017 //"Permite selecionar por família de bens, por status, Filial origem, "
+	cDESC3     := STR0018 //"Filial destino e data transferido"
+	cSTRING := "ST9"
+
+	Private NOMEPROG := "MNTA815"
+	Private TAMANHO  := "M"
+	Private aRETURN  := {STR0019,1,STR0020,1,2,1,"",1}   //"Zebrado"###"Administracao"
+	Private TITULO   := STR0021  //"Relatório da Geração de Documentos"
+	Private nTIPO    := 0
+	Private nLASTKEY := 0
+	Private CABEC1,CABEC2
+	Private aVETINR := {}
+
+	WNREL:=SetPrint(cString,Wnrel,,Titulo,cDesc1,cDesc2,cDesc3,.f.,"")
+	If nLastKey = 27
+	Set Filter To
+	DbSelectArea("ST9")
+	Return
+	EndIf
+	SetDefault(aReturn,cString)
+	RptStatus( { || MNTA815IMP( ) }, STR0022, STR0023 ) //"Aguarde..."###"Processando Registros..."
+	Dbselectarea("ST9")
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    |MNTA815IMP| Autor ³Marcos Wagner Junior   ³ Data ³ 22/03/07 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o | Relatorio da Geracao de Documentos								  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR815                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA815IMP()
+Local nI, l1Problema := .t., lDocGerado := .t.
+Private cRODATXT := ""
+Private nCNTIMPR := 0
+Private li := 80 ,m_pag := 1
+
+nTIPO  := IIf(aReturn[4]==1,15,18)
+
+CABEC1 := STR0024 //"Veículo"
+If lIntFin
+	CABEC2 := STR0031    //"   Documento   Nome                                       Parcela        Valor   Dt. Emissão   Vencimento   N. Título"
+Else
+	CABEC2 := STR0025    //"   Documento   Nome                                       Parcela        Valor   Dt. Emissão   Vencimento"
+Endif
+
+/*
+          1         2         3         4         5         6         7         8         9         0         1
+012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456
+*********************************************************************************************************************
+                             Relatorio de Geracao de Documentos
+*********************************************************************************************************************
+xxxxxxxxxxxxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   Documento   Nome                                       Parcela        Valor   Dt. Emissão   Vencimento   N. Título
+   xxxxxx      xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx         x   999.999,22      99/99/99     99/99/99   xxxxxxxxx
+*/
+cVeiAntigo := ''
+SetRegua(Len(aRelatorio))
+For nI := 1 to Len(aRelatorio)
+	IncRegua()
+	If aRelatorio[nI][1] == '1'
+		If l1Problema
+			l1Problema := .f.
+			NgSomaLi(58)
+			@ Li,000	 Psay "**********   " + STR0032 + "   **********" // "PARA O(S) DOCUMENTO(S) ABAIXO, O CAMPO 'COND. PAGTO' DEVERÁ SER AVALIADO, NO CADASTRO DE DOCUMENTOS."
+			NgSomaLi(58)
+			@ Li,000	 Psay "**************   " + STR0033 + "   **************" // "NÃO FOI POSSÍVEL REALIZAR A GERAçÂO DAS PARCELAS CONFORME A CONDIÇÃO DE PAGAMENTO INFORMADA."
+			NgSomaLi(58)
+		Endif
+		NgSomaLi(58)
+		@ Li,000		 Psay AllTrim(aRelatorio[nI][2]) + ' - ' + AllTrim(aRelatorio[nI][3])
+	Else
+		If lDocGerado .AND. lIntFin
+			lDocGerado := .f.
+			NgSomaLi(58)
+			NgSomaLi(58)
+			@ Li,000	 Psay "***************************************************   " + STR0034 + "   ***************************************************" // "DOCUMENTOS GERADOS:"
+			NgSomaLi(58)
+		Endif
+		NgSomaLi(58)
+		@ Li,000 	 Psay AllTrim(aRelatorio[nI][2]) + ' - ' + AllTrim(aRelatorio[nI][3])
+		NgSomaLi(58)
+		@ Li,003 	 Psay aRelatorio[nI][4]
+		@ Li,015 	 Psay aRelatorio[nI][5]
+		@ Li,064 	 Psay aRelatorio[nI][6]
+		@ Li,068 	 Psay PADL(Transform(aRelatorio[nI][7],'@E 999,999.99'),10)
+		@ Li,081 	 Psay aRelatorio[nI][8]
+		@ Li,095 	 Psay aRelatorio[nI][9]
+		If lIntFin
+			@ Li,108 	 Psay aRelatorio[nI][10]
+		Endif
+	Endif
+Next
+
+RODA(nCNTIMPR,cRODATXT,TAMANHO)
+
+RetIndex('ST9')
+Set Filter To
+Set Device To Screen
+If aReturn[5] == 1
+   Set Printer To
+   dbCommitAll()
+   OurSpool(WNREL)
+EndIf
+MS_FLUSH()
+
+Return Nil

@@ -1,0 +1,469 @@
+#INCLUDE "mntc970.ch"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC970
+Consulta gerencial do Custo das O.S. (Intervalo ano) 
+@author  Inacio Luiz Kolling
+@since 19/03/98
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC970()
+
+	//+-----------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 				  		  |
+	//+-----------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+	
+	Local oTmpTbl1
+
+	Private cCadastro := OemToAnsi(STR0001) //"Dist. Per. Custo das O.S. por C.Custo"
+	Private totano1,totano2,nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1
+	Private nFol,nTempo,nSem
+	Private vVETHORAS := {}
+	
+	Private cTRB := GetNextAlias() 
+
+	Store 0.00 To totano1,totano2,nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1,nFol
+	Store 0    To nTempo,nSem
+
+	aROTINA   := {{STR0002 ,"AxPesqui" , 0, 1},; //"Pesquisar"
+				  {STR0003 ,"NGCAD01" , 0, 2}}   //"Visualizar"
+	cCadastro := OemToAnsi(cCadastro)
+	
+	//+--------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros                         |
+	//| mv_par01     // De Ano                                       |
+	//| mv_par02     // Ate Ano Seguinte                             |
+	//| mv_par03     // De  Servi‡o                                  |
+	//| mv_par04     // Ate Servi‡o                                  |
+	//+--------------------------------------------------------------+
+
+	If !Pergunte("MNT970",.T.)
+		Return
+	EndIf
+
+	aDBF := {{"CUSTO"    , "C", Len(stj->tj_ccusto),0},;
+			 {"NOMECUS"  , "C", 30                 ,0},;
+			 {"ANOUM"    , "N", 12                 ,2},;
+			 {"PERCENT1" , "N", 12                 ,2},;
+			 {"ANODOIS"  , "N", 12                 ,2},;
+			 {"PERCENT2" , "N", 12                 ,2},;
+			 {"PERCENTD" , "N", 12                 ,2}}
+ 
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices 
+	oTmpTbl1:AddIndex( "Ind01" , {"CUSTO"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	Processa({|| C970PRCO()})   // STJ & STS - HISTORICO
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	While !Eof()
+
+		(cTRB)->PERCENT1 := (cTRB)->ANOUM / totano1 * 100
+		(cTRB)->PERCENT2 := (cTRB)->ANODOIS / totano2 * 100
+
+		If (cTRB)->ANOUM = 0
+			(cTRB)->PERCENTD := -100
+		ElseIf (cTRB)->ANODOIS = 0
+			(cTRB)->PERCENTD := 100
+		ElseIf (cTRB)->ANODOIS > (cTRB)->ANOUM
+			(cTRB)->PERCENTD := (((cTRB)->ANODOIS - (cTRB)->ANOUM) / (cTRB)->ANOUM) * -100
+		Else
+			(cTRB)->PERCENTD := (((cTRB)->ANOUM - (cTRB)->ANODOIS) / (cTRB)->ANODOIS) * 100
+		EndIf
+
+		DbSkip()
+	End
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+
+	If Reccount() = 0
+		nDel := Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico..."###"ATENCAO"
+		
+		oTmpTbl1:Delete()   
+
+		DbSelectArea("STJ")
+		Return .T.
+	EndIf
+
+	Define DIALOG oDlg1 FROM 6,0 TO 34,100 TITLE cCadastro+" "+str(mv_par01,4)+STR0008+str(mv_par02,4)
+
+	@ 04,020 Button STR0009 Of oDlg1 Size 40,09 Pixel Action (C970GRAFI()) //"&Grafico"
+	@ 04,060 Button STR0010 Of oDlg1 Size 40,09 Pixel Action (C970PRINT()) //"&Imprimir"
+	@ 04,100 Button STR0028 Of oDlg1 Size 40,09 Pixel Action (oDlg1:End()) //"Sair"
+
+	@ 1,0.3  Listbox Fields CUSTO,;
+	NOMECUS,;
+	AllTrim( Transform( ANOUM   , "@E 999,999,999.99" )),;
+	AllTrim( Transform( PERCENT1, "@E 999,999,999.99" )),;
+	AllTrim( Transform( ANODOIS , "@E 999,999,999.99" )),;
+	AllTrim( Transform( PERCENT2, "@E 999,999,999.99" )),;
+	AllTrim( Transform( PERCENTD, "@E 999,999,999.99" ));
+	FieldSizes 65,120,50,50,50,50,50       ;
+	Size 388,180                           ;
+	HEADERS STR0011                       ,; //"Custo"
+	STR0012                       ,;         //"Nome do C. Custo"
+	STR0013+str(mv_par01,4)      ,;          //"Ano "
+	"   %   "                     ,;
+	STR0013+str(mv_par02,4)       ,;         //"Ano "
+	"   %   "                     ,;
+	STR0014 								 //"Diferenca %"
+
+	@ 200,001 Say STR0015 Size 55,10 Of oDlg1  Pixel //"TOTAL  ANO "
+	@ 200,181 Say totano1 Picture '@E 999,999,999.99' Size 40,10 Of oDlg1 Pixel
+	@ 200,282 Say totano2 Picture '@E 999,999,999.99' Size 40,10 Of oDlg1 Pixel
+	ACTIVATE DIALOG oDlg1
+
+	oTmpTbl1:Delete()
+
+	Set Key VK_F9 To
+	DbSelectArea("STJ")
+	DbSetOrder(01) 
+
+	//+-----------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                          |
+	//+-----------------------------------------------------------------------+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C970PRCO
+Processa as O.S. atual e O.S. historico
+@author Inacio Luiz Kolling 
+@since   /06/97
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C970PRCO()
+
+	cCONDSTJ := 'STJ->TJ_TIPOOS = "B"'
+	cCONDSTJ := cCONDSTJ + ' .And. STJ->TJ_SITUACA == "L" .And. STJ->TJ_TERMINO == "S" .AND. !EMPTY(STJ->TJ_DTMRINI)'                         
+	cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_SERVICO >= mv_par03 .And. STJ->TJ_SERVICO <= mv_par04)'
+
+	cCONDSTS := 'STS->TS_TIPOOS = "B"'
+	cCONDSTS := cCONDSTS + ' .And. STS->TS_SITUACA == "L" .And. STS->TS_TERMINO == "S" .AND. !EMPTY(STS->TS_DTMRINI)'
+	cCONDSTS := cCONDSTS + ' .And. (STS->TS_SERVICO >= mv_par03 .And. STS->TS_SERVICO <= mv_par04)'
+
+	DMV_PAR01 := CTOD('01/01/'+STR(mv_par01,4))
+	DMV_PAR02 := CTOD('31/12/'+STR(mv_par02,4))
+
+	DbSelectArea("STL")
+	DbSetOrder(06)
+	DbSeek(xFilial("STL")+DTOS(DMV_PAR01),.T.)
+	nReg := (LastRec() - Recno())
+
+	DbSelectArea("STT")
+	DbSetOrder(05)
+	DbSeek(xFilial("STT")+DTOS(DMV_PAR01),.T.)
+	nReg := nReg + (LastRec() - Recno())
+
+	totano1   := 0.00
+	totano2   := 0.00
+	DbSelectArea("STL")
+	ProcRegua(nReg)
+	While !Eof() .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_DTINICI <= DMV_PAR02
+
+		IncProc()
+
+		If Alltrim(STL->TL_SEQRELA) <> "0"
+
+			DbSelectArea("STJ")
+			DbSetOrder(01)
+			If DbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+
+				If &(cCONDSTJ)
+
+					nrealiza := 0.00
+
+					// PROCURA O CALENDARIO
+					// ESTA FUNCAO ESTA NO NGUTIL.PRX
+					cCALEND := PROCALEND(STJ->TJ_CODBEM,STJ->TJ_SERVICO,STJ->TJ_SEQRELA)
+
+					vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+					STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+					STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+
+					// ESTA FUNCAO ESTA NO NGCUSTOS.PRX
+					PROCINSUMO(STL->TL_TIPOREG,STL->TL_CODIGO,STL->TL_SEQRELA,;
+					If(NGCADICBASE('TL_PCTHREX','A','STL',.F.),STL->TL_PCTHREX,Val(STL->TL_HREXTRA)),nQTDHORAS,STL->TL_DTINICI,;
+					STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+
+					If nrealiza > 0
+						C970GRAVA(STL->TL_DTINICI,STJ->TJ_CCUSTO)
+					EndIf
+
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STL")
+		DbSkip()
+	End
+
+	DbSelectArea("STT")
+	While !Eof() .And. STT->TT_FILIAL == xFilial("STT") .And. STT->TT_DTINICI <= DMV_PAR02
+
+		IncProc()
+
+		If Alltrim(STT->TT_SEQRELA) <> "0"
+
+			DbSelectArea("STS")
+			DbSetOrder(01)
+			If DbSeek(xFilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+
+				If &(cCONDSTS)
+
+					nrealiza := 0.00
+
+					// PROCURA O CALENDARIO
+					// ESTA FUNCAO ESTA NO NGUTIL.PRX
+					cCALEND := PROCALEND(STS->TS_CODBEM,STS->TS_SERVICO,STS->TS_SEQRELA)
+
+					vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+					STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+					STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+					nQTDHORAS := vVETHORAS[1]
+
+					// ESTA FUNCAO ESTA NO NGCUSTOS.PRX
+					PROCINSUMO(STT->TT_TIPOREG,STT->TT_CODIGO,STT->TT_SEQRELA,;
+					If(NGCADICBASE('TT_PCTHREX','A','STT',.F.),STT->TT_PCTHREX,Val(STT->TT_HREXTRA)),nQTDHORAS,STT->TT_DTINICI,;
+					STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+
+					If nrealiza > 0
+						C970GRAVA(STT->TT_DTINICI,STS->TS_CCUSTO)
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STT")
+		DbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C970GRAVA
+Grava no arquvio auxiliar
+@author Inacio Luiz Kolling
+@since   /  /
+@version undefined
+@param VDTMPINI, , descricao
+@param VCUSTO, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C970GRAVA(VDTMPINI,VCUSTO)
+
+	DbSelectArea(cTRB)
+	If !DbSeek(VCUSTO)
+		(cTRB)->(DbAppend())
+		(cTRB)->CUSTO   := VCUSTO
+		(cTRB)->NOMECUS := NGSEEK('SI3',VCUSTO,1,'I3_DESC') 
+
+		If Year(VDTMPINI) = mv_par01
+			(cTRB)->ANOUM := nrealiza
+			totano1    := totano1 + nrealiza
+		Else
+			(cTRB)->ANODOIS := nrealiza
+			totano2      := totano2 + nrealiza
+		EndIf
+	Else
+		If Year(VDTMPINI) = mv_par01
+			(cTRB)->ANOUM := (cTRB)->ANOUM + nrealiza
+			totano1    := totano1 + nrealiza
+		Else
+			(cTRB)->ANODOIS := (cTRB)->ANODOIS + nrealiza
+			totano2      := totano2 + nrealiza
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C970GRAFI
+Grafico Custo das O.S. por Servico
+@author Inacio Luiz Kolling
+@since   /  /  
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C970GRAFI()
+
+	Local oTmpTbl2
+	
+	Private cTRBV := GetNextAlias()
+
+	cTilucen := "  "+cCadastro + ' '+str(mv_par01,4)+ STR0008+str(mv_par02,4) //" e "
+	
+	// ARQUIVO DE DADOS
+	aDBF3 := {{"CODIGO" , "C", 20,0},;
+			  {"NOMECOD", "C", 30,0},;
+			  {"VALOR1" , "N", 12,2},;
+			  {"VALOR2" , "N", 12,2}}
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF3 )
+	//Index
+	oTmpTbl2:AddIndex( "Ind02" , {"CODIGO"} )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	DbselectArea(cTRB)
+	Dbgotop()
+	While !Eof()
+		(cTRBV)->(DbAppend())
+		(cTRBV)->CODIGO  := (cTRB)->CUSTO
+		(cTRBV)->NOMECOD := NGSEEK('SI3',(cTRB)->CUSTO,1,'SUBSTR(I3_DESC,1,20)') 
+		(cTRBV)->VALOR1  := (cTRB)->ANOUM
+		(cTRBV)->VALOR2  := (cTRB)->ANODOIS
+		DbselectArea(cTRB)
+		Dbskip()
+	End
+
+	// 1- linha titulo do grafico (janela)
+	// 2- linha titulo da direita do grafico
+	// 3- linha titulo superior do grafico
+	// 4- linha titulo da direita do grafico
+	// 5- linha titulo da inferior do grafico
+	// 6- linha series do grafico
+	// 7- leitura ("A" - Arquivo temporario,"M" - Matriz)
+	// 8- alias doa arquivo temporario com os dados /ou
+	// 9- matriz com os dados
+
+	vCRIGTXT := NGGRAFICO(" "+cTilucen," ",STR0016,cTilucen,STR0017,{Str(mv_par01),Str(mv_par02)},"A",(cTRBV))
+
+	oTmpTbl2:Delete()
+
+	DbselectArea(cTRB)
+	DbGotop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C970PRINT
+Impressao do Custo das O.S. por Servico  
+@author Inacio Luiz Kolling
+@since   /  /   
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function C970PRINT()
+
+	Local cString    := (cTRB)
+	Local cDesc1     := cCadastro +" "+str(mv_par01,4)+STR0008+str(mv_par02,4) //" e "
+	Local cDesc2     := ""
+	Local cDesc3     := ""
+	Local wnrel      := "MNTC970"
+
+	Private aReturn  := { STR0020, 1,STR0021, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private Titulo   := cDesc1
+	Private Tamanho  := "M"
+	Private cPerg    := "XXXXX" //Nao retirar, para funcionar CABEC
+
+	//+--------------------------------------------------------------+
+	//| Envia controle para a funcao SETPRINT                        |
+	//+--------------------------------------------------------------+
+	wnrel:=SetPrint(cString,wnrel,Nil,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	EndIf
+
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| C970Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} C970Imp
+Chamada do Relatório  
+@author Inacio Luiz Kolling
+@since 26/06/97 
+@version undefined
+@param lEnd, logical, descricao
+@param wnRel, , descricao
+@param titulo, , descricao
+@param tamanho, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function C970Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := "", nCntImpr := 0
+	
+	Private li := 80, m_pag := 1
+	Private Cabec2   := ' '
+	Private nomeprog := "MNTC970"
+	Private Cabec1   := STR0023 //"C. Custo   Nome do Centro de Custo                           Ano "
+
+	cabec1 := cabec1 + str(mv_par01,4)+Space(16)+'%'+Space(8)+STR0013+str(mv_par02,4)+Space(14)+STR0027 //"Ano " # '%    Difer. %'
+	nTipo := IIF(aReturn[4]==1,15,18)
+
+	/*
+	************************************************************************************************************************************
+	*<empresa>                                                                                                        Folha..: xxxxx   *
+	*SIGA /<nome .04                                 <     titulo do relatorio    >                                   DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                Emissao: dd/mm/aa*
+	************************************************************************************************************************************
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	************************************************************************************************************************************
+	C. Custo            Nome do Centro de Custo                          Ano 9999           %         Ano 9999           %    Difer. %
+	************************************************************************************************************************************
+	XXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX   999.999.999,99   99.999,99   999.999.999,99   99.999,99   99.999,99
+
+	Total                                                  999.999.999,99               999.999.999,99
+	*/
+
+	DbSelectArea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+	While !(cTRB)->(Eof())
+
+		IncRegua()
+		NGSOMALI(58)
+		@li,000 Psay (cTRB)->CUSTO     Picture '@!'
+		@li,023 Psay (cTRB)->NOMECUS   Picture '@!'
+		@li,053 Psay (cTRB)->ANOUM     Picture '@E 999,999,999.99'
+		@li,070 Psay (cTRB)->PERCENT1  Picture '@E 999,999,999.99'
+		@li,086 Psay (cTRB)->ANODOIS   Picture '@E 999,999,999.99'
+		@li,101 Psay (cTRB)->PERCENT2  Picture '@E 999,999,999.99'
+		@li,118 Psay (cTRB)->PERCENTD  Picture '@E 999,999,999.99'
+
+		(cTRB)->(DbSkip())
+	End
+
+	NGSOMALI(58)
+	NGSOMALI(58)
+	@li,000 Psay STR0025 //"TOTAL"
+	@li,053 Psay totano1 Picture '@E 999,999,999.99'
+	@li,086 Psay totano2 Picture '@E 999,999,999.99'
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+	MS_FLUSH()
+	DbGotop()
+
+Return Nil

@@ -1,0 +1,558 @@
+#Include "MNTR600.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR600
+Relatório de Bens Cadastrados
+
+@author NG Informática
+@since XX/06/97
+@version 1.0
+@return Nil Nulo
+/*/
+//---------------------------------------------------------------------
+Function MNTR600() 
+    
+	Local aNGBEGINPRM := NGBEGINPRM()
+    
+	Local cString := "ST9"
+	Local cDesc1  := STR0001 //"Relatório dos Bens cadastrados no sistema com opção de apresentar"
+	Local cDesc2  := STR0002 //"detalhes de cadastramento. O usuário poderá utilizar a opção "
+	Local cDesc3  := STR0003 //"'Parâmetros' para a obtenção dos Bens de seu interesse."
+	Local wnrel   := "MNTR600"
+    
+	Private aReturn  := { STR0004, 1, STR0005, 2, 2, 1, "", 1} //"Zebrado" ## "Administração"
+	Private nLastKey := 0
+	Private cPerg    := "MNT600"
+	Private cTitulo  := STR0006 //"Cadastro de Bens"
+	Private nTamanho := "M"
+    
+    /*---------------------------------------------------------------
+    Vetor utilizado para armazenar retorno da função MNT045TRB,
+    criada de acordo com o item 18 (RoadMap 2013/14)
+    ---------------------------------------------------------------*/
+	Private vFilTRB := MNT045TRB()
+    
+	SetKey(VK_F4, {|| MNT045FIL( vFilTRB[2] )})
+    
+    /*---------------------------------------------------------------
+     Variáveis utilizadas para parâmetros:
+     
+     MV_PAR01   De Centro de Custos
+     MV_PAR02   Até Centro de Custos
+     MV_PAR03   De Centro de Trabalho
+     MV_PAR04   Até Centro de Trabalho
+     MV_PAR05   De Família de Bens
+     MV_PAR06   Até Família de Bens
+     MV_PAR07   De Código do Bem
+     MV_PAR08   Até Código do Bem
+     MV_PAR09   Características         1 - Mostra 2 - Nao Mosta
+     MV_PAR10   Descrição Bem           1 - Mostra 2 - Nao Mosta
+     MV_PAR11   Manutenções             1 - Mostra 2 - Nao Mosta
+     MV_PAR12   Imprime Peças Repos     1 - Sim    2 - Nao
+    ---------------------------------------------------------------*/
+	Pergunte(cPerg,.F.)
+    
+    /*---------------------------------------------------------------
+     Envia controle para a funcao SETPRINT
+    ---------------------------------------------------------------*/
+	wnrel := SetPrint(cString, wnrel, cPerg, cTitulo, cDesc1, cDesc2, cDesc3, .F., "")
+    
+	SetKey(VK_F4, {|| })
+    
+	If nLastKey = 27
+		Set Filter To
+		dbSelectArea("STI")
+        
+		MNT045TRB( .T., vFilTRB[1], vFilTRB[2])
+        
+		Return Nil
+	Endif
+    
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| R600Imp(@lEnd,wnRel,cTitulo,nTamanho)},cTitulo)
+    
+	dbSelectArea("STI")
+    
+	MNT045TRB( .T., vFilTRB[1], vFilTRB[2])
+    
+	NGRETURNPRM(aNGBEGINPRM)
+    
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R600Imp
+Imprime o relatório no modelo padrão
+
+@author Waldemiro L. Lustosa
+@since 13/11/1995
+@version 1.0
+@return Nil Nulo
+/*/
+//---------------------------------------------------------------------
+Static Function R600Imp(lEnd,wnRel,cTitulo,nTamanho)
+    
+    Local cRodaTxt  := ""
+    Local nCntImpr  := 0
+    Local nTamPro   := TamSX3("TPY_CODPRO")[1]
+    Local nTamBem   := TamSX3("B1_DESC")[1] - 15
+    Local lImpRel   := .F.
+    
+    // Contadores de linha e página
+    Private li := 80 ,m_pag := 1
+    Private Cabec1       := " "
+    Private Cabec2       := " "
+    Private NomeProg     := "MNTR600"
+    Private nTipo        := 0
+    Private cQuebraCusto := Space(09)
+    Private cQuebraTraba := Space(06)
+    Private cQuebraFamil := Space(06)
+    
+    // Verifica se deve comprimir ou nao                            ³
+    nTipo  := IIF(aReturn[4] == 1, 15, 18)
+    
+    //          1         2         3         4         5         6         7         8         9         0         1         2         3
+    //0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+    //_____________________________________________________________________________________________________________________________________
+    //
+    //C.Custo.: XXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    C.Trabalho.: XXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //
+    //Familia.: XXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //
+    //*************************************************************************************************************************************
+    //
+    //Bem.......: XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Calend: XXX XXXXXXXX27XXXXXXXXXXXXXXXXX  Bem Padrao: XXX
+    //Pai.......: XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //Fornecedor: XXXXXXXXXXXXXXXXXXXX XXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  Fabricante: XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //Modelo....: XXXXXXXXXXXXXXXXXXXX Serie..: XXXXXXXXXXXXXXXX  Dt.Compra.: dd/mm/aaaa      Cod.Imob: XXXXXXXX     Prazo Gar.: XXXXXX X
+    //Dt Garant.: dd/mm/aaaa           Prior .: XXX               Cod.Estoq.: XXXXXXXXXXXXXXX Tem Estr: XX           Contador..: XXXXXXXXX
+    //Dt Acomp..: dd/mm/aaaa           Var/Dia: XXXXXX            Limite Con: XXXXXX          Sit.Bem.: XXXXXXXXX    Sit.Manut.: XXXXXXXXXX
+    //Custo Hora: 999.999,99            Local.: XXXXXX            Tipo(PCP).: X             Recur/Ferr: XXXXXX            Chapa: XXXXXX
+    //Vida Util.: X             Valor Vida Ut.: 999.999.999  Unid.Vida Util.: X           Valor Compra: X.XXX.XXX.XXX,XX
+    //Cliente...: XXXXXX                 Nome.: XXXXXXXXXXXXXXXXX30XXXXXXXXXXX         Data Instalacao: XX/XX/XXXX
+    //Ponderacao: Jan  Fev  Mar  Abr  Mai  Jun  Jul  Ago  Set  Out  Nov   Dez
+    //            X,XX X,XX X,XX X,XX X,XX X,XX X,XX X,XX X,XX X,XX X,XX, X,XX
+    //Caracter..: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXX XXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXX XXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXX XXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXX XXXXXXXXXX
+    //Descricao.: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //            XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //Manutencao: XXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Sequencia: XXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //            XXXXXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Sequencia: XXX XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    //Pec. de Reposicao: XXXXXXXXXXXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXX Quantidade: XXXXXXXXX Unidade: XXXXXXXXXX
+    //                   XXXXXXXXXXXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXX Quantidade: XXXXXXXXX Unidade: XXXXXXXXXX
+    //                   XXXXXXXXXXXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXX Quantidade: XXXXXXXXX Unidade: XXXXXXXXXX
+    
+    // Define o índice de leitura do arquivo de Bens
+    
+    
+    dbSelectArea("ST9")
+    dbSetOrder(2)
+    dbSeek(xFilial("ST9") + MV_PAR01, .T.)
+    
+    SetRegua(LastRec())
+    
+    // Percorre ST9 para ler as Estruturas
+    While !EoF() .And. ST9->T9_FILIAL == xFilial("ST9") .And.;
+            ST9->T9_CCUSTO <= MV_PAR02
+        
+        IncRegua()
+        
+        If ST9->T9_CENTRAB < MV_PAR03 .Or. ST9->T9_CENTRAB > MV_PAR04
+            dbSkip()
+            Loop
+        EndIf
+        
+        If ST9->T9_CODFAMI < MV_PAR05 .Or. ST9->T9_CODFAMI > MV_PAR06
+            dbSkip()
+            Loop
+        EndIf
+        
+        cCCusto   := ST9->T9_CCUSTO
+        cCentra   := ST9->T9_CENTRAB
+        cFamilia  := ST9->T9_CODFAMI
+        lPrime    := .T.
+        
+        While !Eof() .And. ST9->T9_FILIAL == xFilial("ST9")            .And.;
+                ST9->T9_CCUSTO  == cCCUSTO .And. ST9->T9_CENTRAB == cCENTRA  .And.;
+                ST9->T9_CODFAMI == CFAMILIA
+            
+            IncRegua()
+            If ST9->T9_CODBEM < MV_PAR07 .Or. ST9->T9_CODBEM  > MV_PAR08
+                dbSkip()
+                Loop
+            EndIf
+            
+            If MNT045STB( ST9->T9_CODBEM, vFilTRB[2] )
+                dbSkip()
+                Loop
+            EndIf
+            
+            If lPrime
+                lPrime := .F.
+                Li := 80
+            EndIf
+            
+            /*---------------------------------------------------------------
+             Verifica se o Bem tem Bem Pai
+            ---------------------------------------------------------------*/
+            dbSelectArea("STC")
+            dbSetOrder(03)
+            cChave := ST9->T9_CODBEM
+            
+            While .T.
+                If dbSeek(xFilial("STC") + cChave)
+                    cChave := STC->TC_CODBEM
+                    dbSkip()
+                    Loop
+                EndIf
+                Exit
+            EndDo
+            
+            lImpRel := .T.
+            
+            nAtual  := ST9->(Recno())  // guarda o endereco do Bem Atual
+            
+            MNTR600LIN()
+            
+            @ Li,000 Psay STR0011 //"Bem.......:"
+            @ Li,012 Psay ST9->T9_CODBEM
+            @ Li,029 Psay Substr(ST9->T9_NOME,1,40)
+            @ Li,070 Psay STR0012 //"Calend:"
+            @ Li,078 Psay ST9->T9_CALENDA
+            @ Li,082 Psay NGSEEK('SH7',ST9->T9_CALENDA,1,'Substr(H7_DESCRI,1,27)')
+            
+            dbSelectArea("ST9")
+            
+            @ Li,111 Psay STR0013 //"Bem Padrao:"
+            
+            If ST9->T9_PADRAO == 'S'
+                @ Li,123 Psay STR0014 //"SIM"
+            Else
+                @ Li,123 Psay STR0015 //"NAO"
+            EndIf
+            
+            MNTR600LIN()
+            
+            /*---------------------------------------------------------------
+             Impressão da segunda linha do Bem
+            ---------------------------------------------------------------*/
+            If ST9->T9_CODBEM != cChave
+                dbSelectArea("ST9")
+                dbSetOrder(01)
+                dbSeek(xFilial("ST9")+cChave)
+                @ Li,000 Psay STR0016 //"Pai.......:"
+                @ Li,012 Psay cChave
+                @ Li,029 Psay ST9->T9_NOME
+                MNTR600LIN()
+            EndIf
+            dbSelectArea("ST9")
+            dbSetOrder(02)
+            dbGoTo(nAtual)
+            
+            /*---------------------------------------------------------------
+             Impressão da terceira linha do Bem
+            ---------------------------------------------------------------*/
+            @ Li,000 Psay STR0017 //"Fornecedor:"
+            @ Li,012 Psay ST9->T9_FORNECE
+            @ Li,033 Psay ST9->T9_LOJA
+            @ Li,038 Psay NGSEEK('SA2',ST9->T9_FORNECE+ST9->T9_LOJA,1,'Substr(A2_NOME,1,30)')
+            
+            @ Li,070 Psay STR0018 //"Fabricante:"
+            @ Li,082 Psay ST9->T9_FABRICA
+            @ Li,090 Psay NGSEEK('ST7',ST9->T9_FABRICA,1,'T7_NOME')
+            MNTR600LIN()
+            
+            /*---------------------------------------------------------------
+             Impressão da quarta linha do Bem
+            ---------------------------------------------------------------*/
+            @ Li,000 Psay STR0019 //"Modelo....:"
+            @ Li,012 Psay ST9->T9_MODELO
+            @ Li,032 Psay STR0020 //"Série..:"
+            @ Li,041 Psay ST9->T9_SERIE
+            @ Li,058 Psay STR0021 //"Dt.Compra.:"
+            @ Li,070 Psay ST9->T9_DTCOMPR Picture '99/99/9999'
+            @ Li,085 Psay STR0022 //"Cod.Imob:"
+            @ Li,095 Psay ST9->T9_CODIMOB
+            @ Li,111 Psay STR0023 //"Prazo Gar.:"
+            @ Li,122 Psay ST9->T9_PRGARAN Picture "@E 999999"
+            @ Li,129 Psay ST9->T9_UNGARAN
+            MNTR600LIN()
+            
+            /*---------------------------------------------------------------
+             Impressão da quinta linha do Bem
+            ---------------------------------------------------------------*/
+            @ Li,000 Psay STR0024 //"Dt.Garant.:"
+            @ Li,012 Psay ST9->T9_DTGARAN Picture '99/99/9999'
+            @ Li,032 Psay STR0025 //"Prior..:"
+            @ Li,041 Psay ST9->T9_PRIORID
+            @ Li,053 Psay STR0045 //"Data Instalacao:"
+            @ Li,070 Psay  ST9->T9_DTINSTA Picture '99/99/9999'
+            @ Li,085 Psay STR0027 //"Tem Estr:"
+            @ Li,095 Psay ST9->T9_ESTRUTU
+            @ Li,111 Psay STR0028 //"Contador..:"
+            @ Li,122 Psay ST9->T9_POSCONT Picture '999999999'
+            MNTR600LIN()
+            
+            /*---------------------------------------------------------------
+             Impressao da sexta linha do Bem
+            ---------------------------------------------------------------*/
+            @ Li,000 Psay STR0029 //"Dt Acomp..:"
+            @ Li,012 Psay ST9->T9_DTULTAC Picture '99/99/9999'
+            @ Li,032 Psay STR0030 //"Var/Dia:"
+            @ Li,041 Psay ST9->T9_VARDIA
+            @ Li,058 Psay STR0031 //"Limite Con:"
+            @ Li,070 Psay ST9->T9_LIMICON
+            @ Li,085 Psay STR0032 //"Sit.Bem.:"
+            @ Li,095 Psay ST9->T9_SITBEM
+            @ Li,111 Psay STR0033 //"Sit.Manut.:"
+            @ Li,123 Psay ST9->T9_SITMAN
+            MNTR600LIN()
+            
+            @ Li,000 Psay STR0034 //"Custo Hora:"
+            @ Li,012 Psay ST9->T9_CUSTOHO Picture "@E 999,999.99"
+            @ Li,033 Psay STR0035 //"Local.:"
+            @ Li,041 Psay ST9->T9_LOCAL
+            @ Li,058 Psay STR0036 //"Tipo(PCP).:"
+            @ Li,070 Psay ST9->T9_FERRAME
+            @ Li,083 Psay STR0037 //"Recur/Ferr:"
+            @ Li,095 Psay ST9->T9_RECFERR
+            MNTR600LIN()
+            
+            @ Li,000 Psay STR0039 //"Vida Util.:"
+            @ Li,012 Psay ST9->T9_CONTDES
+            @ Li,025 Psay STR0040 //"Valor Vida Ut.:"
+            @ Li,041 Psay ST9->T9_VALODES Picture '@E 999,999,999'
+            @ Li,053 Psay STR0041 //"Unid.Vida Util.:"
+            @ Li,070 Psay ST9->T9_UNIDDES
+            @ Li,081 Psay STR0042 //"Valor Compra:"
+            @ Li,095 Psay ST9->T9_VALCPA Picture '@E 999,999,999.99'
+            MNTR600LIN()
+            
+            @ Li,000 Psay STR0043 //"Cliente...:"
+            @ Li,012 Psay ST9->T9_CLIENTE
+            @ Li,034 Psay STR0044 //"Nome.:"
+            @ Li,041 Psay NGSEEK('SA1',ST9->T9_CLIENTE,1,'Substr(A1_NOME,1,30)')
+            
+            dbSelectArea("TPE")
+            dbSetOrder(01)
+            dbSeek(xFilial("TPE")+ST9->T9_CODBEM)
+            @ Li,083 Psay "Contador 2:"
+            @ Li,097 Psay TPE->TPE_POSCON Picture '999999'
+            MNTR600LIN()
+            
+            @ Li,000 Psay STR0026 //"Cod.Estoq.:"
+            @ Li,012 Psay ST9->T9_CODESTO
+            @ Li,035 Psay STR0038 //"Chapa:"
+            @ Li,042 Psay ST9->T9_CHAPA
+            
+            /*---------------------------------------------------------------
+             Impressão da linha de Ponderação de Uso do Bem
+            ---------------------------------------------------------------*/
+            MNTR600LIN()
+            @ Li,000 Psay STR0046 //"Ponderação:  Jan  Fev  Mar  Abr  Mai  Jun  Jul  Ago  Set  Out  Nov  Dez"
+            MNTR600LIN()
+            
+            If !Empty(ST9->T9_PONDERA)
+                @ Li,012 Psay ST9->T9_PONDERA
+                MNTR600LIN()
+            EndIf
+            
+            /*---------------------------------------------------------------
+             Impressao da linha de Características
+            ---------------------------------------------------------------*/
+            If MV_PAR09 = 1
+                
+                lPrimeiro = .F.
+                dbSelectArea("STB")
+                dbSetOrder(01)
+                dbSeek(xFilial("STB")+ST9->T9_CODBEM)
+                While !Eof() .And. STB->TB_FILIAL = xFilial("STB") .And. STB->TB_CODBEM = ST9->T9_CODBEM
+                    
+                    If !lPrimeiro
+                        @ Li,000 Psay STR0047 //"Caracter..:"
+                    EndIf
+                    lPrimeiro = .T.
+                    @ Li,012 Psay NGSEEK('TPR',STB->TB_CARACTE,1,'Substr(TPR_NOME,1,40)')
+                    @ Li,053 Psay STB->TB_DETALHE
+                    @ Li,069 Psay STB->TB_UNIDADE
+                    MNTR600LIN()
+                    
+                    dbSelectArea("STB")
+                    dbSkip()
+                    Loop
+                EndDo
+                
+            EndIf
+            
+            /*---------------------------------------------------------------
+             Impressao da Linha de Descrição
+            ---------------------------------------------------------------*/
+            If MV_PAR10 = 1
+                
+                NGIMPMEMO(ST9->T9_DESCRIC,80,0,STR0048,.F.,.F.,"MNTR600LIN()",58)
+                MNTR600LIN()
+                
+            EndIf
+            
+            /*---------------------------------------------------------------
+             Impressão da linha de Manutencões
+            ---------------------------------------------------------------*/
+            If MV_PAR11 = 1
+                dbSelectArea("STF")
+                dbSetOrder(01)
+                dbSeek(xFilial("STF")+ST9->T9_CODBEM)
+                
+                lPrimeiro = .F.
+                lPosicao  = .F.
+                
+                While !Eof() .And. STF->TF_FILIAL = xFilial("STF") .And. STF->TF_CODBEM = ST9->T9_CODBEM
+                    
+                    If !lPrimeiro
+                        @ Li,000 Psay STR0049 //"Manutencao:"
+                    EndIf
+                    
+                    @ Li,012 Psay STF->TF_SERVICO
+                    @ Li,019 Psay NGSEEK('ST4',STF->TF_SERVICO,1,'Substr(T4_NOME,1,37)')
+                    @ Li,060 Psay STR0050 //"Sequencia:"
+                    @ Li,071 Psay STF->TF_SEQRELA Picture "@!"
+                    @ Li,075 Psay STF->TF_NOMEMAN
+                    
+                    MNTR600LIN()
+                    
+                    lPrimeiro = .T.
+                    
+                    dbSelectArea("STF")
+                    dbSkip()
+                    Loop
+                EndDo
+                
+                If lPosicao
+                    MNTR600LIN()
+                EndIf
+            EndIf
+            MNTR600LIN()
+            If MV_PAR12 = 1
+                dbSelectArea("TPY")
+                dbSetOrder(01)
+                If dbSeek(xFilial("TPY") + ST9->T9_CODBEM)
+                    
+                    lPriPeca := .T.
+                    While !EoF() .And. TPY->TPY_FILIAL = xFilial("TPY") .And.;
+                            TPY->TPY_CODBEM = ST9->T9_CODBEM
+                        
+                        MNTR600LIN()
+                        
+                        If LPRIPECA
+                            @ Li,000 Psay STR0054 //"Pec. de Reposicao:"
+                            lPriPeca := .F.
+                        EndIf
+
+                        @ Li,019 Psay TPY->TPY_CODPRO
+                        @ Li,026 + nTamPro Psay NGSEEK('SB1',TPY->TPY_CODPRO,1,'B1_DESC')
+                        @ Li,050 + nTamPro + nTamBem Psay STR0055 //"Quantidade:"
+                        @ Li,062 + nTamPro + nTamBem Psay TPY->TPY_QUANTI
+                        @ Li,075 + nTamPro + nTamBem Psay STR0056 //"Unidade:"
+                        @ Li,084 + nTamPro + nTamBem Psay NGSEEK('SB1',TPY->TPY_CODPRO,1,'B1_UM')
+
+                        dbSelectArea("TPY")
+                        dbSkip()
+                    EndDo
+                EndIf
+            EndIf
+            MNTR600LIN()
+            @ Li,000 Psay Replicate("-",132)
+            
+            dbSelectArea("ST9")
+            dbGoTo(nAtual)
+            dbSkip()
+        EndDo
+    EndDo
+    
+    If lImpRel
+        Roda( nCntImpr, cRodaTxt, nTamanho)
+    Else
+        MsgInfo(STR0008, STR0007)
+        Return .F.
+    EndIf
+    
+    /*---------------------------------------------------------------
+     Devolve a condição original do arquivo principal
+    ---------------------------------------------------------------*/
+    RetIndex("ST9")
+    RetIndex("SA2")
+    RetIndex("ST7")
+    RetIndex("STF")
+    RetIndex("ST4")
+    
+    Set Filter To
+    Set device to Screen
+    
+    If aReturn[5] == 1
+        Set Printer To
+        dbCommitAll()
+        OurSpool(wnrel)
+    EndIf
+    
+    MS_FLUSH()
+    
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Quebra
+Impressão do cabeçalho de quebra
+
+@author NG Informática
+@since XX/06/97
+@version 1.0
+@return .T. Verdadeiro
+/*/
+//---------------------------------------------------------------------
+Static Function Quebra()
+    
+    @ Li,000 Psay STR0051 //"C.Custo.: "
+    @ Li,010 Psay ST9->T9_CCUSTO
+    @ Li,031 Psay NGSEEK('SI3',ST9->T9_CCUSTO,1,'Substr(I3_DESC,1,40)')
+    
+    @ Li,073 Psay STR0052 //"C.Trabalho.: "
+    @ Li,087 Psay ST9->T9_CENTRAB
+    @ Li,094 Psay NGSEEK('SHB',ST9->T9_CENTRAB,1,'Substr(HB_NOME,1,35)')
+    
+    MNTR600LIN()
+    
+    @ Li,000 Psay STR0053 //"Família.: "
+    @ Li,010 Psay ST9->T9_CODFAMI
+    @ Li,017 Psay NGSEEK('ST6',ST9->T9_CODFAMI,1,'Substr(T6_NOME,1,40)')
+    
+    Li++
+    
+    @ Li,000 Psay "************************************************************************************************************************************"
+    
+    MNTR600LIN()
+    
+    dbSelectArea("ST9")
+    
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR600LIN
+Incrementa linha e controla salto de Página
+
+@author NG Informática
+@since XX/06/97
+@version 1.0
+@return Nil Nulo
+/*/
+//---------------------------------------------------------------------
+Function MNTR600LIN()
+    
+    Li++
+    If Li > 58
+        Cabec(cTitulo,cabec1,cabec2,nomeprog,nTamanho,nTipo)
+        Quebra()
+    EndIf
+    
+Return .T.

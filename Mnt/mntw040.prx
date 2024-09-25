@@ -1,0 +1,435 @@
+#INCLUDE "MNTW040.ch"
+#INCLUDE "RWMAKE.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TOPCONN.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW040
+Programa para enviar workflow de aviso de distribuicao para o executante
+da solicitacao de servico
+@type function
+@source MNTW040.prw
+@author Marcos Wagner Junior
+@since 25/07/2008
+@sample MNTW040()
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW040(cCodSS,cCodExec,cCdServ, cTrbW040)
+
+	Local aArea			:= GetArea()
+	Local oTmpTRB
+
+	Private aVETINR		:= {}
+	Private cSS 		:= cCodSS
+	Private cEMAIL_All	:= ""
+	Private cTRB		:= IIf(ValType(cTrbW040) <> "U", cTrbW040, GetNextAlias())
+
+	MNTW040Tmp(@cTRB, @oTmpTRB)
+	Processa({ || MNTW040TRB( cCodExec )})
+
+	dbSelectArea(cTRB)
+	dbGoTop()
+
+	If RecCount() <= 0
+		//Deleta o arquivo temporário
+		oTmpW040:Delete()
+		MsgInfo(STR0024) //Não há dados para gerar o workflow.
+		Return .F.
+	EndIf
+
+	Processa({ || MNTW040TWF()}) //WorkFlow
+
+	RestArea(aArea)
+
+	//Deleta o arquivo temporário
+	oTmpTRB:Delete()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTWBEMLOC
+Consistencia da relacao do campo 'Bem'
+
+@type function
+
+@source MNTW040.prw
+
+@author Marcos Wagner Junior
+@since 25/07/2008
+
+@sample MNTWBEMLOC()
+
+@return Caracter
+/*/
+//---------------------------------------------------------------------
+Static Function MNTWBEMLOC(cTIPOS)
+
+	Local cNOBEMTJ := Space(30)
+	Local aOldArea := GetArea()
+	Local cEstrut
+
+	If !Empty(TQB->TQB_CODBEM)
+		If cTIPOS == "B"
+			If ExistCpo("ST9",TQB->TQB_CODBEM)
+				dbSelectArea("TAF")
+				dbSetOrder(6)
+				If dbSeek(xFilial("TAF")+"X"+"1"+TQB->TQB_CODBEM)
+					cEstrut := NGLocComp(TQB->TQB_CODBEM,"1")
+					cNOBEMTJ := AllTrim(TQB->TQB_CODBEM) + ' - ' + AllTrim(cEstrut)
+				Else
+					cNOBEMTJ := AllTrim(TQB->TQB_CODBEM) + ' - ' + AllTrim(NGSEEK("ST9",TQB->TQB_CODBEM,1,"T9_NOME"))
+				EndIf
+			EndIf
+		Else
+			dbSelectArea("TAF")
+			dbSetOrder(7)
+			If dbSeek(xFilial("TAF")+"X2"+Substr(TQB->TQB_CODBEM,1,3))
+				cEstrut := NGLocComp(Substr(TQB->TQB_CODBEM,1,3),"2")
+				cNOBEMTJ := AllTrim(TQB->TQB_CODBEM) + " - " + AllTrim(cEstrut)
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aOldArea)
+
+Return cNOBEMTJ
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW040SYP
+Faz a concatenacao do campo memo gravado na SYP
+
+@type function
+
+@source MNTW040.prw
+
+@author Marcos Wagner Junior
+@since 25/07/2008
+
+@sample MNTW040SYP()
+
+@return Caracter
+/*/
+//---------------------------------------------------------------------
+Static Function MNTW040SYP()
+
+	Local cDescServ := ''
+	Local aOldArea  := GetArea()
+
+	dbSelectArea("SYP")
+	dbSetOrder(01)
+	dbSeek(xFilial("SYP")+TQB->TQB_CODMSS)
+	While !EoF() .And. SYP->YP_FILIAL = xFilial("SYP") .And. TQB->TQB_CODMSS = SYP->YP_CHAVE
+		If Empty(cDescServ)
+			cDescServ := StrTran(SYP->YP_TEXTO,"\13\10","")
+		Else
+			cDescServ := cDescServ+'<br>'+StrTran(SYP->YP_TEXTO,"\13\10","")
+		EndIf
+		dbSkip()
+	End
+
+	RestArea(aOldArea)
+
+Return cDescServ
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW040TRB
+Geração de arquivo temporário.
+@type function
+
+@author Éwerton Cercal
+@since 10/10/2014
+
+@sample MNTW040TRB()
+
+@param  cExec , Caracter, Código do executante. (Não é utilizado da TQB pois uma
+SS pode ser distribuida para varios executantes.)
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function MNTW040TRB( cExec )
+
+	Local aAux     := {}  
+	Local aEmails  := {}
+	Local cMailTSK := ""
+	Local cCdResp  := ""
+	Local cNmServ  := ""
+	Local cCodUser := ""
+	Local nIndex   := 0
+
+	dbSelectArea("TQB")
+	dbSetOrder(1)
+	If DbSeek(xFilial("TQB")+cSS)
+
+		dbSelectArea("TQ4")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQ4") + TQB->TQB_CDEXEC)
+			cCodUser := TQ4->TQ4_CDEXEC
+			aAdd( aAux, Lower( AllTrim( TQ4-> TQ4_EMAIL1 ) ) ) // email do executante
+		EndIf
+
+		dbSelectArea("TQ3")
+		dbSetOrder(1)
+		If DbSeek(xFilial("TQ3") + TQB->TQB_CDSERV)
+			cCdResp := TQ3->TQ3_CDRESP
+			cNmServ := TQ3->TQ3_NMSERV
+		EndIf
+
+		PswOrder(2)
+		If PswSeek(cCdResp)
+			cCodUser := PswRet(1)[1][1]
+			aAdd( aAux, AllTrim( UsrRetMail( cCodUser ) ) ) // email do responsável pelo tipo serviço
+		EndIf
+
+		PswOrder(1)
+		If PswSeek(TQB->TQB_CDSOLI)
+			cCodUser := PswRet(1)[1][1]
+			aAdd( aAux, AllTrim( UsrRetMail( cCodUser ) ) ) // email do solicitante
+		EndIf
+
+		//----------------------------------------
+		// Carrega array de emails sem repetições
+		//----------------------------------------
+		For nIndex := 1 to Len( aAux )
+			If aScan( aEmails, aAux[ nIndex ] ) == 0
+				aAdd( aEmails, aAux[ nIndex ] )
+			EndIf
+		Next nIndex
+
+		//--------------------------------------
+		// Busca emails da tabela TSk
+		//--------------------------------------
+		cMailTSK := NgEmailWF("1","MNTW040")
+		aAux := StrTokArr( cMailTSK  , ";" )
+
+		//--------------------------------------
+		// Adiciona emails da STK sem repetições
+		//--------------------------------------
+		For nIndex := 1 to Len( aAux )
+			If aScan( aEmails, aAux[ nIndex ] ) == 0
+				aAdd( aEmails, aAux[ nIndex ] )
+			EndIf
+		Next nIndex
+
+		//-------------------------------
+		// Cria string de emails
+		//-------------------------------
+		For nIndex := 1 to Len( aEmails )
+
+			If nIndex > 1
+				cEMAIL_All += ';'
+			EndIf
+
+			cEMAIL_All += aEmails[nIndex]
+
+		Next nIndex
+
+		RecLock((cTRB),.T.)
+
+		(cTRB)->SOLICI := TQB->TQB_SOLICI
+		(cTRB)->TIPOSS := TQB->TQB_TIPOSS
+		(cTRB)->NOMBEM := NGRELABEMLOC( TQB->TQB_TIPOSS, TQB->TQB_CODBEM )
+		(cTRB)->CDEXEC := cExec
+		(cTRB)->DTABER := TQB->TQB_DTABER
+		(cTRB)->HRABER := TQB->TQB_HOABER
+		(cTRB)->CDSERV := TQB->TQB_CDSERV
+		(cTRB)->NMSERV := cNmServ
+		(cTRB)->CDRESP := cCdResp
+		(cTRB)->CDSOLI := TQB->TQB_CDSOLI
+		(cTRB)->NMSOLI := Padr(UsrRetName(cCodUser),40)
+		(cTRB)->CODMSS := TQB->TQB_CODMSS
+		(cTRB)->DESMSS := MSMM((cTRB)->CODMSS,80)
+
+		MsUnlock("TQB")
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW040TWF
+Programa para exportar dados para gerar workflow
+com alerta de Ordem de Serviço atrasada.
+@type function
+
+@author Éwerton Cercal
+@since 10/10/2014
+
+@sample MNTW040TWF()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function MNTW040TWF()
+
+	Local aRegistros := {}
+	Local aArea      := GetArea()
+	Local cAssunto   := dToC( MsDate() ) + ' - ' + STR0018 + STR0022 + Space( 1 ) + cSS // Abertura de Solicitação de Serviço ### SS
+	Local i			 := 0
+	Local lFacilit	 := If(FindFunction("MNTINTFAC"),MNTINTFAC(),.F.)
+
+	dbSelectArea( cTRB )
+	dbSetOrder( 1 )
+
+	aAdd( aRegistros, { (cTRB)->SOLICI, (cTRB)->NMSOLI, (cTRB)->CDEXEC, (cTRB)->DTABER, (cTRB)->HRABER, (cTRB)->CDSERV,;
+		(cTRB)->NOMBEM, (cTRB)->DESMSS } )
+
+
+	If !Empty( aRegistros ) .Or. !Empty( cEMAIL_All )
+
+		If FindFunction( 'NGUseTWF' ) .And. NGUseTWF( 'MNTW040' )[1]
+
+			aFields := {;
+							{ 'strTitle'        , STR0035         },; // Solicitação de Serviços - Aviso de Inclusão
+							{ 'strSbTitle'      , STR0019 + cSS   },; // Solicitação de Serviço a ser atendida - S.S. 00005
+							{ 'head1.strNumSol' , STR0010         },; // Solicitação
+							{ 'head1.strSolici' , STR0011         },; // Solicitante
+							{ 'head1.strExecut' , STR0012         },; // Executante
+							{ 'head1.strDtAber' , STR0014         },; // Dt. Abertura
+							{ 'head1.strHrAber' , STR0015         },; // Hr. Abertura
+							{ 'head1.strTpServ' , STR0016         },; // Tipo Serviço
+							{ 'col1.strNumSol'  , aRegistros[1,1] },;
+							{ 'col1.strSolici'  , aRegistros[1,2] },;
+							{ 'col1.strExecut'  , aRegistros[1,3] },;
+							{ 'col1.strDtAber'  , aRegistros[1,4] },;
+							{ 'col1.strHrAber'  , aRegistros[1,5] },;
+							{ 'col1.strTpServ'  , aRegistros[1,6] },;
+							{ 'head2.strBemLoc' , STR0013         },; // Bem/Localização
+							{ 'col2.strBemLoc'  , aRegistros[1,7] },;
+							{ 'head3.strService', STR0017         },; // Serviço
+							{ 'col3.strService' , aRegistros[1,8] };
+						}
+
+			dbSelectArea( 'TQB' )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( 'TQB' ) + (cTRB)->SOLICI )
+
+			// Função para criação do objeto da classe TWFProcess responsavel pelo envio de workflows.
+			aProcess := NGBuildTWF( cEMAIL_All, 'MNTW040', OemToAnsi( cAssunto ), 'MNTW040', aFields )
+
+			// Consiste se foi possivel a inicialização do objeto TWFProcess.
+			If aProcess[1]
+
+				// Função que realiza o envio do workflow conforme definições do objeto passado por parãmetro.
+				NGSendTWF( aProcess[2] )
+
+			EndIf
+
+		Else
+
+			//Estrutura HTML do e-mail
+			cMailMsg := '<html>'
+			cMailMsg += '<head>'
+			cMailMsg += '<meta http-equiv="Content-Language" content="pt-br">'
+			cMailMsg += '<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">'
+			cMailMsg += '<title>' + STR0035 + '</title>'
+			cMailMsg += '</head>'
+			cMailMsg += '<body bgcolor="#FFFFFF">'
+			cMailMsg += '<p><b><font face="Arial">' + STR0019 + cSS + '</font></b></p>'
+			cMailMsg += '<div align="left">'
+			cMailMsg += '<table border=0 WIDTH=100% cellpadding="2">'
+			cMailMsg += '<tr>'
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="10%" ><b><font face="Arial" size="2">' + STR0010 + '</font></b></td>' //"Solicitação"
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="10%" ><b><font face="Arial" size="2">' + STR0011 + '</font></b></td>' //"Solicitante"
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="30%" ><b><font face="Arial" size="2">' + STR0012 + '</font></b></td>' //"Executante"
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="15%" ><b><font face="Arial" size="2">' + STR0014 + '</font></b></td>' //"Dt. Abertura"
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="15%" ><b><font face="Arial" size="2">' + STR0015 + '</font></b></td>' //"Hr. Abertura"
+			cMailMsg += '   <td bgcolor="#C0C0C0" align="left" width="20%" ><b><font face="Arial" size="2">' + STR0016 + '</font></b></td>' //"Tipo Serviço"
+			cMailMsg += '</tr>'
+
+			ProcRegua(Len(aRegistros))
+
+			For i := 1 To Len(aRegistros)
+
+				IncProc()
+
+				cNomeExec  := IIf( lFacilit, NGSEEK( 'ST1', aRegistros[i,3], 1,'T1_NOME' ), NGSEEK( 'TQ4', aRegistros[i,3], 1, 'TQ4_NMEXEC' ) )
+
+				cMailMsg += '<tr>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="10%" ><font face="Arial" size="1">' + aRegistros[i,1] + '</font></td>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="10%" ><font face="Arial" size="1">' + aRegistros[i,2] + '</font></td>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="30%" ><font face="Arial" size="1">' + cNomeExec + '</font></td>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="15%" ><font face="Arial" size="1">' + dToC( aRegistros[i,4] ) + '</font></td>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="15%" ><font face="Arial" size="1">' + aRegistros[i,5] + '</font></td>'
+				cMailMsg += '    <td bgcolor="#EEEEEE" align="left" width="20%" ><font face="Arial" size="1">' + NGSEEK( 'TQ3', TQB->TQB_CDSERV, 1, 'TQ3_NMSERV' ) + '</font></td>'
+				cMailMsg += '</tr>'
+			Next i
+				cMailMsg += '     <tr>'
+				cMailMsg += '		    <td bgcolor="#C0C0C0" align="left" width="100%" colspan="7"><b><font face="Arial" size="2">' + STR0013 + '</b><br>' //"Bem/Localização"
+				cMailMsg += '	    </tr>'
+
+			ProcRegua(Len(aRegistros))
+
+			For i := 1 To Len(aRegistros)
+				IncProc()
+				cMailMsg += '     <tr>'
+				cMailMsg += '         <td bgcolor="#EEEEEE" align="left" width="100%" colspan="7"><font face="Arial" size="1">' + MNTWBEMLOC( TQB->TQB_TIPOSS ) + '</font></td>'
+				cMailMsg += '     </tr>'
+			Next i
+				cMailMsg += '     <tr>'
+				cMailMsg += '		    <td bgcolor="#C0C0C0" align="left" width="100%" colspan="7"><b><font face="Arial" size="2">' + STR0017 + '</b><br>' //"Serviço"
+				cMailMsg += '	    </tr>'
+
+			ProcRegua(Len(aRegistros))
+
+			For i := 1 To Len(aRegistros)
+				IncProc()
+				cMailMsg += '     <tr>'
+				cMailMsg += '         <td bgcolor="#EEEEEE" align="left" width="100%" colspan="7"><font face="Arial" size="1">' + aRegistros[i,8] + '<br>'
+				cMailMsg += '     </tr>'
+			Next i
+
+			cMailMsg += '</table>'
+			cMailMsg += '<br><hr>'
+			cMailMsg += '</body>'
+			cMailMsg += '</html>'
+
+			// Função de envio de WorkFlow
+			NGSendMail(, cEMAIL_All + Chr( 59 ), , , OemToAnsi( cAssunto ), , cMailMsg )
+
+		EndIf
+
+	EndIf
+
+	RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW040Tmp
+Cria tabela temporária
+@author bruno.souza
+@since 23/02/2017
+@version undefined
+@param cTrbW040, characters, Alias da tabela temporária
+@param oTmpW040, object, Instância da classe FwTemporary Table
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTW040Tmp(cTrbW040, oTmpW040)
+
+	Local aDBF := {}
+
+	//Número S.S. / Tipo S.S. / Nome do Bem / Código do Executante / Data Abertura / Tipo Serviço / Solicitante e Descrição do Serviço
+	aDBF := {	{"SOLICI" ,"C",TAMSX3("TQB_SOLICI")[1],0},;
+				{"TIPOSS" ,"C",1,0},;
+				{"NOMBEM" ,"C",TamSx3('T9_NOME')[1],0},;
+				{"CDEXEC" ,"C",25,0},;
+				{"DTABER" ,"D",8,0},;
+				{"HRABER" ,"C",5,0},;
+				{"CDSERV" ,"C",TAMSX3("TQB_CDSERV")[1],0},;
+				{"NMSERV" ,"C",25,0},;
+				{"CDSOLI" ,"C",TAMSX3("TQB_CDSOLI")[1],0},;
+				{"NMSOLI" ,"C",25,0},;
+				{"CDRESP" ,"C",Len(TQ3->TQ3_CDRESP),0},;
+				{"CODMSS" ,"C",06,0},;
+				{"DESMSS" ,"M",80,0}	}
+
+	//Intancia classe FWTemporaryTable
+	oTmpW040 := FWTemporaryTable():New( cTrbW040, aDBF )
+	//Cria indices
+	oTmpW040:AddIndex( "Ind01" , {"SOLICI"} )
+	//Cria a tabela temporaria
+	oTmpW040:Create()
+
+Return

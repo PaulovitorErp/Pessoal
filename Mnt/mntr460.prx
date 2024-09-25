@@ -1,0 +1,992 @@
+#INCLUDE "mntr460.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR460
+Analise de duracao por tipo de servico.  
+@author Deivys Joenck
+@since 11/01/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTR460()
+
+	Local oReport 
+	Local aArea := GetArea()
+	
+	//+---------------------------------------------+
+	//| Guarda conteudo e declara variaveis padroes |
+	//+---------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private vVETHORAS   := {}
+	Private cTRB		:= GetNextAlias()
+
+	If FindFunction("TRepInUse") .And. TRepInUse()
+		//-- Interface de impressao
+		oReport := ReportDef()
+		oReport:SetPortrait() //Default Retrato  
+		oReport:PrintDialog()
+	Else
+		MNTR460R3()
+	EndIf
+
+	//+--------------------------------------------+
+	//| Retorna conteudo de variaveis padroes      |
+	//+--------------------------------------------+	
+	NGRETURNPRM(aNGBEGINPRM)
+	RestArea(aArea)  
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR460R3
+Analise de duracao por tipo de servico.  
+@author Ricardo Dal Ponte  
+@since 30/01/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTR460R3()
+
+	Local WNREL      := "MNTR460"
+	Local LIMITE     := 132
+	Local cDESC1     := STR0001 //"Duracao de Bens por Tipo de Servico."
+	Local cDESC2     := " "
+	Local cDESC3     := " "
+	Local cSTRING    := "ST9"
+
+	Private NOMEPROG := "MNTR460"
+	Private TAMANHO  := "M"
+	Private aRETURN  := {STR0002,1,STR0003,2,2,1,"",1}  //"Zebrado"###"Administracao"
+	Private TITULO   := cDESC1
+	Private cPERG    := "MNT460" 
+	
+	//+--------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros                         |
+	//| mv_par01     -  De  Familia                                  |
+	//| mv_par02     -  Ate Familia                                  |
+	//| mv_par03     -  De  Bem                                      |
+	//| mv_par04     -  Ate Bem                                      |
+	//| mv_par05     -  Servico                                      |
+	//| mv_par06     -  Sequencia                                    |
+	//| mv_par07     -  Data In¡cio                                  |
+	//| mv_par08     -  Data Fim                                     |
+	//| mv_par09     -  Considera inativo                            | 
+	//| mv_par10     -  Considera Transferencias                     | 
+	//| mv_par11     -  Tipo de Custo (1-Medio, 2-Standard)          |
+	//+--------------------------------------------------------------+
+	Pergunte(cPERG,.F.)
+
+	WNREL := SetPrint(cSTRING,WNREL,cPERG,TITULO,cDESC1,cDESC2,cDESC3,.F.,"")
+
+	If nLASTKEY == 27
+		Set Filter To
+		dbSelectArea("ST9")
+		Return
+	EndIf
+	SetDefault(aRETURN,cSTRING)
+
+	RptStatus({|lEND| MNTR460IMP(@lEND,WNREL,TITULO,TAMANHO)},TITULO)
+	Dbselectarea("ST9")
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR460IMP
+Chamada do Relatório     
+@author Deivys Joenck  
+@since 11/01/2001
+@version undefined
+@param lEND, logical, descricao
+@param WNREL, , descricao
+@param TITULO, , descricao
+@param TAMANHO, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTR460IMP(lEND,WNREL,TITULO,TAMANHO)
+	
+	Local cRODATXT		:= ""
+	Local nCNTIMPR		:= 0
+	Local nMULT			:= 1
+	Local lPrint		:= .T.
+	Local oTmpTbl1	 			 //Tabela Temporaria
+
+	Private li    := 80 
+	Private m_pag := 1
+	
+	nTIPO := IIF(aRETURN[4]==1,15,18)
+
+	CABEC1 := STR0004 //"Bem               Evento      Descricao                   Data Ini.    Data Fim    Cont.Inic.    Cont.Fim         Custo   Vida Util"
+	CABEC2 := " "
+
+	/*/
+	*************************************************************************************************************************************        
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	*************************************************************************************************************************************
+	Bem               Evento      Descricao                   Data Ini.    Data Fim    Cont.Inic.    Cont.Fim         Custo   Vida Util
+	*************************************************************************************************************************************
+
+	Fam¡lia  - xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                                                                                  
+	Servico  - xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	xxxxxxxxxxxxxxxx  xxxxxxxxxx  xxxxxxxxxxxxxxxxxxxx        xx/xx/xx     xx/xx/xx     xxxxxxxxx   xxxxxxxxx    xxx.xxx,xx   x
+	PN492             COMPRA                                  01/01/00                                        xxx.xxx.xxx,x         ****INFORMACAO DO ST9
+	TRANSFER.   PARA FILIAL 03              01/01/00     11/12/01         1.000       1.000          0.00         ****INFORMACAO DO TQ2
+	TRANSFER.   DA FILIAL 03                02/01/00     11/12/01         1.000       1.000          0.00         ****INFORMACAO DO TQ2
+	RODIZIO     CA002\DD                    02/01/00     20/12/01         1.000                                   ****INFORMACAO DO STZ
+	CORRETIVA   LUBRIF\01\000001            02/03/01     04/03/01         1.900       2.000        200.00   *     ****INFORMACAO DO STS OU STJ                                                                  
+	PRODUCAO    BURACO                      06/04/01     05/06/01         2.200       2.300                       ****INFORMACAO DO STY
+	PREVENTIVA  LUBRIF\01\000005            07/08/01     10/08/01         1.900       2.000        200.00   *     ****INFORMACAO DO STS OU STJ                                                                  
+	PRODUCAO    BURACO                      06/10/01     25/10/01         2.200       2.300                       ****INFORMACAO DO STY
+	RODIZIO     CA002\ID                    02/01/01     20/12/01         2.200                                   ****INFORMACAO DO STZ
+	CORRETIVA   LUBRIF\01\000020            02/03/02                      2.300       2.400        300.00   *     ****INFORMACAO DO STS OU STJ                                                                  
+	INATIVO     0004\FALTA DE TECNICO       10/06/02                                                              ****INFORMACAO DO ST9                                                                  
+	/*/
+
+	//³ Processa Arquivo         
+	aDBF :={{"FAMIBEM" , "C", 06,0},;
+			{"SERVICO" , "C", 06,0},;
+			{"CODBEM"  , "C", 16,0},;
+			{"ORDEM"   , "C", 06,0},;
+			{"BEMPAI"  , "C", 16,0},;
+			{"LOCALI"  , "C", 06,0},;
+			{"PRODUC"  , "C", 15,0},;
+			{"DTINIC"  , "D", 08,0},;
+			{"DTFIM"   , "D", 08,0},;
+			{"CONTINI" , "N", 09,0},;
+			{"CONTFIM" , "N", 09,0},;
+			{"CUSTO"   , "N", 09,2},;
+			{"SEQREL"  , "C", 03,0},;
+			{"FILORI"  , "C", 02,0},;
+			{"HORATR"  , "C", 05,0},;
+			{"FILDES"  , "C", 02,0},;
+			{"TIPARQ"  , "C", 03,0}}
+
+	//Intancia classe FWTemporaryTable (TABELA 1)
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aDBF )	
+	//Cria indices
+	oTmpTbl1:AddIndex( "Ind01" , {"FAMIBEM","SERVICO","CODBEM","DTINIC","DTFIM","CONTINI"}  )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	Processa({|lEND| MNTR460ST9()},STR0029) //"Processando Arquivo..."
+
+	lPri := .T.
+	Dbselectarea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+	While !Eof()
+		cFAMIBEM := (cTRB)->FAMIBEM
+		If !Empty(cFAMIBEM)
+			If lPri
+				NgSomali(58)
+				NgSomali(58)
+				lPri := .F.
+			Else
+				NgSomali(58)
+				NgSomali(58)
+				NgSomali(58)
+			EndIf
+			@ Li,000 Psay STR0006 //"Familia -"
+			@ Li,010 Psay cFAMIBEM
+			@ Li,018 Psay NGSEEK('ST6',cFAMIBEM,1,'T6_NOME')
+		EndIf
+		Dbselectarea(cTRB)
+		While !Eof() .And.  (cTRB)->FAMIBEM == cFAMIBEM
+			cSERVICO := (cTRB)->SERVICO
+
+			NgSomali(58)
+			NgSomali(58)
+			@ Li,000 Psay STR0007 //"Servico -"
+			@ Li,010 Psay (cTRB)->SERVICO
+			@ Li,018 PSAY NGSEEK('ST4',(cTRB)->SERVICO,1,'T4_NOME')
+
+			Dbselectarea(cTRB)
+			While !Eof() .And. (cTRB)->FAMIBEM == cFAMIBEM .And. (cTRB)->SERVICO == cSERVICO
+
+				cCODBEM := (cTRB)->CODBEM
+				cKeyTQ2 := ""
+
+				NgSomaLi(58)
+				NgSomaLi(58)
+				dbSelectArea("TQ2")
+				dbSetOrder(2)
+				dbSeek(xFilial("TQ2")+cCODBEM+xFilial("ST9"),.T.)
+				While (TQ2->TQ2_FILIAL == xFILIAL("TQ2") .And. TQ2->TQ2_CODBEM == cCODBEM .And. TQ2->TQ2_FILDES == xFILIAL("ST9") .And. DTOS(TQ2->TQ2_DATATR)+TQ2->TQ2_HORATR <= DTOS((cTRB)->DTINIC)+(cTRB)->HORATR)
+					cKeyTQ2 := TQ2->TQ2_CODBEM+TQ2->TQ2_FILDES+DTOS(TQ2->TQ2_DATATR)+TQ2->TQ2_HORATR
+					dbSkip()
+				EndDo
+
+				If !Empty(cKeyTQ2)
+					dbSkip(-1)
+					@ Li,000 Psay TQ2->TQ2_CODBEM
+					@ Li,018 Psay STR0044 //"Transfer."
+					@ Li,030 Psay STR0045+TQ2->TQ2_FILORI //"da Filial "
+					@ Li,058 Psay TQ2->TQ2_DATATR Picture '99/99/99'
+					@ Li,071 Psay TQ2->TQ2_DATATR Picture '99/99/99'
+					@ Li,086 Psay TQ2->TQ2_POSCON Picture '@E 999,999'
+					@ Li,098 Psay TQ2->TQ2_POSCON Picture '@E 999,999'
+					@ Li,107 Psay 0 Picture '@E 999,999,999.99'
+				Else
+					@ Li,000 Psay (cTRB)->CODBEM
+					@ Li,018 Psay STR0023 //"Compra"
+					DbSelectArea("ST9")
+					DbSetOrder(1)
+					DbSeek(xFILIAL("ST9")+cCODBEM)
+					@ Li,058 Psay ST9->T9_DTCOMPR Picture '99/99/99'
+					@ Li,107 Psay ST9->T9_VALCPA  Picture '@E 999,999,999.99'  
+				EndIf
+
+				Dbselectarea(cTRB)
+				While !Eof() .And.  (cTRB)->FAMIBEM == cFAMIBEM .And. ;
+				(cTRB)->SERVICO == cSERVICO .And. (cTRB)->CODBEM == cCODBEM
+
+					IncRegua()
+					If lPrint
+						NgSomali(58)
+					EndIf
+
+					lPrint := .T.
+
+					If (cTRB)->TIPARQ = "STZ"
+						@ Li,018 Psay STR0024        //"Rodizio"
+						@ Li,030 Psay Alltrim((cTRB)->BEMPAI)+"\"+Alltrim((cTRB)->LOCALI)
+					ElseIf (cTRB)->TIPARQ = "STS" .or. (cTRB)->TIPARQ = "STJ"
+						If Alltrim((cTRB)->SEQREL) <> "0"
+							@ Li,018 Psay STR0025    //"Preventiva"
+						Else
+							@ Li,018 Psay STR0026    //"Corretiva"
+						EndIf
+						@ Li,030 Psay Alltrim((cTRB)->SERVICO)+"\"+Alltrim((cTRB)->SEQREL)+"\"+Alltrim((cTRB)->ORDEM)
+					ElseIf (cTRB)->TIPARQ = "STY"
+						@ Li,018 Psay STR0027        //"Producao"
+						@ Li,030 Psay (cTRB)->PRODUC
+					ElseIf (cTRB)->TIPARQ = "TQ2" .And. cKeyTQ2 != (cTRB)->CODBEM+(cTRB)->FILDES+DTOS((cTRB)->DTINIC)+(cTRB)->HORATR
+						@ Li,018 Psay STR0044        //"Transfer."
+						@ Li,030 Psay If((cTRB)->FILORI == xFILIAL("ST9"),STR0046+AllTrim((cTRB)->FILDES),STR0044+AllTrim((cTRB)->FILORI)) //"para Filial "##"da Filial "
+					Else
+						lPrint := .F.
+					EndIf
+
+					If lPrint
+						@ Li,058 Psay (cTRB)->DTINIC  Picture '99/99/99'
+						@ Li,071 Psay (cTRB)->DTFIM   Picture '99/99/99'
+						@ Li,086 Psay (cTRB)->CONTINI Picture '@E 999,999'
+						@ Li,098 Psay (cTRB)->CONTFIM Picture '@E 999,999'
+						@ Li,107 Psay (cTRB)->CUSTO   Picture '@E 999,999,999.99'
+						If (cTRB)->TIPARQ = "STS" .Or. (cTRB)->TIPARQ = "STJ"
+							Dbselectarea("ST4")
+							Dbsetorder(1)
+							Dbseek(xFILIAL("ST4")+(cTRB)->SERVICO)
+							If ST4->T4_VIDAUTI == 'S'
+								@ Li,123 Psay "*"
+							EndIf
+						EndIf
+					EndIf
+
+					Dbselectarea(cTRB)
+					DbSkip()
+				End
+
+				Dbselectarea("ST9")
+				Dbsetorder(1)
+				Dbseek(xFILIAL("ST9")+cCODBEM)
+				If ST9->T9_SITBEM = "I"
+					If lPrint
+						NgSomaLi(58)
+					EndIf
+					@ Li,018 Psay STR0028 //"Inativo"
+					Dbselectarea("TPJ")
+					Dbsetorder(1)
+					If Dbseek(xFILIAL("TPJ")+ST9->T9_MTBAIXA)
+						@ Li,030 Psay ST9->T9_MTBAIXA+"\"+SubStr(TPJ->TPJ_DESMOT,1,20)
+					EndIf
+					@ Li,058 Psay ST9->T9_DTBAIXA Picture '99/99/99'
+				EndIf
+				DbSelectArea(cTRB)
+				lPrint := .T.
+			End
+		End
+	End
+
+	RODA(nCNTIMPR,cRODATXT,TAMANHO) 
+
+	//+------------------------------------------------------------+
+	//| Devolve a condicao original do arquivo principal           |
+	//+------------------------------------------------------------+
+	RetIndex("ST9")
+	RetIndex("STS")
+	RetIndex("STJ")
+	RetIndex("STL")
+	RetIndex("STT")
+	RetIndex("STZ")
+	RetIndex("STY")
+	RetIndex("TQ2")
+
+	Set Filter To
+	Set Device To Screen
+	If aReturn[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(WNREL)
+	EndIf
+	
+	Ms_Flush()
+	oTmpTbl1:Delete() //Deleta arquivo temporario
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR460ST9
+Processa os arquivos 
+@author Inácio Luiz Kolling
+@since 11/10/2002
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTR460ST9()
+	
+	cCONDST91 := '(st9->t9_codbem >= MV_PAR03 .And. st9->t9_codbem <= MV_PAR04)'
+
+	cCONDSTJ  := 'stj->tj_situaca = "L" .And. stj->tj_termino = "S" .And. '
+	cCONDSTJ  := cCONDSTJ + 'stj->tj_servico = MV_PAR05 .And. stj->tj_seqrela == MV_PAR06'
+	cCONDSTJ  := cCONDSTJ + ' .And. (stj->tj_dtorigi >= MV_PAR07 .And. stj->tj_dtorigi <= MV_PAR08)' 
+
+	cCONDSTS  := 'sts->ts_situaca = "L" .And. sts->ts_termino = "S" .And. '
+	cCONDSTS  := cCONDSTS + 'sts->ts_servico = MV_PAR05 .And. sts->ts_seqrela == MV_PAR06'
+	cCONDSTS  := cCONDSTS + ' .And. (sts->ts_dtorigi >= MV_PAR07 .And. sts->ts_dtorigi <= MV_PAR08)'
+
+	cBem      := " "
+	
+	Dbselectarea("ST9")
+	Dbsetorder(4)
+	Dbseek(xFILIAL("ST9")+MV_PAR01,.T.)
+	Procregua(LastRec())
+	
+	While !Eof() .And. ST9->T9_FILIAL == xFILIAL('ST9') .And.;
+	ST9->T9_CODFAMI <= MV_PAR02
+
+		Incproc()
+		If ST9->T9_SITBEM == 'I'
+			If MV_PAR09 == 1 
+				DbSkip()
+				Loop 
+			EndIf
+		EndIf
+
+		If &(cCONDST91)
+			Dbselectarea("STJ")
+			Dbsetorder(2)
+			If Dbseek(xFILIAL("STJ")+"B"+ST9->T9_CODBEM)
+				nCont := 0
+				While !Eof() .And. STJ->TJ_FILIAL == xFILIAL('STJ') .And. ;
+				STJ->TJ_TIPOOS = "B" .And. STJ->TJ_CODBEM == ST9->T9_CODBEM
+
+					If &(cCONDSTJ)
+						cCUSTO := 0.00
+						Dbselectarea("STL")
+						Dbsetorder(1)
+						
+						If Dbseek(xFILIAL("STL")+STJ->TJ_ORDEM+STJ->TJ_PLANO)
+							While !Eof() .And. STL->TL_FILIAL == xFILIAL('STL') .And. ;
+											   STL->TL_ORDEM == STJ->TJ_ORDEM .And. STL->TL_PLANO == STJ->TJ_PLANO
+
+								If Alltrim(STL->TL_SEQRELA) <> "0"
+
+									If MV_PAR11 = 2 //STANDARD 
+										aVETCUST := NGCUSTSTAN(STL->TL_CODIGO,STL->TL_TIPOREG)
+										nVCUSTO  := aVETCUST[1] //Custo standard 
+										vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+																STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+																STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+										nQTDHORAS := vVETHORAS[1]
+										nVCUSTO  := nVCUSTO * nQTDHORAS
+									Else
+										nVCUSTO  := STL->TL_CUSTO
+									EndIf
+									cCUSTO += nVCUSTO
+								EndIf
+								Dbselectarea("STL")
+								DbSkip()
+							End
+						EndIf
+						//Procura a posicao do contador inicial com bem+data+hora
+						nCONT1INI := NGACUMHIST(ST9->T9_CODBEM,STJ->TJ_DTMRINI,STJ->TJ_HOMRINI,1) 
+
+						//Procura a posicao do contador fim com bem+data+hora
+						nCONT1FIM := NGACUMHIST(ST9->T9_CODBEM,STJ->TJ_DTMRFIM,STJ->TJ_HOMRFIM,1)               
+
+						GRAVAR460(ST9->T9_CODFAMI,STJ->TJ_SERVICO,ST9->T9_CODBEM,STJ->TJ_ORDEM, , , ,STJ->TJ_DTMRINI,STJ->TJ_DTMRFIM,;
+						nCONT1INI[1],nCONT1FIM[1],cCUSTO,;
+						STJ->TJ_SEQRELA, , ,STJ->TJ_HOMPINI,"STJ")
+
+						If STJ->TJ_CODBEM <> cBem
+							cBem := STJ->TJ_CODBEM
+							G460STYSTZ(ST9->T9_CODBEM,STJ->TJ_SERVICO,STJ->TJ_DTMRFIM)
+						EndIf
+					EndIf
+					Dbselectarea("STJ")
+					DbSkip()
+				End
+			EndIf
+
+			Dbselectarea("STS")
+			Dbsetorder(2)
+			If Dbseek(xFILIAL("STS")+"B"+ST9->T9_CODBEM)
+				While !Eof() .And. STS->TS_FILIAL == xFILIAL('STS') .And. ;
+								   STS->TS_TIPOOS = "B" .And. STS->TS_CODBEM == ST9->T9_CODBEM
+					If &(cCONDSTS)
+						cCUSTO := 0.00
+						Dbselectarea("STT")
+						Dbsetorder(1)
+						
+						If Dbseek(xFILIAL("STT")+STS->TS_ORDEM+STS->TS_PLANO)
+							While !Eof() .And. STT->TT_FILIAL == xFILIAL('STT') .And. ;
+											   STT->TT_ORDEM == STS->TS_ORDEM .And. STT->TT_PLANO == STS->TS_PLANO
+								If Alltrim(STT->TT_SEQRELA) <> "0"
+									If MV_PAR11 = 2 //STANDARD 
+										aVETCUST  := NGCUSTSTAN(STT->TT_CODIGO,STT->TT_TIPOREG)
+										nVCUSTO   := aVETCUST[1] //Custo standard 
+										vVETHORAS := NGTQUATINS( STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+																 STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+																 STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+										nQTDHORAS := vVETHORAS[1]
+										nVCUSTO   := nVCUSTO * nQTDHORAS
+									Else
+										nVCUSTO   := STT->TT_CUSTO 
+									EndIf
+
+									cCUSTO += nVCUSTO
+								EndIf
+								Dbselectarea("STT")
+								DbSkip()
+							End
+						EndIf
+						
+						//Procura a posicao do contador incicial com bem+data+hora
+						nCONT1INI := NGACUMHIST(ST9->T9_CODBEM,STS->TS_DTMRINI,STS->TS_HOMRINI,1)
+
+						//Procura a posicao do contador fim com bem+data+hora
+						nCONT1FIM := NGACUMHIST(ST9->T9_CODBEM,STS->TS_DTMRFIM,STS->TS_HOMRFIM,1)
+
+						GRAVAR460(ST9->T9_CODFAMI,STS->TS_SERVICO,ST9->T9_CODBEM,STS->TS_ORDEM, , , ,STS->TS_DTMRINI,STS->TS_DTMRFIM,;
+						nCONT1INI[1],nCONT1FIM[1],cCUSTO,;
+						STS->TS_SEQRELA, , ,STS->TS_HOMPINI,"STS")
+
+						If STS->TS_CODBEM <> cBem
+							cBem := STS->TS_CODBEM
+							G460STYSTZ(ST9->T9_CODBEM,STS->TS_SERVICO,STS->TS_DTMRFIM)
+						EndIf
+					EndIf
+					Dbselectarea("STS")
+					DbSkip()
+				End
+			EndIf
+		EndIf
+		Dbselectarea("ST9")
+		DbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GRAVAR460
+Grava os campos no Arquivo de Trabalho 
+@author Elisangela Costa
+@since 09/07/02 
+@version undefined
+@param VFAMIL, , descricao
+@param VSERV, , descricao
+@param VCODBEM, , descricao
+@param VORDEM, , descricao
+@param VBEMPAI, , descricao
+@param VLOCAL, , descricao
+@param VPRODUC, , descricao
+@param VDATINI, , descricao
+@param VDATFIM, , descricao
+@param VCONTINI, , descricao
+@param VCONTFIM, , descricao
+@param VCUSTO, , descricao
+@param VSEQREL, , descricao
+@param VFILORI, , descricao
+@param VFILDES, , descricao
+@param VHORA, , descricao
+@param VARQ, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function GRAVAR460(VFAMIL,VSERV,VCODBEM,VORDEM,VBEMPAI,VLOCAL,VPRODUC,VDATINI,VDATFIM,;
+	VCONTINI,VCONTFIM,VCUSTO,VSEQREL,VFILORI,VFILDES,VHORA,VARQ)
+	
+	(cTRB)->(DbAppend())
+	(cTRB)->FAMIBEM  := VFAMIL
+	(cTRB)->SERVICO  := VSERV 
+	(cTRB)->CODBEM   := VCODBEM
+	(cTRB)->ORDEM    := VORDEM
+	(cTRB)->BEMPAI   := VBEMPAI    
+	(cTRB)->LOCALI   := VLOCAL
+	(cTRB)->PRODUC   := VPRODUC
+	(cTRB)->DTINIC   := VDATINI
+	(cTRB)->DTFIM    := VDATFIM
+	(cTRB)->CONTINI  := VCONTINI 
+	(cTRB)->CONTFIM  := VCONTFIM
+	(cTRB)->CUSTO    := VCUSTO
+	(cTRB)->SEQREL   := VSEQREL
+	(cTRB)->FILORI   := VFILORI
+	(cTRB)->FILDES   := VFILDES
+	(cTRB)->HORATR   := VHORA //Utilizada apenas para ordenar transferencias/compra
+	(cTRB)->TIPARQ   := VARQ
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} G460STYSTZ
+Grava os campos no Arquivo de Trabalho   
+@author Elisangela Costa
+@since 09/07/02
+@version undefined
+@param cCODBEM, characters, descricao
+@param cSERVICO, characters, descricao
+@param dDATAOS, date, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function G460STYSTZ(cCODBEM,cSERVICO,dDATAOS)
+	
+	Local cFamilia := Space(6)
+	Local cBem     := Space(16)
+
+	//Transferencias entre Filiais
+	If MV_PAR10 = 2
+		DbSelectArea("TQ2")
+		DbSetOrder(1)
+		If DbSeek(xFILIAL("TQ2")+ST9->T9_CODBEM)
+			While !Eof()                           .And.; 
+			TQ2->TQ2_FILIAL == xFILIAL("TQ2")   .And.; 
+			TQ2->TQ2_CODBEM == ST9->T9_CODBEM
+
+				If !(TQ2->TQ2_FILORI == xFILIAL("ST9") .OR. TQ2->TQ2_FILDES == xFILIAL("ST9"))
+					DbSkip()
+					Loop
+				EndIf
+
+				If TQ2->TQ2_DATATR < MV_PAR07 .Or. TQ2->TQ2_DATATR > MV_PAR08
+					DbSkip()
+					Loop
+				EndIf
+
+				GRAVAR460(ST9->T9_CODFAMI,cSERVICO,ST9->T9_CODBEM, , , , ,TQ2->TQ2_DATATR,TQ2->TQ2_DATATR,;
+				TQ2->TQ2_POSCON,TQ2->TQ2_POSCON, , ,TQ2->TQ2_FILORI, TQ2->TQ2_FILDES, TQ2->TQ2_HORATR, "TQ2") 
+
+				DbSelectArea("TQ2")
+				DbSkip()
+			End
+		EndIf
+	EndIf
+
+	//Movimentacao de Bens
+	Dbselectarea("STZ")
+	Dbsetorder(2)
+	Dbseek(xFILIAL("STZ")+cCODBEM+DTOS(dDATAOS),.T.)
+	While !Eof() .And. STZ->TZ_FILIAL == xFILIAL('STZ') .And. ;
+					   STZ->TZ_CODBEM == cCODBEM        .And. ;
+					   STZ->TZ_DATAMOV >= dDATAOS 
+
+		If STZ->TZ_DATAMOV >= MV_PAR07 .And. STZ->TZ_DATAMOV <= MV_PAR08
+			GRAVAR460(ST9->T9_CODFAMI,cSERVICO,ST9->T9_CODBEM, ,STZ->TZ_BEMPAI,STZ->TZ_LOCALIZ, ,;
+			STZ->TZ_DATAMOV,STZ->TZ_DATASAI,STZ->TZ_POSCONT,STZ->TZ_CONTSAI, , , , ,STZ->TZ_HORAENT,"STZ")
+		EndIf
+		Dbselectarea("STZ")
+		DbSkip()
+	End   
+
+	//Hist. de Retorno de Producao
+	Dbselectarea("STY")
+	Dbsetorder(2)
+	Dbseek(xFILIAL("STY")+cCODBEM+DTOS(dDATAOS),.T.)
+	While !Eof() .And. STY->TY_FILIAL == xFILIAL('STY')  .And. ;
+					   STY->TY_CODBEM == cCODBEM         .And. ;
+					   STY->TY_DATAINI >=  dDATAOS
+
+		If STY->TY_DATAINI >= MV_PAR07 .And. STY->TY_DATAINI <= MV_PAR08
+			DbSelectArea("STR")
+			DbSetOrder(1)
+			If DbSeek(xFilial("STR")+ST9->T9_CODFAMI+cBem+STY->TY_PRODUTO)
+				nPosFim := STR->TR_FATOR * STY->TY_QUANTI1 + STY->TY_POSINI1 
+			ElseIf DbSeek(xFilial("STR")+cFamilia+ST9->T9_CODBEM+STY->TY_PRODUTO)
+				nPosFim := STR->TR_FATOR * STY->TY_QUANTI1 + STY->TY_POSINI1 
+			Else   
+				nPosFim := STY->TY_POSINI1 + STY->TY_QUANTI1
+			EndIf 
+
+			GRAVAR460(ST9->T9_CODFAMI,cSERVICO,ST9->T9_CODBEM, , , ,STY->TY_PRODUTO,;
+			STY->TY_DATAINI,STY->TY_DATAFIM,STY->TY_POSINI1,nPosFim, , , , ,STY->TY_HORAINI,"STY")
+		EndIf
+		Dbselectarea("STY")
+		DbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Define as secoes impressas no relatorio  
+@author Elisangela Costa
+@since 30/01/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function ReportDef()
+	
+	Local oReport 
+	Local oSection1 
+	Local oSection2 
+	Local oSection3
+	Local oCell
+
+	Private c1DET01   := ""
+	Private c2DET01   := ""
+	Private c3CODBEM  := ""
+	Private c3EVENTO  := ""
+	Private c3DESCRI  := ""
+	Private c3DTINIC  := ""
+	Private c3DTFIM   := ""
+	Private c3CONTINI := ""
+	Private c3CONTFIM := ""
+	Private c3CUSTO   := ""
+	Private c3ASTE    := ""
+
+	//+-------------------------------------------------------------------------+
+	//| Criacao do componente de impressao                                      |
+	//|                                                                         |
+	//| TReport():New                                                           |
+	//| ExpC1 : Nome do relatorio                                               |
+	//| ExpC2 : Titulo                                                          |
+	//| ExpC3 : Pergunte                                                        |
+	//| ExpB4 : Bloco de codigo que sera executado na confirmacao da impressao  |
+	//| ExpC5 : Descricao                                                       |
+	//|                                                                         |
+	//+-------------------------------------------------------------------------+
+	oReport := TReport():New("MNTR460",OemToAnsi(STR0001),"MNT460",{|oReport| ReportPrint(oReport)},STR0001)
+
+	
+	//+--------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros                         |
+	//| mv_par01     // De  Familia                                  |
+	//| mv_par02     // At‚ Familia                                  |
+	//| mv_par03     // De  Bem                                      |
+	//| mv_par04     // At‚ Bem                                      |
+	//| mv_par05     // Servico                                      |
+	//| mv_par06     // Sequencia                                    |
+	//| mv_par07     // Data In¡cio                                  |
+	//| mv_par08     // Data Fim                                     |
+	//| mv_par09     // Considera inativo                            | 
+	//| mv_par10     // Considera Transferencias                     | 
+	//| mv_par11     // Tipo de Custo (1-Medio, 2-Standard)          |
+	//+--------------------------------------------------------------+
+	
+	cPERG    := "MNT460" 
+	
+	Pergunte(oReport:uParam,.F.)
+
+	//+------------------------------------------------------------------------+
+	//| Criacao da secao utilizada pelo relatorio                              |
+	//|                                                                        |
+	//| TRSection():New                                                        |
+	//| ExpO1 : Objeto TReport que a secao pertence                            |
+	//| ExpC2 : Descricao da seçao                                             |
+	//| ExpA3 : Array com as tabelas utilizadas pela secao. A primeira tabela  |
+	//|         sera considerada como principal para a seção.                  |
+	//| ExpA4 : Array com as Ordens do relatório                               |
+	//| ExpL5 : Carrega campos do SX3 como celulas                             |
+	//|         Default : False                                                |
+	//| ExpL6 : Carrega ordens do Sindex                                       |
+	//|         Default : False                                                |
+	//|                                                                        |
+	//+------------------------------------------------------------------------+
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//| Criacao da celulas da secao do relatorio                               | 
+	//|                                                                        | 
+	//| TRCell():New                                                           | 
+	//|  ExpO1 - Objeto TSection que a secao pertence                          | 
+	//|  ExpC2 - Nome da celula do relatório. O SX3 será consultado            |
+	//|  ExpC3 - Nome da tabela de referencia da celula                        |
+	//|  ExpC4 - Titulo da celula                                              |
+	//|          Default : X3Titulo()                                          |
+	//|  ExpC5 - Picture                                                       |
+	//|          Default : X3_PICTURE                                          |
+	//|  ExpC6 - Tamanho                                                       |
+	//|          Default : X3_TAMANHO                                          |
+	//|  ExpL7 - Informe se o tamanho esta em pixel                            |
+	//|          Default : False                                               |
+	//|  ExpB8 - Bloco de código para impressao.                               |
+	//|          Default : ExpC2                                               |
+	//|                                                                        |
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+	oSection1 := TRSection():New(oReport,STR0040,{"ST6"}) //"Familia"
+	oCell := TRCell():New(oSection1,"c1DET01","","","@!",50,/*lPixel*/,{||c1DET01})
+	TRPosition():New(oSection1,"ST6",1,{|| xFilial("ST6") + (cTRB)->FAMIBEM})
+
+	oSection2 := TRSection():New(oReport,STR0041,{"ST4"})//"Servico"
+	oCell := TRCell():New(oSection2,"c2DET01","","","@!",50,/*lPixel*/,{||c2DET01})
+	TRPosition():New(oSection2,"ST4",1,{|| xFilial("ST4") + (cTRB)->SERVICO})
+
+	oSection3 := TRSection():New(oReport,STR0032,{"ST9"})
+	oCell := TRCell():New(oSection3,"c3CODBEM","",STR0031,"@!",16,/*lPixel*/,{||c3CODBEM})//"Bem"
+	oCell := TRCell():New(oSection3,"c3EVENTO","",STR0032,"@!",11,/*lPixel*/,{||c3EVENTO})//"Evento"
+	oCell := TRCell():New(oSection3,"c3DESCRI","",STR0033,"@!",27,/*lPixel*/,{||c3DESCRI})//"Descricao"
+	oCell := TRCell():New(oSection3,"c3DTINIC","",STR0034,"99/99/9999",10,/*lPixel*/,{||c3DTINIC})//"Data Ini."
+	oCell := TRCell():New(oSection3,"c3DTFIM" ,"",STR0035,If(!Empty(c3DTFIM),'99/99/9999', ''),10,/*lPixel*/,{||c3DTFIM})//"Data Fim"
+	oCell := TRCell():New(oSection3,"c3CONTINI" ,"",STR0036,If(!Empty(c3CONTINI),'@E 999,999,999,999', ''),12,/*lPixel*/,{||c3CONTINI})//"Cont.Inic."
+	oCell := TRCell():New(oSection3,"c3CONTFIM" ,"",STR0037,If(!Empty(c3CONTFIM),'@E 999,999,999,999', ''),12,/*lPixel*/,{||c3CONTFIM})//"Cont.Fim"
+	oCell := TRCell():New(oSection3,"c3CUSTO" ,"",STR0038,"@E 9,999,999,999.99",12,/*lPixel*/,{||c3CUSTO})//"Custo"
+	oCell := TRCell():New(oSection3,"c3ASTE" ,"",STR0039,"@!",9,/*lPixel*/,{||c3ASTE})//"Vida Util"
+	oCell := TRPosition():New(oSection3,"ST9",1,{|| xFilial("ST9") + (cTRB)->CODBEM })
+
+	oSection3:Cell("c3CONTINI"):SetHeaderAlign("RIGHT") 
+	oSection3:Cell("c3CONTFIM"):SetHeaderAlign("RIGHT") 
+	oSection3:Cell("c3CUSTO")  :SetHeaderAlign("RIGHT")
+
+Return oReport 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Chamada do Relatório  
+@author douglas.constancio
+@since 21/06/06
+@version undefined
+@param oReport, object, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oReport)
+
+	Local oSection1 := oReport:Section(1)
+	Local oSection2 := oReport:Section(2)
+	Local oSection3 := oReport:Section(3)
+	Local oTmpTbl2	//Tabela Temporaria
+
+	Private aVETINR	:= {}
+	
+	aDBF :={{"FAMIBEM" , "C", 06,0},;
+			{"SERVICO" , "C", 06,0},;
+			{"CODBEM"  , "C", 16,0},;
+			{"ORDEM"   , "C", 06,0},;
+			{"BEMPAI"  , "C", 16,0},;
+			{"LOCALI"  , "C", 06,0},;
+			{"PRODUC"  , "C", 15,0},;
+			{"DTINIC"  , "D", 08,0},;
+			{"DTFIM"   , "D", 08,0},;
+			{"CONTINI" , "N", 09,0},;
+			{"CONTFIM" , "N", 09,0},;
+			{"CUSTO"   , "N", 09,2},;
+			{"SEQREL"  , "C", 03,0},;
+			{"FILORI"  , "C", 02,0},;
+			{"HORATR"  , "C", 05,0},;
+			{"FILDES"  , "C", 02,0},;
+			{"TIPARQ"  , "C", 03,0}}
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl2:= FWTemporaryTable():New( cTRB, aDBF )
+	//Cria indices
+	oTmpTbl2:AddIndex( "Ind01" , {"FAMIBEM","SERVICO","CODBEM","DTINIC","DTFIM","CONTINI"}  )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+	
+	Processa({|lEND| MNTR460ST9()},STR0029) //"Processando Arquivo..."
+
+	lPri := .T.
+	Dbselectarea(cTRB)
+	DbGoTop()
+	oReport:SetMeter(RecCount())
+	While !Eof() .And. !oReport:Cancel()
+		cFAMIBEM := (cTRB)->FAMIBEM
+		If !Empty(cFAMIBEM)
+			oSection1:Init()
+			If lPri
+				lPri := .F.
+			Else
+				oReport:SkipLine()
+			EndIf
+
+			c1DET01:= STR0006+" "+cFAMIBEM +" "+NGSEEK('ST6',cFAMIBEM,1,'T6_NOME')
+			oSection1:PrintLine()
+		EndIf
+		Dbselectarea(cTRB)
+		While !Eof() .And. !oReport:Cancel() .And.  (cTRB)->FAMIBEM == cFAMIBEM
+			cSERVICO := (cTRB)->SERVICO
+
+			oReport:SkipLine()
+
+			oSection2:Init()
+			c2DET01:= STR0007+" "+(cTRB)->SERVICO +" "+NGSEEK('ST4',(cTRB)->SERVICO,1,'T4_NOME')
+
+			oSection2:PrintLine()
+
+			Dbselectarea(cTRB)
+			While !Eof()  .And. !oReport:Cancel();
+			.And. (cTRB)->FAMIBEM == cFAMIBEM .And. (cTRB)->SERVICO == cSERVICO
+
+				oSection3:Init()
+				c3CODBEM  := ""
+				c3EVENTO  := ""
+				c3DESCRI  := ""
+				c3DTINIC  := ""
+				c3DTFIM   := ""
+				c3CONTINI := ""
+				c3CONTFIM := ""
+				c3CUSTO   := ""
+				c3ASTE    := ""
+
+				cCODBEM := (cTRB)->CODBEM
+				cKeyTQ2 := ""
+
+				oReport:SkipLine()
+
+				dbSelectArea("TQ2")
+				dbSetOrder(2)
+				dbSeek(xFilial("TQ2")+cCODBEM+xFilial("ST9"),.T.)
+				While (TQ2->TQ2_FILIAL == xFILIAL("TQ2") .And. TQ2->TQ2_CODBEM == cCODBEM .And. TQ2->TQ2_FILDES == xFILIAL("ST9") .And. DTOS(TQ2->TQ2_DATATR)+TQ2->TQ2_HORATR <= DTOS((cTRB)->DTINIC)+(cTRB)->HORATR)
+					cKeyTQ2 := TQ2->TQ2_CODBEM+TQ2->TQ2_FILDES+DTOS(TQ2->TQ2_DATATR)+TQ2->TQ2_HORATR
+					dbSkip()
+				EndDo
+
+				If !Empty(cKeyTQ2)
+					dbSkip(-1)
+					c3CODBEM := TQ2->TQ2_CODBEM
+					c3EVENTO := STR0044 //"Transfer."
+					c3DESCRI := STR0045+TQ2->TQ2_FILORI //"da Filial "
+					c3DTINIC := TQ2->TQ2_DATATR
+					c3DTFIM  := TQ2->TQ2_DATATR
+					c3CONTINI:= TQ2->TQ2_POSCON
+					c3CONTFIM:= TQ2->TQ2_POSCON
+					c3CUSTO  := 0
+					c3ASTE   := ""
+				Else
+					c3CODBEM:= (cTRB)->CODBEM
+					c3EVENTO:= STR0023 //Compra
+					DbSelectArea("ST9")
+					DbSetOrder(1)
+					DbSeek(xFILIAL("ST9")+cCODBEM)
+					c3DTINIC := ST9->T9_DTCOMPR
+					c3CUSTO  := ST9->T9_VALCPA
+				EndIf
+
+				oSection3:PrintLine()
+				Dbselectarea(cTRB)
+				While !Eof()  .And. !oReport:Cancel() .And.  (cTRB)->FAMIBEM == cFAMIBEM .And. ;
+				(cTRB)->SERVICO == cSERVICO .And. (cTRB)->CODBEM == cCODBEM
+
+					oReport:IncMeter()
+
+					c3CODBEM:= ""
+					lPrint := .T.
+
+					If (cTRB)->TIPARQ = "STZ"
+						c3EVENTO:= STR0024 //"Rodizio"
+						c3DESCRI:= Alltrim((cTRB)->BEMPAI)+"\"+Alltrim((cTRB)->LOCALI)
+					ElseIf (cTRB)->TIPARQ = "STS" .or. (cTRB)->TIPARQ = "STJ"
+						If Alltrim((cTRB)->SEQREL) <> "0"
+							c3EVENTO:= STR0025 //"Preventiva"
+						Else
+							c3EVENTO:= STR0026 //"Corretiva"
+						EndIf
+						c3DESCRI:= Alltrim((cTRB)->SERVICO)+"\"+Alltrim((cTRB)->SEQREL)+"\"+Alltrim((cTRB)->ORDEM)
+					ElseIf (cTRB)->TIPARQ = "STY"
+						c3EVENTO:= STR0027 //"Producao"
+						c3DESCRI:= (cTRB)->PRODUC
+					ElseIf (cTRB)->TIPARQ = "TQ2" .And. cKeyTQ2 != (cTRB)->CODBEM+(cTRB)->FILDES+DTOS((cTRB)->DTINIC)+(cTRB)->HORATR
+						c3EVENTO:= STR0044 //"Transfer."
+						c3DESCRI:= If((cTRB)->FILORI == xFILIAL("ST9"),STR0046+AllTrim((cTRB)->FILDES),STR0045+AllTrim((cTRB)->FILORI)) //"para Filial "##"da Filial "
+					Else
+						lPrint := .F.
+					EndIf
+
+					If lPrint
+						c3DTINIC := (cTRB)->DTINIC
+						c3DTFIM  := (cTRB)->DTFIM
+						c3CONTINI:= (cTRB)->CONTINI
+						c3CONTFIM:= (cTRB)->CONTFIM
+						c3CUSTO  := (cTRB)->CUSTO
+						c3ASTE  := ""
+
+						If c3EVENTO= STR0023
+							c3DTFIM  := ""
+							c3CONTINI:= ""
+							c3CONTFIM:= ""
+						EndIf
+
+						If (cTRB)->TIPARQ = "STS" .Or. (cTRB)->TIPARQ = "STJ"
+							Dbselectarea("ST4")
+							Dbsetorder(1)
+							Dbseek(xFILIAL("ST4")+(cTRB)->SERVICO)
+							If ST4->T4_VIDAUTI == 'S'
+								c3ASTE  := "*"
+							EndIf
+						EndIf
+
+						oSection3:PrintLine()
+					EndIf
+
+					Dbselectarea(cTRB)
+					DbSkip()
+				End
+				Dbselectarea("ST9")
+				Dbsetorder(1)
+				Dbseek(xFILIAL("ST9")+cCODBEM)
+				If ST9->T9_SITBEM = "I"
+					c3DTINIC := ""
+					c3DTFIM  := ""
+					c3CONTINI:= 0
+					c3CONTFIM:= 0
+					c3CUSTO  := 0
+					c3ASTE   := ""
+					If !lPrint
+						oReport:SkipLine()
+					EndIf
+					c3EVENTO:= STR0028 //"Inativo"
+					Dbselectarea("TPJ")
+					Dbsetorder(1)
+					If Dbseek(xFILIAL("TPJ")+ST9->T9_MTBAIXA)
+						c3DESCRI:= ST9->T9_MTBAIXA+"\"+SubStr(TPJ->TPJ_DESMOT,1,20)
+					EndIf
+					c3DTINIC := ST9->T9_DTBAIXA
+					oSection3:PrintLine()
+				EndIf
+				DbSelectArea(cTRB)
+				lPrint := .T.
+			End
+
+			oSection3:Finish()
+		End
+		oSection2:Finish()
+		oSection1:Finish()
+	End
+
+	//+--------------------------------------------------------------+
+	//| Devolve a condicao original do arquivo principal             |
+	//+--------------------------------------------------------------+	
+	RetIndex("ST9")
+	RetIndex("STS")
+	RetIndex("STJ")
+	RetIndex("STL")
+	RetIndex("STT")
+	RetIndex("STZ")
+	RetIndex("STY")
+	RetIndex("TQ2")
+
+	Set Filter To
+	Set Device To Screen
+
+	oTmpTbl2:Delete() //Deleta Arquivo temporario 2
+	
+Return .T.

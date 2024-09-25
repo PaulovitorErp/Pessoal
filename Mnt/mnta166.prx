@@ -1,0 +1,558 @@
+#INCLUDE "MNTA166.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA166
+Gera o cadastro de Manutencao Normal utilizando uma manutencao
+Normal ja cadastrada (STF,ST5,STG,STH,STM,TP1).
+para um intervalo de bens (De, Ate)
+@author Inacio Luiz Kolling
+@since 10/01/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA166()
+
+	Local aNGBEGINPRM	:= NGBEGINPRM()
+
+	Private APOS1
+	Private CSAVEMENUH
+	Private Y
+	Private V
+	Private X
+	Private ACAMPOS
+	Private I
+	Private NN
+	Private PP
+	Private VL
+	Private CCODBEM
+	Private CSERVICO
+	Private cSEQUENC
+	Private cSEQ
+	Private cTF_SEQUENC
+	Private LTP1
+	Private nSequenc
+	Private lIndSTF	:= NgVerify("STF")
+	Private nImp 	:= 0
+	Private cCadastro	:= STR0005
+
+	Private cTRB  := GetNextAlias() //Alias Tab. 1
+	Private cTRBA := GetNextAlias() //Alias Tab. 2
+	Private cTRBB := GetNextAlias() //Alias Tab. 3
+	Private cTRBC := GetNextAlias() //Alias Tab. 4
+	Private cTRB1 := GetNextAlias() //Alias Tab. 5
+	Private cTRBD := GetNextAlias() //Alias Tab. 6
+
+	aPos1		:= {15,1,78,315}
+
+	If Pergunte("MNT166",.T.)
+		Processa({|lEnd| MNTA166ST9()})
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA166ST9
+Processa o ST9 e faz copia da manutencao
+@author Inacio Luiz Kolling
+@since 10/01/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA166ST9()
+
+	Local ii := 0
+	Local nI := 0
+	Local nSEQIni := 0
+	Local nSEQFim := 0
+	Local oTmpTbl1
+
+
+	dbSelectArea("STF")
+
+	aCampos	:= STF->(dbStruct())
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRB, aCampos )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"TF_SEQUENC","TF_CODBEM","TF_SERVICO" } )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	dbSeek(xFilial("ST9")+ MV_PAR05,.T.)
+	ProcRegua(RecCount())
+
+	While !Eof() .And. st9->t9_filial = xFilial("ST9") .And.;
+	st9->t9_codbem <= MV_PAR06
+
+		IncProc()
+		If ST9->T9_TIPMOD >= MV_PAR07 .And. ST9->T9_TIPMOD <= MV_PAR08 .And.;
+		If(Empty(MV_PAR09) .And. Empty(MV_PAR10),.T.,ST9->T9_MODELO >= MV_PAR09 .And. ST9->T9_MODELO <= MV_PAR10) .And.;
+		ST9->T9_CODFAMI >= MV_PAR11 .And. ST9->T9_CODFAMI <= MV_PAR12
+
+			nSEQIni := If( ValType( MV_PAR03 ) == "N",MV_PAR03,Val( MV_PAR03 ) )
+			nSEQFim := If( ValType( MV_PAR04 ) == "N",MV_PAR04,Val( MV_PAR04 ) )
+
+			For nI := nSEQIni To nSEQFim
+
+				dbSelectArea( "STF" )
+				dbSetOrder( 01 )
+
+				If dbSeek( xFilial( "STF" ) + MV_PAR01 + MV_PAR02 + PadR( cValToChar( nI ),TAMSX3( "TF_SEQRELA" )[1] ) )
+
+					nRegSTF  := Recno()
+					nSEQUENC := STF->TF_SEQUENC
+					cCODBEM  := STF->TF_CODBEM
+					cSERVICO := STF->TF_SERVICO
+
+					If lIndSTF
+						cSEQUENC := STF->TF_SEQRELA
+					EndIf
+
+					If !dbSeek(xFilial("STF")+ST9->T9_CODBEM+MV_PAR02+If(lIndSTF,cSEQUENC,Str(nSEQUENC,3)))
+						dbGoTo(nRegSTF)
+						dbSelectArea(cTRB)
+						Zap
+						RecLock((cTRB),.T.)
+						For ii	:= 1 To FCount()
+							nn	:= FieldName(ii)
+							pp	:= (cTRB)->(fieldpos(nn))
+							vl	:= "STF->" + FieldName(ii)
+							(cTRB)->(FieldPut(pp,&vl.) )
+						Next ii
+						(cTRB)->(MsUnlock())
+
+						RecLock("STF",.T.)
+						For ii	:= 1 To FCount()
+							nn	:= FieldName(ii)
+							pp	:= STF->(fieldpos(nn))
+							If nn == 'TF_CODBEM'
+								STF->TF_CODBEM := ST9->T9_CODBEM
+							Else
+								vl := "(cTRB)->"+FieldName(ii)
+								STF->(FieldPut(pp,&vl.))
+							EndIf
+						Next ii
+						STF->(MsUnlock())
+						nImp++
+						MNTA166PRO()
+					EndIf
+				EndIf
+
+			Next nI
+		EndIf
+		dbSelectArea("ST9")
+		dbSkip()
+	End
+
+	oTmpTbl1:Delete()//Deleta Tabela Temporária 1
+
+	MsgInfo(STR0013 + "  " + Str(nImp,10),STR0012)//##"Qtd. Manut. Copiadas"## ##"Resultado da operação"##
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA166PRO
+Processa o ST5,STG,STH,STM,TP1 e faz as copias
+@author Inacio Luiz Kolling
+@since 10/01/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA166PRO()
+
+	Local I := 0
+	Local lIndSTG := If(NgVerify("STG"),.T.,.F.)
+	Local lIndST5 := If(NgVerify("ST5"),.T.,.F.)
+	Local lIndSTH := If(NgVerify("STH"),.T.,.F.)
+	Local lIndTP1 := If(NgVerify("TP1"),.T.,.F.)
+	Local lIndSTM := If(NgVerify("STM"),.T.,.F.)
+
+	Local oTmpTbl2 //Obj. Tab. Temporária 2
+	Local oTmpTbl3 //Obj. Tab. Temporária 3
+	Local oTmpTbl4 //Obj. Tab. Temporária 4
+	Local oTmpTbl5 //Obj. Tab. Temporária 5
+	Local oTmpTbl6 //Obj. Tab. Temporária 6
+
+
+	// TAREFA DA MANUTENCAO
+	dbSelectArea("ST5")
+	dbSetOrder(1)
+
+	If (lIndST5  .And. dbSeek(xFilial('ST5')+cCODBEM+cSERVICO+cSEQUENC)) .Or. ;
+	   (!lIndST5 .And. dbSeek(xFilial('ST5')+cCODBEM+cSERVICO+STR(nSEQUENC,3)))
+
+		aCampos	:= ST5->(dbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl2:= FWTemporaryTable():New( cTRBA, aCampos )
+		//Adiciona os Indices
+		oTmpTbl2:AddIndex( "Ind01" , {"T5_CODBEM","T5_SERVICO","T5_SEQRELA","T5_SEQUENC" } )
+		//Cria a tabela temporaria
+		oTmpTbl2:Create()
+
+		dbSelectArea("ST5")
+		While !EoF() .And. ST5->T5_filial == xFilial('ST5') .And.;
+		ST5->T5_CODBEM  == cCODBEM .And. ST5->T5_SERVICO == cSERVICO .And.;
+		IIF(lIndST5,ST5->T5_SEQRELA == cSEQUENC,ST5->T5_SEQUENC == nSEQUENC)
+
+			dbSelectArea(cTRBA)
+			RecLock((cTRBA),.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= (cTRBA)->(fieldpos(nn))
+				vl	:= ST5->(fieldget(I))
+				(cTRBA)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBA)->(MSUNLOCK())
+			dbSelectArea("ST5")
+			dbSkip()
+		End
+
+		dbSelectArea(cTRBA)
+		dbGoTop()
+
+		While !Eof()
+			dbSelectArea("ST5")
+			RecLock("ST5",.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= ST5->(fieldpos(nn))
+				If nn == 'T5_CODBEM'
+					ST5->T5_CODBEM := ST9->T9_CODBEM
+				Else
+					vl := (cTRBA)->(fieldget(I))
+					ST5->(FieldPut(pp,vl))
+				EndIf
+			Next i
+			ST5->(MsUnlock())
+
+			dbSelectArea(cTRBA)
+			dbSkip()
+		End
+
+		oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+
+	EndIf
+
+	// DETALHE DA MANUTENCAO
+	dbSelectArea("STG")
+	dbSetOrder(1)
+
+	If (lIndSTG  .And. dbSeek(xFilial('STG')+cCODBEM+cSERVICO+cSEQUENC)) .Or. ;
+	(!lIndSTG .And. dbSeek(xFilial('STG')+cCODBEM+cSERVICO+STR(nSEQUENC,3)))
+
+		aCampos	:= STG->(dbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl3:= FWTemporaryTable():New( cTRBB, aCampos )
+		//Adiciona os Indices
+		oTmpTbl3:AddIndex( "Ind01" , {"TG_CODBEM","TG_SERVICO","TG_SEQRELA","TG_SEQUENC" } )
+		//Cria a tabela temporaria
+		oTmpTbl3:Create()
+
+		dbSelectArea("STG")
+
+		While !eof() .And. STG->TG_filial == xFilial('STG') .And.;
+		STG->TG_CODBEM == cCODBEM .And. STG->TG_SERVICO == cSERVICO .And.;
+		IIF(lIndSTG,STG->TG_SEQRELA == cSEQUENC,STG->TG_SEQUENC == nSEQUENC)
+
+			dbSelectArea(cTRBB)
+			RecLock((cTRBB),.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= (cTRBB)->(fieldpos(nn))
+				vl	:= STG->(fieldget(I))
+				(cTRBB)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBB)->(MSUNLOCK())
+			dbSelectArea("STG")
+			dbSkip()
+		End
+
+		dbSelectArea(cTRBB)
+		dbGoTop()
+
+		While !Eof()
+			dbSelectArea("STG")
+			RecLock("STG",.T.)
+			For i	:= 1 To FCount()
+				nn	:= FieldName(i)
+				pp	:= STG->(fieldpos(nn))
+				If nn == 'TG_CODBEM'
+					STG->TG_CODBEM := ST9->T9_CODBEM
+				Else
+					vl := (cTRBB)->(fieldget(I))
+					STG->(FieldPut(pp,vl))
+				EndIf
+			Next i
+
+			MSUNLOCK('STG')
+			dbSelectArea(cTRBB)
+			dbSkip()
+		End
+
+		oTmpTbl3:Delete()//Deleta Tabela Temporária 3
+
+	EndIf
+
+	// ETAPAS DA MANUTENCAO
+
+	dbSelectArea("STH")
+	dbSetOrder(1)
+	If (lIndSTH  .And. dbSeek(xFilial('STH')+cCODBEM+cSERVICO+cSEQUENC)) .Or. ;
+	(!lIndSTH .And. dbSeek(xFilial('STH')+cCODBEM+cSERVICO+STR(nSEQUENC,3)))
+
+		aCampos	:= STH->(dbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl4:= FWTemporaryTable():New( cTRBC, aCampos )
+		//Adiciona os Indices
+		oTmpTbl4:AddIndex( "Ind01" , {"TH_CODBEM","TH_SERVICO","TH_SEQRELA","TH_SEQUENC" } )
+		//Cria a tabela temporaria
+		oTmpTbl4:Create()
+
+		lTP1 := .F.
+
+		dbSelectArea("STH")
+
+		While !Eof() .And. STH->TH_filial == xFilial('STH') .And.;
+		STH->TH_CODBEM == cCODBEM .And. STH->TH_SERVICO == cSERVICO .And.;
+		IIF(lIndSTH,STH->TH_SEQRELA == cSEQUENC,STH->TH_SEQUENC == nSEQUENC)
+
+			dbSelectArea(cTRBC)
+			RecLock((cTRBC),.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= (cTRBC)->(fieldpos(nn))
+				vl	:= STH->(fieldget(I))
+				(cTRBC)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBC)->(MsUnlock())
+
+			// OPCOES DAS ETAPAS DA MANUTENCAO
+
+			dbSelectArea("TP1")
+			dbSetOrder(1)
+
+			If (lIndTP1  .And. dbSeek(xFilial('TP1')+cCODBEM+cSERVICO+cSEQUENC+STH->TH_TAREFA+STH->TH_ETAPA) ) .Or. ;
+			(!lIndTP1 .And. dbSeek(xFilial('TP1')+cCODBEM+cSERVICO+STR(nSEQUENC,3)+STH->TH_TAREFA+STH->TH_ETAPA))
+
+				If !lTP1
+
+					aCampos	:= TP1->(dbStruct())
+
+					//Instancia classe FWTemporaryTable
+					oTmpTbl5:= FWTemporaryTable():New( cTRB1, aCampos )
+					//Adiciona os Indices
+					oTmpTbl5:AddIndex( "Ind01" , {"TP1_FILIAL","TP1_CODBEM","TP1_SERVIC" } )
+					//Cria a tabela temporaria
+					oTmpTbl5:Create()
+
+					lTP1 := .T.
+
+				EndIf
+
+				dbSelectArea("TP1")
+
+				While !Eof() .And. TP1->TP1_filial == xFilial('STH') .And.;
+				TP1->TP1_codbem == cCODBEM .And. TP1->TP1_servic == cSERVICO .And.;
+				IIF(lIndTP1,TP1->TP1_seqrel == cSEQUENC,TP1->TP1_sequen == nSEQUENC) .And.;
+				TP1->TP1_tarefa == STH->TH_TAREFA .And. TP1->TP1_etapa  == STH->TH_ETAPA
+
+					dbSelectArea(cTRB1)
+					RecLock((cTRB1),.T.)
+					For i	:= 1 TO FCount()
+						nn	:= FieldName(i)
+						pp	:= (cTRB1)->(fieldpos(nn))
+						vl	:= TP1->(fieldget(I))
+						(cTRB1)->(FieldPut(pp,vl))
+					Next i
+
+					(cTRB1)->(MSUNLOCK())
+
+					dbSelectArea("TP1")
+					dbSkip()
+				End
+			EndIf
+
+			dbSelectArea("STH")
+			dbSkip()
+		End
+
+		dbSelectArea(cTRBC)
+		dbGoTop()
+
+		While !Eof()
+
+			dbSelectArea("STH")
+			RecLock("STH",.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= STH->(fieldpos(nn))
+				If nn == 'TH_CODBEM'
+					STH->TH_CODBEM := ST9->T9_CODBEM
+				Else
+					vl := (cTRBC)->(fieldget(I))
+					STH->(FieldPut(pp,vl))
+				EndIf
+			Next i
+			STH->(MsUnlock())
+			dbSelectArea(cTRBC)
+			dbSkip()
+		End
+
+		oTmpTbl4:Delete()//Deleta Tabela Temporária 4
+
+		If lTP1
+
+			dbSelectArea(cTRB1)
+			dbGoTop()
+
+			While !Eof()
+
+				dbSelectArea("TP1")
+				RecLock("TP1",.T.)
+				For i	:= 1 To FCount()
+					nn	:= FieldName(i)
+					pp	:= TP1->(fieldpos(nn))
+					If nn == 'TP1_CODBEM'
+						TP1->TP1_CODBEM := ST9->T9_CODBEM
+					Else
+						vl := (cTRB1)->(fieldget(I))
+						TP1->(FieldPut(pp,vl))
+					EndIf
+				Next i
+				TP1->(MsUnlock())
+
+				dbSelectArea(cTRB1)
+				dbSkip()
+			End
+
+			oTmpTbl5:Delete()//Deleta Tabela Temporária 5
+
+		EndIf
+	EndIf
+
+	// DEPENDENCIAS DA MANUTENCAO
+
+	dbSelectArea("STM")
+	dbSetOrder(1)
+
+	If (lIndSTM  .And. dbSeek(xFilial('STM')+cCODBEM+cSERVICO+cSEQUENC)) .Or.;
+	   (!lIndSTM .And. dbSeek(xFilial('STM')+cCODBEM+cSERVICO+STR(nSEQUENC,3)))
+
+		aCampos	:= STM->(dbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl6:= FWTemporaryTable():New( cTRBD, aCampos )
+		//Adiciona os Indices
+		oTmpTbl6:AddIndex( "Ind01" , {"TM_CODBEM","TM_SERVICO","TM_SEQRELA","TM_SEQUENC" } )
+		//Cria a tabela temporaria
+		oTmpTbl6:Create()
+
+		dbSelectArea("STM")
+		While !eof() .And. STM->TM_filial == xFilial('STM') .And.;
+		STM->TM_CODBEM  == cCODBEM .And. STM->TM_SERVICO == cSERVICO .And.;
+		IIF(lIndSTM,STM->TM_SEQRELA == cSEQUENC,STM->TM_SEQUENC == nSEQUENC)
+
+			dbSelectArea(cTRBD)
+			RecLock((cTRBD),.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= (cTRBD)->(fieldpos(nn))
+				vl	:= STM->(fieldget(I))
+				(cTRBD)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBD)->(MSUNLOCK())
+			dbSelectArea("STM")
+			dbSkip()
+		End
+
+		dbSelectArea(cTRBD)
+		dbGoTop()
+
+		While !Eof()
+
+			dbSelectArea("STM")
+			RecLock("STM",.T.)
+			For i	:= 1 TO FCount()
+				nn	:= FieldName(i)
+				pp	:= STM->(fieldpos(nn))
+				If nn == 'TM_CODBEM'
+					STM->TM_CODBEM := ST9->T9_CODBEM
+				Else
+					vl := (cTRBD)->(fieldget(I))
+					STM->(FieldPut(pp,vl))
+				EndIf
+			Next i
+			STM->(MsUnlock())
+
+			dbSelectArea(cTRBD)
+			dbSkip()
+		End
+
+		oTmpTbl6:Delete()//Deleta Tabela Temporária 6
+
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA166DS
+Consistencia De sequencia
+@author Inacio Luiz Kolling
+@since 14/01/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA166DS()
+
+	Local lRet03 := .T., cSeqP := If(lIndSTF,MV_PAR03,Str(MV_PAR03,3))
+
+	If !Empty(mv_par03)
+		If !ExistCpo("STF",MV_PAR01+MV_PAR02+cSeqP)
+			lRet03 := .F.
+		EndIf
+	EndIf
+
+Return lRet03
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA166AS
+Consistencia de Ate seguencia
+@author Inacio Luiz Kolling
+@since 14/01/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA166AS()
+
+	Local lRet04 := .T., cSeqP := If(lIndSTF,MV_PAR04,Str(MV_PAR04,3))
+
+	If mv_par04 <> "ZZZ"
+
+		If !NAOVAZIO(MV_PAR04)
+			lRet04 := .F.
+		Else
+			If mv_par04 < mv_par03
+				MsgInfo(STR0018,STR0019)
+				lRet04 := .F.
+			Else
+				If !ExistCpo("STF",MV_PAR01+MV_PAR02+cSeqP)
+					lRet04 := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet04

@@ -1,0 +1,1028 @@
+#Include "Protheus.ch"
+
+Static cQryCusSTL 
+Static cQryCusSTT
+Static lHasMNTES
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGCUSSTLMED
+Atualiza o custo do STL no recalculo do custo medio
+
+@author  Inacio Luiz Kolling
+@since   24/11/2003
+@version P11/P12
+@param   cNUMSEQ, Caracter, Número da movimentação ( D3_NUMSEQ )
+@param   nVALORC, Numérico, Valor total do custo do item ( D3_CUSTO1 )
+/*/
+//-------------------------------------------------------------------
+Function NGCUSSTLMED(cNUMSEQ,nVALORC)
+
+	Local aArea   := {}
+	Local aASTL   := {}
+	Local aBind   := {}
+	Local cAlsMNT := '' 
+	Local lFound  := .F.
+	
+	Default lHasMNTES := SuperGetMv( 'MV_NGMNTES', .F., 'N' ) == 'S'
+
+	If lHasMNTES
+		
+		aArea  := GetArea()
+
+		/*----------------------+
+		| Movimentações de O.S. |
+		+----------------------*/
+		If !Empty( cNUMSEQ ) .And. !Empty( nVALORC )
+
+			aASTL := STL->( GetArea() )
+			
+			/*----------------------------------------+
+			| Verifica a existência da query em cache |
+			+----------------------------------------*/
+			If Empty( cQryCusSTL )
+
+				cQryCusSTL :=	'SELECT '
+				cQryCusSTL += 		'R_E_C_N_O_ RECSTL '
+				cQryCusSTL +=	'FROM '
+				cQryCusSTL += 		RetSqlName( 'STL' ) + ' STL '
+				cQryCusSTL += 	'WHERE '
+				cQryCusSTL += 		'STL.TL_FILIAL  = ? AND '
+				cQryCusSTL += 		'STL.TL_NUMSEQ  = ? AND '
+				cQryCusSTL += 		'STL.D_E_L_E_T_ = ?'
+				
+				cQryCusSTL := ChangeQuery( cQryCusSTL )
+
+			EndIf
+			
+			aBind := {}
+			aAdd( aBind, FWxFilial( 'STL' ) )
+			aAdd( aBind, cNUMSEQ )
+			aAdd( aBind, Space( 1 ) )
+
+			cAlsMNT := GetNextAlias()
+
+			dbUseArea( .T., 'TOPCONN', TcGenQry2( , , cQryCusSTL, aBind ), cAlsMNT, .T., .T. )
+
+			If (cAlsMNT)->( !EoF() )
+
+				lFound := .T.
+
+				dbSelectArea( 'STL' )
+				msGoTo( (cAlsMNT)->RECSTL )
+
+				RecLock( 'STL', .F. )
+					STL->TL_CUSTO := nVALORC
+				MsUnLock()
+
+				dbSelectArea( 'STJ' )
+				dbSetOrder( 1 ) // TJ_FILIAL + TJ_ORDEM + TJ_PLANO + TJ_TIPOOS + TJ_CODBEM + TJ_SERVICO + TJ_SEQRELA
+				If msSeek( FWxFilial( 'STJ' ) + STL->TL_ORDEM + STL->TL_PLANO )
+
+					// Atualiza o Custo da O.S.
+					MNTA901OS( 'STJ' )
+
+				EndIf
+
+			EndIf
+
+			RestArea( aASTL )
+
+			(cAlsMNT)->( dbCloseArea() )
+		
+		EndIf
+
+		/*------------------------------------------+
+		| Movimentações - SD3 de O.S. em Histórico. |
+		+------------------------------------------*/
+		If !lFound
+
+			If !Empty( cNUMSEQ ) .And. !Empty( nVALORC ) .And.;
+				SubStr( SD3->D3_OP, 7, 5 ) == 'OS001'
+				
+				If Empty( cQryCusSTT )
+
+					cQryCusSTT := 	'SELECT '
+					cQryCusSTT +=		'R_E_C_N_O_ RECSTT '
+					cQryCusSTT +=	'FROM '
+					cQryCusSTT += 		RetSqlName( 'STT' ) + ' STT '
+					cQryCusSTT += 	'WHERE '
+					cQryCusSTT += 		'STT.TT_FILIAL  =  ? AND '
+					cQryCusSTT += 		'STT.TT_ORDEM   =  ? AND '
+					cQryCusSTT += 		'STT.TT_SEQRELA <> ? AND '
+					cQryCusSTT += 		'STT.TT_TIPOREG =  ? AND '
+					cQryCusSTT += 		'STT.TT_CODIGO  =  ? AND '
+					cQryCusSTT += 		'STT.TT_NUMSEQ  =  ? AND '
+					cQryCusSTT += 		'STT.D_E_L_E_T_ =  ? '
+
+					cQryCusSTT := ChangeQuery( cQryCusSTT )
+
+				EndIf
+
+				aBind := {}
+				aAdd( aBind, FWxFilial( 'STT' ) )
+				aAdd( aBind, SubStr( SD3->D3_OP, 1, 6 ) )
+				aAdd( aBind, '0  ' )
+				aAdd( aBind, 'P' )
+				aAdd( aBind, SD3->D3_COD )
+				aAdd( aBind, cNUMSEQ )
+				aAdd( aBind, Space( 1 ) )
+				
+				cAlsMNT := GetNextAlias()
+
+				dbUseArea( .T., 'TOPCONN', TcGenQry2( , , cQryCusSTT, aBind ), cAlsMNT, .T., .T. )
+
+				If (cAlsMNT)->( !EoF() )
+				
+					lFound := .T.
+
+					dbSelectArea( 'STT' )
+					msGoTo( (cAlsMNT)->RECSTT )
+
+					RecLock( 'STT', .F. )
+						STT->TT_CUSTO := nVALORC
+					MsUnLock()
+
+					// Atualiza o Custo do Historico O.S. tabela STS
+					dbSelectArea( 'STS' )
+					dbSetOrder( 1 ) // TS_FILIAL + TS_ORDEM + TS_PLANO + TS_TIPOOS + TS_CODBEM + TS_SERVICO + TS_SEQRELA
+					If msSeek( FWxFilial( 'STS' ) + STT->TT_ORDEM + STT->TT_PLANO )
+
+						MNTA901OS( 'STS' )
+
+					EndIf
+
+				EndIf
+
+				(cAlsMNT)->( dbCloseArea() )
+			
+			EndIf
+
+		EndIf
+
+		/*-------------------------------------------------+
+		| Movimentações - SD3 originadas de Abastecimento. |
+		+-------------------------------------------------*/
+		If !lFound
+			
+			If !Empty( cNUMSEQ ) .And. !Empty( nVALORC )
+				
+				dbSelectArea( 'TQN' )
+				dbSetOrder( 16 ) // TQN_FILIAL + TQN_NUMSEQ
+				If msSeek( FWxFilial( 'TQN' ) + cNUMSEQ )
+					
+					RecLock( 'TQN', .F. )
+						TQN->TQN_VALTOT := nVALORC
+						TQN->TQN_VALUNI := TQN->TQN_VALTOT / TQN->TQN_QUANT
+					MsUnLock()
+				
+				EndIf
+
+			EndIf
+
+		EndIf
+		
+		RestArea( aArea )
+
+	EndIf
+
+	/*--------------------------------------------------+
+	| Desaloca consumo de memória p/ melhor performance |
+	+--------------------------------------------------*/
+	aSize( aArea, 0 )
+	aArea := Nil
+
+	aSize( aASTL, 0 )
+	aASTL := Nil
+
+	aSize( aBind, 0 )
+	aBind := Nil 
+
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ\ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTCCUSTO³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de centro de custo (CTT) da MICROSIGA             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cCUSTOINT - Codigo do centro de custo                        ³±±
+±±³          ³lMENSAGCC - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do centro de custo liberado para a exclusao   ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do centro de custo nao podera ser exclu¡do    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTCCUSTO(cCUSTOINT,lMENSAGCC)
+
+	Local aCUSTOINT := {},aSaveAC := GetArea()
+
+	If Empty(cCUSTOINT) .Or. cCUSTOINT = NIL
+		Return .T.
+	Endif
+
+	// Dicionario est  fechado e nao ha chave de acesso
+
+	#IFDEF TOP
+	DbSelectArea("SX3")
+	DbSetOrder(2)
+	If Dbseek("TQ2_FILIAL")
+		cError := Space(1)
+		cQuery := "SELECT TQ2_CCUSTO FROM " + RetSQLName("TQ2")
+		cQuery += " WHERE TQ2_FILIAL = '" + xFilial("TQ2") + "'"
+		cQuery += " AND TQ2_CCUSTO = '" + cCUSTOINT+"'"
+		cQuery += " AND D_E_L_E_T_ = ' '"
+
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), 'TQ2TMP', .F., .T.)
+
+		dbSelectArea("TQ2TMP")
+		dbgotop()
+
+		While !Eof()
+			If !Empty(TQ2TMP->TQ2_CCUSTO)
+				cError := AllTrim(FwX2Nome("TQ2")) + " (TQ2)"
+				HELP(" ",1,"NGINTMOD",,cError,5,1)
+				Exit
+			Endif
+			dbSelectArea("TQ2TMP")
+			dbskip()
+		End
+
+		dbSelectArea("TQ2TMP")
+		dbCloseArea()
+
+		RestArea(aSaveAC)
+		If !Empty(cError)
+			DbSelectArea("SX3")
+			DbSetOrder(1)
+			Return .f.
+		Endif
+	Endif
+	DbSelectArea("SX3")
+	DbSetOrder(1)
+	#ENDIF
+
+	aCUSTOINT := {{"ST1",3,cCUSTOINT},{"ST9",2,cCUSTOINT},;
+				  {"STI",4,cCUSTOINT},{"STI",5,cCUSTOINT},;
+				  {"STJ",7,cCUSTOINT},{"STO",3,cCUSTOINT},;
+				  {"STO",4,cCUSTOINT},{"STS",4,cCUSTOINT},;
+				  {"TP9",3,cCUSTOINT},{"TPN",3,cCUSTOINT},;
+				  {"TN0",5,cCUSTOINT},{"TAA",3,cCUSTOINT},;
+				  {"TQA",7,cCUSTOINT},{"TQB",7,cCUSTOINT},;
+				  {"TPW",6,cCUSTOINT},{"TPP",6,cCUSTOINT},;
+				  {"STP",6,cCUSTOINT},{"STW",6,cCUSTOINT},;
+				  {"TM0",7,cCUSTOINT},{"TMV",5,cCUSTOINT},;
+				  {"TMW",6,cCUSTOINT},{"TMW",7,cCUSTOINT},;
+				  {"TNC",5,cCUSTOINT},{"TNI",2,cCUSTOINT},;
+				  {"TOB",2,cCUSTOINT},{"TOC",3,cCUSTOINT}}
+
+Return NGINTGERAL(aCUSTOINT,lMENSAGCC)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTCALEND³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de calendario (SH7) da MICROSIGA                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cCALENINT - Codigo do calendario                             ³±±
+±±³          ³lMENSAGCA - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do calendario esta liberado para a exclusao   ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do calendario nao podera ser exclu¡do         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTCALEND(cCALENINT,lMENSAGCA)
+
+	Local aCALENINT := {}
+	//Variaveis para validacao da TMK
+	Local nInd
+	Local cKey, cInd, cCondicao
+	Local aArea
+	Local cAliasQryCont
+	Private cAliasQry
+
+	If Empty(cCALENINT) .Or. cCALENINT = NIL
+		Return .T.
+	Endif
+
+	//Validação da TMK pois não possui indice especifico de FILIAL+CALENDARIO
+	If NGCADICBASE("TMK_CALEND","A","TMK",.F.)
+		dbSelectArea("TMK")
+		dbSetOrder(1)
+
+		cAliasQryCont := GetNextAlias()
+		BeginSql alias cAliasQryCont
+
+			SELECT COUNT(TMK.TMK_CALEND) AS QTDCAL
+				FROM %table:TMK% TMK
+				INNER JOIN %table:SH7% SH7 ON
+					TMK.TMK_CALEND = SH7.H7_CODIGO AND SH7.%notDel%
+				WHERE TMK.TMK_CALEND = %exp:cCALENINT% AND
+					TMK.%notDel%
+		EndSQL
+
+		If TMK->(!Eof())
+			dbSelectArea( cAliasQryCont )
+			If ( cAliasQryCont )->QTDCAL > 0
+				aArea := GetArea()
+				cError := AllTrim(FwX2Nome("TMK")) + " (TMK)"
+				HELP(" ",1,"NGINTMOD",,cError,5,1)
+				RestArea(aArea)
+				dbSelectArea("TMK")
+				dbClearFilter()
+				RetIndex("TMK")
+				Return .F.
+			Endif
+		Endif
+		dbSelectArea("TMK")
+		dbClearFilter()
+		RetIndex("TMK")
+	Endif
+
+	aCALENINT := {{"ST1",5,cCALENINT},{"ST9",9,cCALENINT},;
+				  {"STF",6,cCALENINT},{"TP9",4,cCALENINT},;
+				  {"TPF",2,cCALENINT},{"TML",2,cCALENINT},;
+				  {"TMV",4,cCALENINT},{"TP6",3,cCALENINT}}
+
+Return NGINTGERAL(aCALENINT,lMENSAGCA)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTCENTRA³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de centro de trabalho (SHB) da MICROSIGA          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cCTRABINT - Codigo do centro de trabalho                     ³±±
+±±³          ³lMENSAGCT - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do centro de trabalho esta liberado p/exclusao³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do centro de trabalho nao podera ser exclu¡do ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTCENTRA(cCTRABINT,lMENSAGCT)
+
+	Local aCTRABINT := {},aSaveAC := GetArea()
+	If Empty(cCTRABINT) .Or. cCTRABINT = NIL
+		Return .T.
+	Endif
+
+	// Dicionario est  fechado e nao ha chave de acesso
+
+	#IFDEF TOP
+	cError := Space(1)
+	DbSelectArea("SX3")
+	DbSetOrder(2)
+	If Dbseek("TQ2_FILIAL")
+		cQuery := "SELECT TQ2_CENTRA FROM " + RetSQLName("TQ2")
+		cQuery += " WHERE TQ2_FILIAL = '" + xFilial("TQ2") + "'"
+		cQuery += " AND TQ2_CENTRA = '" + cCTRABINT+"'"
+		cQuery += " AND D_E_L_E_T_ = ' '"
+
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), 'TQ2TMP', .F., .T.)
+
+		dbSelectArea("TQ2TMP")
+		dbgotop()
+
+		While !Eof()
+			If !Empty(TQ2TMP->TQ2_CENTRA)
+				cError := AllTrim(FwX2Nome("TQ2")) + " (TQ2)"
+				HELP(" ",1,"NGINTMOD",,cError,5,1)
+				Exit
+			Endif
+			dbSelectArea("TQ2TMP")
+			dbskip()
+		End
+
+		dbSelectArea("TQ2TMP")
+		dbCloseArea()
+
+		RestArea(aSaveAC)
+		If !Empty(cError)
+			DbSelectArea("SX3")
+			DbSetOrder(1)
+			Return .f.
+		Endif
+	Endif
+
+	If Empty(cError)
+		DbSelectArea("SX3")
+		DbSetOrder(2)
+		If Dbseek("TQB_FILIAL")
+			cQuery := "SELECT TQB_CENTRA FROM " + RetSQLName("TQB")
+			cQuery += " WHERE TQB_FILIAL = '" + xFilial("TQB") + "'"
+			cQuery += " AND TQB_CENTRA = '" + cCTRABINT+"'"
+			cQuery += " AND D_E_L_E_T_ = ' '"
+
+			cQuery := ChangeQuery(cQuery)
+			dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), 'TQBTMP', .F., .T.)
+
+			dbSelectArea("TQBTMP")
+			dbgotop()
+
+			While !Eof()
+				If !Empty(TQBTMP->TQB_CENTRA)
+					cError := AllTrim(FwX2Nome("TQB")) + " (TQB)"
+					HELP(" ",1,"NGINTMOD",,cError,5,1)
+					Exit
+				Endif
+				dbSelectArea("TQBTMP")
+				dbskip()
+			End
+
+			dbSelectArea("TQBTMP")
+			dbCloseArea()
+
+			RestArea(aSaveAC)
+			If !Empty(cError)
+				DbSelectArea("SX3")
+				DbSetOrder(1)
+				Return .f.
+			Endif
+		Endif
+
+	Endif
+
+	DbSelectArea("SX3")
+	DbSetOrder(1)
+	#ENDIF
+
+	aCTRABINT := {{"ST9",10,cCTRABINT},{"STI",6,cCTRABINT},;
+	{"STI", 7,cCTRABINT},{"STO",5,cCTRABINT},;
+	{"STO", 6,cCTRABINT},{"STS",7,cCTRABINT},;
+	{"TPN", 4,cCTRABINT},{"TQA",8,cCTRABINT},;
+	{"TP9", 6,cCTRABINT},{"TPW",7,cCTRABINT},;
+	{"TPP", 7,cCTRABINT},{"STP",7,cCTRABINT},;
+	{"STW", 7,cCTRABINT}}
+
+Return NGINTGERAL(aCTRABINT,lMENSAGCT)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTFUNCIO³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de funcionarios (SRA) da MICROSIGA                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cFUNCIINT - Codigo do funcionario                            ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do funcionario esta liberado para exclusao    ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do funcionario nao podera ser exclu¡do        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTFUNCIO(cFUNCIINT,lMENSAGFU)
+	Local aFUNCIINT := {}
+	Local cCHASTLTT := "M"+cFUNCIINT+Space(Len(SB1->B1_COD)-Len(cFUNCIINT))
+	If Empty(cFUNCIINT) .Or. cFUNCIINT = NIL
+		Return .T.
+	Endif
+
+	aFUNCIINT := {{"ST1",1,cFUNCIINT},{"TM0",3,cFUNCIINT,"SRA"},;
+	{"TNF",3,cFUNCIINT},{"TN6",2,cFUNCIINT},;
+	{"TNQ",2,cFUNCIINT},{"TAA",4,cFUNCIINT},;
+	{"TAF",6,cFUNCIINT},{"STL",8,cCHASTLTT},;
+	{"STT",3,cCHASTLTT},{"STG",2,cCHASTLTT},;
+	{"TMJ",9,cFUNCIINT},{"TNI",3,cFUNCIINT},;
+	{"TNI",4,cFUNCIINT},{"TNO",2,cCHASTLTT},;
+	{"TNS",2,cCHASTLTT},{"TO8",2,cCHASTLTT},;
+	{"TPG",2,cCHASTLTT},{"TOC",2,cFUNCIINT}}
+
+Return NGINTGERAL(aFUNCIINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTCLIENT³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de clientes (SA1) da MICROSIGA                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cCLIENINT - Codigo do cliente                                ³±±
+±±³          ³cLOJACINT - Codigo da loja                                   ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro de clientes esta liberado para exclusao       ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro de clientes nao podera ser exclu¡do           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTCLIENT(cCLIENINT,cLOJACINT,lMENSAGFU)
+	Local aCLIENINT := {}, cCHAVCOMP := cCLIENINT+cLOJACINT
+	If Empty(cCHAVCOMP) .Or. cCHAVCOMP = NIL
+		Return .T.
+	Endif
+
+	aCLIENINT := {{"ST9",12,cCHAVCOMP},{"TO0",2,cCHAVCOMP},;
+	{"TMW",8,cCLIENINT},{"TMW",9,cCLIENINT},;
+	{"TM0",8,cCHAVCOMP}}
+
+Return NGINTGERAL(aCLIENINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTFORNEC³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de fornecedores (SA2) da MICROSIGA                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cFORNEINT - Codigo do fornecedor                             ³±±
+±±³          ³cLOJAFINT - Codigo da loja                                   ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do fornecedor esta liberado para exclusao     ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do fornecedor nao podera ser exclu¡do         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTFORNEC(cFORNEINT,cLOJAFINT,lMENSAGFU)
+	Local aFORNEINT := {}, cCHAVCOMP := cFORNEINT+cLOJAFINT
+	Local cCHASTLTT := "T"+cFORNEINT+Space(Len(SB1->B1_COD)-Len(cFORNEINT))
+
+	If Empty(cCHAVCOMP) .Or. cCHAVCOMP = NIL
+		Return .T.
+	Endif
+
+	aFORNEINT := {{"ST9",11,cCHAVCOMP},{"TP3",2,cCHAVCOMP},;
+	{"TPO", 1,cCHAVCOMP},{"STL",8,cCHASTLTT},;
+	{"STT", 3,cCHASTLTT},{"TMD",1,cCHAVCOMP},;
+	{"TN3", 1,cCHAVCOMP},{"TNF",1,cCHAVCOMP},;
+	{"STG", 2,cCHASTLTT},{"TP9",7,cCHAVCOMP},;
+	{"TPG", 2,cCHASTLTT}}
+
+Return NGINTGERAL(aFORNEINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTPRODUT³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de produto (SB1) da MICROSIGA                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cPRODUINT - Codigo do produto                                ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do produto esta liberado para exclusao        ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do produto nao podera ser exclu¡do            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTPRODUT(cPRODUINT,lMENSAGFU)
+	Local aPRODUINT := {}
+	Local cCHASTLTT := "P"+cPRODUINT+Space(Len(SB1->B1_COD)-Len(cPRODUINT))
+	If Empty(cPRODUINT) .Or. cPRODUINT = NIL
+		Return .T.
+	Endif
+
+	aPRODUINT := {{"ST9",7,cPRODUINT},{"STR",3,cPRODUINT},;
+	{"STY",3,cPRODUINT},{"TP9",5,cPRODUINT},;
+	{"TPK",2,cPRODUINT},{"TPY",2,cPRODUINT},;
+	{"STL",8,cCHASTLTT},{"STT",3,cCHASTLTT},;
+	{"TN3",2,cPRODUINT},{"TNF",2,cPRODUINT},;
+	{"TNB",3,cPRODUINT},{"TNX",3,cPRODUINT},;
+	{"STG",2,cCHASTLTT},{"TPZ",4,cPRODUINT},;
+	{"TPG",2,cCHASTLTT}}
+
+Return NGINTGERAL(aPRODUINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTFUNCAO³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de funcoes (SRJ) da MICROSIGA                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cFUNCAINT - Codigo da funcao                                 ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro da funcao esta liberado para exclusao         ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do funcao nao podera ser exclu¡do             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTFUNCAO(cFUNCAINT,lMENSAGFU)
+	Local aFUNCAINT := {}
+	If Empty(cFUNCAINT) .Or. cFUNCAINT = NIL
+		Return .T.
+	Endif
+
+	aFUNCAINT := {{"TNB",1,cFUNCAINT},{"TM0",9,cFUNCAINT},;
+	{"TMV",6,cFUNCAINT},{"TN0",7,cFUNCAINT},;
+	{"TNC",6,cFUNCAINT},{"TNF",4,cFUNCAINT},;
+	{"TOC",1,cFUNCAINT},{"TOB",1,cFUNCAINT},;
+	{"TO5",3,cFUNCAINT}}
+
+Return NGINTGERAL(aFUNCAINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTQDH   ³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de documentos (QDH) da MICROSIGA                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cDOCUINT  - Codigo do documento                              ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do documento esta liberado para exclusao      ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do documento nao podera ser exclu¡do          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTQDH(cDOCUINT,lMENSAGFU)
+	Local aDOCUINT := {}
+	If Empty(cDOCUINT) .Or. cDOCUINT = NIL
+		Return .T.
+	Endif
+
+	aDOCUINT := {{"STF",7,cDOCUINT},{"ST4",5,cDOCUINT},;
+	{"ST5",4,cDOCUINT},{"TP5",2,cDOCUINT},;
+	{"TPA",5,cDOCUINT},{"TPH",4,cDOCUINT},;
+	{"TPF",3,cDOCUINT}}
+
+Return NGINTGERAL(aDOCUINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTUMEDID³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de unidade de medida (SAH) da MICROSIGA           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cUMEDIINT - Codigo da unidade de medida                      ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro da unidade medida esta liberado p/a exclusao  ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro da unidade de medida nao podera ser exclu¡do  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTUMEDID(cUMEDIINT,lMENSAGFU)
+	Local aUMEDIINT := {}
+	If Empty(cUMEDIINT) .Or. cUMEDIINT = NIL
+		Return .T.
+	Endif
+
+	aUMEDIINT := {{"STB",3,cUMEDIINT},{"TPB",3,cUMEDIINT}}
+
+Return NGINTGERAL(aUMEDIINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTENDERE³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de enderecos (SBE) da MICROSIGA                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cENDERINT - Codigo da endereco                               ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do endereco esta liberado p/a exclusao        ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do endereco nao podera ser exclu¡do           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTENDERE(cENDERINT,lMENSAGFU)
+	Local aENDERINT := {}
+	If Empty(cENDERINT) .Or. cENDERINT = NIL
+		Return .T.
+	Endif
+
+	aENDERINT := {{"STL",13,cENDERINT},{"STT",6,cENDERINT}}
+
+Return NGINTGERAL(aENDERINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTRECURS³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de recursos  (SH1) da MICROSIGA                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cRECURINT - Codigo do recurso                                ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do recurso  esta liberado p/a exclusao        ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do recurso  nao podera ser exclu¡do           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTRECURS(cRECURINT,lMENSAGFU)
+	Local aRECURINT := {}
+	Local cCHAVST9 := "R"+cRECURINT
+	If Empty(cRECURINT) .Or. cRECURINT = NIL
+		Return .T.
+	Endif
+
+	aRECURINT := {{"ST9",13,cCHAVST9}}
+
+Return NGINTGERAL(aRECURINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTIMOBIL³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro do imobilizado (SN1) da MICROSIGA                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cIMOBIINT - Codigo do imobilizado                            ³±±
+±±³          ³cITEMINT  - Codigo do imobilizado                            ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do imobilizado esta liberado p/a exclusao     ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do imobilizado nao podera ser exclu¡do        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTIMOBIL(cIMOBIINT,cITEMINT,lMENSAGFU)
+	Local aIMOBIINT := {}
+	Local cCHAVCOMP := cIMOBIINT+cITEMINT
+	If Empty(cCHAVCOMP) .Or. cCHAVCOMP = NIL
+		Return .T.
+	Endif
+
+	aIMOBIINT := {{"ST9",8,cCHAVCOMP}}
+
+Return NGINTGERAL(aIMOBIINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTFERRAM³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastro de ferramenta (SH4) da MICROSIGA                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cFERRAINT - Codigo da ferramenta                             ³±±
+±±³          ³lMENSAGFU - Indicacao da mensagem para o usuario via tela    ³±±
+±±³          ³            OBS: Todos os parametros sao obrigatorio         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro do ferramenta esta liberado para exclusao     ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro do ferramenta nao podera ser exclu¡do         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³                                                             ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTFERRAM(cFERRAINT,lMENSAGFU)
+	Local aFERRAINT := {}
+	Local cCHASTLTT := "F"+cFERRAINT+Space(Len(SB1->B1_COD)-Len(cFERRAINT))
+	Local cCHAST9FE := "F"+cFERRAINT
+	If Empty(cFERRAINT) .Or. cFERRAINT = NIL
+		Return .T.
+	Endif
+
+	aFERRAINT := {{"ST9",13,cCHAST9FE},{"STG",2,cCHASTLTT},;
+				  {"STL", 8,cCHASTLTT},{"STT",3,cCHASTLTT},;
+				  {"TPG", 2,cCHASTLTT}}
+
+Return NGINTGERAL(aFERRAINT,lMENSAGFU)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGINTGERAL ³ Autor ³ In cio Luiz Kolling   ³ Data ³24/11/2003³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Consistencia de integirdade dos modulos da NG INFORMµTICA com³±±
+±±³          ³o cadastros da MICROSIGA                                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³aVARQALI - Array com os alias dos arquivos/tabelas e indice  ³±±
+±±³          ³           de acesso                                         ³±±
+±±³          ³lMENSAG  - Indicacao da mensagem para o usuario via tela     ³±±
+±±³          ³           OBS: Todos os parametros sao obrigatorio          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Returna   ³.t. - Nao ha integridade com os modulos da NG INFORMATICA    ³±±
+±±³          ³      registro esta liberado para a exclusao                 ³±±
+±±³          ³.f. - Ha integridade com os modulos da NG INFORMATICA        ³±±
+±±³          ³      registro nao podera ser exclu¡do                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ NGINTMOD                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGINTGERAL(aVARQALI,lMENSAG)
+	Local cALIATU := Alias(),nINDATU := IndexOrd(),lRETINT := .T., vINDSIX := {}
+	Local xn := 0,nx := xn,ics := nx
+	For XN := 49 To 57
+		Aadd(vINDSIX,chr(XN))
+	Next XN
+	For NX := 65 To 90
+		Aadd(vINDSIX,chr(NX))
+	Next NX
+
+	For ICS := 1 To Len(aVARQALI)
+		If Select(aVARQALI[ICS][1]) > 0
+			DbSelectArea(aVARQALI[ICS][1])
+			If Reccount() > 0
+				DbSelectArea("SIX")
+				DbSetOrder(1)
+				If Dbseek(aVARQALI[ICS][1]+vINDSIX[aVARQALI[ICS][2]])
+					DbSelectArea(aVARQALI[ICS][1])
+					DbSetOrder(aVARQALI[ICS][2])
+					cChaveAc := If(Len(aVARQALI[ICS])==4,xFILIAL(aVARQALI[ICS][4])+aVARQALI[ICS][3],;
+					xFILIAL(aVARQALI[ICS][1])+aVARQALI[ICS][3])
+					If Dbseek(cChaveAc)
+						If lMENSAG
+							SX2->(DbSeek(aVARQALI[ICS][1]))
+							cError := AllTrim(FwX2Nome(aVARQALI[ICS][1])) + " (" + aVARQALI[ICS][1] + ")"
+							HELP(" ",1,"NGINTMOD",,cError,5,1)
+						Endif
+						lRETINT := .F.
+						Exit
+					Endif
+				Endif
+			Endif
+		Else
+
+			// ini. hirakawa 07/dez/2004
+			// E' melhor verificar se o Alias XXX existe antes do CHKFILE, e adotar o SX2
+			// como alias, por seguranca !
+			if select("XXX") > 0
+				DbSelectArea("XXX")
+				dbclosearea()
+				DbSelectArea("SX2")
+			endif
+			// fim. hirakawa 07/dez/2004
+
+			If CHKFILE(aVARQALI[ICS][1],.F.,"XXX")
+				DbSelectArea("XXX")
+				If Reccount() > 0
+					DbSelectArea("SX2")
+					DbSetOrder(1)
+					If Dbseek(aVARQALI[ICS][1])
+						DbSelectArea("SIX")
+						DbSetOrder(1)
+						If Dbseek(aVARQALI[ICS][1]+vINDSIX[aVARQALI[ICS][2]])
+							cChaveAc := If(Len(aVARQALI[ICS])==4,xFILIAL(aVARQALI[ICS][4])+aVARQALI[ICS][3],;
+							xFILIAL(aVARQALI[ICS][1])+aVARQALI[ICS][3])
+
+							// ini. hirakawa 07/dez/2004
+							// Esqueceram de mudar o Alias de NGX para XXX ...
+							DbSelectArea("XXX") // DbSelectArea("NGX") // hirakawa
+							// FIM. hirakawa 07/dez/2004
+
+							DbSetOrder(aVARQALI[ICS][2])
+							If Dbseek(cChaveAc)
+								If lMENSAG
+									SX2->(DbSeek(aVARQALI[ICS][1]))
+									cError := AllTrim(FwX2Nome("XXX")) + " (XXX)"
+									HELP(" ",1,"NGINTMOD",,cError,5,1)
+								Endif
+								lRETINT := .F.
+
+								// ini. hirakawa 07/dez/2004
+								// Esqueceram de mudar o Alias de NGX para XXX ...
+								DbSelectArea("XXX") // DbSelectArea("NGX") // hirakawa
+								// FIM. hirakawa 07/dez/2004
+
+								Use
+								Exit
+							Endif
+
+							/*
+							// ini. hirakawa 07/dez/2004
+							// Nao e' o melhor local para "desligar" o XXX ou NGX ...
+							// E' melhor colocar apos o Endif do "If Reccount() > 0"
+							// If Select("NGX") > 0
+							//    DbSelectArea("NGX")
+							//    Use
+							// Endif
+							// FIM. hirakawa 07/dez/2004
+							*/
+
+						Endif
+					Endif
+				Endif
+
+				// ini. hirakawa 07/dez/2004
+				// E' o melhor local para "desligar" o XXX ou NGX ...
+				// Esqueceram de mudar o Alias de NGX para XXX ...
+				If Select("XXX") > 0  // If Select("NGX") > 0 // hirakawa
+					DbSelectArea("XXX")  // DbSelectArea("NGX") // hirakawa
+					Use
+				Endif
+				// FIM. hirakawa 07/dez/2004
+
+			Endif
+		Endif
+	Next ICS
+
+	DbSelectArea(cALIATU)
+	DbSetOrder(nINDATU)
+Return lRETINT

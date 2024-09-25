@@ -1,0 +1,177 @@
+#INCLUDE "MNTA660.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA660
+
+Reprocessamento dos registros rejeitados durante o processo de Importacao
+dos registros de abastecimento
+
+@author Evaldo Cevinscki Jr.
+@since 31/01/2006
+@version 1.0
+@sample Generico
+@return True
+
+/*/
+//---------------------------------------------------------------------
+Function MNTA660(aErro, aReproce)
+
+	//Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM 	:= NGBEGINPRM()
+	Local aPE			:= {}
+	Local nCont 		:= 0
+	Local cAliasQry     := ''
+	Local aProcess      := {}
+
+	Default aReproce 	:= {}
+
+	//-------------------------------------------------------------------------------
+	// Validação referente a função que centraliza o processamento de abastecimentos
+	//-------------------------------------------------------------------------------
+	If !FindFunction( 'MNT635CONS' )
+		ShowHelpDlg(  STR0004 ,;      // ATENÇÃO
+					{ STR0021 }, 2,; // Essa rotina passou recentemente por uma atualização importante.
+					{ STR0022 }, 2 ) // "Favor verificar a documentação MP - MNT - Definição da filial nas inconsistências de abastecimento"
+
+		Return .F.
+	EndIf
+
+	//-------------------------------------------------------------
+	// Adiciona campos expecíficos ao array de inconsistencias
+	//-------------------------------------------------------------
+	If ExistBlock("MNTA6602")
+		aPE := ExecBlock("MNTA6602",.F.,.F.)
+	EndIf
+
+	//----------------------------------------------------------------
+	// Caso aReproce vazio é chamada via menu 
+	// Deve buscar todos os registros inconsistentes
+	//----------------------------------------------------------------
+	If Len( aReproce ) == 0 
+
+		cAliasQry := GetNextAlias()
+
+		cQuery := " SELECT * "
+		cQuery += " FROM " + RetSQLName("TQQ")
+		cQuery += " WHERE D_E_L_E_T_<>'*' "
+
+		//--------------------------------------------
+		// Adiciona na Query mais validações no WHERE
+		//--------------------------------------------
+		If ExistBlock("MNTA6601")
+			cQuery += ExecBlock("MNTA6601",.F.,.F.)
+		EndIf
+
+		cQuery += " ORDER BY TQQ_FILIAL"
+
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+		While !(cAliasQry)->( Eof() )
+
+			dbSelectArea("TQQ")
+			TQQ->(dbGoTo((cAliasQry)->R_E_C_N_O_))
+
+			//-----------------------------------------------------
+			// Carrega array para processamento
+			//-----------------------------------------------------
+			aProcess := fAdiciona( aProcess, aPE )
+
+			(cAliasQry)->( dbSkip() )
+
+		EndDo
+
+		(cAliasQry)->( dbCloseArea() )
+
+	Else
+
+		//---------------------------------------------------------------------------------------------------------
+		// Quando o array aReproce está carregado é via reprocessamento do MNTA700 - ANÁLISE DE INCONSISTÊNCIA
+		//---------------------------------------------------------------------------------------------------------
+		For nCont := 1 to Len( aReproce )
+
+			dbSelectArea('TQQ')
+			dbSetorder(1) //TQQ_FILIAL+TQQ_NABAST+TQQ_CNPJ+DTOS(TQQ_DTABAS)+TQQ_HRABAS
+			If dbSeek( aReproce[nCont][2] + aReproce[nCont][5] + aReproce[nCont][3] + DtoS(aReproce[nCont][6]) + aReproce[nCont][7] )
+
+				//-----------------------------------------------------
+				// Carrega array para processamento
+				//-----------------------------------------------------
+				aProcess := fAdiciona( aProcess, aPE )
+
+			EndIf
+
+		Next nCont
+
+	EndIf
+
+	//------------------------------------------------------
+	// Realiza reprocessamento de registros inconsistentes
+	//------------------------------------------------------
+	MNT635CONS( aProcess, .T. )
+
+	//Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAdiciona
+Adiiciona registro inconsistente no array passado por parâmetro
+
+@param aAux, array, informações de registros inconsistentes
+@param aPE, array, campos do ponto de entrada
+@author Maria Elisandra d Paula
+@since 07/04/21
+@Return array
+/*/
+//---------------------------------------------------------------------
+Static Function fAdiciona( aAux, aPE )
+
+	Local lRPORel17 := GetRPORelease() <= '12.1.017'
+	Local nIndice   := 0
+	Local aAuxiliar := {}
+
+	aAdd(aAux,{;
+		TQQ->TQQ_NABAST,; //1
+		TQQ->TQQ_PLACA, ; //2
+		TQQ->TQQ_CODCOM,; //3
+		TQQ->TQQ_CNPJ  ,; //4
+		TQQ->TQQ_CODMOT,; //5
+		TQQ->TQQ_HODOM ,; //6
+		TQQ->TQQ_QUANT ,; //7
+		TQQ->TQQ_VALUNI,; //8
+		TQQ->TQQ_VALTOT,; //9
+		TQQ->TQQ_DTABAS,; //10
+		TQQ->TQQ_HRABAS,; //11
+		TQQ->TQQ_NABAAN,; //12
+		TQQ->TQQ_ERROVA,; //13
+		TQQ->TQQ_TANQUE,; //14
+		TQQ->TQQ_BOMBA ,; //15
+		TQQ->TQQ_POSCO2,; //16
+		TQQ->TQQ_EMPORI,; // 17 - Empresa Origem
+		TQQ->TQQ_FILORI,; // 18 - Filial Origem
+		TQQ->TQQ_EMPDES,; // 19 - Empresa Destino
+		TQQ->TQQ_FILDES,; // 20 - Filial Destino
+		TQQ->TQQ_POSDES,; // 21 - Posto Destino
+		TQQ->TQQ_LOJDES,; // 22 - Loja Destino
+		TQQ->TQQ_TANDES,; // 23 - Tanque Destino
+		TQQ->TQQ_MOTTRA,; // 24 - Motivo da Transferência
+		TQQ->TQQ_POSTO ,; // 25 - Posto
+		TQQ->TQQ_LOJA  ,; // 26 - Loja
+		IIf(lRPORel17  ,TQQ->TQQ_CODOBS, TQQ->TQQ_OBSERV),; // 27 - Observacao
+		TQQ->TQQ_CONVEN,; // 28 - Convênio
+		TQQ->TQQ_FILIAL }) // 29 -Filial
+
+		//------------------------------------------------------------
+		// Adiciona o conteúdo dos campos do PE na última posição do array 
+		//------------------------------------------------------------
+		If Len( aPE ) > 0
+			For nIndice := 1 To Len(aPE)
+				aAdd(aAuxiliar , { aPE[ nIndice ],  &( "TQQ->" + aPE[ nIndice ] ) } )
+			Next nIndice
+			aAdd( aAux[ Len( aAux ) ], aAuxiliar )
+		EndIf
+
+Return aAux

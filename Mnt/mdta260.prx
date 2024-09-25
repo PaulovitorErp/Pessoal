@@ -1,0 +1,135 @@
+#INCLUDE "Mdta260.ch"
+#Include "Protheus.ch"
+
+#DEFINE _nVERSAO 2 //Versao do fonte
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA260
+Programa para limpar Ficha Medica de Candidato 
+
+@author Denis Hyroshi de Souza	
+@since 11/08/2003
+@return
+/*/ 
+//---------------------------------------------------------------------                                                                       
+Function MDTA260
+Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+Local oDlg,oScr
+Local nOpcc := 0
+Local oPainelTop
+Private cCadastro := OemtoAnsi(STR0001) //"Remocao das Fichas Medicas de Candidatos não Admitidos"
+Private cPrograma := "MDTA260"
+Private DeFicha := Space(9),AteFicha := Replicate("Z",9),TotalDias := Date()
+
+DEFINE MSDIALOG oDlg TITLE cCadastro From 0,0 To 250,500 OF oMainWnd PIXEL 
+
+oPainelTop := TPanel():New(00,00,,oDlg,,,,,,,,.F.,.F.)
+oPainelTop:Align := CONTROL_ALIGN_ALLCLIENT  
+      
+@ 10,10 SAY OemToAnsi(STR0002) OF oPainelTop  PIXEL//"De  Ficha Medica:"   
+@ 10,60 MSGET DeFicha  Picture "@!" Size 46,10 Valid (If(Empty(DeFicha),.t.,ExistCpo("TM0",DeFicha))) F3 "TM0" When .T. OF oPainelTop HasButton PIXEL 
+@ 25,10 SAY OemToAnsi(STR0003) OF oPainelTop  PIXEL//"Ate Ficha Medica:"
+@ 25,60 MSGET AteFicha Picture "@!" Size 46,10 Valid (If(Atecodigo("TM0",DeFicha,AteFicha,9),.t.,.f.)) F3 "TM0" When .T. OF oPainelTop HasButton PIXEL
+@ 40,10 SAY OemToAnsi(STR0004)  OF oPainelTop PIXEL//"Data Limite:"
+@ 40,60 MSGET TotalDias Picture "99/99/9999" Size 46,10  Valid (naovazio(TotalDias)) When .T. OF oPainelTop HasButton PIXEL
+@ 55,10 SCROLLBOX oScr SIZE 35,230 OF oPainelTop BORDER PIXEL
+@ 01.0,5 SAY STR0005 OF oScr PIXEL  //"O programa irá remover as Fichas Médicas de Candidatos não admitidos e todas as tabelas"
+@ 11.0,5 SAY STR0006 OF oScr PIXEL  //"relacionadas a ela, desde que o número da Ficha Médica do Candidato esteja dentro do"
+@ 21.0,5 SAY STR0007 OF oScr PIXEL  //"intervalo acima e que a data da inclusão da Ficha Medica não seja superior a data limite."
+  
+ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{||nOpcc:=1,oDlg:End()},{||oDlg:End()}) CENTERED
+   
+If nOpcc == 0       
+	Return .t.
+Endif
+
+If Msgyesno(STR0008+chr(13)+chr(13)+; //"Confirma a Remocao das Fichas Medicas de Candidatos não Admitidos ?"
+			STR0002+" "+DeFicha+chr(13)+; //"De  Ficha Medica:"
+			STR0003+" "+AteFicha+chr(13)+; //"Ate Ficha Medica:"
+			STR0004+" "+dtoc(TotalDias)) //"Data Limite:"
+    
+	Processa({ |lEnd| DELFIC260() },STR0009) //"Excluindo Fichas Medicas..."
+Endif
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DELFIC260
+Verifica as Fichas para remoção
+
+@author Denis Hyroshi de Souza	
+@since 11/08/2003
+@return
+/*/ 
+//---------------------------------------------------------------------
+Function DELFIC260()
+
+Dbselectarea("TM0")
+Dbsetorder(1)
+Dbseek(xFilial("TM0")+DeFicha,.t.)       
+ProcRegua(reccount()) 
+While !eof() .and. xFilial("TM0") == TM0->TM0_FILIAL .and. TM0->TM0_NUMFIC <= AteFicha
+	IncProc() 
+	If TM0->TM0_DTIMPL > TotalDias
+		Dbselectarea("TM0")
+		Dbskip()
+		Loop
+	Endif
+	If !Empty(TM0->TM0_MAT) .or. Empty(TM0->TM0_CANDID)
+		Dbselectarea("TM0")
+		Dbskip()
+		Loop
+	Endif	
+
+	EXCLUI260("TM2") 
+	EXCLUI260("TM5") 
+	EXCLUI260("TM6") 
+	EXCLUI260("TM9") 
+	EXCLUI260("TMF") 
+	EXCLUI260("TMI") 
+	EXCLUI260("TMJ",2) 
+	EXCLUI260("TMN",2) 
+	EXCLUI260("TMT") 
+	EXCLUI260("TMY",2) 
+	EXCLUI260("TN4") 
+	EXCLUI260("TNA") 
+	EXCLUI260("TNY") 
+		
+	Dbselectarea("TM0")
+	RecLock("TM0",.F.)
+	DbDelete()        
+	MsUnlock("TM0")
+	Dbskip()
+End
+
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} EXCLUI260
+Deleta as tabelas relacionadas a Ficha Medica 
+
+@author Denis Hyroshi de Souza	
+@since 11/08/2003
+
+@param cAlias - Alias utilizado.
+@param nIndex -Indice utilizado. 
+
+@return .T. 
+/*/ 
+//---------------------------------------------------------------------
+Function EXCLUI260(cAlias,nIndex)
+Local aArea := TM0->(GetArea())
+Local cCpoFil := cAlias+"->"+cAlias+"_FILIAL"
+Local cCpoNum := cAlias+"->"+cAlias+"_NUMFIC"
+
+Default nIndex := 1
+
+Dbselectarea(cAlias)
+Dbsetorder(nIndex)
+Dbseek(xFilial(cAlias)+TM0->TM0_NUMFIC)
+While !eof() .and. xFilial(cAlias) == &cCpoFil .and. &cCpoNum == TM0->TM0_NUMFIC
+	Dbselectarea(cAlias)
+	RecLock(cAlias,.F.)
+	DbDelete()        
+	MsUnlock(cAlias)
+	Dbskip()	
+End               
+
+RestArea(aArea)
+Return .t.

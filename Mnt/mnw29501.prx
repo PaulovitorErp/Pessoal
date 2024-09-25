@@ -1,0 +1,181 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TOPCONN.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNW29501
+Programa para geracao de Workflow de solicitacoes
+
+@type function
+
+@source MNW29501.prw
+
+@author Rafael Diogo Richter
+@since 26/06/2008
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample MNW29501()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNW29501(cSolici)
+
+	Local lAMBIE   := .F.
+	Local cIniFile := GetAdv97()
+	Local cCodEmp  := ""
+	Local cCodFil  := ""
+
+	//Abre tabelas necessarias
+	If !(Type("oMainWnd")=="O")
+
+		lAMBIE  := .T.
+		cCodEmp := GetPvProfString("ONSTART","Empresa","",cInIfile)
+		cCodFil := GetPvProfString("ONSTART","Filial" ,"",cInIfile)
+
+		If cCodEmp == '-1' .Or. cCodFil == '-1'
+			Return .f.
+		Endif
+
+		RPCSetType(3)
+
+		//Abre empresa/filial/modulo/arquivos
+		RPCSetEnv(cCodEmp,cCodFil,"","","MNT","",{"TRE"})
+	Else
+		WF001(cSolici)
+	EndIf
+
+Return  .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} WF001
+Relatorio para gerar um Workflow com as solicitacoes novas e alteradas
+
+@type function
+
+@source MNW29501.prw
+
+@author Rafael Diogo Richter
+@since 26/06/2008
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample WF001()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function WF001(cSolici)
+
+	Local lRetu			:= .T.
+	Local cMailMsg		:= ""
+	Local cEmail		:= ""
+	Local cEmailPara	:= UsrRetMail(cSolici)
+	Local cEMAIL_All	:= ""
+	Local nLen			:= 0
+
+	Local cSmtp			:= GetNewPar("MV_RELSERV", "") 	//Servidor SMTP
+	Local cConta		:= GetNewPar("MV_RELAUSR","") 	// Usuário para autenticação no servidor de e-mail
+	Local cCntEmail		:= GetNewPar("MV_RELACNT","")	// Conta de e-mail do usuário no servidor de e-mail
+	Local lAutentica	:= GetNewPar("MV_RELAUTH",.F.)	// Autenticação (Sim/Não)
+	Local nSmtpPort		:= GetNewPar("MV_PORSMTP",0)	// Porta Servidor SMTP
+
+	Local cAssunto		:= DTOC(TQB->TQB_DTABER) + " - SS: " + TQB->TQB_SOLICI + " - Inclusão de OS"
+	Local lUPD87		:= NGCADICBASE("TSK_TIPUSE","A","TSK",.F.)
+
+	If (nPos := At(":",cSmtp)) <> 0
+		nSmtpPort	:= Val( SubStr( cSmtp, nPos+1, Len( cSmtp ) ) )
+		cSmtp		:= SubStr( cSmtp, 1, nPos-1 )
+	EndIf
+
+	If Empty(cEmailPara)
+		PswOrder(1)
+		If PswSeek(cSolici)
+			cSupervi := PswRet(1)[1][11]
+			nLen := 15-Len(cSupervi)
+			cSupervi := cSupervi+Space(nLen)
+			cEmailPara := UsrRetMail(cSupervi)
+		EndIf
+	Endif
+
+	cMailMsg := '<html>'
+	cMailMsg += '	<head>'
+	cMailMsg += '		<meta http-equiv="Content-Language" content="pt-br">'
+	cMailMsg += '		<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'
+	cMailMsg += '		<meta name="GENERATOR" content="Microsoft FrontPage 4.0">'
+	cMailMsg += '		<meta name="ProgId" content="FrontPage.Editor.Document">'
+	cMailMsg += '		<title>Aviso sobre Solicitação de Serviços</title>'
+	cMailMsg += '	</head>'
+	cMailMsg += '	<body bgcolor="#FFFFFF">'
+	cMailMsg += '		<p><b><font face="Arial"> Solicitação de Serviço - Abertura de Ordem de Servi&ccedil;o</font></b></p>'
+	cMailMsg += '		<div align="left">'
+	cMailMsg += '			<table border=0 WIDTH=100% cellpadding="2">'
+	cMailMsg += '				<tr>'
+	cMailMsg += '					<td bgcolor="#C0C0C0" align="center" width="14%"          ><b><font face="Arial" size="2">Solicitação</font></b></td>'
+	cMailMsg += '					<td bgcolor="#C0C0C0" align="center" width="14%"          ><b><font face="Arial" size="2">Bem/Localização</font></b></td>'
+	cMailMsg += '					<td bgcolor="#C0C0C0" align="center" width="30%"          ><b><font face="Arial" size="2">Descrição</font></b></td>'
+	cMailMsg += '					<td width="14%" align="center" bgcolor="#C0C0C0"          >'
+	cMailMsg += '						<p align="center"><b><font face="Arial" size="2">Ordem Serviço</font></b></p>'
+	cMailMsg += '					</td>'
+	cMailMsg += '					<td bgcolor="#C0C0C0" align="center" width="14%"            ><b><font face="Arial" size="2">Data Prevista Início</font></b></td>'
+	cMailMsg += '					<td bgcolor="#C0C0C0" align="center" width="14%"          ><b><font face="Arial" size="2">Hora Prevista Início</font></b></td>'
+	cMailMsg += '				</tr>'
+	cMailMsg += '				<tr>'
+	cMailMsg += '					<td bgcolor="#EEEEEE" align="center" width="185"><font face="Arial" size="1">'+TQB->TQB_SOLICI+'</font></td>'
+	cMailMsg += '					<td bgcolor="#EEEEEE" align="center" width="185"><font face="Arial" size="1">'+AllTrim( STJ->TJ_CODBEM )+'</font></td>'
+	cMailMsg += '					<td bgcolor="#EEEEEE" align="center" width="300"><font face="Arial" size="1">'+AllTrim( NGRELABEMLOC( STJ->TJ_TIPOOS, STJ->TJ_CODBEM ))+'</font></td>'
+	cMailMsg += '					<td width="185" align="center" bgcolor="#EEEEEE"><font face="Arial" size="1">'+STJ->TJ_ORDEM+'</font></td>'
+	cMailMsg += '					<td bgcolor="#EEEEEE" align="center" width="185"><font face="Arial" size="1">'+DtoC(STJ->TJ_DTMPINI)+'</font></td>'
+	cMailMsg += '					<td bgcolor="#EEEEEE" align="center" width="185"><font face="Arial" size="1">'+STJ->TJ_HOMPINI+'</font></td>'
+	cMailMsg += '				</tr>'
+	cMailMsg += '				<tr align="left" bgcolor="#C0C0C0">'
+	cMailMsg += '					<td colspan="6" bgcolor="#C0C0C0"><strong><font size="2" face="Arial, Helvetica, sans-serif">Observa&ccedil;&atilde;o</font></strong></td>'
+	cMailMsg += '				</tr>'
+	cMailMsg += '				<tr align="left" bgcolor="#EEEEEE">'
+	cMailMsg += '					<td colspan="6" bgcolor="#EEEEEE"><font size="1" face="Arial, Helvetica, sans-serif">'+STJ->TJ_OBSERVA+'</font></td>'
+	cMailMsg += '				</tr>'
+	cMailMsg += '			</table>'
+	cMailMsg += '		</div>'
+	cMailMsg += '		<U>'
+	cMailMsg += '		<br><hr>'
+	cMailMsg += '	</body>'
+	cMailMsg += '</html>'
+
+	cEmail	 := AllTrim(cEmailPara)
+
+	If lUPD87 .And. !Empty(cEmail)
+		cEMAIL_All 		:= cEmail
+	ElseIf !Empty(cCntEmail)
+		cEMAIL_All 		:= cCntEmail
+	Else
+		ShowHelpDlg("Destinatário do E-mail não informado.", {" Favor, verificar parâmetro MV_RELACNT" + (IIF(lUPD87, " ou se o funcionário possui E-mail cadastrado no sistema.", "."))}, 2, {" Envio de E-mail cancelado!"}, 1)
+	EndIf
+
+	If Empty(cSmtp)
+		MsgInfo("Servidor SMTP não informado! Favor, verificar parâmetro MV_RELSERV. Envio do e-mail cancelado!")
+		Return .F.
+	EndIf
+
+	If lAutentica .And. Empty(cConta)
+		MsgInfo("Verifique os parâmetros de configuração: MV_RELAUSR e MV_RELAUTH. Envio do e-mail cancelado!")
+		Return .F.
+	EndIf
+
+	//Função de envio de WorkFlow
+	lRetu := NGSendMail(, cEMAIL_All,,, cAssunto,, cMailMsg )
+
+	If lRetu
+		MsgInfo("E-mail enviado!") //"Aviso de Inclusão de SS enviado para o responsável"
+	Endif
+
+Return lRetu

@@ -1,0 +1,479 @@
+#include "MDTC701.ch"
+#include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTC701
+Consulta de EPI's necessarios.
+Selecionando um determinado funcionario, é possivel saber
+quais sao os EPI's necessarios. O programa busca os Epi's
+necessarios à funcao do funcionario, ao seu centro de custo,
+aos riscos associados a ele e as suas tarefas.
+
+@return
+
+@sample MDTC701()
+
+@author Andre E. Perez Alvarez
+@since 20/01/06
+@version 4.0
+/*/
+//---------------------------------------------------------------------
+Function MDTC701()
+
+	//-------------------------------------------------
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	//-------------------------------------------------
+	Local aNGBEGINPRM 	:= NGBEGINPRM( )
+
+	//Variaveis padroes
+	Private aRotina   	:= MenuDef()
+	Private cCadastro 	:= ""
+	Private lSigaMdtPs	:= SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+	Private cCliMdtPs	:= ""
+
+	//Monta o Browse
+	fBrowse( .T. )
+
+	//-------------------------------------------------
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//-------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTC701N
+Consulta os Epi's necessarios ao funcionario selecionado
+
+@return Nil
+
+@param cAlias - Alias do Browse
+@param nReg - Registro posicionado
+@param nOpcx - Opção selecionada
+
+@sample MDTC701N()
+
+@author Andre E. Perez Alvarez
+@since 20/01/06
+/*/
+//---------------------------------------------------------------------
+Function MDTC701n( cAlias , nReg , nOpcx )
+
+	//Contadores
+	Local i
+
+	//Objetos de tela
+	Local oDlg, oGet
+	Local oPnlPai, oPnlTop
+
+	//Customização realizada pontualmente no fonte
+	Local lPosTrab	:= .F.
+	Local cDescFun
+	Local cTab_Fun	:= "SRJ"
+
+	//Descrição do Centro de Custo
+	Local cFiDesc
+
+	//Variaveis de tamanho de tela
+	Local lEnchBar		:= .T. // Indica se a janela de diálogo possuirá enchoicebar
+	Local lPadrao		:= .F. // Indica se a janela deve respeitar as medidas padrões do Protheus (.T.) ou usar o máximo disponível (.F.)
+	Local nMinY			:= 430 // Altura mínima da janela
+	Local aSize			:= MsAdvSize( lEnchBar , lPadrao , nMinY )
+
+	Local aCampos       := { 'TNB_CODEPI', 'TNB_DESC' }
+
+	//Define as variaveis de aCols e aHeader
+	Private aCols, aHeader := {}
+	Private nCnt := 0, nUsado:=0
+
+	Private nIndTNB		:= 1
+	Private cCCodFun	:= "SRA->RA_CODFUNC"
+	Private cCCodTNB	:= "TNB_CODFUN"
+
+	Private nSizeSI3	:= If( ( TAMSX3( "I3_CUSTO" )[ 1 ] ) < 1 , 9 , ( TAMSX3( "I3_CUSTO" )[ 1 ] ) )
+	Private nSizeSRJ	:= If( ( TAMSX3( "RJ_FUNCAO" )[ 1 ] ) < 1 , 4 , ( TAMSX3( "RJ_FUNCAO" )[ 1 ] ) )
+
+	//Define de qual tabela ira utilizar a contabilidade (CTT ou SI3)
+	If Alltrim( GetMV( "MV_MCONTAB" ) ) == "CTB"
+		cFiDesc  := NgSeek( "CTT" , SRA->RA_CC , 1 , "CTT_DESC01" )
+	Else
+		cFiDesc  := NgSeek( "SI3" , SRA->RA_CC , 1 , "SI3->I3_DESC" )
+	EndIf
+
+	//Define a customização pontual
+	If TNB->( FieldPos( "TNB_CODPOS" ) )	> 0 .And. ;
+		( TAMSX3( "ZZI_COD" )[ 1 ] ) > 0
+			lPosTrab	:= .T.
+			cCCodFun	:= "SRA->RA_POSTO"
+			cDescFun	:= NgSeek( "ZZI" , SRA->RA_POSTO , 1 , "ZZI->ZZI_DESC" )
+			cCCodTNB	:= "TNB_CODPOS"
+			nIndTNB		:= 4
+			cTab_Fun	:= "ZZI"
+	Else
+		cDescFun  := NgSeek( "SRJ" , SRA->RA_CODFUNC , 1 , "SRJ->RJ_DESC" )
+	Endif
+
+	//------------------------------------------------------
+	// Monta o cabecalho
+	//------------------------------------------------------
+	//Adiciona os campos Cod. Epi e Desc. Epi
+	aHeader := NGHeadExc( aCampos, .F. )
+
+	// Realiza a busca de EPI's
+	Processa( { | lEnd | fBuscaEPI() } )
+
+	//Se nao houver Epis necessarios ao funcionario, mostra aviso na tela
+	If nCnt == 0
+		MsgInfo( STR0005 )	//"Não existem Epi's necessários para este funcionário."
+		Return .F.
+	EndIf
+
+	//Reordena o aCols
+	aSort( aCols , , , { | x , y | x[ 1 ] < y[ 1 ] } )
+
+	//Calcula a Idade
+	nIDADE := fCalcIdade( SRA->RA_NASC , dDataBase )
+
+	DEFINE MSDIALOG oDlg TITLE cCadastro From aSize[ 7 ],0 To aSize[ 6 ],aSize[ 5 ] OF oMainWnd Pixel
+
+		//Panel criado para correta disposicao da tela
+		oPnlPai := TPanel():New( , , , oDlg , , , , , , , , .F. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	    //-------------------------------------------------------------------------
+		// Elementos da parte superior da tela (Informacoes do Funcionário)
+		//-------------------------------------------------------------------------
+			oPnlTop := TPanel():New( , , , oPnlPai , , , , , , , 100 , .F. , .F. )
+	        	oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	        	//------------------------------------
+	        	// Informações do Funcionário
+	        	//------------------------------------
+			 	@ 0.5 ,.8  Say OemToAnsi( STR0006 ) Of oPnlTop //"Matrícula"
+			  	@ 0.5 ,3.5 MsGet MDTHideCpo( SRA->RA_MAT, "RA_MAT" ) Size 18,10 When .F. Of oPnlTop
+				@ 0.5 ,8   Say OemToAnsi( STR0007 ) Of oPnlTop  //"Nome"
+			 	@ 0.5 ,11  MsGet MDTHideCpo( SRA->RA_NOME, "RA_NOME" ) Size 120,10 When .F. Of oPnlTop
+			  	@ 0.5 ,27  Say OemToAnsi( STR0008 ) Of oPnlTop  //"Data Nasc."
+			   	@ 0.5 ,32  MsGet SRA->RA_NASC Size 42,10 When .F. Of oPnlTop HasButton
+
+				@ 1.7 ,0.8 Say OemToAnsi( STR0009 ) Of oPnlTop  //"Idade"
+			 	@ 1.7 ,3.5 MsGet nIDADE Size 19,10  When .F. Of oPnlTop
+			  	@ 1.7 ,6.6 Say OemToAnsi( STR0010 ) Of oPnlTop  //"Sexo"
+			   	@ 1.7 ,8.6 MsGet SRA->RA_SEXO Size 9,10 When .F. Of oPnlTop
+
+			    //------------------------------------
+	        	// Informações do Centro de Custo
+	        	//------------------------------------
+			    @ 1.7 ,11  Say OemToAnsi( STR0011 ) Of oPnlTop //"C.Custo"
+			    @ 1.7 ,14  MsGet SRA->RA_CC Size 70,10 When .F. Of oPnlTop
+			    @ 1.7 ,23  Say OemToAnsi( STR0012 ) Of oPnlTop //"Nome C.Custo"
+			    @ 1.7 ,28  MsGet cFiDesc Size 80,10 When .F. Of oPnlTop
+
+			    //------------------------------------
+	        	// Informações da Função
+	        	//------------------------------------
+			    dbSelectArea( cTab_Fun )
+			    dbSetOrder( 1 )
+			    dbSeek( xFilial( cTab_Fun ) + SRA->( &( cCCodFun ) ) )
+			    @ 2.9 ,0.8 Say OemToAnsi( If( !lPosTrab , STR0013 , STR0014 ) ) Of oPnlTop //"Função" //"Posto"
+			    @ 2.9 ,3.5 MsGet SRA->( &( cCCodFun ) ) Size 18,10 When .F. Of oPnlTop
+			    @ 2.9 ,8   Say OemToAnsi( If( !lPosTrab , STR0015 , STR0016 ) ) Of oPnlTop //"Nome Func." //"Nome Posto"
+			    @ 2.9 ,13  MsGet cDescFun Size 100,10 When .F. Of oPnlTop
+
+				//------------------------------------
+	        // Informações do Departamento
+	        //------------------------------------
+				If !NGCADICBASE( "TN0_DEPTO" , "A" , "TN0" , .F. )
+			    @ 2.9 ,27  Say OemToAnsi( STR0017 ) Of oPnlTop //"Data Admissão"
+			    @ 2.9 ,32  MsGet SRA->RA_ADMISSA Size 42,10 When .F. Of oPnlTop HasButton
+				Else
+					@ 4.1 ,0.8  Say OemToAnsi( NGRETTITULO("RA_DEPTO") ) Of oPnlTop //"Departamento"
+					@ 4.1 ,5.0  MsGet SRA->RA_DEPTO Size 18,10 When .F. Of oPnlTop
+					@ 4.1 ,10.0 Say OemToAnsi( NGRETTITULO("RA_DDEPTO") ) Of oPnlTop //"Desc. Depto"
+					@ 4.1 ,14.0 MsGet NGSeek( "SQB" , SRA->RA_DEPTO , 1 , "QB_DESCRIC" ) Size 100,10 When .F. Of oPnlTop
+					@ 4.1 ,28.0 Say OemToAnsi( STR0017 ) Of oPnlTop //"Data Admissão"
+					@ 4.1 ,33.0 MsGet SRA->RA_ADMISSA Size 42,10 When .F. Of oPnlTop HasButton
+				EndIf
+
+		//------------------------------------
+		// GetDados de EPI's
+		//------------------------------------
+		oGet := MSGetDados():New( 0 , 0 , 1000 , 1000 , nOpcx , , , "" , .T. , , , , 9999 , , , , , oPnlPai )
+			oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Activate MsDialog oDlg On Init EnchoiceBar( oDlg , ;//Objeto de Ativação
+												{ | | oDlg:End() } , ;//bAction do botão OK
+												{ | | oDlg:End() } )//bAction do botão Cancelar
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRiscoEPI
+Consulta os Epi's relacionados ao(s) risco(s) associados
+ao funcionario, adicionando-os no array aCols para
+a visualizacao na tabela filha.
+
+@return Nil
+
+@sample fRiscoEPI()
+
+@author Andre E. Perez Alvarez
+@since 23/01/06
+/*/
+//---------------------------------------------------------------------
+Static Function fRiscoEPI()
+
+	dbSelectArea( "TNX" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TNX" ) + TN0->TN0_NUMRIS )
+	While !EOF()                       			.AND.;
+	  	  TNX->TNX_NUMRIS  == TN0->TN0_NUMRIS  .AND.;
+	  	  TNX->TNX_FILIAL  == xFilial( "TNX" )
+
+	    If aScan( aCols, { | x | x[ 1 ]  == TNX->TNX_EPI } ) == 0
+	    	aAdd( aCols , { TNX->TNX_EPI , NGSEEK( "SB1" , TNX->TNX_EPI , 1 ,"B1_DESC" ) , .F. } )
+	    	nCnt++
+	    Endif
+	    dbSkip()
+
+	End
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaEPI
+Busca os Epis necessarios.
+
+@return Nil
+
+@sample fBuscaEPI()
+
+@author Andre E. Perez Alvarez
+@since 23/01/06
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaEPI()
+
+	Local lTIK	   := AliasInDic( "TIK" )
+	Local nProc    := 6 + If( lTIK , 1 , 0 )
+	Local aColsAux := BlankGetD(aHeader)[1]
+	Local nPosCod  := aScan( aHeader , { | x | AllTrim(x[ 2 ])  == 'TNB_CODEPI' } )
+	Local nPosDes  := aScan( aHeader , { | x | AllTrim(x[ 2 ])  == 'TNB_DESC' } )
+
+	ProcRegua( nProc )
+
+	//Limpa aCols
+	aCols := {}
+
+	//---------------- Busca os EPI's relacionados 'a funcao do funcionario ----------------
+	dbSelectArea( "TNB" )
+	dbSetOrder( nIndTNB )
+	dbSeek( xFilial( "TNB" ) + &cCCodFun )
+	While TNB->( !Eof() ) .And. TNB->TNB_FILIAL + &( cCCodTNB ) == xFilial( "TNB" ) + &( cCCodFun )
+		aAdd( aCols, aClone(aColsAux) )
+		aCols[ Len(aCols),nPosCod ] := TNB->TNB_CODEPI
+		aCols[ Len(aCols),nPosDes ] :=  NGSEEK( "SB1" , TNB->TNB_CODEPI , 1 , "B1_DESC" )
+	 	nCnt++
+	   	dbSkip()
+	End
+	IncProc()
+
+	//---------------- Busca os EPI's relacionados ao centro de custo do funcionario ----------------
+	dbSelectArea( "TOH" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TOH" ) + SRA->RA_CC )
+	While TOH->( !Eof() ) .And. TOH->TOH_FILIAL == xFilial( "TOH" ) .And. SRA->RA_CC == TOH->TOH_CC
+	    If aScan( aCols , { | x | x[ 1 ]  == TOH->TOH_CODEPI } ) == 0
+	    	aAdd( aCols, aClone(aColsAux) )
+			aCols[ Len(aCols),nPosCod ] := TOH->TOH_CODEPI
+			aCols[ Len(aCols),nPosDes ] :=  NGSEEK( "SB1" , TOH->TOH_CODEPI , 1 , "B1_DESC" )
+	    	nCnt++
+	    EndIf
+	    dbSkip()
+	End
+	IncProc()
+
+	//---------------- Busca os EPI's relacionados aos riscos associados ao funcionario ----------------
+	dbSelectArea("TM0")
+	dbSetOrder(3)//TM0_FILFUN+TM0_MAT+TM0_NUMDEP
+	dbSeek( SRA->RA_FILIAL + SRA->RA_MAT )
+	MDTRETRIS( ,TM0->TM0_NUMFIC , , { | | fRiscoEPI() } , , , , .F. )
+
+	IncProc()
+	//---------------- Busca os EPI's relacionados a tarefa do funcionario ----------------
+	If lTIK
+		dbSelectArea( "TN6" )
+		dbSetOrder( 2 )
+		If dbSeek( xFilial( "TN6" ) + SRA->RA_MAT )
+			While TN6->( !Eof() ) .And. TN6->TN6_FILIAL == xFilial( "TN6" ) .And. ;
+					TN6->TN6_MAT == SRA->RA_MAT
+				dbSelectArea( "TIK" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TIK" ) + TN6->TN6_CODTAR )
+				While TIK->( !Eof() ) .And. TIK->TIK_FILIAL == xFilial("TIK") .And. TIK->TIK_TAREFA == TN6->TN6_CODTAR
+				    If aScan( aCols, { | x | x[ 1 ]  == TIK->TIK_EPI } ) == 0 .And. ;
+				    		TN6->TN6_DTINIC <= dDataBase .And. ( Empty( TN6->TN6_DTTERM ) .Or. TN6->TN6_DTTERM >= dDataBase )
+				    	aAdd( aCols, aClone(aColsAux) )
+						aCols[ Len(aCols),nPosCod ] := TIK->TIK_EPI
+						aCols[ Len(aCols),nPosDes ] := NGSEEK( "SB1" , TIK->TIK_EPI , 1 , "B1_DESC" )
+				    	nCnt++
+				    EndIf
+				    TIK->( dbSkip() )
+				End
+				TN6->( dbSkip() )
+			End
+		EndIf
+		IncProc()
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  - 	Array com as opções de menu.
+					Parametros do array a Rotina:
+					1. Nome a aparecer no cabecalho
+					2. Nome da Rotina associada
+					3. Reservado
+					4. Tipo de Transa‡„o a ser efetuada:
+						1 - Pesquisa e Posiciona em um Banco de Dados
+						2 - Simplesmente Mostra os Campos
+						3 - Inclui registros no Bancos de Dados
+						4 - Altera o registro corrente
+						5 - Remove o registro corrente do Banco de Dados
+					5. Nivel de acesso
+					6. Habilita Menu Funcional
+
+@sample
+MenuDef()
+
+@author Andre E. Perez Alvarez
+@since 13/12/2006
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lSigaMdtPs )
+
+	Local aRotina
+
+	Default lSigaMdtPs := If( SuperGetMv( "MV_MDTPS" , .F. , "N" ) == "S" , .T. , .F. )
+
+	If lSigaMdtps
+		aRotina := {	{ STR0001 , "AxPesqui"		, 0 , 1 } , ;	//"Pesquisar"
+						{ STR0002 , "NGCAD01"		, 0 , 2 } , ;	//"Visualizar"
+						{ STR0019 , "MDTC701SRA"	, 0 , 4 } }		//"Funcionários"
+	Else
+		aRotina := { 	{ STR0001 , "AxPesqui"		, 0 , 1 } , ;	//"Pesquisar"
+						{ STR0003 , "MDTC701N"		, 0 , 2 } }		//"Epi's"
+	Endif
+
+Return aRotina
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBrowse
+Montagem padrao de Browse
+
+@return Nil
+
+@param lPrimeiro - Indica se deve monta o Broese de prestador
+
+@sample
+fBrowse()
+
+@author
+@since
+/*/
+//---------------------------------------------------------------------
+Static Function fBrowse( lPrimeiro )
+
+	//Definicoes basicas
+	Local cAlias		:= "SRA"
+	Local cFiltro		:= ""
+	Local nSizeCli		:= If( ( TAMSX3( "A1_COD" )[ 1 ] ) < 1 , 6 , ( TAMSX3( "A1_COD" )[ 1 ] ) )
+	Local nSizeLoj		:= If( ( TAMSX3( "A1_LOJA" )[ 1 ] ) < 1 , 2 , ( TAMSX3( "A1_LOJA" )[ 1 ] ) )
+
+	Default lPrimeiro	:= .F.//Caso nao seja passado parametro, indica ser a primeira montagem
+
+	cCadastro 	:= STR0004 //"EPI's Necessários"
+
+	If lSigaMdtPs//Caso prestador de servico
+		If lPrimeiro//Quando eh primeira montagem limpa o filtro e troca o alias
+			cAlias		:= "SA1"
+			cFiltro		:= ""
+			cCadastro 	:= STR0018 //"Clientes"
+		Else
+			//Quando segunda montagem adiciona o Filtro na Tabela de Laudos
+			cFiltro	:= "SubStr(SRA->RA_CC,1," + cValToChar( nSizeCli + nSizeLoj ) + ") == '" + cCliMdtps + "'"
+		EndIf
+	EndIf
+
+	//Enderacao a funcao de browse
+	dbSelectArea( cAlias )
+	dbSetOrder( 1 )
+	If !Empty( cFiltro )//Caso tenha o filtro, executa
+		Set Filter To &( cFiltro )
+	EndIf
+
+	mBrowse( 6 , 1 , 22 , 75 , cAlias )//Monta o Browse
+
+	//Retorna a tabela ao estado original
+	dbSelectArea( cAlias )
+	Set Filter To
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTC701SRA
+Faz a montagem do Browse de acordo com o Prestador de Serviço
+
+@return Nil
+
+@sample
+MDTC701SRA()
+
+@author
+@since
+/*/
+//---------------------------------------------------------------------
+Function MDTC701SRA()
+
+    Local aRotOld	:= aClone( aRotina )//Salva o aRotina atual
+    Local cOldCad	:= cCadastro//Salva a variavel de nome do cadastro
+
+    aRotina			:= MenuDef( .F. )//Alimenta aRotina com as novas opcoes
+
+	cCliMdtPs		:= SA1->A1_COD + SA1->A1_LOJA//Salva o cliente atual
+
+	fBrowse()//Monta o Browse de acordo com os Laudos do Cliente
+
+	aRotina			:= aClone( aRotOld )//Retorna o aRotina
+	cCadastro		:= cOldCad//Retorna a variavel de nome do cadastro
+
+Return
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³fCalcIdade| Autor ³ Jackson Machado       ³ Data ³26/08/2011³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Calcula a idade.                                            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³ dNasc  - Data de Nascimento                                ³±±
+±±³          ³ dFim   - Data Fim para calculo, caso nao seja passada,     ³±±
+±±³          ³          pegara como padrao a data atual (Date())          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MDTR487                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+/*/
+Static Function fCalcIdade(dNasc,dFim)
+
+Local nIdade := 0
+
+nIdade := Year(dFim) - Year(dNasc)
+If Month(dFim) < Month(dNasc)
+	nIdade := nIdade - 1
+Elseif Month(dFim) == Month(dNasc)
+	If Day(dFim) < Day(dNasc)
+		nIdade := nIdade - 1
+	Endif
+Endif
+
+Return nIdade

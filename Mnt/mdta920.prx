@@ -1,0 +1,616 @@
+#INCLUDE "Mdta920.ch"
+#include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA920
+Programa de Cadastro de Licenças Maternidade
+
+@return .T.
+
+@author Denis Hyroshi de Souza
+@since 16/02/04
+/*/
+//---------------------------------------------------------------------
+Function MDTA920
+//---------------------------------------------------------------------
+// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+//---------------------------------------------------------------------
+Local aNGBEGINPRM := NGBEGINPRM()
+
+Private lIntGpe   := SuperGetMv("MV_MDTGPE",.F.,"N") == "S" //Verifica se está integrado ao GPE
+Private lCpoDura  := NGCADICBASE("R8_DURACAO","A","SR8",.F.) .and.;//Verifica se existem os campos
+								NGCADICBASE("R8_DPAGAR" ,"A","SR8",.F.) .and.;
+								NGCADICBASE("R8_DIASEMP","A","SR8",.F.)
+Private nDias:= SuperGetMv("MV_NG2LICE",.F.,120) // Determina a quantidade de dias, da licença maternidade.
+
+Private lSigaMdtPS := SuperGetMv("MV_MDTPS",.F.,"N") == "S"
+Private bNGGRAVA
+Private nSizeCli   := If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1]))
+Private nSizeLoj   := If((TAMSX3("A1_LOJA")[1]) < 1,2,(TAMSX3("A1_LOJA")[1]))
+Private nSizeSI3   := If((TAMSX3("I3_CUSTO")[1]) < 1,9,(TAMSX3("I3_CUSTO")[1]))  //Usado no X3_RELACAO
+Private aRotina    := MenuDef()
+Private cCadastro  := OemtoAnsi(STR0006) //"Licencas Maternidade"
+Private APERATUAL := {}
+Private CPROCESSO := ""
+
+If FindFunction("MDTRESTRI") .AND. !MDTRESTRI(cPrograma)
+	//---------------------------------------------------------------------
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//---------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+	Return .F.
+Endif
+
+If !lSigaMdtPS
+	MDTA920d_()
+Else
+	dbSelectArea("SA1")
+	dbSetOrder(1)
+	mBrowse( 6, 1,22,75,"SA1")
+Endif
+
+//---------------------------------------------------------------------
+// Devolve variaveis armazenadas (NGRIGHTCLICK)
+//---------------------------------------------------------------------
+NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA920d_
+Registrar as Licenças Maternidades
+
+@return .T.
+
+@author Denis Hyroshi de Souza
+@since 21/03/2000
+/*/
+//---------------------------------------------------------------------
+Function MDTA920d_
+Local aArea			:= GetArea()
+Local aAreaTOF		:= TOF->( GetArea() )
+Local aIndexTOF		:= {}
+Local aIndexTM0		:= {}
+Local oldROTINA     := aCLONE(aROTINA)
+Local uRet
+
+Private cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+Private cAlias    := "TOF"
+Private cNUMFIC   := space(09)
+
+Begin Sequence
+
+	aRotina :=	MenuDef( .F. )
+
+	If lSigaMdtPS
+		cCadastro	:= OemToAnsi(STR0006+STR0011+Alltrim(SA1->A1_NOME)) //" - Cliente: "
+
+
+		//---------------------------------------------------------------------
+		// Inicializa o filtro da tabela TOF - Licencas
+		//---------------------------------------------------------------------
+		Private bFiltra920	:= { || NIL }
+		cFiltra920 := ChkRh("MDTA920","TOF","1")
+		cFiltra920 += IF(!Empty(cFiltra920),' .and. ','')
+		cFiltra920 += 'TOF_CLIENT == "'+SA1->A1_COD+'" .And. TOF_LOJA == "'+SA1->A1_LOJA+'"'
+		bFiltra920 := { || FilBrowse("TOF",@aIndexTOF,@cFiltra920) }
+		Eval( bFiltra920 )
+	Else
+
+		//---------------------------------------------------------------------
+		// Inicializa o filtro da tabela TM0 -Ficha Medica
+		//---------------------------------------------------------------------
+		Private bFiltra921	:= { || NIL }
+		cFiltra921 := 'TM0_SEXO == "2" .AND. Empty(TM0_NUMDEP)'
+		bFiltra921 := { || FilBrowse("TM0",@aIndexTM0,@cFiltra921) }
+		Eval( bFiltra921 )
+	Endif
+
+	dbSelectarea("TOF")
+	dbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TOF")
+
+	//---------------------------------------------------------------------
+	// Deleta o filtro utilizando a funcao FilBrowse
+	//---------------------------------------------------------------------
+	If lSigaMdtPS
+		EndFilBrw( "TOF" , aIndexTOF )
+	Else
+		EndFilBrw( "TM0" , aIndexTM0 )
+	Endif
+
+End Sequence
+
+RestArea( aAreaTOF )
+RestArea( aArea )
+aROTINA := aCLONE(oldROTINA)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} VAL920FIC
+Valida campo Ficha Medica p/ aceitar sexo feminino
+
+@param cFichaMed
+
+@return .T.
+
+@author Denis Hyroshi de Souza
+@since 16/02/04
+/*/
+//---------------------------------------------------------------------
+Function VAL920FIC(cFichaMed)
+
+Dbselectarea("TM0")
+Dbsetorder(1)
+If Dbseek(xFilial("TM0")+cFichaMed)
+	If TM0->TM0_SEXO != "2"
+		MsgStop(STR0007,STR0008) //"Somente poderá selecionar pessoa do sexo feminino."###"ATENCAO"
+		Return .f.
+	Endif
+Else
+	Help(" ",1,"REGNOIS")
+	Return .f.
+Endif
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} VAL920DTF
+Altera a data de saida e de retorno da licença maternidade
+
+@param dDataFim
+
+@return .T.
+
+@author Denis Hyroshi de Souza
+@since 16/02/04
+/*/
+//---------------------------------------------------------------------
+Function VAL920DTF(dDataFim)
+
+If !Naovazio(dDataFim)//Verifica se está vazio
+	Return .f.
+Endif
+
+M->TOF_DTRLIC := dDataFim+nDias //Data de Retorno da Licenca Maternidade
+lRefresh := .t.
+
+Return .t.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} IMPATEST
+Imprime o atestado para licença maternidade
+
+@return .T.
+
+@author Liber de Esteban
+@since 20/04/04
+/*/
+//---------------------------------------------------------------------
+Function IMPATEST()
+
+Local cCart, cSerie, cNome
+Local nDiasPar := SuperGetMv("MV_NG2LICE",.F.,120) // Determina a quantidade de dias, da licença maternidade.
+Private oFont14,oFont16,oFont21
+oFont14	:= TFont():New("COURIER NEW",13,13,,.F.,,,,.F.,.F.)
+oFont16	:= TFont():New("COURIER NEW",16,16,,.F.,,,,.F.,.F.)
+oFont21	:= TFont():New("COURIER NEW",21,21,,.F.,,,,.F.,.F.)
+
+oPrint	:= TMSPrinter():New(OemToAnsi(STR0010)) //"ATESTADO MÉDICO PARA GESTANTE"
+oPrint:Setup()
+
+lin := 450
+
+oPrint:StartPage()
+
+	dbselectarea("TM0")
+	dbSetorder(01)
+	dbSeek(xFilial("TM0")+TOF->TOF_NUMFIC)
+	dbselectarea("SRA")
+	dbSetorder(01)
+	dbSeek(xFilial("SRA")+TM0->TM0_MAT)
+	oPrint:Say(lin,510,STR0010,oFont21) //"ATESTADO MÉDICO PARA GESTANTE"
+	lin += 450
+    cNome := If(!Empty(SRA->RA_NOME),Alltrim(SRA->RA_NOME),Alltrim(TM0->TM0_NOMFIC))//Verifica se pegará os dados da SRA ou TM0
+    cCart := If(!Empty(SRA->RA_NUMCP),Alltrim(SRA->RA_NUMCP),Alltrim(TM0->TM0_NUMCP))//Verifica se pegará os dados da SRA ou TM0
+    cSerie:= If(!Empty(SRA->RA_SERCP),Alltrim(SRA->RA_SERCP),Alltrim(TM0->TM0_SERCP))//Verifica se pegará os dados da SRA ou TM0
+    nNome := len(cNome)
+    if nNome > 18
+   		cLin1 := STR0012 + cNome + STR0013 //"ATESTO QUE A SEGURADA EMPREGADA "###", PORTADORA DA CARTEIRA"
+   	ElseiF nNome > 15
+		cLin1 := STR0014 + cNome + STR0013 //"    ATESTO QUE A SEGURADA EMPREGADA "###", PORTADORA DA CARTEIRA"
+	Else
+		cLin1 := STR0015 + cNome + STR0013 //"     ATESTO  QUE A SEGURADA EMPREGADA  "###", PORTADORA DA CARTEIRA"
+   	End
+   	cLin2 := STR0016 + cCart + STR0017 + cSerie + STR0018 //"DE  TRABALHO  E  PREVIDENCIA  SOCIAL  NÚMERO "###" , SÉRIE  "###" ,  DEVERÁ"
+   	cLin3 := STR0019 + " " + cValToChar( nDiasPar ) + " (" + Extenso( nDiasPar , .T. ) + " ) " + STR0041//"AFASTAR-SE DO TRABALHO POR  UM PERÍODO DE" ## "DIAS, A PARTIR"
+   	cLin4 := STR0020 + DTOC(TOF->TOF_DTSLIC) + STR0021 //"DE  "###" , NOS TERMOS DO ARTIGO 393 DA C.L.T., DEVENDO RETORNAR AO "
+   	cLin6 := STR0022 + DTOC(TOF->TOF_DTRLIC) + STR0023 //"TRABALHO NO DIA "###", PASSANDO PELO SERVIÇO MÉDICO PARA A REALIZAÇÃO DO"
+   	cLin7 := STR0024 //"EXAME MÉDICO DE RETORNO AO TRABALHO."
+
+	oPrint:Say(lin,60,cLin1,oFont14)
+	lin += 80
+	oPrint:Say(lin,60,cLin2,oFont14)
+	lin += 80
+	oPrint:Say(lin,60,cLin3,oFont14)
+	lin += 80
+	oPrint:Say(lin,60,cLin4,oFont14)
+	lin += 80
+	oPrint:Say(lin,60,cLin6,oFont14)
+	lin += 80
+	oPrint:Say(lin,60,cLin7,oFont14)
+
+	lin += 500
+	cData := Alltrim(SM0->M0_CIDCOB)+", "+STRZERO(Day(dDataBase),2)+STR0025+ Upper(MesExtenso(dDataBase))+STR0025+StrZero(Year(dDataBase),4) //" de "###" de "
+	oPrint:Say(lin,600,cData,oFont16)
+	lin += 450
+	oPrint:line(lin,650,lin,1650)
+	oPrint:Say(lin+25,860,STR0026,oFont14) //"CARIMBO E ASSINATURA"
+
+oPrint:EndPage()
+oPrint:Preview()
+
+Return .t.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+	5. Nivel de acesso
+	6. Habilita Menu Funcional
+
+@return aRotina
+@param lMdtPs
+
+@author Rafael Diogo Richter
+@since 29/11/2006
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lMdtPs )
+Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+Local aRotina
+
+Default lMdtPs  := lSigaMdtPS
+
+If lMdtPs
+	aRotina := { 	{ STR0001 , "AxPesqui"	, 0 , 1},; //"Pesquisar"
+					{ STR0002 , "NGCAD01"	, 0 , 2},; //"Visualizar"
+					{ STR0027 , "MDTA920d_"	, 0 , 4}} //"Licenças M."
+Else
+	aRotina :=	{ 	{ STR0001, "AxPesqui"	, 0 , 1},; //"Pesquisar"
+					{ STR0002, "NGCAD01"		, 0 , 2},; //"Visualizar"
+					{ STR0003, "MDT920INC"	, 0 , 3},; //"Incluir"
+					{ STR0004, "MDT920INC"	, 0 , 4},; //"Alterar"
+					{ STR0005, "MDT920INC"	, 0 , 5, 3},; //"Excluir"
+					{ STR0009, "ImpAtest"	, 0 , 2}} //"Atestado"
+	If !lSigaMdtPS .AND. SuperGetMv("MV_NG2AUDI",.F.,"2") == "1"
+		aAdd( aRotina , { STR0037,"MDTA991('TOF')" , 0 , 3 } )//"Hist. Exc."
+	Endif
+Endif
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT920INC
+Tela de inclusão de licença maternidade
+
+@return .T.
+
+@param cAlias
+@param nRecno
+@param nOpcx
+
+@author Roger Rodrigues
+@since 27/05/10
+/*/
+//---------------------------------------------------------------------
+Function MDT920INC(cAlias, nRecno, nOpcx)
+
+	Local nRet := 0
+	Local aSR8Reg
+
+	Private cCondSR8
+	Private aRetDias := {}
+	Private lTipoAfas:= TOF->( FieldPos( "TOF_CODAFA" ) ) > 0
+	Private nRecSR8 := 0
+	Private cSeq := "0"
+
+	If lIntGpe .And. (nOpcx == 4 .Or. nOpcx == 5)//Verifica se esta integrado ao GPE e alteracao ou inclusao
+		dbSelectArea("TM0")
+		dbSetOrder(1)
+		dbSeek(xFilial("TM0")+TOF->TOF_NUMFIC)
+		dbSelectArea("SRA")
+		dbSetOrder(1)
+		If dbSeek(xFilial("SRA",TM0->TM0_FILFUN)+TM0->TM0_MAT)
+			dbSelectArea("SR8")
+			aSR8Reg := { { "R8_FILIAL" , xFilial("SRA",TM0->TM0_FILFUN) } , { "R8_MAT" , SRA->RA_MAT } ,;
+								{ "R8_DATAINI" , TOF->TOF_DTSLIC } , { "R8_TIPOAFA" , TOF->TOF_CODAFA } }
+
+			nRecSR8 := MDTRecnoSR8( aSR8Reg )
+
+			If nOpcx == 4
+				dbSelectArea("SR8")
+				dbSetOrder(6)
+				If dbSeek( xFilial("SR8") + SRA->RA_MAT + DTOS(TOF->TOF_DTSLIC) + TOF->TOF_CODAFA )
+					cSeq := SR8->R8_SEQ
+				EndIf
+			EndIf
+
+		Endif
+	Endif
+
+	If NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. cValToChar(nOpcx) $ "4/5" .And. FindFunction("MDTRESTRI") .And. !MDTRESTUS(MDTDATALO("TOF->TOF_USERGI",.F.))
+		bNGGRAVA  := {||}
+		Return .F.
+	ElseIf NGCADICBASE("TMK_USUARI","A","TMK",.F.) .And. nOpcx == 5 .And. SuperGetMV("MV_NG2SEG",.F.,"2") == "1" .And. !(SuperGetMV("MV_MDTPS",.F.,"N") == "S") .And. ;
+			FindFunction("MDTEXCSBI") .And. !MDTEXCSBI(MDTDATALO("TOF->TOF_USERGI"))
+		bNGGRAVA  := {||}
+		Return .F.
+	Endif
+
+	bNGGRAVA  := {|| f920VLAF(nOpcx)} // Verifica se os campos estao preenchidos corretamente
+	nRet := NGCAD01("TOF", nRecno, nOpcx)//Abre tela de cadastro
+	bNGGRAVA  := {|| }
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f920VLAF
+Verifica se existe afastamento no período informado
+
+@return lRet
+
+@param nOpcx
+
+@author Roger Rodrigues
+@since 28/05/10
+/*/
+//---------------------------------------------------------------------
+Static Function f920VLAF( nOpcx )
+
+	Local lRet := .T.
+	Local aArea
+
+	If nOpcx == 5
+		If nRecSR8 <> 0
+			lRet := MsgYesNo(STR0028; //"Foi registrado afastamento referente a este registro de Licença Maternidade."
+							+STR0029, STR0030) //"Confirma a exclusão do Afastamento e do registro de Licença Maternidade?"###"Atenção"
+		Endif
+	ElseIf nOpcx == 3 .or. nOpcx == 4
+		If lIntGpe
+			dbSelectArea("TM0")
+			dbSetOrder(1)
+			dbSeek(xFilial("TM0")+M->TOF_NUMFIC)
+			dbSelectArea("SRA")
+			dbSetOrder(1)
+			dbSeek(xFilial("SRA",TM0->TM0_FILFUN)+TM0->TM0_MAT)
+			dbSelectArea("SR8")
+			dbSetOrder(1)
+			dbSeek(xFilial("SRA",TM0->TM0_FILFUN)+SRA->RA_MAT)
+			While !eof() .and. SR8->R8_FILIAL+SR8->R8_MAT == xFilial("SRA",TM0->TM0_FILFUN)+SRA->RA_MAT
+				If (nOpcx <> 3) .and. (nRecSR8 <> 0 .and. SR8->(Recno()) == nRecSR8)
+					dbSelectArea("SR8")
+					dbSkip()
+					Loop
+				Endif
+				If M->TOF_DTRLIC < SR8->R8_DATAINI
+					Exit
+				Endif
+				If M->TOF_DTSLIC >= SR8->R8_DATAINI .and. (M->TOF_DTSLIC <= SR8->R8_DATAFIM .OR. Empty(SR8->R8_DATAFIM))
+					lRet := .F.
+				Endif
+				If M->TOF_DTRLIC >= SR8->R8_DATAINI .AND. (M->TOF_DTRLIC <= SR8->R8_DATAFIM .OR. Empty(SR8->R8_DATAFIM))
+					lRet := .F.
+				Endif
+				If SR8->R8_DATAINI > M->TOF_DTSLIC .AND. SR8->R8_DATAFIM < M->TOF_DTRLIC
+					lRet := .F.
+				Endif
+				If !lRet
+					ShowHelpDlg(STR0030,{STR0031},2) //"Atenção"###"Já existe Afastamento cadastrado no período desejado."
+					Exit
+				Endif
+				dbSelectArea("SR8")
+				dbSkip()
+			End
+			//
+			If lRet .And. TOF->( FieldPos("TOF_CODAFA") ) > 0
+				If !Empty( M->TOF_CODAFA )
+					If AllTrim( "Q" ) <> SubStr( NGSeek( "RCM" , M->TOF_CODAFA , 1 , "RCM_CODSEF" ), 1 , 1 )
+						ShowHelpDlg(STR0030,	{ STR0038 },2,;//"Atenção"###"O 'Código de Ausência' selecionado possui um 'Código SEFIP' que não caracteriza como Linceça Maternidade."
+														{ STR0039 } , 2 )//"Altere o 'Código de Ausência' que possua o 'Código SEFIP' com tais características."
+						lRet := .F.
+					EndIf
+				Else
+					Help(1," ","OBRIGAT2",,NGRETTITULO("TOF_CODAFA"),3,0)
+					lRet := .F.
+				EndIf
+			EndIf
+		Endif
+	Endif
+
+	aArea := GetArea()
+
+	If lRet
+		dbSelectArea("TM0")
+		dbSetOrder(1)
+		dbSeek(xFilial("TM0")+M->TOF_NUMFIC)
+		dbSelectArea("SRA")
+		dbSetOrder(1)
+		If dbSeek(xFilial("SRA",TM0->TM0_FILFUN)+TM0->TM0_MAT) .And. lIntGpe//Se encontrar funcionário e for integrado ao GPE
+			If ExistBlock("MDTA9201")
+				ExecBlock("MDTA9201",.F.,.F.)
+			Else
+				//Caso Exclusão
+				If nOpcx == 5 .And. nRecSR8 > 0
+					cCondSR8 := "SR8->R8_DATAINI == M->TOF_DTSLIC"
+					MDTGravSR8( "SR8" , 5 , , nRecSR8 , "!Eof() .And. " + cCondSR8 )
+				EndIf
+
+				If nOpcx == 3 .Or. nOpcx == 4
+					If  nOpcx == 3
+						//Verifica ultima sequencia
+						dbSelectArea("SR8")
+						dbSetOrder(2)
+						dbSeek(SRA->RA_FILIAL+SRA->RA_MAT+"ZZZ",.T.)
+						dbSkip(-1)
+						If !Eof() .And. SRA->RA_FILIAL+SRA->RA_MAT == SR8->R8_FILIAL+SR8->R8_MAT
+							cSeq := SOMA1(SR8->R8_SEQ)
+						Else
+							cSeq := "001"
+						Endif
+					EndIf
+					//Aleteração já tem o numero de sequência
+					aRecordSR8 := {}
+					aAdd( aRecordSR8 , { "R8_FILIAL"	,	SRA->RA_FILIAL		}	)
+					aAdd( aRecordSR8 , { "R8_SEQ"		,	cSeq				}	)
+					aAdd( aRecordSR8 , { "R8_MAT"		,	SRA->RA_MAT			}	)
+					aAdd( aRecordSR8 , { "R8_DATA"		,	dDataBase			}	)
+					aAdd( aRecordSR8 , { "R8_DATAINI"	,	M->TOF_DTSLIC		}	)
+					aAdd( aRecordSR8 , { "R8_DATAFIM"	,	M->TOF_DTRLIC-1	}	)
+					aAdd( aRecordSR8 , { "R8_CONTINU"	,	"2"					}	)
+					//A empresa deverá pagar o salário integralmente a funcionária
+					If lCpoDura
+						aRetDias := a685AtuDia( M->TOF_DTSLIC, M->TOF_DTRLIC-1, "2" , Space(3),  ,  , , NGSeek( "RCM" , M->TOF_CODAFA , 1 , "RCM->RCM_DIASEM" ))
+						aAdd( aRecordSR8 , { "R8_DURACAO"	,	nDias	}	)
+						aAdd( aRecordSR8 , { "R8_DIASEMP"	,	aRetDias[2]	}	)
+						aAdd( aRecordSR8 , { "R8_DPAGAR"	,	aRetDias[3]	}	)
+						If Len(aRetDias) > 3
+							aAdd( aRecordSR8 , { "R8_DPAGOS"  , aRetDias[4] } )
+							aAdd( aRecordSR8 , { "R8_SDPAGAR" , aRetDias[3] - aRetDias[4] } )
+							If aRetDias[ 4 ] > 0
+								aAdd( aRecordSR8 , { "R8_STATUS"  , "T" } )
+							EndIf
+						EndIf
+					Endif
+					If lTipoAfas
+						aAdd( aRecordSR8 , { "R8_TIPOAFA"		,	M->TOF_CODAFA }	)
+						aAdd( aRecordSR8 , { "R8_PD"	,  NGSeek( "RCM" , M->TOF_CODAFA , 1 , "RCM->RCM_PD" ) } )
+						aAdd( aRecordSR8 , { "R8_TPEFD"	,  NGSeek( "RCM" , M->TOF_CODAFA , 1 , "RCM->RCM_TPEFD" ) } )
+					EndIf
+					If ( lRet := MDTGravSR8( "SR8" , nOpcx , aRecordSR8 ) )
+						//Monta email comunicando afastamento se inclusao
+						If nOpcx == 3
+							fMontaMail("018")
+						Endif
+					EndIf
+				Endif
+
+			Endif
+		Endif
+		//Altera o status do funcionário para Afastado.
+		RetSituacao( SRA->RA_FILIAL , SRA->RA_MAT , .T. )
+	EndIf
+
+	RestArea(aArea)
+
+	//Realiza tratativa pois as variáveis não retornam o Status
+	aRotSetOpc( "TOF" , If( nOpcX == 3 , 0 , TOF->( RecNo() ) ) , nOpcX )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT920DATA
+Cadastro de Certificado de Aprovação de Instalação
+
+@return lRet
+
+@param dDtMestrua
+@param dDtParto
+@param dDtSaida
+@param cCampo
+
+@author Bruno Lobo de Souza
+@since 19/12/2013
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDT920DATA(dDtMestrua,dDtParto,dDtSaida,cCampo)
+
+	Local lRet := .T.
+	Local cMat := Posicione("TM0",1,xFilial("TM0")+M->TOF_NUMFIC,"TM0_MAT")
+	Local dDtAdmis := Posicione("SRA",1,xFilial("SRA")+cMat,"RA_ADMISSA")
+
+	If cCampo == "TOF_DTULME"
+		If !Empty(dDtMestrua) .And. dDtMestrua > dDataBase
+			MsgStop(STR0040,STR0030) //"Atenção"###"A data da ultima menstruação deve ser menor que a data atual."
+			lRet := .F.
+		EndIf
+		If !Empty(dDtMestrua) .And. !Empty(dDtParto) .And. dDtMestrua >= dDtParto .And. lRet
+			MsgStop(STR0032,STR0030) //"Atenção"###"A data da ultima menstruação deve ser menor que a data do parto."
+			lRet := .F.
+		ElseIf lRet
+			lRet := EXISTCHAV("TOF",M->TOF_NUMFIC+DTOS(dDtMestrua))
+		EndIf
+	EndIf
+
+	If cCampo == "TOF_DTPART"
+		If !Empty(dDtParto) .And. dDtParto < dDtAdmis
+			MsgStop(STR0036,STR0030)
+			lRet := .F.
+		EndIf
+		If !Empty(dDtMestrua) .And. !Empty(dDtParto) .And. dDtMestrua >= dDtParto .And. lRet
+			MsgStop(STR0033,STR0030) //"Atenção"###"A data do parto deve ser maior que a data da ultima menstruação."
+			lRet := .F.
+		Endif
+	EndIf
+
+	If cCampo == "TOF_DTSLIC"
+		If !Empty(dDtSaida) .And. dDtSaida < dDtAdmis
+			MsgStop(STR0036,STR0030)
+			lRet := .F.
+		EndIf
+		If Empty(dDtSaida) .And. lRet //Verifica se está vazio
+			lRet := .F.
+		Endif
+		If lRet
+			M->TOF_DTRLIC := dDtSaida+nDias //Data de Retorno da Licença Maternidade
+			lRefresh := .T.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT920SX3
+Função utilizada para conter o X3_VALID, X3_RELACAO e X3_INIBRW do cadastro de licenças maternidade
+
+@return	xRet, Caracter/Boolean, Retorna caracter ou lógico de acordo com a regra
+
+@param	nRegra, Caracter, Opção do campo a ser validado/retornado (1- X3_VALID, 2- X3_RELACAO, 3- X3_INIBRW)
+@param	cCampo, Caracter, Campo a ser validado/retornado
+
+@sample	MDT920SX3( 1, "TOF_NOMFIC" )
+
+@author	Luis Fellipy Bett
+@since	31/08/2021
+/*/
+//-------------------------------------------------------------------
+Function MDT920SX3( nRegra, cCampo )
+
+	Local xRet //Variável de retorno
+
+	If nRegra == 2 //Caso for X3_RELACAO
+		
+		Do Case
+			Case cCampo == "TOF_NOMFIC"
+				xRet := Posicione( "TM0", 1, xFilial( "TM0" ) + M->TOF_NUMFIC, "TM0_NOMFIC" )
+		End Case
+
+	ElseIf nRegra == 3 //Caso for X3_INIBRW
+		
+		Do Case
+			Case cCampo == "TOF_NOMFIC"
+				xRet := Posicione( "TM0", 1, xFilial( "TM0", TOF->TOF_FILIAL ) + TOF->TOF_NUMFIC, "TM0_NOMFIC" )
+		End Case
+
+	EndIf
+
+Return xRet

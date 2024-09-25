@@ -1,0 +1,2026 @@
+#INCLUDE "MNTA170.CH"
+#INCLUDE "FOLDER.CH"
+#INCLUDE "FONT.CH"
+#INCLUDE "COLORS.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWADAPTEREAI.CH" // Integração via Mensagem Única
+
+Static lRel12133 := GetRPORelease() >= '12.1.033'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA170
+Bens Padrao de Manutenção
+@author Inacio Luiz Kolling
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA170()
+
+    //Guarda conteúdo e declara variáveis padrões
+    Local aNGBEGINPRM 	:= NGBEGINPRM()
+	Local nTamTot		:= 0
+	Local nInd			:= 0
+	Local aEstrutura	:= {}
+
+    Private aRotina := MenuDef()
+    Private aAC     := { STR0001, STR0002 }             //"Abandona" ## "Confirma"
+    Private aCRA    := { STR0002, STR0003, STR0001 }    //"Confirma" ## "Redigita" ## "Abandona"
+    Private lSH1    := .F.
+
+    Private cCadastro  := OemToAnsi(STR0009) //"Bens Padrao"
+    Private nControGD  := 1
+    Private fAltera    := .F.
+    Private lAltCaract := .F.
+    Private lAltPecaRe := .F.
+    Private lMostra    := .T.
+    Private arrayTPB   := {}
+    Private arrayST9   := {}
+    Private arrayTPK   := {}
+    Private aTPBACOL   := {}
+    Private aTPKACOL   := {}
+	Private lTipMod    := lRel12133 .Or. MNTA170FR() // Define se utiliza/exibe o campo Tipo Modelo
+    Private lLocGar
+    Private aCols
+    Private aHeader
+    Private nUnidad
+    Private nQtdGar
+    Private nUniGar
+    Private nCodPro
+    Private nOpcao
+    Private nLocGar
+
+    Private lTpModAlt := .F.    // Identifica que já havia bem padrão cadastrado
+                                // antes de integrar com o frota e na alteração
+                                // do registro verifica a chave antiga
+    Private oMenu, oPanel
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 35, 95 )
+
+		aChoice := {}
+		aVarNao := {}
+
+		dbSelectArea("TPB")
+		aEstrutura := dbStruct()
+		nTamTot    := Len(aEstrutura)
+
+		For nInd := 1 To nTamTot
+			aAdd(arrayTPB, aEstrutura[nInd,1]) // Nome da coluna
+		Next nInd
+
+		dbSelectArea("ST9")
+		aEstrutura := dbStruct()
+		nTamTot    := Len(aEstrutura)
+
+		For nInd := 1 To nTamTot
+			aAdd(arrayST9, aEstrutura[nInd,1]) // Nome da coluna
+		Next nInd
+
+		dbSelectArea("TPK")
+		aEstrutura := dbStruct()
+		nTamTot    := Len(aEstrutura)
+
+		For nInd := 1 To nTamTot
+			aAdd(arrayTPK, aEstrutura[nInd,1]) // Nome da coluna
+		Next nInd
+
+		dbSelectArea("SX3")
+		dbSetOrder(02)
+		lLocGar := ( dbSeek("TPK_LOCGAR") )
+
+		dbSelectArea("SX3")
+		dbSetOrder(01)
+
+		aPOS1  := {15, 1, 78, 315}
+		POSREG := Recno()
+
+		dbSelectArea("TP9")
+		mBrowse(6, 1, 22, 75, "TP9")
+
+	EndIf
+
+	// Retorna conteúdo de variáveis padrões
+	NGReturnPRM(aNGBEGINPRM)
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170FOLD
+Geracao de folders
+@author Deivys Joenck
+@since 02/07/2001
+@version undefined
+@param cAlias1, characters
+@param nREG, numeric
+@param nOPCX, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170FOLD(cAlias1,nREG,nOPCX)
+
+	Local mX, oFont, nI, cGET
+	Local nControl  := 0
+	Local nOk       := 0
+	Local aPages    := {}
+	Local aTitles   := {}
+	Local aVar      := {}
+	Local cPrimeiro := ""
+	Local lGETD     := .F.
+	Local aNoFields := {}
+
+	Local aSize    := MsAdvSize(, .F., 430)
+	Local aInfo    := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	Local aObjects := {{ 040, 040, .T., .T.}, { 100, 100, .T., .T.}, { 020, 020, .T., .T. }}
+	Local aPosObj  := MsObjSize(aInfo, aObjects, .F.)
+	Local oSize     := FwDefSize():New(.T.)
+	Local nLinIniTl := oSize:aWindSize[1] // Linha  inicial da tela
+	Local nColIniTl := oSize:aWindSize[2] // Coluna inicial da tela
+	Local nLinFimTl := oSize:aWindSize[3] // Linha  final   da tela
+	Local nColFimTl := oSize:aWindSize[4] // Coluna final   da tela
+
+	Private _cAlias1  := cAlias1
+	Private _nReg     := nReg
+	Private _nOpcx    := nOpcx
+	Private n := 1, x := 0
+	Private nOpcao    := nOpcx
+	Private lOK       := .F.
+	Private aSVHeader := {{}, {}, {}}
+	Private aSVCols   := {{}, {}, {}}
+	Private aSVATela  := {}
+	Private aSVAGets  := {}
+	Private aTela     := {}
+	Private aGets     := {}
+	Private Inclui    := (nOPCAO == 3)
+
+	Private oGET170, oGet17001, oGet17002
+	Private oEnc17001, oFolder170, oDLG170
+
+	Private asMenu := NGRIGHTCLICK("MNTA170")
+
+	If ExistBlock("MNTA1701")
+		Return ExecBlock("MNTA1701",.F.,.F.)
+	EndIf
+
+	aAdd(aTitles, OemToAnsi(STR0012))
+	aAdd(aPages, "HEADER 1")
+	nControl++
+
+	aAdd(aTitles, OemToAnsi(STR0016))
+	aAdd(aPages, "HEADER 2")
+	nControl++
+
+	aAdd(aTitles, OemToAnsi(STR0017))
+	aAdd(aPages, "HEADER 3")
+	nControl++
+
+	// Visual
+	If nOPCAO # 2 .Or. nOPCAO # 5
+		lGetD := .T.
+	EndIf
+
+	nCONTROGD := 1
+
+	DEFINE MSDIALOG oDLG170 TITLE cCADASTRO FROM nLinIniTl,nColIniTl TO nLinFimTl,nColFimTl OF oMAINWND Pixel STYLE nOR(WS_VISIBLE,WS_POPUP)
+
+	oDLG170:lMaximized := .T.
+	oPanel := TPanel():New(0, 0, Nil, oDLG170, Nil, .T., .F., Nil, Nil, 0, 0, .T., .F. )
+	oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oFOLDER170 := TFOLDER():New(1,0,aTITLES,aPAGES,oPanel,,,,.F.,.F.,320,200,)
+	oFOLDER170:bChange := {|| ChangeGet() }
+	oFOLDER170:bSetOption := {|| CheckCols() }
+	oFOLDER170:aDIALOGS[1]:oFONT := oDLG170:oFONT
+	oFOLDER170:aDIALOGS[2]:oFONT := oDLG170:oFONT
+	oFOLDER170:aDIALOGS[3]:oFONT := oDLG170:oFONT
+
+	//---------------------------------------------------------------------
+	//| Enchoice 01														  |
+	//---------------------------------------------------------------------
+	aTELA    := {}
+	aGETS    := {}
+
+	dbSelectArea("TP9")
+
+	RegToMemory("TP9",(nOPCAO == 3))
+
+	oENC1701:= MsMGet():New("TP9",nREG,nOPCAO,,,,,{0,0,0,0},,,,,,oFOLDER170:aDIALOGS[1],,,.F.,"aSVATELA")//
+
+	oEnc1701:oBox:bGotFocus := {|| NGENTRAENC("TP9")}
+	oEnc1701:oBox:Align     := CONTROL_ALIGN_ALLCLIENT
+
+	aSVATELA := aClone(aTela)
+	aSVAGETS := aClone(aGets)
+
+	//---------------------------------------------------------------------
+	//| GetDados 01														  |
+	//---------------------------------------------------------------------
+	aAdd(aNoFields, 'TPB_CODFAM')
+
+	If lTipMod
+		aAdd(aNoFields, 'TPB_TIPMOD')
+	EndIf
+
+	cQuery := "SELECT * FROM "+RetSqlName("TPB")+" TPB WHERE TPB.TPB_FILIAL = '"+xFilial("TPB")+"' AND TPB.TPB_CODFAM = '" + TP9->TP9_CODFAM + "'"
+
+		If lTipMod
+			cQuery += " AND TPB.TPB_TIPMOD = '" + TP9->TP9_TIPMOD + "'"
+		EndIf
+
+		cQuery += " AND TPB.D_E_L_E_T_ = ' '"
+
+		FillGetDados( nOpcx, "TPB", 4, xFilial("TPB") + TP9->TP9_CODFAM, {|| "TPB->TPB_FILIAL + TPB->TPB_CODFAM"}, {|| .T.}, aNoFields,,, cQuery)
+
+	If(lTipMod,TPB->(dbSetOrder(4)),TPB->(dbSetOrder(1)))
+
+	dbSelectArea("TPB")
+	dbGoBottom()
+	dbSkip()
+
+	If Empty(aCols) .Or. nOPCAO == 3
+		aCols := BLANKGETD(aHeader)
+	ELSE
+		aTPBACOL := aClone(aCols)
+	EndIf
+
+	aSVHEADER[1] := aClone(aHeader)
+	aSVCOLS[1]   := aClone(aCols)
+	n            := Len(aCols)
+
+		oGET17001    := MsNewGetDados():New(0,0,125,315,GD_INSERT+GD_UPDATE+GD_DELETE,"NG170LINOK()","AllWaysTrue()","",,,999999999,,,"NG170LDEL()",oFOLDER170:aDIALOGS[2],aSVHEADER[1],aSVCOLS[1])
+
+	oGET17001:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+	oGET17001:oBROWSE:DEFAULT()
+	oGET17001:oBROWSE:REFRESH()
+
+	//---------------------------------------------------------------------
+	//| GetDados 02														  |
+	//---------------------------------------------------------------------
+	IIf(lTipMod, TPK->(dbSetOrder(3)), TPK->(dbSetOrder(1)))
+
+	aHeader     := {}
+	aCols       := {}
+	aNoFields   := {}
+
+	aAdd(aNoFields, 'TPK_CODFAM')
+
+	If lTipMod
+		aAdd(aNoFields, 'TPK_TIPMOD')
+	EndIf
+
+		cQuery := "SELECT * FROM "+RetSqlName("TPK")+" TPK WHERE TPK.TPK_FILIAL = '"+xFilial("TPK")+"' AND TPK.TPK_CODFAM = '" + TP9->TP9_CODFAM + "'"
+
+		If lTipMod
+			cQuery += " AND TPK.TPK_TIPMOD = '"  + TP9->TP9_TIPMOD + "'"
+		EndIf
+
+		cQuery += " AND TPK.D_E_L_E_T_ = ' '"
+
+		FillGetDados( nOpcx, "TPK", 3, xFilial("TPK") + TP9->TP9_CODFAM, {|| "TPK->TPK_FILIAL + TPK->TPK_CODFAM"}, {|| .T.}, aNoFields,,, cQuery)
+
+	dbSelectArea("TPK")
+	dbGoBottom()
+	dbSkip()
+	If Empty(aCols) .Or. nOPCAO == 3
+		aCols := BLANKGETD(aHeader)
+	Else
+		aTPKACOL := aClone(aCols)
+
+		If nOpcao == 4
+			For mx := 1 To Len(aCols)
+				dbSelectArea("SB1")
+				dbSetOrder(1)
+				If dbSeek(xFilial("SB1")+aCols[mx][1])
+					nUnidad := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPK_UNIDAD"})
+					aCols[mx][nUnidad] := SB1->B1_UM
+				EndIf
+			Next
+		EndIf
+	EndIf
+
+	nCodPro := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_CODPRO"})
+	nQtdGar := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_QTDGAR"})
+	nUniGar := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_UNIGAR"})
+	nUnidad := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_UNIDAD"})
+	nLocGar := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_LOCGAR"})
+
+	NGSAIGET( 2 )
+
+		oGet17002 := MsNewGetDados():New(0,0,125,315,GD_INSERT+GD_UPDATE+GD_DELETE,"NG170LINO2()","AllWaysTrue()","",,,999999999,,,"NG170LDEL2()",oFOLDER170:aDIALOGS[3],aSVHEADER[2],aSVCOLS[2])
+	oGet17002:oBrowse:Align      := CONTROL_ALIGN_ALLCLIENT
+	oGet17002:oBrowse:Default()
+	oGet17002:oBrowse:Refresh()
+
+	//Atenção: Implementações de novos folders (no padrão) deverão ser alocados acima do ponto de entrada em questão
+	If ExistBlock("MNTA1703")
+		ExecBlock("MNTA1703",.F.,.F.,{oFOLDER170})
+	EndIf
+
+	If nOpcx <> 3 .And. Len(aSMenu) > 0
+		NGPOPUP(aSMenu,@oMenu,oPanel)
+		oENC1701:oBox:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oENC1701:oBox)}
+		oPanel:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPanel)}
+	EndIf
+
+	nQtdFold := Len(oFOLDER170:aDialogs)
+
+	@ 1000,1000 MSGET oGET170 VAR cGET PICTURE "@!" SIZE 1,01 OF oFOLDER170:aDIALOGS[nQtdFold]
+
+	// Posiciona na primeira getdados criada
+	EntraGet( 1 )
+
+	ACTIVATE DIALOG oDLG170 ON INIT (ENCHOICEBAR(oDLG170,{|| lOK:=.T.,MNT170TPMOD(nOPCAO),If(oGET17001:TUDOOK(),If(MNT170CHK(),oDLG170:END(),lOK := .F.),lOK := .F.)},{|| nOK:= 0,oDLG170:END()}),,;
+		AlignObject(oDLG170,{oFOLDER170},1)) Centered
+
+	If lOK .And. Str(nOPCAO, 1) $ "345"
+		NG170GRAVA(nOPCAO)
+	EndIf
+
+	dbSelectArea("TP9")
+	dbSetOrder(1)
+	dbGoTo(Recno())
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} EntraGet
+Retorna aCols e aHeader quando se foca a GETDADOS
+@author Deivys Joenck
+@since 14/08/01
+@version undefined
+@param nG, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function EntraGet(nG)
+
+    Local cVar := "oGET170" + Strzero(nG, 2)
+	Local cHeadClo := cVar + ":aHeader"
+	Local cAcolClo := cVar + ":aCols"
+
+    aHeader := aClone(&cHeadClo)
+    aCols   := aClone(&cAcolClo)
+    n       := Len(aCols)
+
+    oFolder170:Refresh()
+
+    lRefresh := .T.
+
+    If Type(cVAR) == "O"
+        &cVAR:oBROWSE:Refresh()
+
+        If cVar = "oGET17001"
+            oGET17001:oBrowse:Refresh()
+        ElseIf Type(cVAR) == "O"
+            oGET17002:oBrowse:Refresh()
+        EndIf
+    EndIf
+
+    nCONTROGD := nG
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170GRAVA
+Funcao de gravacao dos dados.
+@author Deivys Joenck
+@since 02/07/01
+@version undefined
+@param nOPCS, numeric
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170GRAVA(nOPCS)
+
+    Local lFoundTP9, ah, ny, i := 0
+    Local nOrdTPB, nOrdTPK
+    Local cKeyTPB, cKeyTPK
+	Local xConteudo := ""
+    Local oTmpGrv //Obj. Tabela Temporária
+
+    Private cTRB  := GetNextAlias()//Alias tabela
+
+    If nControGD # 0
+        NGSaiEnc(nControGD)
+    EndIf
+
+    bCampo := {|nCpo| Field(nCpo)}
+    lField := ( ValType(aChoice) == "A" )
+    lGrava := ( Type("bNGGRAVA") == "B" )
+
+    If lField
+        lField := !Empty(aChoice)
+    EndIf
+
+    dbSelectArea("TP9")
+    dbSetOrder(1)
+    If nOpcs == 3 .Or. nOpcs == 4
+
+        dbSelectArea("TP9")
+        aCampos  := dbStruct()
+
+		//Instancia classe FWTemporaryTable
+		oTmpGrv:= FWTemporaryTable():New( cTRB, aCampos )
+		//Adiciona os Indices
+		oTmpGrv:AddIndex( "Ind01" , {"TP9_CODFAM","TP9_TIPMOD"} )
+		//Cria a tabela temporaria
+		oTmpGrv:Create()
+
+        If nOPCS == 4
+            dbSelectArea("TP9")
+            dbSelectArea(cTRB)
+            (cTRB)->(dbAppend())
+            For i := 1 To FCount()
+                x := "TP9->" + FieldName(i)
+                y := "(cTRB)->" + FieldName(i)
+                Replace &y. With &x.
+            Next i
+        EndIf
+
+        //---------------------------------------------------------------------
+        //|  Atualiza o arquivo principal (cAlias)							  |
+        //---------------------------------------------------------------------
+        dbSelectArea("TP9")
+        For ah := 1 To Len(aVarNao)
+
+            xx := aVarNao[ah][1]
+            yy := aVarNao[ah][2]
+
+            If !Empty(yy)
+                &xx. := &yy.
+            EndIf
+        Next
+
+        cChavTP9 := IIf(lTipMod .And. !lTpModAlt, M->TP9_CODFAM + M->TP9_TIPMOD, M->TP9_CODFAM)
+
+        dbSelectArea("TP9")
+        dbSetOrder(1)
+        lFoundTP9 := dbSeek(xFilial("TP9") + cChavTP9)
+
+        RecLock("TP9", !lFoundTP9)
+
+        For nY := 1 TO FCount()
+            nX := "M->" + FieldName(ny)
+            If "_FILIAL" $ Upper(nX)
+                FieldPut(ny, xFilial("TP9"))
+            Else
+                xConteudo := &nX.
+                If ValType(xConteudo) != "M"
+                    FieldPut(ny, &nX.)
+                EndIf
+            EndIf
+        Next ny
+        MsUnLock("TP9")
+
+        GravaaCols("TPB",1)
+        GravaaCols("TPK",2)
+
+        EvalTrigger()       // Processa Gatilhos
+
+        If nOPCS == 3
+            ConfirmSX8()
+        EndIf
+
+        ATUALIST9() // Atualiza o ST9 e o STB
+
+        oTmpGrv:Delete()//Deleta Tabela Temporária
+
+    EndIf
+
+    If nOpcs == 3
+        RollBackSX8()
+
+    ElseIf nOPCS == 5
+
+        nOrdTPB := IIf( lTipMod, 4, 1 )
+        nOrdTPK := IIf( lTipMod, 3, 1 )
+
+        cKeyTPB := IIf( lTipMod, M->TP9_CODFAM + M->TP9_TIPMOD, M->TP9_CODFAM)
+        cKeyTPK := IIf( lTipMod, M->TP9_CODFAM + M->TP9_TIPMOD, M->TP9_CODFAM)
+
+        dbSelectArea("TPB")
+        dbSetOrder(nOrdTPB)
+        dbSeek(xFilial("TPB") + cKeyTPB)
+        While !EoF() .And. xFilial("TPB") == TPB->TPB_FILIAL .And.;
+                TPB->TPB_CODFAM == M->TP9_CODFAM .And. TPB->TPB_TIPMOD == M->TP9_TIPMOD
+
+            RecLock("TPB",.F.)
+            dbDelete()
+            MsUnLock("TPB")
+
+            dbSelectArea("TPB")
+            dbSkip()
+        EndDo
+
+        dbSelectArea("TPK")
+        dbSetOrder(nOrdTPK)
+        dbSeek(xFilial("TPK") + cKeyTPK)
+        While !EoF() .And. xFilial("TPK") == TPK->TPK_FILIAL .And.;
+                TPK->TPK_CODFAM == M->TP9_CODFAM .And.;
+                TPK->TPK_TIPMOD == M->TP9_TIPMOD
+
+            RecLock("TPK",.F.)
+            dbDelete()
+            MsUnLock("TPK")
+
+            dbSelectArea("TPK")
+            dbSkip()
+        EndDo
+
+        dbSelectArea("TP9")
+
+        RecLock("TP9", .F.)
+        dbDelete()
+        MsUnLock("TP9")
+
+    EndIf
+
+    dbSelectArea("TP9")
+Return .T.
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GravaaCols
+Função para gravação dos dados no aCols.
+
+@author Deivys Joenck
+@since 02/07/2001
+@version 1.0
+@return .T. - Verdadeiro
+
+@obs Alterações: Melhoria na identação e fluxo da função
+@author Pedro Henrique Soares de Souza
+@since 31/07/2014
+/*/
+//---------------------------------------------------------------------
+Static Function GravaaCols( cAlias, nC )
+
+    Local nLocGar, nCaract, nCodPro
+    Local cCampo, uValor, cCondicao, cChave
+    Local yy, nX
+    Local nI       := 0
+    Local cFam170   := M->TP9_CODFAM
+    Local cTip170   := IIf(lTipMod, M->TP9_TIPMOD, Space(1))
+    Local nOrd170   := 1
+	Local cHeadClo := "oGET170" + Strzero(nC,2) + ":aHeader"
+	Local cAcolClo := "oGET170" + Strzero(nC,2) + ":aCols"
+
+    If lTipMod
+        nOrd170 := IIf( cAlias == "TPB", 4, 3 )
+    Else
+        nOrd170 := 1
+    EndIf
+
+    dbSelectArea(cAlias)
+    dbSetOrder(nOrd170)
+
+    aHeader := aClone(&cHeadClo)
+    aCols   := aClone(&cAcolClo)
+
+    If Len(aHeader) > 0 .And. Altera
+        If SubStr(aHeader[1][2], 1, 3) <> cAlias
+            Return .T.
+        EndIf
+    EndIf
+
+    nLocGar := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_LOCGAR"})
+    nCaract := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPB_CARACT"})
+    nCodPro := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_CODPRO"})
+
+    For nX := 1 To Len( aCols )
+
+        If cAlias == "TPK" .And. lLocGar
+            cChaFor := IIf(lTipMod, cFam170 + cTip170 + aCols[nX][nCodPro] + aCols[nX][nLocGar], cFam170 + aCols[nX][1] + aCols[nX][nLocGar])
+        Else
+            cChaFor := IIf(lTipMod, cFam170 + cTip170 + aCols[nX][nCaract], cFam170 + aCols[nX][nCaract])
+        EndIf
+
+        If !Empty( aCols[nX][1] )
+            If ATail(aCols[nX])
+
+                dbSelectArea(cAlias)
+                dbSetOrder(nOrd170)
+                If dbSeek(xFilial(cAlias) + cChaFor)
+
+                    RecLock(cAlias, .F.)
+                    dbDelete()
+                    MsUnLock(cAlias)
+
+                    lAltCaract := (cAlias == "TPB")
+                    lAltPecaRe := (cAlias == "TPK")
+                EndIf
+
+                Loop
+            EndIf
+
+            dbSelectArea(cAlias)
+            dbSetOrder(nOrd170)
+            If dbSeek(xFilial(cAlias) + cChaFor)
+
+                If !lAltCaract .And. cAlias == "TPB"
+                    If nX <= Len(aTPBaCol)
+                        For yy := 1 To Len(aHeader) - 2
+                            If aCols[nX][yy] <> aTPBACOL[nX][yy]
+                                lAltCaract := .T.
+                            EndIf
+                        Next yy
+                    EndIf
+
+                ElseIf !lAltPecaRe .And. cAlias == "TPK"
+                    If nX <= Len(aTPKaCol)
+                        For yy := 1 To Len(aHeader) - 2
+                            If aCols[nX][yy] <> aTPKACOL[nX][yy]
+                                lAltPecaRe := .T.
+                            EndIf
+                        Next yy
+                    EndIf
+                EndIf
+
+                RecLock(cAlias,.F.)       
+            Else
+
+                RecLock(cAlias,.T.)
+
+                If cAlias == "TPB"
+                    lAltCaract := .T.
+                    TPB->TPB_FILIAL := xFilial(cAlias)
+                    TPB->TPB_CODFAM := cFam170
+
+                    If lTipMod
+                        TPB->TPB_TIPMOD := cTip170
+                    EndIf
+
+                ElseIf cAlias == "TPK"
+                    lAltPecaRe := .T.
+                    TPK->TPK_FILIAL := xFilial(cAlias)
+                    TPK->TPK_CODFAM := cFam170
+
+                    If lTipMod
+                        TPK->TPK_TIPMOD := cTip170
+                    EndIf
+                EndIf
+            EndIf
+
+            For nI := 1 To Len(aHeader) - 2
+                If aHeader[nI,10] == 'V'
+                    Loop
+                EndIf
+
+                cCampo  := cAlias + "->" + Trim(aHeader[nI][2])
+                &cCampo := aCols[nX][nI]
+            Next
+
+            MsUnLock(cAlias)
+        EndIf
+    Next nX
+
+    dbSelectArea("TP9")
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170LinOk
+Critica se a linha digitada esta' Ok
+@author Deivys Joenck
+@since 10/07/01
+@version undefined
+@param lLinOk, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170LinOk( lLinOk )
+
+	Local nI, nCaract, nDetalh, nConte2, nCondOp
+	Local lEmpty := .F., lRet := .T.
+
+	Default lLinOk := .T.
+
+	If lOk
+		NGSaiGet(nControGD)
+		aCols   := aClone(oGET17001:aCols)
+		aHeader := aClone(oGET17001:aHeader)
+
+		If Empty(aCols[1][1])
+			lEmpty := .T.
+		EndIf
+	EndIf
+
+	nCaract := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPB_CARACT"})
+	nDetalh := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPB_DETALH"})
+	nConte2 := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPB_INFO02"})
+	nCondOp := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPB_CONDOP"})
+
+	If lRet .And. !lEmpty
+		For nI:= 1 to Len(aCols)
+			If !ATail(aCols[nI])
+				If !lLinOk .Or. nI == n
+					If Empty( aCols[nI][nCaract] )
+						ShowHelpDlg( "DETALHE", { STR0032 }, 5,;	//"O campo Característica está em branco."
+						{ STR0033 }, 5)				//"Informe uma característica!"
+						lRet := .F.
+					EndIf
+
+					If lRet .And. Empty(aCols[nI][nDetalh])
+						ShowHelpDlg( "DETALHE", { STR0034 }, 5,;	//"O campo obrigatório 'Detalhe 1' está em branco"
+						{ STR0035 }, 5)				//"Informe o campo 'Detalhe 1'!"
+						lRet := .F.
+					EndIf
+
+					If lRet
+						If aCols[nI][nCondOp] == '2'
+							If Empty(aCols[nI][nConte2])
+								ShowHelpDlg( "DETALHE", { STR0038 }, 5,;	//"O campo obrigatório 'Detalhe 2' está em branco"
+								{ STR0039 }, 5)				//"Informe o campo 'Detalhe 2'!"
+								lRet := .F.
+							EndIf
+						EndIf
+					EndIf
+
+					If lRet .And. nI <> n .And. !Atail(aCols[nI])
+						If aCols[nI][nCaract] == aCols[n][nCaract]
+							Help( " ", 1, "JAGRAVADO" )
+							lRet := .F.
+						EndIf
+					EndIf
+				EndIf
+
+				If !lRet
+					Exit
+				EndIf
+			EndIf
+		Next nI
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170LINO2
+Critica se a linha digitada esta' Ok
+@author Deivys Joenck
+@since 10/07/01
+@version undefined
+@param lLinOk, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170LINO2(lLinOk)
+
+    Local nI
+    Local lEmpty := .F., lRet := .T.
+
+    Default lLinOk := .T.
+
+    If Type("nQTDGAR") == "U"
+        Return lRet
+    EndIf
+
+    If lOk
+        aCols   := aClone(oGET17002:aCols)
+        aHeader := aClone(oGET17002:aHeader)
+
+        If Empty(aCols[1][1])
+            lEmpty := .T.
+        EndIf
+    EndIf
+
+    If lRet .And. !lEmpty
+        For nI:= 1 to Len(aCols)
+            If !ATail(aCols[nI])
+                If !lLinOk .Or. nI == n
+                    If Empty(aCols[n][nCodPro])
+                        Help(" ",1,"OBRIGAT")
+                        lRet := .F.
+                    EndIf
+
+                    If lRet .And. (!Empty(aCols[n][nQtdGar]) .And. Empty(aCols[n][nUniGar])) .Or.;
+                            (Empty(aCols[n][nQtdGar]) .And. !Empty(aCols[n][nUniGar]))
+
+                        Help(" ",1,"OBRIGAT")
+                        lRet := .F.
+                    EndIf
+                EndIf
+
+                If lRet .And. nI <> n .And. !ATail(aCols[n])
+                    If aCols[nI][nLocGar] + aCols[nI][nCodPro] == aCols[n][nLocGar] + aCols[n][nCodPro]
+                        Help( " ", 1, "JAGRAVADO" )
+                        lRet := .F.
+                    EndIf
+                EndIf
+
+                If !lRet
+                    Exit
+                EndIf
+            EndIf
+        Next nI
+    EndIf
+
+    If lLinOk
+        If !lRet
+            lOk := .F.
+        EndIf
+    EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170EXIST
+Critica se a nota toda esta' Ok
+@author Inacio Luiz Kolling
+@version undefined
+@param cAlias, characters
+@param lLinOk, logical
+@param lChkDel, logical
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170EXIST(cAlias,lLinOk,lChkDel)
+
+    Local lRet := .T. ,QTD := 0,nCARACT,nLOCGAR
+    Local nI
+    Default lLinOk := .F.
+    Default lChkDel := .T.
+
+    nCARACT := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPB_CARACT"})
+
+    If cAlias == "TPB"
+        If lLinOk
+            M->TPB_CARACT := aCols[n][nCARACT]
+        EndIf
+        For nI := 1 To Len(aCols)
+            If nI != n .And. !aCols[nI][Len(aCols[nI])] .And. IIf(lChkDel,!aCols[n][Len(aCols[n])],.T.) .And.;
+                    M->TPB_CARACT == aCols[nI][nCARACT]
+                If lChkDel
+                    aCols[n][nCARACT] := Space( TAMSX3("TPB_CARACT")[1] )
+                EndIf
+                HELP(" ",1,"JAGRAVADO")
+                lRet := .F.
+                Exit
+            EndIf
+        Next
+    EndIf
+
+    If cAlias == "TPK"
+        If lLocGar
+            nLOCGAR := aScan(aHeader,{|x| Trim(Upper(x[2])) == "TPK_LOCGAR"})
+            If Type("M->TPK_CODPRO") == 'C'
+                cCODIGO := M->TPK_CODPRO
+            Else
+                cCODIGO := aCols[n][nCODPRO]
+            EndIf
+            If Type("M->TPK_LOCGAR") == 'C'
+                cLOCGAR := M->TPK_LOCGAR
+            Else
+                cLOCGAR := aCols[n][nLOCGAR]
+            EndIf
+            For nI := 1 To Len(aCols)
+                If nI != n .And. !aCols[nI][Len(aCols[nI])] .And. IIf(lChkDel,!aCols[n][Len(aCols[n])],.T.) .And.;
+                        cCODIGO == aCols[nI][nCODPRO] .And. cLOCGAR == aCols[nI][nLOCGAR]
+                    If lChkDel
+                        aCols[n][nLOCGAR] := Space(Len(cLOCGAR))
+                    EndIf
+                    Help(" ",1,"JAGRAVADO")
+                    lRet := .F.
+                    Exit
+                EndIf
+            Next
+        Else
+            If Type("M->TPK_CODPRO") == 'C'
+                cCODIGO := M->TPK_CODPRO
+            Else
+                cCODIGO := aCols[n][nCODPRO]
+            EndIf
+            For nI := 1 To Len(aCols)
+                If nI != n .And. !aCols[nI][Len(aCols[nI])] .And. IIf(lChkDel,!aCols[n][Len(aCols[n])],.T.) .And.;
+                        cCODIGO == aCols[nI][nCODPRO]
+                    If lChkDel
+                        aCols[n][nCODPRO] := Space(Len(cCODIGO))
+                    EndIf
+                    Help(" ",1,"JAGRAVADO")
+                    lRet := .F.
+                    Exit
+                EndIf
+            Next
+        EndIf
+    EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ATUALIST9
+Atualiza o ST9 e o STB
+@author Inacio Luiz Kolling
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function ATUALIST9()
+
+	Local x := 0
+
+	cCodFam  := M->TP9_CODFAM
+	cTipMod  := IIf(lTipMod, M->TP9_TIPMOD, Space(1))
+	AlPadrao := .F.
+	ExPadrao := .F.
+
+	cAliasQry := GetNextAlias()
+
+	cQuery := " SELECT Count( T9_PADRAO ) AS nCont"
+	cQuery += " FROM " + RetSqlName("ST9")
+	cQuery += " WHERE T9_CODFAMI  = '" + cCodFam + "'"
+
+	// Para o Tipo Modelo '*' deve-se considerar apenas bens que não possuírem um bem padrão (TP9) mais específico (TP9_CODFAM + TP9_TIPMOD = T9_CODFAMI + T9_TIPMOD)
+	If lRel12133 .And. Trim( cTipMod ) == '*'
+		cQuery += " AND NOT EXISTS(SELECT TP9_TIPMOD FROM " + RetSqlName("TP9") + " WHERE TP9_FILIAL = '" + xFilial("TP9") + "' AND TP9_CODFAM = '" + cCodFam + "'"
+		cQuery += " AND TP9_TIPMOD = T9_TIPMOD AND D_E_L_E_T_ = ' ')"
+	ElseIf lTipMod
+		cQuery += " AND T9_TIPMOD = '" + cTipMod + "'"
+	EndIf
+
+	cQuery += " AND T9_FILIAL = '" + xFilial("ST9") + "'"
+	cQuery += " AND T9_PADRAO = 'S' "
+	cQuery += " AND D_E_L_E_T_ = ' ' "
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	ExPadrao := (cAliasQry)->nCont > 0
+
+	(cAliasQry)->( dbCloseArea() )
+
+	// Se tem bem padrão, verifica se houve mudanças nos campos do bem
+	If ExPadrao
+		xAlias := "ST9"
+
+		dbSelectArea(cTRB)
+
+		For x := 1 To FCount()
+			xNome := AllTrim( FieldName(x) )
+
+			lTracaN := .F.
+			If lTipMod
+				If xNome != "TP9_FILIAL" .And. xNome != "TP9_CODFAM" .And. xNome != "TP9_TIPMOD" .And. xNome != "TP9_CCUSTO"
+					lTracaN := .T.
+				EndIf
+			Else
+				If xNome != "TP9_FILIAL" .And. xNome != "TP9_CODFAM" .And. xNome != "TP9_CCUSTO"
+					lTracaN := .T.
+				EndIf
+			EndIf
+
+			If lTracaN
+				xx  := "M->" + xNome
+				yy  := "(cTRB)->" + xNome
+
+				If yy == '(cTRB)->TP9_DESCRI'
+					vv := &xx
+					zz := &yy
+					If !Empty(VV) .And. Empty(zz)
+						AlPadrao := .T.
+					EndIf
+				EndIf
+
+				If &xx != &yy
+
+                    /*------------------------------------------------------------------------+
+                    | Desconsidera alteração no campo Tem Contador, para bens já cadastrados. |
+                    +------------------------------------------------------------------------*/
+                    If xNome == 'TP9_TEMCON' .And. &yy == 'N'
+                        Loop
+                    EndIf
+
+					AlPadrao := .T.
+					Exit
+
+				EndIf
+			EndIf
+		Next x
+
+		// Caso tenha alterado as características ou bem padrão
+		If AlPadrao .Or. lAltCaract .Or. lAltPecaRe
+			If Pergunte("MNT170", .T.)
+				If MV_PAR01 == 2 .And. MV_PAR02 == 2
+
+					cAliasQry := GetNextAlias()
+					cQuery := " SELECT T9_FILIAL, T9_CODBEM, T9_PADRAO "
+					cQuery += " FROM " + RetSqlName("ST9")
+					cQuery += " WHERE T9_CODFAMI  = '" + cCodFam + "'"
+
+					If lRel12133 .And. Trim( cTipMod ) == '*'
+						cQuery += " AND NOT EXISTS(SELECT TP9_TIPMOD FROM " + RetSqlName("TP9") + " WHERE TP9_FILIAL = '" + xFilial("TP9") + "' AND TP9_CODFAM = '" + cCodFam + "'"
+						cQuery += " AND TP9_TIPMOD = T9_TIPMOD AND D_E_L_E_T_ = ' ')"
+					ElseIf lTipMod
+						cQuery += " AND T9_TIPMOD = '" + cTipMod + "'"
+					EndIf
+
+					cQuery += " AND T9_FILIAL = '" + xFilial("ST9") + "'"
+					cQuery += " AND T9_PADRAO = 'S' "
+					cQuery += " AND D_E_L_E_T_ = ' ' "
+
+					cQuery := ChangeQuery(cQuery)
+					dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+					While !EoF()
+						dbSelectArea("ST9")
+						dbSetOrder(1)
+						dbSeek(xFilial("ST9") + (cAliasQry)->T9_CODBEM)
+
+						If AlPadrao
+							AltFamiST9()
+						EndIf
+
+						If lAltCaract
+							AtuCarST9( cCodFam, cTipMod )
+						EndIf
+
+						If lAltPecaRe
+							AtuPecST9( cCodFam, cTipMod )
+						EndIf
+
+						dbSelectArea(cAliasQry)
+						dbSkip()
+					EndDo
+
+					(cAliasQry)->(dbCloseArea())
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+
+	dbSelectArea("TP9")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} AltFamiST9
+Atualiza o ST9 com os campos modificados do TP9
+@author Inacio Luiz Kolling
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function AltFamiST9()
+
+    Local i, y   := 0
+	Local lMain  := Type( "oMainWnd" ) == "O"
+
+    dbSelectArea(cTRB)
+    For i := 1 To FCount()
+        If FieldName(i) <> "TP9_FILIAL"
+            For y := 1 To Len(arrayST9)
+                If AllTrim(SubStr(arrayST9[y],3,7)) == AllTrim(SubStr(FieldName(i),4,7))
+
+                    Do Case
+
+                        Case ArrayST9[Y] == 'T9_TEMCONT' .And. M->TP9_TEMCON == 'N'
+
+                            /*-------------------------------------------------+
+                            | Reset das informações de contador na tabela ST9. |
+                            +-------------------------------------------------*/
+                            fUpdCount()
+
+                        Case ArrayST9[Y] != 'T9_CCUSTO ' .And. ArrayST9[Y] != 'T9_CENTRAB' .And.;
+                            ArrayST9[Y] != 'T9_CALENDA' .And. ArrayST9[Y] != 'T9_TEMCONT'
+
+                            xx  := "ST9->" + arrayST9[y]
+                            yy  := "(cTRB)->" + FieldName(i)
+                            zz  := "M->"   + FieldName(i)
+
+                            dbSelectArea("ST9")
+
+                            RecLock(xAlias, .F.)
+
+                            If &xx == &yy .And. &yy <> &zz
+                                &xx. := &zz.
+                            ElseIf MV_PAR02 == 2 .And. &yy <> &zz
+                                &xx. := &zz.
+                            EndIf
+
+                            MsUnLock()
+                            //----------------------------------------------------
+                            // Integração via mensagem única do cadastro de Bem
+                            //----------------------------------------------------
+                            If FindFunction("MN080INTMB") .And. MN080INTMB(ST9->T9_CODFAMI)
+
+                                dbSelectArea( "ST9" )
+
+                                // Define array private que será usado dentro da integração
+                                aParamMensUn    := Array( 4 )
+                                aParamMensUn[1] := Recno() // Indica numero do registro
+                                aParamMensUn[2] := 4       // Indica tipo de operação que esta invocando a mensagem unica
+                                aParamMensUn[3] := .F.     // Indica que se deve recuperar dados da memória
+                                aParamMensUn[4] := 1       // Indica se deve inativar o bem (1 ativo,2 - inativo)
+
+                                lMuEquip := .F.
+                                bBlock := { || FWIntegDef( "MNTA080",EAI_MESSAGE_BUSINESS,TRANS_SEND,Nil ) }
+
+                                If lMain
+                                    MsgRun( "Aguarde integração com backoffice...","Equipment",bBlock )
+                                Else
+                                    Eval( bBlock )
+                                EndIf
+
+                            EndIf
+                            dbSelectArea(cTRB)
+
+                            Exit       
+
+                    End Case
+
+                EndIf
+
+            Next y
+
+        EndIf
+
+    Next i
+
+    If ExistBlock("MNTA1702")
+        Return ExecBlock("MNTA1702", .F., .F.)
+    EndIf
+
+Return .T.
+
+//-----------------------------------------------
+/*/{Protheus.doc} fUpdCount
+Reset das informações de contador na tabela ST9.
+@type function
+
+@author Alexandre Santos
+@since 31/12/2021
+/*/
+//-----------------------------------------------
+Static Function fUpdCount()
+
+    Local aAreaAll := GetArea()
+    Local aAreaST9 := ST9->( GetArea() ) 
+    Local cAlsSTP  := GetNextAlias()
+
+    BeginSQL Alias cAlsSTP
+
+        SELECT 
+            STP.TP_TIPOLAN,
+            STP.R_E_C_N_O_
+        FROM
+            %table:STP% STP
+        WHERE
+            STP.TP_FILIAL  = %xFilial:STP%         AND
+            STP.TP_CODBEM  = %exp:ST9->T9_CODBEM%  AND
+            STP.TP_DTLEITU = %exp:ST9->T9_DTULTAC% AND
+            STP.%NotDel%
+        ORDER BY
+            STP.TP_DTLEITU || STP.TP_HORA DESC
+
+    EndSQL
+
+    If (cAlsSTP)->TP_TIPOLAN == 'I'
+
+        RecLock( 'ST9', .F. )
+        ST9->T9_TEMCONT := 'N'
+        ST9->T9_TPCONTA := SPACE( LEN( ST9->T9_TPCONTA ))
+        ST9->T9_POSCONT := 0
+        ST9->T9_DTULTAC := CToD( '' )
+        ST9->T9_CONTACU := 0
+        ST9->T9_VARDIA  := 0
+        ST9->T9_LIMICON := 0
+        MsUnLock()
+        
+        dbSelectArea( 'STP' )
+        dbGoTo( (cAlsSTP)->R_E_C_N_O_ )
+
+        RecLock( 'STP', .F. )
+        dbDelete()
+        MsUnLock()
+
+    EndIf
+
+    (cAlsSTP)->( dbCloseArea() )
+
+    RestArea( aAreaST9 )
+    RestArea( aAreaAll )
+    
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ATUCARST9
+Atualiza as caracteristicas do bem STB / TPB
+
+@author Inacio Luiz Kolling
+@version undefined
+@type function
+
+@param cCodFam, Caracter, Código da familia da TP9
+@param cTipMod, Caracter, Tipo Modelo da TP9
+
+/*/
+//---------------------------------------------------------------------
+Function ATUCARST9( cCodFam, cTipMod )
+
+    Local i, nX, x := 0
+    Local nCaract, nOrdTPB
+    Local cKeyTPB
+
+    If Len(aSVCOLS) == 0
+        Return .T.
+    EndIf
+
+    aCols   := aClone(oGET17001:aCols)
+    aHeader := aClone(oGET17001:aHeader)
+    nCaract := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPB_CARACT"})
+
+    dbSelectArea("ST9")
+    dbSetOrder(1)
+    dbSeek(xFilial("ST9") + (cAliasQry)->T9_CODBEM)
+    For nX := 1 To Len(aCols)
+
+        nOrdTPB := IIf( lTipMod, 4, 1 )
+        cKeyTPB := IIf( lTipMod, cCodFam + cTipMod + aCols[nX][nCaract], cCodFam + aCols[nX][nCaract])
+
+        If ATail(aCols[nX])
+            dbSelectArea("STB")
+            dbSetOrder(1)
+            If dbSeek(xFilial("STB") + ST9->T9_CODBEM + aCols[nX][nCaract])
+                RecLock("STB", .F.)
+                dbDelete()
+            EndIf
+
+            Loop
+        Else
+            dbSelectArea('STB')
+            dbSetOrder(1)
+            If dbSeek(xFilial("STB") + ST9->T9_CODBEM + aCols[nX][nCaract])
+
+                dbSelectArea("TPB")
+                dbSetOrder(nOrdTPB)
+                If dbSeek(xFilial("TPB") + cKeyTPB)
+
+                    dbSelectArea("STB")
+                    RecLock("STB", .F.)
+                    For i := 1 To FCount()
+                        If FieldName(i) <> "TB_FILIAL"  .And. FieldName(i) <> "TB_CODBEM"  .And.;
+                            FieldName(i) <> "TB_CARACTE"
+
+                            For x := 1 To Len(arrayTPB)
+                                If AllTrim(SubStr(arrayTPB[x],4,7)) == AllTrim(SubStr(FieldName(i),3,7))
+
+                                    v := "STB->" + FieldName(i)
+                                    y := "TPB->" + arrayTPB[x]
+
+                                    If MV_PAR02 == 2 .And. &v <> &y
+                                        &v. := &y.
+                                    EndIf
+
+                                    Exit
+                                EndIf
+                            Next x
+                        EndIf
+                    Next i
+                EndIf
+            Else
+                dbSelectArea("TPB")
+                dbSetOrder(nOrdTPB)
+                If dbSeek(xFilial("TPB") + cKeyTPB)
+
+                    dbSelectArea("STB")
+                    RecLock("STB", .T.)
+
+                    STB->TB_FILIAL := xFilial("STB")
+                    STB->TB_CODBEM := ST9->T9_CODBEM
+
+                    For i := 1 To FCount()
+                        If FieldName(i) <> "TB_FILIAL" .And. FieldName(i) <> "TB_CODBEM"
+                            For x := 1 To Len(arrayTPB)
+                                If AllTrim( SubStr(arrayTPB[x], 4, 7) ) == AllTrim( SubStr(FieldName(i), 3, 7) )
+
+                                    v := "STB->" + FieldName(i)
+                                    y := "TPB->" + arrayTPB[x]
+                                    &v. := &y.
+
+                                    Exit
+                                EndIf
+                            Next x
+                        EndIf
+                    Next i
+                EndIf
+            EndIf
+        EndIf
+    Next nX
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ATUPECST9
+Atualiza as pecas de reposecao do bem TPY / TPK
+
+@author Deivys Joenck
+@since 18/07/01
+@type function
+
+@param cCodFam, Caracter, Código da familia da TP9
+@param cTipMod, Caracter, Tipo Modelo da TP9
+
+/*/
+//---------------------------------------------------------------------
+Function ATUPECST9( cCodFam, cTipMod )
+
+    Local i, nX, x := 0
+    Local nCodPro, nOrdTPK
+    Local cKeyTPK
+
+    aCols   := aClone(oGET17002:aCols)
+    aHeader := aClone(oGET17002:aHeader)
+    nCodPro := aScan( aHeader, {|x| Trim( Upper(x[2]) ) == "TPK_CODPRO"})
+
+    dbSelectArea("ST9")
+    dbSetOrder(1)
+    dbSeek(xFilial("ST9")+(cAliasQry)->T9_CODBEM)
+    For nX := 1 To Len(aCols)
+
+        nOrdTPK := IIf( lTipMod, 3, 1 )
+        cKeyTPK := IIf( lTipMod, cCodFam + cTipMod + aCols[nX][nCodPro], cCodFam + aCols[nX][nCodPro])
+
+        If ATail(aCols[nX])
+
+            dbSelectArea("TPY")
+            dbSetOrder(1)
+            If dbSeek(xFilial("TPY") + ST9->T9_CODBEM + aCols[nX][nCodPro])
+                RecLock("TPY",.F.)
+                dbDelete()
+            EndIf
+
+            Loop
+        Else
+            dbSelectArea("TPY")
+            dbSetOrder(1)
+            If dbSeek(xFilial("TPY") + ST9->T9_CODBEM + aCols[nX][nCodPro])
+
+                dbSelectArea("TPK")
+                dbSetOrder(nOrdTPK)
+                If dbSeek(xFilial("TPK") + cKeyTPK)
+
+                    dbSelectArea("TPY")
+                    RecLock("TPY",.F.)
+                    For i := 1 To FCount()
+                        If FieldName(i) <> "TPY_FILIAL" .And. FieldName(i) <> "TPY_CODBEM" .And.;
+                            FieldName(i) <> "TPY_CODPRO"
+
+                            For x := 1 To Len(arrayTPK)
+                                If AllTrim( SubStr(arrayTPK[x], 4, 7) ) == AllTrim(SubStr(FieldName(i), 4, 8))
+
+                                    v := "TPY->" + FieldName(i)
+                                    y := "TPK->" + arrayTPK[x]
+
+                                    If MV_PAR02 == 2 .And. &v <> &y
+                                        &v. := &y.
+                                    EndIf
+
+                                    Exit
+                                EndIf
+                            Next x
+                        EndIf
+                    Next i
+                EndIf
+            Else
+                dbSelectArea("TPK")
+                dbSetOrder(nOrdTPK)
+                If dbSeek(xFilial("TPK") + cKeyTPK)
+
+                    dbSelectArea("TPY")
+                    RecLock("TPY",.T.)
+                    Replace TPY_FILIAL With xFilial("TPY")
+                    Replace TPY_CODBEM With ST9->T9_CODBEM
+                    For i := 1 To FCount()
+                        If FieldName(i) <> "TPY_FILIAL" .And. FieldName(i) <> "TPY_CODBEM"
+
+                            For x := 1 To Len(arrayTPK)
+                                If AllTrim( SubStr(arrayTPK[x], 4, 7) ) == AllTrim( SubStr(FieldName(i), 4, 8) )
+                                    v := "TPY->" + FieldName(i)
+                                    y := "TPK->" + arrayTPK[x]
+                                    &v. := &y.
+                                EndIf
+                            Next x
+                        EndIf
+                    Next i
+                EndIf
+            EndIf
+        EndIf
+    Next nX
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170VALID
+Verifica se o campo pode ser alterado
+@author Inacio Luiz Kolling
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170VALID()
+
+    If !CHKCENTRAB(M->TP9_CENTRA,M->TP9_CCUSTO)
+        Return .F.
+    EndIf
+
+    If lSH1
+        ALERT(STR0014,{"OK"},STR0015) //"Este campo nao pode ser alterado"###"ATENCAO"
+        Return .F.
+    EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT170CHK
+Verifica se os campos obrigatorios Foram digitados
+@author Deivys Joenck
+@since 31/07/01
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT170CHK()
+
+    Local lRet := .T.
+
+    If !Obrigatorio(aGets, aTela)
+        lRet := .F.
+    EndIf
+
+    If lRet
+        // Validação das Características
+        EntraGet(1)
+
+        If lRet
+            If !NG170LinOk(, .F.)
+                lRet := .F.
+            EndIf
+        EndIf
+
+        NGSaiGet(1)
+
+        If !lRet
+            If oFOLDER170:nOption <> 1
+                EntraGet(oFOLDER170:nOption - 1)
+            EndIf
+        EndIf
+
+        // Validação das Peças de Reposição
+        If lRet
+
+            EntraGet(2)
+
+            If !NG170LINO2(, .F.)
+                lRet := .F.
+            EndIf
+
+            NGSaiGet(2)
+
+            If !lRet
+                If oFOLDER170:nOption <> 1
+                    EntraGet(oFOLDER170:nOption - 1)
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+    If lRet .And. ((Empty(M->TP9_PERACO) .And. !Empty(M->TP9_UNIACO)) .Or.;
+        (!Empty(M->TP9_PERACO) .And. Empty(M->TP9_UNIACO)))
+
+        Help(" ", 1, "NGATENCAO",, "O Campo 'Per. Acomp.' ou 'Unid. Medida' não foi informado! ", 1, 0)
+        lRet := .F.
+    EndIf
+
+    If lRet .And. ((!Empty(M->TP9_FORNEC) .And. Empty(M->TP9_LOJA)) .Or.;
+        		   (!Empty(M->TP9_LOJA)   .And. Empty(M->TP9_FORNEC)))
+
+        ShowHelpDlg( STR0015, {STR0025}, 1, {STR0026}, 1 )
+        lRet := .F.
+    EndIf
+
+    If nOpcao == 5
+        // Verifica se há algum bem (ST9) sendo Bem Padrão
+        cAliasQry := GetNextAlias()
+        cQuery := " SELECT 1"
+        cQuery += " FROM " + RetSqlName("ST9")+" ST9," + RetSqlName("TP9") + " TP9"
+        cQuery += " WHERE ST9.T9_CODFAMI = '" + M->TP9_CODFAM + "'"
+        cQuery += " AND ST9.T9_PADRAO  = 'S'"
+
+		// Para o Tipo Modelo '*' deve-se considerar apenas bens que não possuírem um bem padrão (TP9) mais específico (TP9_CODFAM + TP9_TIPMOD = T9_CODFAMI + T9_TIPMOD)
+		If lRel12133 .And. Trim( M->TP9_TIPMOD ) == '*'
+			cQuery += " AND NOT EXISTS(SELECT TP9_TIPMOD FROM " + RetSqlName("TP9") + " WHERE TP9_FILIAL = '" + xFilial("TP9") + "' AND TP9_CODFAM = '" + M->TP9_CODFAM + "'"
+			cQuery += " AND TP9_TIPMOD = T9_TIPMOD AND D_E_L_E_T_ = ' ')"
+        ElseIf lTipMod
+            cQuery += " AND   ST9.T9_TIPMOD  = '" + M->TP9_TIPMOD + "'
+        EndIf
+
+        cQuery += " AND ST9.T9_FILIAL  = '" + xFilial("ST9") + "'"
+        cQuery += " AND TP9.TP9_FILIAL = '" + xFilial("TP9") + "'"
+        cQuery += " AND ST9.D_E_L_E_T_ = ' ' "
+        cQuery += " AND TP9.D_E_L_E_T_ = ' ' "
+
+        cQuery := ChangeQuery(cQuery)
+        dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+        dbGoTop()
+        If !EoF()
+            Help(" ",1,"EXBEMPST9")
+            lRet := .F.
+        EndIf
+
+    EndIf
+
+    If lRet
+        If ExistBlock("MNTA1704")
+            lRet := ExecBlock("MNTA1704",.F.,.F.)
+        EndIf
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de menu Funcional
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version undefined
+@return Array com opcoes da rotina.
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+    Local lPyme  := IIf( Type("__lPyme") <> "U", __lPyme, .F.)
+    Local aRotUsu := {}
+    Local nRot
+
+	//+----------------------------------------------------------+
+	//|	Parametros do array a Rotina:                 	     	 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transação a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 		     	 |
+	//+----------------------------------------------------------+
+
+    Local aRotina := {{STR0004, "AxPesqui" , 0, 1},;   //"Pesquisar"
+                      {STR0005, "NG170FOLD", 0, 2},;   //"Visualizar"
+                      {STR0006, "NG170FOLD", 0, 3},;   //"Incluir"
+                      {STR0007, "NG170FOLD", 0, 4, 0},;//"Alterar"
+                      {STR0008, "NG170FOLD", 0, 5, 3}} //"Excluir"
+
+    If ExistBlock("MNTA1705")
+        aRotUsu := ExecBlock( "MNTA1705", .F., .F. )
+        If ValType(aRotUsu) == "A"
+            For nRot := 1 To Len(aRotUsu)
+                If ValType(aRotUsu[nRot]) == "A"
+                    aAdd( aRotina, aClone(aRotUsu[nRot]) )
+                EndIf
+            Next
+        EndIf
+    EndIf
+
+    If !lPyme
+        aAdd( aRotina, { STR0020, "MsDocument", 0, 4 } )  //"Conhecimento"
+    EndIf
+
+Return(aRotina)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA170FR
+
+Verifica se usa frota
+
+@author Inácio Luiz Kolling
+@since 12/02/2008
+@version undefined
+@type function
+
+@Reescrito 18/09/2017
+@author Maicon André Pinheiro
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA170FR()
+
+	Local lFrotas := GetNewPar("MV_NGMNTFR","N" ) == "S" // Possui frotas
+
+	If lFrotas
+
+		If Posicione("SX2",1,"TPB","X2_UNICO") <> "TPB_FILIAL+TPB_CODFAM+TPB_TIPMOD+TPB_CARACT"
+			lFrotas := .F.
+		EndIf
+
+		If Posicione("SX2",1,"TPK","X2_UNICO") <> "TPK_FILIAL+TPK_CODFAM+TPK_TIPMOD+TPK_CODPRO+TPK_LOCGAR"
+			lFrotas := .F.
+		EndIf
+
+		If Posicione("SX2",1,"TP9","X2_UNICO") <> "TP9_FILIAL+TP9_CODFAM+TP9_TIPMOD"
+			lFrotas := .F.
+		EndIf
+
+		If !lFrotas
+			MsgInfo(STR0057 + Chr(13) + Chr(10) +; //"Foi identificado um problema no índice único das Tabela TPB, TPK ou TP9."
+					STR0058 + Chr(13) + Chr(10) +; //"Dessa forma o parâmetro MV_NGMNTFR (Utiliza frota) será considerado como N-Não utiliza."
+					STR0059,;                      //"Favor entrar em contato com o administrador do sistema."
+					STR0015)                       //"Atenção"
+		Else
+			If !X3Obrigat('TP9_TIPMOD')
+				MsgInfo(STR0060 + Chr(13) + Chr(10) +; //"O campo TP9_TIPMOD está como não obrigatório."
+						STR0058 + Chr(13) + Chr(10) +; //"Dessa forma o parâmetro MV_NGMNTFR (Utiliza frota) será considerado como N-Não utiliza."
+						STR0061,;                      //"Favor entrar em contato com o administrador do sistema ou alterar o mesmo via configurador."
+						STR0015)                       //"Atenção"
+				lFrotas := .F.
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return lFrotas
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} MNT170TPMOD
+
+@author NG Informática
+@since XX/XX/XXXX
+@version 1.0
+
+@obs Remover esta função três releases após a 12.1.033
+
+@Return .T. Verdadeiro
+/*/
+//-----------------------------------------------------------------------
+Function MNT170TPMOD(nOpcao)
+
+    Local cTipMod := Space(10)
+    Local nOPGA2 := 0
+    Local oDlg1
+
+    If nOPCAO == 4
+        If SuperGetMV("MV_NGMNTFR",.F.,"N" ) == "S" // Possui frotas
+            If Empty(M->TP9_TIPMOD)
+                Define Msdialog oDlg1 From  000,000 To 155,400 Title STR0022 Pixel //"Tipo de Modelo"
+
+                @ 1.5,.5 To 3.5,25 LABEL STR0023 OF oDlg1 //"Para Bem Padrão com integração com Frotas, informe o Tipo de Modelo:"
+
+                @ 30,008 Say OemToAnsi(STR0024) Size 47,07 Of oDlg1 Pixel Color CLR_HBLUE // "Tipo Modelo"
+                @ 30,040 MsGet cTipMod Size 38,08 Of oDlg1 Pixel Picture '@!' F3 "TQR" Valid EXISTCPO("TQR",cTipMod) .And. EXISTCHAV("TP9",M->TP9_CODFAM+cTipMod)
+                @ 30,100 MsGet oNomMod Var NGSEEK('TQR',cTipMod,1,'TQR_DESMOD') Of oDlg1 Pixel Picture '@!' When Size 90,08
+
+                Activate MsDialog oDlg1 On Init EnchoiceBar(oDlg1,{||nOPGA2:=2,oDlg1:End()},{||nOPGA2:=1,oDlg1:End()}) Centered
+
+                If nOPGA2 == 2
+                    M->TP9_TIPMOD := cTipMod
+                    lTpModAlt := .T.
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170LDEL
+Validacao do 'Delete' da GetDados de Caracteristica
+@author Marcos Wagner Junior
+@since 17/08/2009
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170LDEL()
+
+    If ATail(aCols[n])
+        If !NG170EXIST("TPB",.T.,.F.)
+            Return .F.
+        EndIf
+    EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170LDEL2
+Validacao do 'Delete' da GetDados de Pecas Reposicao
+@author Marcos Wagner Junior
+@since 17/08/2009
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG170LDEL2()
+
+    If ATail(aCols[n])
+        If !NG170EXIST("TPK",,.F.)
+            Return .F.
+        EndIf
+    EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT170CLCT
+Valida contador
+@author Robson Pereira
+@since 03/04/12
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT170CLCT()
+
+    Local lRet := .T.
+    Local lPad := .F.
+
+    If M->TP9_TEMCON $ "SNPI"
+        If M->TP9_TEMCON == "N"
+
+            // Busca bem relacionado ao bem padrão
+            dbSelectArea("ST9")
+            dbSetOrder(04)
+            If dbSeek(xFilial("ST9")+M->TP9_CODFAM)
+                While !EoF() .And. M->TP9_CODFAM == ST9->T9_CODFAMI
+                    If ST9->T9_PADRAO == "S"
+                        lPad := .T.
+                        Exit
+                    EndIf
+
+                    dbSelectArea("ST9")
+                    dbSkip()
+                EndDo
+            EndIf
+
+            If !lPad
+                M->TP9_TPCONT := Space(TAMSX3("TP9_TPCONT")[1])
+                M->TP9_PERACO := 0
+                M->TP9_UNIACO := Space(TAMSX3("TP9_UNIACO")[1])
+            EndIf
+        EndIf
+    Else
+        lRet := .F.
+    EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG170FORN
+Validação de fornecedor e loja
+@author Cezar Augusto Padilha
+@since 10/08/2012
+@version P11
+@Param cFornec - Indica o fornecedor a ser verificado
+@Param cLoja - Indica a loja a ser verificada
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+Function NG170FORN(cFornec,cLoja)
+
+    Local lRet := .F.
+
+    Default cFornec := ""
+    Default cLoja := ""
+
+    If !Empty(cFornec) .And. !Empty(cLoja)
+        lRet := ExistCpo( "SA2", AllTrim( cFornec + cLoja ))
+
+    ElseIf !Empty(cFornec) .And. Empty(cLoja)
+
+        dbSelectArea("SA2")
+        dbSetOrder(1)
+        If dbSeek( xFilial("SA2") + cFornec )
+            While AllTrim( SA2->A2_COD ) == AllTrim( cFornec ) .And. !lRet
+                If dbSeek(xFilial("SA2") + cFornec + SA2->A2_LOJA) .And. SA2->A2_MSBLQL <> '1'
+                    lRet := ExistCpo("SA2",AllTrim(cFornec+SA2->A2_LOJA))
+                EndIf
+
+                dbSelectArea("SA2")
+                dbSkip()
+            EndDo
+        EndIf
+
+        lRet := IIf( !lRet, ExistCpo("SA2",AllTrim(cFornec+SA2->A2_LOJA)), )
+
+    ElseIf Empty(cFornec) .And. !Empty(cLoja)
+        lRet := .T.
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT170WHEN
+Função para validações When em campos que estão em tela
+
+@author Rafael Reinert
+@since 30/11/2012
+@version MP10
+@return lRet - Indica se campo ficará aberto
+
+@obs Alterações: Feita uma verificação na categoria do Bem, se for do tipo Pneu
+bloqueia apenas o campo T9_CONTACU e atribui a ele a soma das bandas do
+pneu.
+@author Pablo Servin
+@since 31/03/2014
+/*/
+//---------------------------------------------------------------------
+Function MNT170WHEN()
+
+	Local lRet := .T.
+
+	Do Case
+		Case ReadVar() $ "M->TPB_DETALH/M->TPB_INFO02"
+			lRet := MNT080DTLH(.F.)
+	EndCase
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA170VLD
+Função para Valid dos campos da rotina de Bens Padrão
+
+@author Pedro Henrique Soares de Souza
+@since 30/07/2014
+@version P11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTA170VLD(cCampo)
+
+	Local nCondOp, nDetail, nInfo02, nCaract, cInfo, xCaract
+	Local cOldTpInfo, cNewTpInfo
+	Local lRet      := .T.
+	Local lWhenSitu := .T.
+
+	Default cCampo := ""
+
+	If Empty(cCampo)
+		cCampo := ReadVar()
+	EndIf
+
+	Do Case
+		Case cCampo $ "M->TPB_CONDOP"
+
+            nCaract := aScan( aHeader, {|x| AllTrim( Upper( x[2] ) ) == "TPB_CARACT" })
+            xCaract := aCols[n][nCaract]
+
+			If .Not. Empty(xCaract) .And. NGIFDBSEEK( 'TPR' , xCaract , 1 )
+				cInfo := TPR->TPR_TPINFO
+			EndIf
+
+			If cInfo <> "4"
+				lRet := Pertence('12')
+			Else
+				lRet := .T.
+			EndIf
+
+			nCondOp := aScan( aHeader, {|x| AllTrim( Upper(x[2]) ) == "TPB_CONDOP" })
+			nDetail := aScan( aHeader, {|x| AllTrim( Upper(x[2]) ) == "TPB_DETALH" })
+			nInfo02 := aScan( aHeader, {|x| AllTrim( Upper(x[2]) ) == "TPB_INFO02" })
+
+			If nCondOp > 0
+				If M->TPB_CONDOP != aCols[n][nCondOp]
+					aCols[n][nInfo02] := Space( TamSX3('TPB_INFO02')[1] )
+				EndIf
+			EndIf
+
+		Case cCampo == "M->TPB_CARACT"
+			lRet := ExistCpo("TPR", M->TPB_CARACT) .And. NG170EXIST("TPB")
+
+			If lRet
+				nCaract := aScan( aHeader, {|x| AllTrim( Upper( x[2] ) ) == "TPB_CARACT" })
+				nDetail := aScan( aHeader, {|x| AllTrim( Upper( x[2] ) ) == "TPB_DETALH" })
+				nInfo02 := aScan( aHeader, {|x| AllTrim( Upper( x[2] ) ) == "TPB_INFO02" })
+				nCondOp := aScan( aHeader, {|x| AllTrim( Upper( x[2] ) ) == "TPB_CONDOP" })
+
+				cOldTpInfo := NGSEEK("TPR", aCols[n][nCaract], 1, "TPR_TPINFO" )
+				cNewTpInfo := NGSEEK("TPR", M->TPB_CARACT, 1, "TPR_TPINFO" )
+
+				If cOldTpInfo != cNewTpInfo
+					aCols[n][nDetail] := ""
+					aCols[n][nInfo02] := ""
+				EndIf
+
+				If cNewTpInfo == "4"
+	        		aCols[n][nCondOp] := "1"
+	        		lWhenSitu := .F.
+	        	Else
+	        		aCols[n][nCondOp] := ""
+	        		lWhenSitu := .T.
+	        	EndIf
+			EndIf
+
+        Case cCampo == "TP9_CODFAM"
+
+            If !Empty( M->TP9_CODFAM )
+
+                // Valida se o Tipo Modelo informado é válido
+                If !ExistCpo('ST6',M->TP9_CODFAM)
+                    lRet := .F.
+                EndIf
+
+                // Valida chave unica da TP9
+                If lRet .And. !Empty( M->TP9_TIPMOD )
+                    lRet := ExistChav( 'TP9', M->TP9_CODFAM + M->TP9_TIPMOD )
+                EndIf
+
+            EndIf
+
+		Case cCampo == "TP9_TIPMOD"
+
+            If !Empty( M->TP9_TIPMOD )
+
+                // A partir do release 12.1.33, o valor '*' torna-se válido e
+                // indica que a regra aplica-se à todos os tipos modelos existentes
+                lRet := Trim(M->TP9_TIPMOD) == "*" .Or. ExistCpo('TQR', M->TP9_TIPMOD)
+
+                // Valida chave unica da TP9
+                If lRet .And. !Empty( M->TP9_CODFAM )
+                    lRet := ExistChav( 'TP9', M->TP9_CODFAM + M->TP9_TIPMOD )
+                EndIf
+
+            EndIf
+
+	End Case
+
+Return lRet
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} ChangeGet()
+Realiza backup do aCols modificado e carrega novo aCols de acordo
+com mudança de Aba.
+
+@author Pedro Henrique Soares de Souza
+@since	05/01/2015
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function ChangeGet()
+
+	Do Case
+		Case oFOLDER170:nOption == 2
+			EntraGet(1)
+		Case oFOLDER170:nOption == 3
+			EntraGet(2)
+	EndCase
+
+	Return
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} CheckCols()
+Verifica se o aCols atual está de acordo com o que será validado
+no linOk.
+
+@author Pedro Henrique Soares de Souza
+@since	05/01/2015
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function CheckCols()
+
+	Local lRet := .T.
+
+	If ( lRet := NGSAIENC( "TP9" ) )
+		Do Case
+			Case oFOLDER170:nOption == 2
+				lRet := NGSaiGet(1)
+			Case oFOLDER170:nOption == 3
+				lRet := NGSaiGet(2)
+		EndCase
+	EndIf
+
+Return lRet
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} MNTA170GAT()
+Executa gatilhos específicos.
+
+@param cCampo, Caractere, Nome do campo
+
+@author Wexlei Silveira
+@since	06/04/2020
+@return Caractere, Descrição do campo
+/*/
+//----------------------------------------------------------------
+Function MNTA170GAT(cCampo)
+
+	Local cDesc := ''
+
+	If cCampo == 'TP9_TIPMOD'
+
+        cDesc := MNTDesTpMd( M->TP9_TIPMOD )
+
+	EndIf
+
+Return cDesc
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} MNTA170INI()
+Inicializador padrão para a descrição de campos.
+
+@param cCampo, Caractere, Nome do campo
+
+@author Wexlei Silveira
+@since	09/04/2020
+@return Caractere, Descrição do modelo
+/*/
+//----------------------------------------------------------------
+Function MNTA170INI(cCampo)
+
+	Local cDesc := ''
+
+	If cCampo == 'TP9_DESMOD'
+
+        cDesc := MNTDesTpMd( M->TP9_TIPMOD )
+
+	EndIf
+
+Return cDesc

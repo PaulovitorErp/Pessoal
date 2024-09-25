@@ -1,0 +1,527 @@
+#INCLUDE "Mntr240.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//------------------------
+/*/{Protheus.doc} MNTR240
+Mapa de Despesas Anuais
+
+@author  Deivys Joenck
+@since   28/11/01
+@version P12
+/*/
+//------------------------
+Function MNTR240()
+
+	Local aNGBEGINPRM := NGBEGINPRM() //Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aArea       := GetArea()
+
+	Private nTOTCUST := 0.00
+	Private nCUSMAN  := 0.00
+	Private cQuery
+
+	MNTR240R3()
+
+	RestArea(aArea)
+
+	NGRETURNPRM(aNGBEGINPRM) //Devolve variaveis armazenadas (NGRIGHTCLICK)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTR240R3
+Mapa de Despesas Anuais
+
+@author Ricardo Dal Ponte
+@since  30/01/07
+@source MNTR240
+/*/
+//-------------------------------------------------------------------
+Static Function MNTR240R3()
+
+	Local WNREL      := "MNTR240"
+	Local LIMITE     := 132
+	Local cDESC1     := STR0001 //"Apropriacao de Horas por Centro de Custo."
+	Local cDESC2     := STR0002 //"O usuario pode informar parametros de selecao para a impressao"
+	Local cDESC3     := ""
+	Local cSTRING    := "STJ"
+
+	Private NOMEPROG := "MNTR240"
+	Private TAMANHO  := "M"    //P=80,M=132;G=232
+	Private aRETURN  := {STR0003,1,STR0004,1,2,1,"",1} //"Zebrado"###"Administracao"
+	Private TITULO   := ""
+	Private nTIPO    := 0
+	Private nLASTKEY := 0
+	Private CABEC1
+	Private CABEC2
+	Private cPERG := "MNT24R"
+
+	//Variaveis utilizadas para parametros
+	//MV_PAR01 - De Periodo
+	//MV_PAR02 - Ate Periodo
+	//MV_PAR03 - Tipo [Sintetico/Analitico]
+
+	Pergunte(cPERG,.F.)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Envia controle para a funcao SETPRINT                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+	WNREL:=SetPrint(cSTRING,WNREL,cPERG,STR0001,cDESC1,cDESC2,cDESC3,.F.,"")
+	If nLASTKEY = 27
+		Set Filter To
+		dbSelectArea("STJ")
+		Return
+	EndIf
+
+	TITULO := STR0015+DTOC(MV_PAR01)+STR0016+DTOC(MV_PAR02) //"Apropriacao de Horas por Centro de Custo - de "###" até "
+
+	If MV_PAR03 == 2
+		LIMITE  := 232
+		TAMANHO := "G"
+	EndIf
+
+	SetDefault(aRETURN,cSTRING)
+	RptStatus({|lEND| MNTR240IMP(@lEND,WNREL,STR0001,TAMANHO)},STR0001)
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTR240IMP³ Autor ³ Deivys Joenck         ³ Data ³ 28/11/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³ Chamada do Relat¢rio                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR240                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTR240IMP(lEND,WNREL,TITULO,TAMANHO)
+
+	Local cRODATXT 	:= ""
+	Local nCNTIMPR 	:= 0
+	Local nCont 	:= 0
+	Local nCont2 	:= 0
+	Local nQuant 	:= 0
+	Local oTempTable //Obj. Tab. Temp.
+
+	//Variaveis para controle do cursor de progressao do relatorio ³
+	Local nTOTREGS := 0 ,nMULT := 1 ,nPOSANT := 4 ,nPOSATU := 4 ,nPOSCNT := 0
+	//Contadores de linha e pagina
+	Private li := 80 ,m_pag := 1
+	//Verifica se deve comprimir ou nao
+	nTIPO  := IIF(aRETURN[4]==1,15,18)
+
+	Private cTRB	 := GetNextAlias() //Alias Tab. Temp.
+
+	//Monta os Cabecalhos
+	If MV_PAR03 == 2
+		CABEC1 := STR0008 //"Centro de Custo (MDO)                 Centro de Custo (MAQ)                 Bem                                                         O.S        Mao-de-Obra                                            Horas"
+	Else
+		CABEC1 := STR0009 //"Centro de Custo (MDO)                 Centro de Custo (MAQ)              Total Horas"
+	EndIf
+	CABEC2 := ""
+
+	//SINTETICO
+	//          1         2         3         4         5         6         7         8         9        10       110       120
+	//0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123
+	//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	//Centro de Custo (MDO)                 Centro de Custo (MAQ)              Total Horas
+	//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	//xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                      xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                      xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//
+	//                                                        Total do C.Custo: 9999999:99
+	//                                                        Total Geral.....: 9999999:99
+
+	//ANALITICO
+	//          1         2         3         4         5         6         7         8         9        10         11        12       13        14        15        16        17        18        19        20        21        22        23
+	//01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	//Centro de Custo (MDO)                 Centro de Custo (MAQ)                 Bem                                                         O.S        Mao-de-Obra                                            Horas
+	//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	//-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	//xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                        xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                            xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                            xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                                                   Total do C.Custo: 9999999:99
+	//
+	//xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                        xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                        xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                            xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxx     xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//                                                                                                                                                   xxxxxx - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999999:99
+	//
+	//                                                                                                                                                                                   Total do C.Custo: 9999999:99
+	//                                                                                                                                                                                   Total Geral.....: 9999999:99
+
+	aDBF := {{"CUSTOF" ,"C",TAMSX3("CTT_CUSTO")[1],0},;
+			 {"CUSTOM" ,"C",TAMSX3("CTT_CUSTO")[1],0},;
+			 {"CODBEM" ,"C",16,0},;
+			 {"CODINS" ,"C",06,0},;
+			 {"OS"     ,"C",06,0},;
+			 {"DATAINI","D",08,0},;
+			 {"HORAINI","C",05,0},;
+			 {"DATAFIM","D",08,0},;
+			 {"HORAFIM","C",05,0},;
+			 {"QUANT"  ,"N",09,2},;
+			 {"TIPOHOR","C",01,0},;
+			 {"TURNO"  ,"C",03,0},;
+			 {"UNIDADE","C",03,0},;
+			 {"TIPOOS" ,"C",01,0}}
+
+	//Instancia classe FWTemporaryTable
+    oTempTable := FWTemporaryTable():New( cTRB, aDBF )
+    //Cria indices
+    oTempTable:AddIndex( "Ind01" , {"CUSTOF","CUSTOM","CODBEM","OS","CODINS"} )
+    oTempTable:AddIndex( "Ind02" , {"OS","CODINS"} )
+    //Cria a tabela temporaria
+    oTempTable:Create()
+
+	Processa({|lEND| MNTR240STL()},STR0011) //"Processando Itens das O.S. Normais..."
+	Processa({|lEND| MNTR240STT()},STR0012) //"Processando Itens das O.S. Historico..."
+
+	MesclaRept()
+
+	//IMPRESSAO DO RELATORIO
+	dbSelectArea(cTRB)
+	dbSetOrder(1)
+	dbGoTop()
+	nCUSTGERA := 0.00
+	SetRegua(RecCount())
+	While !Eof()
+		cCUSTOF  := (cTRB)->CUSTOF
+		nTOTCUST := 0.00
+		NGSOMALI(58)
+		NGSOMALI(58)
+		@LI,000 Psay (cTRB)->CUSTOF
+		dbSelectArea("CTT")
+		dbSetOrder(1)
+		dbSeek(xFILIAL("CTT")+(cTRB)->CUSTOF)
+		@Li,022 PSay SubStr(CTT->CTT_DESC01,1,25)
+
+		dbSelectArea(cTRB)
+		While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF
+			cCUSTOM := (cTRB)->CUSTOM
+			nCUSMAN := 0.00
+			@Li,053 PSay (cTRB)->CUSTOM
+			dbSelectArea("CTT")
+			dbSetOrder(1)
+			dbSeek(xFILIAL("CTT")+(cTRB)->CUSTOM)
+			@Li,083 PSay Substr(CTT->CTT_DESC01,1,25)
+
+			dbSelectArea(cTRB)
+			While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And.;
+			(cTRB)->CUSTOM == cCUSTOM
+
+				cCODBEM := (cTRB)->CODBEM
+				If MV_PAR03 == 2
+					If (cTRB)->TIPOOS == "B"
+						@Li,116 PSay (cTRB)->CODBEM
+						@LI,133 PSay SubStr(NGSeek("ST9",(cTRB)->CODBEM,1,"T9_NOME"),1,30)
+					Else
+						@Li,116 PSay (cTRB)->CODBEM
+						@LI,123 PSay SubStr(NGSeek("TAF","X"+"2"+(cTRB)->CODBEM,7,"TAF_NOMNIV"),1,30)
+					EndIf
+				EndIf
+
+				While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And.;
+				(cTRB)->CUSTOM == cCUSTOM .And. (cTRB)->CODBEM == cCODBEM
+
+					cOS := (cTRB)->OS
+					If MV_PAR03 == 2
+						@Li,166 PSay (cTRB)->OS
+					EndIf
+
+					While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And.;
+					(cTRB)->CUSTOM == cCUSTOM .And. (cTRB)->CODBEM == cCODBEM .And.;
+					(cTRB)->OS == cOS
+
+						IncRegua()
+
+						nCUSMAN := NGSOMAHNUM((cTRB)->QUANT,nCUSMAN)
+
+						If MV_PAR03 == 2
+							@Li,175 PSay (cTRB)->CODINS
+							@Li,184 PSay SubStr(NGSeek("ST1",(cTRB)->CODINS,1,"T1_NOME"),1,23)
+							vVETHORAS := NGRETHORDDH((cTRB)->QUANT)
+							@ LI,206 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+							NGSOMALI(58)
+						EndIf
+
+						dbSelectArea(cTRB)
+						dbSkip()
+
+					End
+
+				End
+
+			End
+
+			If MV_PAR03 != 2
+				vVETHORAS := NGRETHORDDH(nCUSMAN)
+				@ LI,115 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+				NGSOMALI(58)
+			EndIf
+
+			nTOTCUST := NGSOMAHNUM(nCUSMAN,nTOTCUST)
+		End
+
+		vVETHORAS := NGRETHORDDH(nTOTCUST)
+		NGSOMALI(58)
+		If MV_PAR03 == 2
+			@ LI,189 PSay STR0013 //"Total do C.Custo:"
+			@ LI,206 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+		Else
+			@ LI,096 PSay STR0013 //"Total do C.Custo:"
+			@ LI,115 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+		EndIf
+		nCUSTGERA := NGSOMAHNUM(nTOTCUST,nCUSTGERA)
+
+	End
+
+	If nCUSTGERA != 0
+		vVETHORAS := NGRETHORDDH(nCUSTGERA)
+		NGSOMALI(58)
+		If MV_PAR03 == 2
+			@ LI,189 PSay STR0014 //"Total Geral.....:"
+			@ LI,206 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+		Else
+			@ LI,096 PSay STR0014 //"Total Geral.....:"
+			@ LI,115 + 9 - (Len(vVETHORAS[1])) PSay  vVETHORAS[1]
+		EndIf
+	EndIf
+
+	RODA(nCNTIMPR,cRODATXT,TAMANHO)
+	RetIndex("STJ")
+	RetIndex("STL")
+	RetIndex("STS")
+	RetIndex("STT")
+	RetIndex("CTT")
+	RetIndex("ST1")
+	RetIndex("ST9")
+	Set Filter To
+	Set Device To Screen
+	If aRETURN[5] == 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(WNREL)
+	EndIf
+	MS_FLUSH()
+
+	oTempTable:Delete()//Deleta tabela temporária
+
+Return Nil
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTR240STL³ Autor ³ Inacio Luiz Kolling   ³ Data ³27/02/2001³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Processa os itens das O.S. normais                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR240                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTR240STL()
+
+	dbSelectArea("STL")
+	dbSetOrder(6)
+	dbSeek(xFILIAL("STL")+DTOS(MV_PAR01),.T.)
+	ProcRegua(LastRec())
+	While !Eof() .And. STL->TL_FILIAL == xFILIAL("STL") .And.;
+	STL->TL_DTINICI <= MV_PAR02
+
+		IncProc()
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		dbSeek(xFILIAL("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+		If Alltrim(STL->TL_SEQRELA) <> "0" .And. STL->TL_TIPOREG = "M" .And. STJ->TJ_SITUACA = "L"
+			dbSelectArea("ST1")
+			dbSetOrder(1)
+			dbSeek(xFILIAL("ST1")+SubStr(STL->TL_CODIGO,1,6))
+
+			R240GRTRAB(STJ->TJ_ORDEM,STJ->TJ_CODBEM,;
+			ST1->T1_CCUSTO,STJ->TJ_CCUSTO,STL->TL_DTINICI,STL->TL_HOINICI,;
+			STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_QUANTID,STL->TL_UNIDADE,;
+			ST1->T1_TURNO,STL->TL_TIPOHOR,STL->TL_USACALE,STL->TL_CODIGO,STJ->TJ_TIPOOS)
+
+		EndIf
+
+		dbSelectArea("STL")
+		dbSkip()
+	End
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTR240STT³ Autor ³ Inacio Luiz Kolling   ³ Data ³27/02/2001³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Processa os itens das O.S. Historicos                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR240                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MNTR240STT()
+
+	dbSelectArea("STT")
+	dbSetOrder(5)
+	dbSeek(xFILIAL("STT")+DTOS(MV_PAR01),.T.)
+
+	ProcRegua(LastRec())
+
+	While !Eof() .And. STT->TT_FILIAL == xFILIAL("STT") .And.;
+	STT->TT_DTINICI <= MV_PAR02
+
+		IncProc()
+		dbSelectArea("STS")
+		dbSetOrder(1)
+		dbSeek(xFILIAL("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+		If Alltrim(STT->TT_SEQRELA) <> "0" .And. STT->TT_TIPOREG = "M" .And. STS->TS_SITUACA = "L"
+			dbSelectArea("ST1")
+			dbSetOrder(1)
+			dbSeek(xFILIAL("ST1")+SubStr(STT->TT_CODIGO,1,6))
+
+			R240GRTRAB(STS->TS_ORDEM,STS->TS_CODBEM,;
+			ST1->T1_CCUSTO,STS->TS_CCUSTO,STT->TT_DTINICI,STT->TT_HOINICI,;
+			STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_QUANTID,STT->TT_UNIDADE,;
+			ST1->T1_TURNO,STT->TT_TIPOHOR,STT->TT_USACALE,STT->TT_CODIGO,STS->TS_TIPOOS)
+
+		EndIf
+
+		dbSelectArea("STT")
+		dbSkip()
+	End
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³R240GRATRB³ Autor ³ Inacio Luiz Kolling   ³ Data ³21/02/2001³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Grava no arquivo temporario                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTR240                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Static Function R240GRTRAB(cORDEM,cCODBEM,;
+	cCUSTOF,cCUSTOO,dDTINICI,hHOINICI,dDTFIM,hHOFIM,;
+	nQUANTI,cUNI,cTURNO,cTPHOR,cUSACAL,cCODIGO,cTipoOS)
+	Local vVETHORAS := {}
+
+	dbSelectArea(cTRB)
+	(cTRB)->(DbAppend())
+	(cTRB)->OS      := cORDEM
+	(cTRB)->CODBEM  := cCODBEM
+	(cTRB)->CUSTOF  := cCUSTOF
+	(cTRB)->CUSTOM  := cCUSTOO
+	(cTRB)->DATAINI := dDTINICI
+	(cTRB)->HORAINI := hHOINICI
+	(cTRB)->DATAFIM := dDTFIM
+	(cTRB)->HORAFIM := hHOFIM
+
+	vVETHORAS  := NGTQUATINS(cCODIGO,"M",cUSACAL,nQUANTI,cTPHOR,dDTINICI,hHOINICI,dDTFIM,hHOFIM,cUNI)
+	(cTRB)->QUANT := vVETHORAS[2]
+
+	(cTRB)->TIPOHOR := cTPHOR
+	(cTRB)->UNIDADE := cUNI
+	(cTRB)->TURNO   := cTURNO
+	(cTRB)->CODINS  := cCODIGO
+	(cTRB)->TIPOOS  := cTipoOS
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MesclaRept ³ Autor ³  Felipe N. Welter     ³ Data ³ 24/04/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Mescla Registros semelhantes da TRB, somando o campo QUANTI  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTR240                                                      ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function MesclaRept()
+
+	Local nCont := 0
+	Local aRept := {}
+	Local xQuant := 0
+
+	//Encontra registros coincidentes e guarda no vetor
+	dbSelectArea(cTRB)
+	dbSetOrder(1)
+	While !Eof()
+		cCUSTOF := (cTRB)->CUSTOF
+		While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF
+			cCUSTOM := (cTRB)->CUSTOM
+			While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And. (cTRB)->CUSTOM == cCUSTOM
+				cBEM := (cTRB)->CODBEM
+				While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And. (cTRB)->CUSTOM == cCUSTOM .And. (cTRB)->CODBEM == cBEM
+					cOS := (cTRB)->OS
+					While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And. (cTRB)->CUSTOM == cCUSTOM .And. (cTRB)->CODBEM == cBEM .And. (cTRB)->OS == cOS
+						cCODINS := (cTRB)->CODINS
+						While !Eof() .And. (cTRB)->CUSTOF == cCUSTOF .And. (cTRB)->CUSTOM == cCUSTOM .And. (cTRB)->CODBEM == cBEM .And. (cTRB)->OS == cOS;
+						.And. (cTRB)->CODINS == cCODINS
+							nCont++
+							dbSkip()
+						End
+						If nCont > 1
+							AADD(aRept,{cOS,cCODINS,0,cCUSTOM,cCUSTOF,cBEM})
+						EndIf
+						nCont := 0
+					End
+				End
+			End
+		End
+	End
+
+	//Soma o campo QUANTID para cada posicao correspondente e guarda no vetor
+	dbSelectArea(cTRB)
+	dbSetOrder(2)
+	For nCont := 1 To Len(aRept)
+		dbSeek(aRept[nCont,1]+aRept[nCont,2],.F.)
+		While (cTRB)->OS == aRept[nCont,1] .And. (cTRB)->CODINS == aRept[nCont,2]
+			xQuant := NGSOMAHNUM((cTRB)->QUANT,xQuant)
+			dbDelete()
+			dbSkip()
+		End
+		aRept[nCont,3] := xQuant
+		xQuant := 0
+	End
+	Pack
+
+	//Grava novos registros com base no vetor
+	For nCont := 1 To Len(aRept)
+		dbSelectArea(cTRB)
+		RecLock((cTRB),.T.)
+		(cTRB)->OS     := aRept[nCont,1]
+		(cTRB)->CODINS := aRept[nCont,2]
+		(cTRB)->QUANT  := aRept[nCont,3]
+		(cTRB)->CUSTOM := aRept[nCont,4]
+		(cTRB)->CUSTOF := aRept[nCont,5]
+		(cTRB)->CODBEM := aRept[nCont,6]
+		MSUnlock(cTRB)
+	End
+
+Return

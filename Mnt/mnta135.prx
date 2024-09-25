@@ -1,0 +1,512 @@
+#INCLUDE "MNTA135.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA135
+Gera o cadastro de Manutencao ( STF...) a partir da manutencoes Padrao
+TPF,TP5,TPG,TPH,TPM
+
+@author Inacio Luiz Kolling
+@since 15/10/98
+@return nill
+@obs Antes de executar este programa ‚ recomend vel que se faz
+uma copia de seguran‡a dos arquivos: STF, ST5, STG , STH e STM 
+e verificar nos arquivos : TPF,TP5,TPG,TPH e TPM ), se existem os 
+dados padräes necess rios para gerar as manutenções Caso ocorra algum erro 
+durante a geracao, limpe ou delete os arquivos STF, ST5, STG, STH e STM 
+/*/
+//-----------------------------------------------------------------------------
+Function MNTA135()
+
+	Local aNGBeginPrm := {}
+	Local oDlg
+	Local oMenu
+	Local x := 4
+	Local aProcess := {}
+	Local cMesage  := ""
+
+	If MNTAmIIn( 19, 95 )
+
+		aNGBeginPrm := NGBeginPrm()
+
+		Private cSAVEMENUH,cREC,cSEQUENC,cSERVICO,NSEQUENC
+		Private nOpcon    := 0
+		Private cFamilia1 := Space(Len(ST6->T6_CODFAMI))
+		Private cFamilia2 := Space(Len(ST6->T6_CODFAMI))
+
+		Private cTipMod1  := Space(Len(TQR->TQR_TIPMOD))
+		Private cTipMod2  := Space(Len(TQR->TQR_TIPMOD))
+
+		DEFINE MSDIALOG oDlg TITLE OemToAnsi(STR0003)from 015,030 To 025+X,085 of oMainwnd  COLOR CLR_HBLUE,CLR_WHITE //"Gera Manutencao Preventiva apartir do Padrao"
+
+			oPnlPai := TPanel():New(00,00,,oDlg,,,,,,085,021+X,.F.,.F.)
+					oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			@ 0.5,2  Say OemToAnsi(STR0001) of oPnlPai //"De Familia Padrao ? "
+			@ 0.5,9  MSGET cFamilia1 Picture "@!" F3 "ST6" VALID NaoVazio() .And. famid09(cFamilia1) of oPnlPai HASBUTTON
+			@ 1.5,2  Say OemtoAnsi(STR0002) of oPnlPai  //"Ate Familia Padrao ?"
+			@ 1.5,9  MSget cFamilia2  Picture "@!" F3 "ST6" VALID NaoVazio() .And. famid09(cFamilia1) .And. Atecodigo("ST6",cFamilia1,cFamilia2) of oPnlPai HASBUTTON
+
+			@ 2.5,2  Say OemToAnsi(STR0004) of oPnlPai //"De Tipo Modelo"
+			@ 2.5,9  MSGET cTipMod1 Picture '@!' F3 'TQR' VALID MNTA135VLD( 1, cTipMod1, cTipMod2 ) of oPnlPai HASBUTTON
+			@ 3.5,2  Say OemtoAnsi(STR0005) of oPnlPai //"Até Tipo Modelo"
+			@ 3.5,9  MSget cTipMod2 Picture '@!' F3 'TQR' VALID MNTA135VLD( 2, cTipMod1, cTipMod2 ) of oPnlPai HASBUTTON
+
+			If Len(aSMenu) > 0
+				NGPOPUP(aSMenu,@oMenu)
+				oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+			EndIf
+		ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{|| nOpcon := 1, oDlg:End() },{||oDlg:End()}) CENTERED
+
+		If nOpcon == 1
+
+			If Trim( cTipMod1 ) == '*'
+				cTipMod1 := Space( FWTamSx3( 'TQR_TIPMOD' )[1] )
+			EndIf
+
+			If Trim( cTipMod2 ) == '*'
+				cTipMod2 := Replicate( 'Z', FWTamSx3( 'TQR_TIPMOD' )[1] )
+			EndIf
+
+			Processa({|lEnd| aProcess := PSTFPROC()})
+
+			cMesage := STR0006 + " " + cValtoChar( aProcess[1] ) // "Total de manutenções geradas:"
+
+			If Empty( aProcess[2] )
+				Help(" ",1,"NGATENCAO",,cMesage,3,1)
+			Else
+				NGMSGMEMO( STR0003, cMesage + CRLF + STR0007 + CRLF + CRLF + aProcess[2] ) // "Inconsistências:"
+			EndIf
+		Else
+			Help(" ",1,"NGATENCAO",,STR0012,3,1) //"Nenhuma manutenção gerada, verifique os parâmetros."
+		EndIf
+
+		NGRETURNPRM(aNGBEGINPRM)
+
+	EndIf
+
+Return
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} PSTFPROC
+Processa a TPF
+
+@author Inacio Luiz Kolling
+@since 15/10/98
+@return nill
+/*/
+//-----------------------------------------------------------------------------
+Static Function PSTFPROC()
+
+	Local cSeek, cTPF, cSTF, i
+
+	Local aSTF := RetFields("STF","TPF")
+	Local aSTG := RetFields("STG","TPG")
+	Local aST5 := RetFields("ST5","TP5")
+	Local aSTM := RetFields("STM","TPM")
+	Local aSTH := RetFields("STH","TPH")
+	Local aTP1 := RetFields("TP1","TP2")
+
+	Local lMNTA1351	:= ExistBlock("MNTA1351")
+	Local cProblem  := ""
+	Local nTotManut := 0
+
+	Private nREC   := 0
+
+	dbSelectArea("ST9")
+	dbSetOrder(4)
+	dbSeek(xFilial("ST9")+cFamilia1)
+	dbEval({|| nREC := nREC + 1},,{||	ST9->T9_CODFAMI >= cFamilia1 .And. ST9->T9_CODFAMI <= cFamilia2 })
+	ProcRegua(nREC)
+
+	dbSelectArea("ST9")
+	dbSetOrder(4)
+	BEGIN TRANSACTION
+		If dbSeek(xFilial("ST9")+ cFamilia1,.T.)
+
+			While !Eof() .And. xFilial("ST9") == ST9->T9_FILIAL
+
+				If !(ST9->T9_CODFAMI >= cFamilia1 .And. ST9->T9_CODFAMI <= cFamilia2)
+					ST9->(dbSkip())
+					Loop
+				EndIf
+
+				IncProc()
+
+				If !(ST9->T9_TIPMOD >= cTipMod1 .And. ST9->T9_TIPMOD <= cTipMod2)
+					ST9->(dbSkip())
+					Loop
+				EndIf
+
+				dbSelectArea( 'TPF' )
+				dbSetOrder( 4 ) // TPF_FILIAL + TPF_CODFAM + TPF_TIPMOD + TPF_SERVIC + TPF_SEQREL
+				If msSeek( FWxFilial( 'TPF' ) + ST9->T9_CODFAMI + ST9->T9_TIPMOD ) .Or.;
+					msSeek( FWxFilial( 'TPF' ) + ST9->T9_CODFAMI + '*' )
+					
+					// GERA O ARQUIVO DE MANUTENCAO ( STF... )
+					While !Eof() .And. xFilial("TPF") == TPF->TPF_FILIAL;
+						.And. ST9->T9_CODFAMI == TPF->TPF_CODFAM
+
+						If Trim( TPF->TPF_TIPMOD ) != '*' .And.;
+							ST9->T9_TIPMOD != TPF->TPF_TIPMOD
+							
+
+							dbSkip()
+							Loop
+							
+						EndIf
+
+						cSEQUENC := TPF->TPF_SEQREL
+						cSERVICO := TPF->TPF_SERVIC
+
+						While !Eof() .And. xFilial("TPF") == TPF->TPF_FILIAL;
+							.And. ST9->T9_CODFAMI == TPF->TPF_CODFAM;
+							.And. TPF->TPF_SERVIC == cServico;
+							.And. TPF->TPF_SEQREL == cSequenc
+
+							dbSelectArea("STF")
+							dbSetOrder(1)
+							If !dbSeek(xFilial("STF")+ST9->T9_CODBEM+TPF->TPF_SERVIC+TPF->TPF_SEQREL)
+								If ST9->t9_sitbem == "A" .And. ST9->t9_SITMAN == "A"
+
+									If Empty( TPF->TPF_CALEND )
+										cProblem += STR0008  + " " + Alltrim( ST9->T9_CODBEM ) + " / " + ;//"Bem:"
+													STR0009  + " " + TPF->TPF_SERVIC + " / " + ; //"Serviço:"
+													STR0010  + " " + TPF->TPF_SEQREL + CRLF + ; // "Sequencia:"
+													STR0011  + CRLF + CRLF // "Campo calendário da manutenção padrão não está preenchido."
+										TPF->( dbskip() )
+										Loop
+									EndIf
+
+									nTotManut++
+
+									//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+									//³Carrega o TPF nas variaveis do STF                                 ³
+									//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+									dbSelectArea("TPF")
+									RecLock('STF',.T.)
+									For i := 1 TO LEN(aSTF)
+									cTPF := aSTF[i][2]
+									cSTF := aSTF[i][1]
+									If TPF->(FIELDPOS(cTPF)) > 0
+										&cSTF. := TPF->(FIELDGET(FIELDPOS(cTPF)))
+									Endif
+									Next i
+									STF->TF_FILIAL  := xFilial('STF')
+									STF->TF_CODBEM  := ST9->T9_CODBEM
+									STF->TF_DTULTMA := dDataBase
+									STF->TF_PADRAO  := "S"
+									STF->TF_ATIVO   := "S"
+									STF->TF_SEQREPA := TPF->TPF_SEQREL
+									MsUnLock("STF")
+									// GERA O ARQUIVO DE DATALHE DA MANUTENCAO ( STG... )
+
+									dbSelectArea("TPG")
+									dbSetOrder(3)
+									cSeek := TPF->TPF_CODFAM+TPF->TPF_TIPMOD+cSERVICO+cSEQUENC
+
+									If dbSeek(xFilial("TPG")+cSeek)
+
+										While !Eof() .And. xFilial("TPG") == TPG->TPG_FILIAL ;
+											.And. TPG->TPG_CODFAM == TPF->TPF_CODFAM;
+											.And. TPG->TPG_SERVIC == cServico;
+											.And. TPG->TPG_SEQREL == cSequenc
+
+											If TPG->TPG_TIPMOD != TPF->TPF_TIPMOD
+												dbSkip()
+												Loop
+											EndIf
+
+											dbSelectArea("STG")
+											dbSetOrder(1)
+											If !dbSeek(xFilial("STG")+ST9->T9_CODBEM+TPG->TPG_SERVIC+TPG->TPG_SEQREL+TPG->TPG_TAREFA+TPG->TPG_TIPORE+TPG->TPG_CODIGO)
+												RecLock('STG',.T.)
+												//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+												//³Carrega o TPG nas variaveis do STG                                 ³
+												//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+												For i := 1 TO LEN(aSTG)
+												cTPG := aSTG[i][2]
+												cSTG := aSTG[i][1]
+												If TPG->(FIELDPOS(cTPG)) > 0
+													&cSTG. := TPG->(FIELDGET(FIELDPOS(cTPG)))
+												Endif
+												Next i
+												STG->TG_FILIAL  :=  xFilial("STG")
+												STG->TG_CODBEM  :=  ST9->T9_CODBEM
+												MSUNLOCK()
+											EndIf
+
+											dbSelectArea('TPG')
+											dbskip()
+										End
+
+									EndIf
+
+									// GERA O ARQUIVO DAS TAREFAS DA MANUTENCAO ( ST5... )
+
+									dbSelectArea("TP5")
+									dbSetOrder(3)
+									cSeek := TPF->TPF_CODFAM+TPF->TPF_TIPMOD+cSERVICO+cSEQUENC
+
+									If dbSeek(xFilial("TP5")+cSeek)
+
+										While !Eof() .And. xFilial("TP5") == TP5->TP5_FILIAL ;
+											.And. TP5->TP5_CODFAM == TPF->TPF_CODFAM;
+											.And. TP5->TP5_SERVIC == cServico;
+											.And. TP5->TP5_SEQREL == cSequenc
+
+											If TP5->TP5_TIPMOD != TPF->TPF_TIPMOD
+												dbSkip()
+												Loop
+											EndIf
+
+											dbSelectArea('ST5')
+											dbSetOrder(1)
+											If !dbSeek(xFilial("ST5")+ST9->T9_CODBEM+TP5->TP5_SERVIC+TP5->TP5_SEQREL+TP5->TP5_TAREFA)
+												RecLock('ST5',.T.)
+												//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+												//³Carrega o TP5 nas variaveis do ST5                                 ³
+												//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+												For i := 1 TO LEN(aST5)
+												cTP5 := aST5[i][2]
+												cST5 := aST5[i][1]
+												If TP5->(FIELDPOS(cTP5)) > 0
+													&cST5. := TP5->(FIELDGET(FIELDPOS(cTP5)))
+												Endif
+												Next i
+												ST5->T5_FILIAL  := xFilial( 'ST5' )
+												ST5->T5_CODBEM  := ST9->T9_CODBEM
+												MSUNLOCK()
+											EndIf
+
+											dbSelectArea('TP5')
+											dbskip()
+										End
+
+									EndIf
+
+									// GERA O ARQUIVO DAS DEPEndENCIAS DAS TAREFAS DA MANUTENCAO ( STM... )
+
+									dbSelectArea("TPM")
+									dbSetOrder(2)
+									cSeek := TPF->TPF_CODFAM+TPF->TPF_TIPMOD+cSERVICO+cSEQUENC
+
+									If dbSeek(xFilial("TPM")+cSeek)
+
+										While !Eof() .And. xFilial("TPM") == TPM->TPM_FILIAL ;
+											.And. TPM->TPM_CODFAM == TPF->TPF_CODFAM;
+											.And. TPM->TPM_SERVIC == cServico;
+											.And. TPM->TPM_SEQREL == cSequenc
+
+											If TPM->TPM_TIPMOD != TPF->TPF_TIPMOD
+												dbSkip()
+												Loop
+											EndIf
+
+											dbSelectArea("STM")
+											dbSetOrder(1)
+											If !dbSeek(xFilial("STM")+ST9->T9_CODBEM+TPM->TPM_SERVIC+TPM->TPM_SEQREL+TPM->TPM_TAREFA+TPM->TPM_DEPEND)
+												RecLock('STM',.T.)
+												//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+												//³Carrega o TPM nas variaveis do STM                                 ³
+												//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+												For i := 1 TO LEN(aSTM)
+												cTPM := aSTM[i][2]
+												cSTM := aSTM[i][1]
+												If TPM->(FIELDPOS(cTPM)) > 0
+													&cSTM. := TPM->(FIELDGET(FIELDPOS(cTPM)))
+												Endif
+												Next i
+												STM->TM_FILIAL  :=  xFilial("STM")
+												STM->TM_CODBEM  :=  ST9->T9_CODBEM
+												MSUNLOCK("STM")
+											EndIf
+
+											dbSelectArea('TPM')
+											dbskip()
+										End
+
+									EndIf
+
+									// GERA O ARQUIVO DAS ETAPAS DAS TAREFAS DA MANUTENCAO ( STH... )
+
+									dbSelectArea("TPH")
+									dbSetOrder(6)
+									cSeek := TPF->TPF_CODFAM+TPF->TPF_TIPMOD+cSERVICO+cSEQUENC
+
+									If dbSeek(xFilial("TPH")+cSeek)
+
+										While !Eof() .And. xFilial("TPH") == TPH->TPH_FILIAL ;
+											.And. TPH->TPH_CODFAM == TPF->TPF_CODFAM;
+											.And. TPH->TPH_SERVIC == cServico .And.;
+											TPH->TPH_SEQREL == cSequenc
+
+											If TPH->TPH_TIPMOD != TPF->TPF_TIPMOD
+												dbSkip()
+												Loop
+											EndIf
+
+											dbSelectArea("STH")
+											dbSetOrder(1)
+											If !dbSeek(xFilial("STH")+ST9->T9_CODBEM+TPH->TPH_SERVIC+TPH->TPH_SEQREL+TPH->TPH_TAREFA+TPH->TPH_ETAPA)
+												RecLock('STH',.T.)
+												//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+												//³Carrega o TPH nas variaveis do STH                                 ³
+												//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+												For i := 1 TO LEN(aSTH)
+												cTPH := aSTH[i][2]
+												cSTH := aSTH[i][1]
+												If TPH->(FIELDPOS(cTPH)) > 0
+													&cSTH. := TPH->(FIELDGET(FIELDPOS(cTPH)))
+												Endif
+												Next i
+												STH->TH_FILIAL  := xFilial("STH")
+												STH->TH_CODBEM  := ST9->T9_CODBEM
+												MSUNLOCK()
+
+												NGIFDBSEEK("TP2",TPH->TPH_CODFAM+TPH->TPH_TIPMOD+TPH->TPH_SERVIC+TPH->TPH_SEQREL+TPH->TPH_TAREFA + TPH->TPH_ETAPA,3)
+
+												While !Eof() .And. TP2->TP2_FILIAL == xFilial('TP2') .And.;
+													TP2->TP2_CODFAM == TPH->TPH_CODFAM .And. TP2->TP2_SERVIC == TPH->TPH_SERVIC;
+													.And. TP2->TP2_SEQREL == TPH->TPH_SEQREL  .And. TP2->TP2_TAREFA == TPH->TPH_TAREFA;
+													.And. TP2->TP2_ETAPA  == TPH->TPH_ETAPA .And. TPH->TPH_TIPMOD==TP2->TP2_TIPMOD
+
+													If !NGIFDBSEEK("TP1",STF->TF_CODBEM+STF->TF_SERVICO+STF->TF_SEQRELA+TP2->TP2_TAREFA+TP2->TP2_ETAPA+TP2->TP2_OPCAO,1)
+														RecLock("TP1",.T.)
+														//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+														//³Carrega o TP2 nas variaveis do TP1                                 ³
+														//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+														For i := 1 TO LEN(aTP1)
+														cTP2 := aTP1[i][2]
+														cTP1 := aTP1[i][1]
+														If TP2->(FIELDPOS(cTP2)) > 0
+															&cTP1. := TP2->(FIELDGET(FIELDPOS(cTP2)))
+														Endif
+														Next i
+														TP1->TP1_FILIAL := xFilial("TP1")
+														TP1->TP1_CODBEM := STF->TF_CODBEM
+														TP1->TP1_SERVIC := STF->TF_SERVICO
+														TP1->TP1_SEQREL := STF->TF_SEQRELA
+														TP1->TP1_BLOQMA := "S"
+														TP1->TP1_BLOQFU := "S"
+														TP1->TP1_BLOQFE := "S"
+														MSUNLOCK('TP1')
+													Endif
+													NGDBSELSKIP("TP2")
+												End
+
+											EndIf
+
+											dbSelectArea('TPH')
+											dbSkip()
+										EndDo
+									EndIf
+								EndIf
+							EndIf
+
+							If lMNTA1351
+								ExecBlock("MNTA1351",.F.,.F.,{ST9->T9_CODBEM,TPF->TPF_SERVIC, TPF->TPF_SEQREL})
+							EndIf
+
+							dbSelectArea('TPF')
+							dbskip()
+						EndDo
+					EndDo
+				EndIf
+
+				dbSelectArea('ST9')
+				dbskip()
+			EndDo
+
+		EndIf
+	End TRANSACTION
+	dbSelectArea('ST9')
+	dbSetOrder(1)
+
+Return { nTotManut, cProblem }
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} RetFields
+Retorna array contendo campos em comuns entre duas tabelas
+
+@author Vitor Emanuel Batista
+@since 14/07/2009
+@return array
+/*/
+//-----------------------------------------------------------------------------
+Static Function RetFields(cToTable,cFromTable,aNao)
+Local cToField := ""
+Local cFromField := ""
+Local nPos := 0
+Local nLen := 0
+Local nInd := 0
+Local cCampo := ""
+Local aFields := {}
+Local aHeader := {}
+Default aNao  := {}
+
+aHeader := NGHeader(cToTable, aNao)
+
+For nInd := 1 To Len(aHeader)
+
+	cCampo := aHeader[nInd,2]
+
+	nPos       := At("_",cCampo) + 1
+	nLen       := Len(cCampo)
+	cToField   := cToTable+"->" + cCampo
+	cFromField := PrefixoCpo(cFromTable) + "_" + SUBSTR(cCampo,nPos,nLen-nPos + 1)
+
+	aAdd(aFields,{cToField, Substr(cFromField,1,nLen)})
+
+Next nInd
+
+Return aFields
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA135VLD
+Validação de campos familia e modelo.
+@type function
+
+@author Maria Elisandra de Paula
+@since 12/06/2023
+
+@param nType, integer, Indica o tipo de validação 1 - DE? e 2 - ATE?
+@param cDe  , string , Conteúdo do pergunte DE?
+@param cAte , string , Conteúdo do pergunte ATE?
+
+@return boolean
+/*/
+//-----------------------------------------------------------------------------
+Function MNTA135VLD( nType, cDe, cAte  )
+
+	Local lRet := .T.
+
+	Do Case
+
+		Case nType == 1 
+
+			If !( Empty( cDe ) .Or. Alltrim( cDe ) == '*' ) 
+
+				lRet := ExistCPO( 'TQR', cDe )
+
+			EndIf
+
+		Case nType == 2
+
+			If !( cAte == Replicate( 'Z', FWTamSx3( 'TQR_TIPMOD' )[1] ) .Or. AllTrim( cAte ) == '*' )
+
+				lRet := ExistCPO( 'TQR', cAte )
+
+			EndIf 
+
+	End Case
+
+	If lRet .And. !Empty( cDe ) .And. !Empty( cAte ) .And. cAte < cDe
+		
+		Help( '' ,1,'DEATEINVAL')
+		
+		lRet := .F.
+
+	EndIf
+
+Return lRet

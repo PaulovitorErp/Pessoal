@@ -1,0 +1,146 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+
+Namespace TotvsDevelopers.Demo.Controllers
+
+Using Namespace TotvsDevelopers.Demo.Services
+
+Class NgInd014indDispController From NgBaseController
+
+    Public Method New() Constructor
+
+    @Get("/api/v1/indDisp")
+    Public Method Get()
+
+EndClass
+
+Method New() Class NgInd014indDispController
+    _Super:New()
+Return
+
+Method Get() Class NgInd014indDispController
+
+    Local oJson       := JsonObject():New()
+    Local cDataBase   := Upper( TcGetDb() )
+    Local cAliasQry   := GetNextAlias()
+    Local cQuery      := '%'
+    Local cJson       := ''
+    Local cDeData     := ''
+    Local cAteData    := ''
+    Local cDeBem      := ''
+    Local cAteBem     := ''
+    Local cDeCcusto   := ''
+    Local cAteCcusto  := ''
+    Local cDeCentra   := ''
+    Local cAteCentra  := ''
+    Local cConsParada := ''
+    Local cConsSobOs  := ''
+    Local nTotalInd   := 0
+    Local nCount      := 1
+    Local nMNTV042    := 0
+    Local nMNTV044    := 0
+    Local nTamBem     := FwTamSX3( 'T9_CODBEM' )[ 1 ]
+    Local nTamCC      := FwTamSX3( 'T9_CCUSTO' )[ 1 ]
+    Local nTamCT      := FwTamSX3( 'T9_CENTRAB' )[ 1 ]
+
+    oJson:FromJson( oRest:GetQueryRequest()['value'] )
+
+    // Pega os parametros recebidos do front
+    cDeData     := StoD( StrTran( oJson:GetJsonObject('deData'),  '-' , '' ) )
+    cAteData    := StoD( StrTran( oJson:GetJsonObject('ateData'),  '-' , '' ) )
+
+    cDeBem  := PadR( oJson:GetJsonObject( 'deBem' ), nTamBem )
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateBem' ) )
+      cAteBem := PadR( oJson:GetJsonObject( 'ateBem' ), nTamBem, 'Z' )
+    Else
+      cAteBem := PadR( oJson:GetJsonObject( 'ateBem' ), nTamBem )
+    EndIf
+
+    cDeCcusto := PadR( oJson:GetJsonObject( 'deCcusto' ), nTamCC )
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateCcusto' ) )
+      cAteCcusto := PadR( oJson:GetJsonObject( 'ateCcusto' ), nTamCC, 'Z' )
+    Else
+      cAteCcusto := PadR( oJson:GetJsonObject( 'ateCcusto' ), nTamCC )
+    EndIf
+
+    cDeCentra := PadR( oJson:GetJsonObject( 'deCentra' ), nTamCT )
+
+    If 'ZZZ' $ Upper( oJson:GetJsonObject( 'ateCentra' ) )
+      cAteCentra := PadR( oJson:GetJsonObject( 'ateCentra' ), nTamCT, 'Z' )
+    Else
+      cAteCentra := PadR( oJson:GetJsonObject( 'ateCentra' ), nTamCT )
+    EndIf
+
+    cConsParada := cValToChar( oJson:GetJsonObject('consideraTempoDe') )
+    cConsSobOs  := cValToChar( oJson:GetJsonObject('consideraSob') )
+
+    If cDataBase == "ORACLE"
+      cQuery += " NVL( MIN( CTT.CTT_CUSTO ), '' ) deCusto, "
+      cQuery += " NVL( MAX( CTT.CTT_CUSTO ), 'ZZZZ' ) ateCusto, "
+      cQuery += " NVL( MIN( HB_COD ), '' ) deCentrab, "
+      cQuery += " NVL( MAX( HB_COD ), 'ZZZZ' ) ateCentrab %"
+    ElseIf cDataBase == "POSTGRES"
+      cQuery += " COALESCE( MIN( CTT.CTT_CUSTO ), '' ) deCusto, "
+      cQuery += " COALESCE( MAX( CTT.CTT_CUSTO ), 'ZZZZ' ) ateCusto, "
+      cQuery += " COALESCE( MIN( HB_COD ), '' ) deCentrab, "
+      cQuery += " COALESCE( MAX( HB_COD ), 'ZZZZ' ) ateCentrab %"
+    Else
+      cQuery += " IsNull( MIN( CTT.CTT_CUSTO ), '' ) deCusto, "
+      cQuery += " IsNull( MAX( CTT.CTT_CUSTO ), 'ZZZZ' ) ateCusto, "
+      cQuery += " IsNull( MIN( HB_COD ), '' ) deCentrab, "
+      cQuery += " IsNull( MAX( HB_COD ), 'ZZZZ' ) ateCentrab %"
+    EndIf
+
+    BeginSQL Alias cAliasQry
+
+      SELECT ST9.T9_CODFAMI,
+             MIN( ST9.T9_CODBEM ) deBem,
+             MAX( ST9.T9_CODBEM ) ateBem,
+             %exp:cquery%
+      FROM %table:ST9% ST9
+      LEFT JOIN %table:CTT% CTT
+        ON  CTT.CTT_FILIAL = %xFilial:CTT% AND CTT.CTT_CUSTO = ST9.T9_CCUSTO AND CTT.%NotDel%
+      LEFT JOIN %table:SHB% SHB
+        ON  SHB.HB_FILIAL = %xFilial:SHB%  AND SHB.HB_COD = ST9.T9_CENTRAB AND SHB.%NotDel%
+      WHERE ST9.T9_FILIAL = %xFilial:ST9%
+        AND ST9.T9_CCUSTO  BETWEEN %exp:cDeCcusto% AND %exp:cAteCcusto%
+        AND ST9.T9_CENTRAB BETWEEN %exp:cDeCentra% AND %exp:cAteCentra%
+        AND ST9.T9_CODBEM  BETWEEN %exp:cDeBem%    AND %exp:cAteBem%
+        AND ST9.%NotDel%
+        GROUP BY ST9.T9_CODFAMI
+
+    EndSQL
+
+    While (cAliasQry)->( !EoF() )
+
+      nMNTV042  := MNTV042( cDeData, cAteData, (cAliasQry)->deBem, (cAliasQry)->ateBem, (cAliasQry)->deCusto, (cAliasQry)->ateCusto, (cAliasQry)->deCentrab, (cAliasQry)->ateCentrab)
+      nMNTV044  := MNTV044( cDeData, cAteData, (cAliasQry)->deBem, (cAliasQry)->ateBem, (cAliasQry)->deCusto, (cAliasQry)->ateCusto, (cAliasQry)->deCentrab, (cAliasQry)->ateCentrab, cConsSobOs, cConsParada )
+
+      nTotalInd := ( ( nMNTV042 - nMNTV044 ) / nMNTV042 ) * 100
+
+      If nTotalInd > 0
+        If nCount == 1
+          cJson += '{"items": [{ "codigo": " ' + (cAliasQry)->T9_CODFAMI + '", "indicador": ' + cValToChar( nTotalInd ) + ', "mntv042": ' + cValToChar( nMNTV042 ) + ', "mntv044": ' + cValToChar( nMNTV044 )
+        Else
+          cJson += ', { "codigo": " ' + (cAliasQry)->T9_CODFAMI + '", "indicador": ' + cValToChar( nTotalInd ) + ', "mntv042": ' + cValToChar( nMNTV042 ) + ', "mntv044": ' + cValToChar( nMNTV044 )
+        EndIf
+        cJson += '}'
+        nCount++
+      EndIf
+
+      (cAliasQry)->( dbSkip() )
+
+    End
+
+    (cAliasQry)->( dbCloseArea() )
+
+    If !Empty( cJson )
+      cJson += ']}'
+    EndIf
+
+    oRest:SetResponse( cJson )
+
+Return
+

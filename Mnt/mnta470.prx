@@ -1,0 +1,813 @@
+#INCLUDE "MNTA470.CH"
+#INCLUDE 'PROTHEUS.CH'
+#INCLUDE 'FWMVCDEF.CH'
+
+Static oTPN := Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA470
+Movimentacao de bens.
+
+@author Felipe Nathan Welter
+@since 20/02/2013
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA470()
+
+	Local aNGBEGINPRM := {}
+
+	Private cCadastro := OemToAnsi( STR0007 ) // Cadastro de Bens
+	Private aRotina   := { { STR0002, 'NGCAD01' , 0, 2 },; // Visualizar
+						   { STR0006, 'MNTA470M', 0, 2 } } // Movimentação
+
+	If !IsInCallStack( 'MNTA471' )
+
+		If GetRPORelease() >= '12.1.025'
+
+			// A rotina Movimentação de Bens (MNTA470) não deve ser utilizada diretamente pelo menu a partir da versão 12.1.25
+			// Substitua a rotina MNTA470 presente no menu do módulo SIGAMNT pela nova rotina MNTA471.
+			Help( '', 1, 'MNTA470',, STR0065, 2, 0,,,,,, { STR0066 } )
+
+		Else
+
+			aNGBEGINPRM := NGBEGINPRM() // Guarda conteúdo e declara variaveis padroes
+
+			dbSelectArea( 'ST9' )
+			dbSetOrder( 1 )
+
+			mBrowse( 6, 1, 22, 75, 'ST9',,,,,,,,,,,,,, "T9_MOVIBEM = 'S'" )
+
+			dbSelectArea('ST9')
+			Set Filter To
+
+			NGRETURNPRM( aNGBEGINPRM ) // Retorna conteúdo de variaveis padroes
+
+		EndIf
+
+	Else
+
+		MNTA470M()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA470M
+Monta browse de movimentacoes do bem selecionado.
+
+@author Felipe Nathan Welter
+@since 12/04/13
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA470M()
+
+	Local oBrowse
+	Local cFiltroTPN := ''
+	Local cOldProg   := FunName()
+
+	Private oMenu, aSMenu := NGRIGHTCLICK("MNTA470")
+
+	Private oPnlNoInf1, oPnlNoInf2
+
+	Private lTAG := ((NGCADICBASE("TPN_TAG","D","TPN",.F.) .And. NGCADICBASE("T9_TAG","D","ST9",.F.),.F.))
+	Private lTIPOACOM,lTIPOACOM2 //Variaveis da Tabela TPN(When)
+	Private TIPOACOM,TIPOACOM2,lCHKCON1,lCHKCON2  //variaveis de contador
+	Private cCCusto0, cDescCC0, cCTrab0, cDescCT0, cCodBem, cNomBem, cTag  //painel dados atuais do bem
+	Private cCCusto1, cDescCC1, cCTrab1, cDescCT1, dDtInic1, cHrInic1, nPoscon11, nPoscon21, cTag1, cObserv1 //painel mov. anterior
+	Private cCCusto2, cDescCC2, cCTrab2, cDescCT2, dDtInic2, cHrInic2, nPoscon12, nPoscon22, cTag2, cObserv2 //painel mov. posterior
+
+	Store .F. To TIPOACOM,TIPOACOM2,lCHKCON1,lCHKCON2,lTIPOACOM,lTIPOACOM2
+
+	Store '' To cCCusto0, cDescCC0, cCTrab0, cDescCT0, cCCusto1, cDescCC1, cCTrab1, cDescCT1,;
+					cCCusto2, cDescCC2, cCTrab2, cDescCT2, cTag0, cTag1, cTag2
+	Store '  :  ' To cHrInic1, cHrInic2
+	Store STOD('  /  /  ') To dDtInic1, dDtInic2
+	Store 0 To nPosCon10, nPosCon20, nPoscon11, nPoscon21, nPoscon12, nPoscon22
+
+	cFiltroTPN := "TPN_FILIAL = '"+xFilial('TPN')+"' .And. TPN_CODBEM = '"+ST9->T9_CODBEM+"'"
+
+	SetFunName( 'MNTA470' ) // Assume a função posicionada como Pai.
+
+	/*mantido para compatibilidade*/
+	If ExistBlock("MNTA4704")
+		cFiltroTPN += ExecBlock("MNTA4704",.F.,.F.)
+	EndIf
+
+	TIPOACOM  := If(ST9->T9_TEMCONT = 'S',.t.,.f.)
+	//FindFunction remover na release GetRPORelease() >= '12.1.027'
+	If FindFunction("MNTCont2")
+		TIPOACOM2 := MNTCont2(ST9->T9_FILIAL, ST9->T9_CODBEM)
+	Else
+		TIPOACOM2 := NGIFDBSEEK( 'TPE', ST9->T9_CODBEM, 1) .And. TPE->TPE_SITUAC <> '2'
+	EndIf
+	Store .T. To lTIPOACOM,lTIPOACOM2
+
+	cCadastro := OemToAnsi(STR0008) //'Cadastro de Movimentacao'
+
+	//dados atuais do bem
+	cCodBem := ST9->T9_CODBEM
+	cNomBem := ST9->T9_NOME
+	cCCusto0:= "ST9->T9_CCUSTO"
+	cDescCC0:= "NGSEEK('CTT',&cCCusto0,1,'CTT_DESC01')"
+	cCTrab0 := "ST9->T9_CENTRAB"
+	cDescCT0:= "NGSEEK('SHB',&cCTrab0,1,'HB_NOME')"
+	nPosCon10:= If( TIPOACOM, ST9->T9_POSCONT, 0)
+	nPosCon20:= If( TIPOACOM2, NGSEEK( 'TPE', cCodBem, 1, 'TPE_POSCON') , 0)
+	cTag0 := If(lTAG, ST9->T9_TAG, '')
+
+	aRotina := Menudef()
+
+	oBrowse := FWMBrowse():New()
+	oBrowse:SetAlias('TPN')
+	oBrowse:SetDescription(STR0008) //'Cadastro de Movimentacao'
+	oBrowse:AddLegend( "TPN_UTILIZ=='U'", 'GREEN' , STR0031 )
+	oBrowse:AddLegend( "TPN_UTILIZ=='P'", 'GRAY'  , STR0032 )
+	oBrowse:AddLegend( "TPN_UTILIZ=='D'", 'YELLOW', STR0033 )
+	oBrowse:SetFilterDefault( cFiltroTPN )
+	oBrowse:DisableDetails()
+	oBrowse:SetMenuDef('MNTA470')
+	oBrowse:Activate()
+
+	SetFunName( cOldProg ) // Retoma a função de origem como Pai.
+
+Return Nil
+
+
+//-------------------------------------------------------------------
+Static Function ModelDef()
+
+	// Cria a estrutura a ser usada no Modelo de Dados
+	Local oStruTPN := FWFormStruct( 1, 'TPN', /*bAvalCampo*/,/*lViewUsado*/ )
+	Local oModel
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New('MNTA470', /*bPreValidacao*/, { |oModel| MNTA470POS( oModel ) }/*bPosValidacao*/,;
+										 { |oModel| MNTA470GRV( oModel ) }/*bCommit*/, {|oModel| MTA470CAN( oModel ) } )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields( 'TPNMASTER', /*cOwner*/, oStruTPN, /*bPreValidacao*/, /*bPosValidacao*/, /*bLoad*/ )
+
+	// Altera propriedades dos campos
+	//oStruTPN:SetProperty( 'TPN_CODBEM' , MODEL_FIELD_INIT,{|| ST9->T9_CODBEM})
+
+	// Adiciona regras de dependencia de campos
+	oModel:AddRules( 'TPNMASTER', 'TPN_CTRAB', 'TPNMASTER', 'TPN_CCUSTO', 3 )
+
+	// Adiciona a descricao do Modelo de Dados
+	oModel:SetDescription( STR0056 )
+
+	// Adiciona a descricao do Componente do Modelo de Dados
+	oModel:GetModel( 'TPNMASTER' ):SetDescription( STR0057 )
+
+Return oModel
+
+
+//-------------------------------------------------------------------
+Static Function ViewDef()
+
+
+	Local oModel
+	Local oStruTPN
+	Local oView
+	
+	//Tratamento para reposicionar corretamente quando utiliza filtros na ST9 para usuário ou grupo
+	NGIFDBSEEK( 'ST9', cCodbem, 1 )
+
+	oModel   := FWLoadModel( 'MNTA470' ) //// Cria um objeto de Modelo de Dados baseado no ModelDef do fonte informado
+	oStruTPN := FWFormStruct( 2, 'TPN' ) // Cria a estrutura a ser usada na View
+	oView    := FWFormView():New() // Cria o objeto de View
+
+	// Define qual o Modelo de dados será utilizado
+	oView:SetModel( oModel )
+
+	oView:SetViewCanActivate( {|oView| fVActivate( oView ) } )
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( 'VIEW_TPN', oStruTPN, 'TPNMASTER' )
+
+	// Remove campos da tela
+	oStruTPN:RemoveField('TPN_CODBEM')
+
+	// Cria os box para adicionar paineis especiais
+	oView:CreateHorizontalBox( 'BOX_ST9'/*cID*/, 35/*nPercHeight*/, /*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/)
+	oView:CreateHorizontalBox( 'BOX_OTHERTPN'/*cID*/, 35/*nPercHeight*/, /*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/)
+		oView:CreateVerticalBox('BOX_OTHERTPN_BEFORE' /*cID*/, 50/*nPercHeight*/, 'BOX_OTHERTPN'/*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/)
+		oView:CreateVerticalBox('BOX_OTHERTPN_AFTER'  /*cID*/, 50/*nPercHeight*/, 'BOX_OTHERTPN'/*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/)
+	oView:CreateHorizontalBox( 'BOX_TPN'/*cID*/, 30/*nPercHeight*/, /*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/)
+
+	//adiciona painel de dados atuais do bem
+	oView:AddOtherObject('VIEW_ST9' /*cFormModelID*/, {|oBox,oView| fBuildInfo(oBox,0,oView) }/*bActivate*/,;
+								{|oBox| If(ValType(oBox) == 'O', oBox:FreeChildren(), ) }/*bDeActivate*/, /*bRefresh*/)
+
+	//adiciona painel de movimentacao anterior
+	oView:AddOtherObject('VIEW_OTHERTPN_BEFORE' /*cFormModelID*/, {|oBox,oView| fBuildInfo(oBox,1,oView) }/*bActivate*/,;
+								{|oBox| If(ValType(oBox) == 'O', oBox:FreeChildren(), ) }/*bDeActivate*/, /*bRefresh*/)
+
+	//adiciona painel de movimentacao posterior
+	oView:AddOtherObject('VIEW_OTHERTPN_AFTER' /*cFormModelID*/, {|oBox,oView| fBuildInfo(oBox,2,oView) }/*bActivate*/,;
+								{|oBox| If(ValType(oBox) == 'O', oBox:FreeChildren(), ) }/*bDeActivate*/, /*bRefresh*/)
+
+
+	// Relaciona o ID da View com o "box" para exibicao
+	oView:SetOwnerView( 'VIEW_TPN', 'BOX_TPN' )
+	oView:SetOwnerView( 'VIEW_ST9' /*cFormModelID*/, 'BOX_ST9' /*cIDUserView*/)
+	oView:SetOwnerView( 'VIEW_OTHERTPN_BEFORE' /*cFormModelID*/, 'BOX_OTHERTPN_BEFORE' /*cIDUserView*/)
+	oView:SetOwnerView( 'VIEW_OTHERTPN_AFTER' /*cFormModelID*/, 'BOX_OTHERTPN_AFTER' /*cIDUserView*/)
+
+	// Titulo do componente
+	oView:EnableTitleView( 'VIEW_ST9', STR0013 )
+	oView:EnableTitleView( 'VIEW_TPN', STR0018 )
+	oView:EnableTitleView( 'VIEW_OTHERTPN_BEFORE', STR0014 )
+	oView:EnableTitleView( 'VIEW_OTHERTPN_AFTER' , STR0017 )
+
+	// Inclui chamada de funcao apos a validacao dos campos
+	oView:SetFieldAction( 'TPN_DTINIC', { |oView, cIDView, cField, xValue| fLoadInfos(oView) } )
+	oView:SetFieldAction( 'TPN_HRINIC', { |oView, cIDView, cField, xValue| fLoadInfos(oView), fSetCnt(oModel, oView) } )
+
+	NGMVCUserBtn(oView)
+
+Return oView
+
+//-------------------------------------------------------------------
+Static Function MenuDef()
+	Local aRotina := {}
+
+	ADD OPTION aRotina TITLE STR0002 ACTION 'VIEWDEF.MNTA470' OPERATION 2 ACCESS 0 //Visualizar
+	ADD OPTION aRotina TITLE STR0003 ACTION 'VIEWDEF.MNTA470' OPERATION 3 ACCESS 0 //Incluir
+	ADD OPTION aRotina TITLE STR0005 ACTION 'VIEWDEF.MNTA470' OPERATION 5 ACCESS 0 //Excluir
+	ADD OPTION aRotina TITLE STR0059 ACTION 'VIEWDEF.MNTA470' OPERATION 8 ACCESS 0 //Imprimir
+	ADD OPTION aRotina TITLE STR0060 ACTION 'VIEWDEF.MNTA470' OPERATION 9 ACCESS 0 //Copiar
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuildInfo
+Montagem dos paineis adicionais que apresentam informacoes relacionadas
+ao registro de movimentacao.
+
+@param oPanel	objeto onde sera montado o painel
+@param nPanel	tipo do painel (0=dados atuais do bem; 1=mov. anterior; 2=mov. posterior)
+@author Felipe Nathan Welter
+@since 12/04/13
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fBuildInfo(oPanel,nPanel,oView)
+
+	Local nAltura		:= GetScreenRes()[2] - 685
+	Local nLargura	:= GetScreenRes()[1] - 690
+
+	If nPanel == 0  //MONTAGEM DO PAINEL COM DADOS ATUAIS DO BEM
+		oScr1 := TScrollBox():New(oPanel,11,01,nAltura,nLargura,.T.,.T.,.T.)
+			//bem
+			TSay():New( 05, 05, {|| STR0009 }	, oScr1/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 13, 05, {||cCodBem}	, oScr1/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCodBem',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 13, 45, {||cNomBem}	, oScr1/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cNomBem',,,,, .T./*lNoButton*/,,,,)
+			//centro de custo
+			TSay():New( 30, 05, {|| STR0011 }, oScr1/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 38, 05, {||&cCCusto0}	, oScr1/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCCusto0',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 38, 45, {||&cDescCC0}	, oScr1/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCC0',,,,, .T./*lNoButton*/,,,,)
+			//centro de trabalho
+			TSay():New( 55, 05, {|| STR0012 }	, oScr1/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 63, 05, {||&cCTrab0}			, oScr1/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCTrab0',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 63, 45, {||&cDescCT0}		, oScr1/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCT0',,,,, .T./*lNoButton*/,,,,)
+			//contador 1
+			TSay():New( 80, 05, {|| STR0022}	, oScr1/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 05, {||nPosCon10}		, oScr1/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPosCon10',,,,, .T./*lNoButton*/,,,,)
+			//contador 2
+			TSay():New( 80, 65, {|| STR0023}	, oScr1/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 65, {||nPosCon20}		, oScr1/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPosCon20',,,,, .T./*lNoButton*/,,,,)
+			If lTAG
+				TSay():New( 68, 125, {|| STR0051}	, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+				TGet():New( 76, 125, {||cTag2}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cTag2',,,,, .T./*lNoButton*/,,,,)
+			EndIf
+
+	ElseIf nPanel == 1  //MONTAGEM DO PAINEL COM DADOS DA MOVIMENTACAO ANTERIOR
+		oScr2 := TScrollBox():New(oPanel,11,01,nAltura,nLargura/2,.T.,.T.,.T.)
+			//centro de custo
+			TSay():New( 05, 05, {|| STR0011 }, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 13, 05, {||cCCusto1}	, oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCCusto1',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 13, 45, {||cDescCC1}	, oScr2/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCC1',,,,, .T./*lNoButton*/,,,,)
+			//centro de trabalho
+			TSay():New( 30, 05, {|| STR0012 }, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 38, 05, {||cCTrab1}  , oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCTrab1' ,,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 38, 45, {||cDescCT1} , oScr2/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCT1',,,,, .T./*lNoButton*/,,,,)
+			//data
+			TSay():New( 55, 05, {|| STR0015}		, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 63, 05, {||dDtInic1}	, oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'dDtInic1',,,,, .T./*lNoButton*/,,,,)
+			//hora
+			TSay():New( 55, 65, {|| STR0016}		, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 63, 65, {||cHrInic1}	, oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cHrInic1',,,,, .T./*lNoButton*/,,,,)
+			//contador 1
+			TSay():New( 80, 05, {|| STR0022}	, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 05, {||nPoscon11}		, oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPoscon11',,,,, .T./*lNoButton*/,,,,)
+			//contador 2
+			TSay():New( 80, 65, {|| STR0023}	, oScr2/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 65, {||nPoscon21}		, oScr2/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPoscon21',,,,, .T./*lNoButton*/,,,,)
+			If lTAG
+				TSay():New( 68, 125, {|| STR0051}	, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+				TGet():New( 76, 125, {||cTag1}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cTag1',,,,, .T./*lNoButton*/,,,,)
+			EndIf
+
+			oPnlNoInf1 := TPanel():New(00,00,,oPanel,,,,,,1,1,.F.,.F.)
+			oPnlNoInf1:Align := CONTROL_ALIGN_ALLCLIENT
+			oPnlNoInf1:CoorsUpdate()
+		TSay():New( 43, 10, {|| STR0058 }, oPnlNoInf1/*oWnd*/,,,,,, .T./*lPixels*/,,, 150/*nWidth*/, 10/*nHeight*/,,,,,,)
+
+	ElseIf nPanel == 2  //MONTAGEM DO PAINEL COM DADOS DA MOVIMENTACAO POSTERIOR
+		oScr3 := TScrollBox():New(oPanel,11,01,nAltura,nLargura/2,.T.,.T.,.T.)
+			//centro de custo
+			TSay():New( 05, 05, {|| STR0011  }, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 13, 05, {||cCCusto2}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCCusto2',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 13, 45, {||cDescCC2}	, oScr3/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCC2',,,,, .T./*lNoButton*/,,,,)
+			//centro de trabalho
+			TSay():New( 30, 05, {|| STR0012 }, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 38, 05, {||cCTrab2}			, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cCTrab2',,,,, .T./*lNoButton*/,,,,)
+			TGet():New( 38, 45, {||cDescCT2}		, oScr3/*oWnd*/, 140, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cDescCT2',,,,, .T./*lNoButton*/,,,,)
+			//data
+			TSay():New( 55, 05, {|| STR0015}		, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 63, 05, {||dDtInic2}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'dDtInic2',,,,, .T./*lNoButton*/,,,,)
+			//hora
+			TSay():New( 55, 65, {|| STR0016}		, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 63, 65, {||cHrInic2}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cHrInic2',,,,, .T./*lNoButton*/,,,,)
+			//contador 1
+			TSay():New( 80, 05, {|| STR0022}	, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 05, {||nPoscon12}		, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPoscon12',,,,, .T./*lNoButton*/,,,,)
+			//contador 2
+			TSay():New( 80, 65, {|| STR0023}	, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+			TGet():New( 88, 65, {||nPoscon22}		, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'nPoscon22',,,,, .T./*lNoButton*/,,,,)
+			//tag
+			If lTAG
+				TSay():New( 68, 125, {|| STR0051 }	, oScr3/*oWnd*/,,,,,, .T./*lPixels*/,,, 40/*nWidth*/, 10/*nHeight*/,,,,,,)
+				TGet():New( 76, 125, {||cTag2}	, oScr3/*oWnd*/, 40, 10,,,,,,,, .T./*lPixel*/,,,,,,, .T./*lReadOnly*/,,, 'cTag2',,,,, .T./*lNoButton*/,,,,)
+			EndIf
+
+			oPnlNoInf2 := TPanel():New(00,00,,oPanel,,,,,,1,1,.F.,.F.)
+			oPnlNoInf2:Align := CONTROL_ALIGN_ALLCLIENT
+			oPnlNoInf2:CoorsUpdate()
+		TSay():New( 43, 10, {|| STR0058 }, oPnlNoInf2/*oWnd*/,,,,,, .T./*lPixels*/,,, 150/*nWidth*/, 10/*nHeight*/,,,,,,)
+
+	EndIf
+
+	fLoadInfos( oView, nPanel )
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fLoadInfos
+Carrega informacoes dos paineis de movimentacao anterior e posterior
+para visualizacao em tela (viewdef).
+
+@param oView	objeto do tipo View
+@author Felipe Nathan Welter
+@since 12/04/13
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fLoadInfos( oView, nPanel )
+
+	Local cCodB, dData, cHora
+	Local nOperation := oView:GetModel():GetOperation()
+
+	If nPanel == 0
+		If nOperation == MODEL_OPERATION_INSERT
+			oView:GetModel():SetValue("TPNMASTER","TPN_CODBEM",ST9->T9_CODBEM)
+		EndIf
+
+	ElseIf nPanel == 2 .Or. nPanel == Nil //2-> no evento build, Nil-> no evento gatilho
+		//carrega dados do model
+		cCodB := oView:GetModel():GetValue('TPNMASTER','TPN_CODBEM')
+		dData := oView:GetModel():GetValue('TPNMASTER','TPN_DTINIC')
+		cHora := oView:GetModel():GetValue('TPNMASTER','TPN_HRINIC')
+
+		If !Empty(dData) .And. !Empty(cHora)
+
+			//limpa todas as varieveis de tela
+			Store '' To cCCusto1, cDescCC1, cCTrab1, cDescCT1, cObserv1, cCCusto2, cDescCC2, cCTrab2, cDescCT2, cObserv2
+			Store '  :  ' To cHrInic1, cHrInic2
+			Store STOD('  /  /  ') To dDtInic1, dDtInic2
+			Store 0 To nPoscon11, nPoscon21, nPoscon12, nPoscon22
+
+			dbSelectArea('TPN')
+			dbSetOrder(01)
+
+			// carrega movimentacao posterior
+			If dbSeek(xFilial('TPN')+cCodB+DTOS(dData)+cHora)
+				dbSkip(1)
+			Else
+				dbSeek(xFilial('TPN')+cCodB+DTOS(dData)+cHora,.T.)
+			EndIf
+
+			If TPN->TPN_FILIAL == xFilial('TPN') .And. TPN->TPN_CODBEM == cCodB
+				cCCusto2 := TPN->TPN_CCUSTO
+				cDescCC2 := NGSEEK('CTT',cCCusto2,1,'CTT_DESC01')
+				cCTrab2  := TPN->TPN_CTRAB
+				cDescCT2 := NGSEEK('SHB',cCTrab2,1,'HB_NOME')
+				dDtInic2 := TPN->TPN_DTINIC
+				cHrInic2 := TPN->TPN_HRINIC
+				nPoscon12:= TPN->TPN_POSCON
+				nPoscon22:= TPN->TPN_POSCO2
+				cObserv2 := TPN->TPN_OBSERV
+				cTag2    := If(lTAG, TPN->TPN_TAG, '')
+				oPnlNoInf2:Hide()
+			Else
+				oPnlNoInf2:Show()
+			EndIf
+
+			dbSeek(xFilial('TPN')+cCodB+DTOS(dData)+cHora,.T.)
+			dbSkip(-1)
+
+			// carrega movimentacao anterior
+			If !Bof() .And. TPN->TPN_FILIAL == xFilial('TPN') .And. TPN->TPN_CODBEM == cCodB
+				cCCusto1 := TPN->TPN_CCUSTO
+				cDescCC1 := NGSEEK('CTT',cCCusto1,1,'CTT_DESC01')
+				cCTrab1  := TPN->TPN_CTRAB
+				cDescCT1 := NGSEEK('SHB',cCTrab1,1,'HB_NOME')
+				dDtInic1 := TPN->TPN_DTINIC
+				cHrInic1 := TPN->TPN_HRINIC
+				nPoscon11:= TPN->TPN_POSCON
+				nPoscon21:= TPN->TPN_POSCO2
+				cObserv1 := TPN->TPN_OBSERV
+				cTag1    := If(lTAG, TPN->TPN_TAG, '')
+				oPnlNoInf1:Hide()
+			Else
+				oPnlNoInf1:Show()
+			EndIf
+		EndIf
+
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA470VLD
+Funcao que realiza as validacoes da rotina.
+
+@author Felipe Nathan Welter
+@since 20/02/2013
+@version P12
+@return bool
+/*/
+//---------------------------------------------------------------------
+Function MNTA470VLD(cField)
+	Local lRet := .T.
+
+	Local nREGIST := 0 ,lMENOR := .f. ,nINDECE
+	Local aArraySTZ := {}
+
+	Default cField := ReadVar()
+
+	If 'TPN_DTINIC' $ cField .Or. 'TPN_HRINIC' $ cField
+
+		If 'TPN_DTINIC' $ cField
+			If Empty(M->TPN_DTINIC) .Or. M->TPN_DTINIC > dDataBase
+				Help(" ",1,STR0020,,STR0019,4,5)
+				lRet := .F.
+			EndIf
+
+		ElseIf 'TPN_HRINIC' $ cField
+			If !NGVALHORA(M->TPN_HRINIC,.T.)
+				lRet := .F.
+			EndIf
+
+		EndIf
+
+		If !ExistChav('TPN',M->TPN_CODBEM+Dtos(M->TPN_DTINIC)+M->TPN_HRINIC)
+			lRet := .F.
+		EndIf
+
+		If !Empty(M->TPN_DTINIC) .And. !Empty(M->TPN_HRINIC)
+
+			If  lRet .AND. ( M->TPN_DTINIC == dDataBase .AND. M->TPN_HRINIC > Substr(Time(),1,5) )
+
+				Help(" ",1,STR0042,,STR0068,4,5)//"Atenção",
+												//"Não é possível agendar a movimentação de um bem para uma data futura"
+				lRet := .F.
+		
+			EndIf
+
+			cCodBemPai := NGBEMPAI(M->TPN_CODBEM)
+			//Busca a Data de Entrada e Saida do Filho na estrutura do Bem Pai
+			aArraySTZ := NGRETSTCDT(cCodBemPai,M->TPN_DTINIC,M->TPN_HRINIC)
+			nPosScan   := aScan(aArraySTZ, {|x| x[1] == M->TPN_CODBEM })
+			If nPosScan > 0
+				ShowHelpDlg(STR0042,; // "Atencao"
+				{STR0061},1,; // "Não é permitido incluir movimentação para um bem filho de estrutura."
+				{STR0062+ Alltrim(cCodBemPai)},1) // "Cadastrar movimentação para o bem Pai "
+				lRet :=  .F.
+			EndIf
+
+		EndIf
+
+	ElseIf 'TPN_CCUSTO' $ cField
+
+		lRet := CTB105CC(M->TPN_CCUSTO)
+
+		If lRet
+			If !ExistCpo('SI3',M->TPN_CCUSTO,1)
+			   lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf 'TPN_CTRAB' $ cField
+
+		If !Empty(M->TPN_CTRAB)
+			If !ExistCpo('SHB',M->TPN_CTRAB)
+				lRet := .F.
+			EndIf
+			If !CHKCENTRAB(M->TPN_CTRAB,M->TPN_CCUSTO)
+				lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf 'TPN_POSCON' $ cField
+
+		If Type('lCHKCON1') <> 'U'
+			lCHKCON1 := .F.
+			If !Positivo(M->TPN_POSCON) .Or. !NaoVazio(M->TPN_POSCON) .Or. !CHKPOSLIM(M->TPN_CODBEM,M->TPN_POSCON,1)
+				lRet := .F.
+			EndIf
+		EndIf
+
+	ElseIf 'TPN_POSCO2' $ cField
+
+		If Type('lCHKCON1') <> 'U'
+			lCHKCON2 := .F.
+			If !Positivo(M->TPN_POSCO2) .Or. !NaoVazio(M->TPN_POSCO2) .Or. !CHKPOSLIM(M->TPN_CODBEM,M->TPN_POSCO2,2)
+				lRet := .F.
+			EndIf
+		EndIf
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT470EXCO
+Exclui o lançamento de contador do pai e dos filhos.
+
+@param cBEM	   , Caracter, Código do Bem
+@param dDATAL  , Data    , Data de leitura
+@param cHORL   , Caracter, Hora de leitura
+@param cTIPOCON, Caracter, Tipo de contador (1=Contador 1, 2= Contador 2)
+@param aTrbEst , Array   , Array possuindo as tabelas temporárias responsáveis por montar a estrutura do bem.
+							[1] tabela temporaria do pai da estrutura - cTRBS
+							[2] tabela temporaria do pai da estrutura - cTRBF
+							[3] tabela temporaria do eixo suspenso    - CTRBEixo
+@author Elisangela Costa
+@since 10/08/2006
+@version P12
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT470EXCO(cBEM,dDATAL,cHORL,nTIPCON,aTrbEst)
+
+	Local aArea := FwGetArea()
+
+	Private nTIPCA  := nTIPCON
+	Private aARALTC := If(nTIPCA = 1,{'STP','stp->tp_filial','stp->tp_codbem',;
+										'stp->tp_dtleitu','stp->tp_hora','stp->tp_poscont',;
+										'stp->tp_acumcon','stp->tp_vardia','stp->tp_viracon',;
+										'stp->tp_tipolan'},;
+										{'TPP','tpp->tpp_filial','tpp->tpp_codbem',;
+										'tpp->tpp_dtleit','tpp->tpp_hora','tpp->tpp_poscon',;
+										'tpp->tpp_acumco','tpp->tpp_vardia','tpp->tpp_viraco',;
+										'tpp->tpp_tipola'})
+
+	Private aARABEM := If(nTIPCA = 1,{'ST9','st9->t9_poscont','st9->t9_contacu',;
+									'st9->t9_dtultac','st9->t9_vardia'},;
+									{'TPE','tpe->tpe_poscon','tpe->tpe_contac',;
+									'tpe->tpe_dtulta','tpe->tpe_vardia'})
+
+	Default aTrbEst := {}
+
+	//Exlui o lancamento de contador da movimetacao
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(05)
+	If Dbseek(xFilial(aARALTC[1])+cBEM+Dtos(dDATAL)+cHORL)
+		If &(aARALTC[10]) == "A"
+			//If NGCHKSTPEX(&(aARALTC[3]),&(aARALTC[4]),&(aARALTC[5]),&(aARALTC[6]))
+				Return .t.
+			//EndIf
+		EndIf
+		nRECNSTP := Recno()
+		lULTIMOP := .T.
+		nACUMFIP := 0
+		nCONTAFP := 0
+		nVARDIFP := 0
+		dDTACUFP := Ctod('  /  /  ')
+		DbSkip(-1)
+		If !Eof() .And. !Bof() .And. &(aARALTC[2]) = xFilial(aARALTC[1]) .And.;
+			&(aARALTC[3]) = cBEM
+			nACUMFIP := &(aARALTC[7])
+			dDTACUFP := &(aARALTC[4])
+			nCONTAFP := &(aARALTC[6])
+			nVARDIFP := &(aARALTC[8])
+		Endif
+		Dbgoto(nRECNSTP)
+		nACUMDEL := &(aARALTC[7])
+
+		DbSelectArea(aARALTC[1])
+		RecLock(aARALTC[1],.F.)
+		Dbdelete()
+		MsUnlock(aARALTC[1])
+
+		MNTA875ADEL(cBEM,dDATAL,cHORL,nTIPCA,,,aTrbEst)
+
+	Endif
+
+	FwRestArea( aArea )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA470POS
+Funcao de pos-validacao do Model
+
+@author Felipe Nathan Welter
+@since 17/04/2013
+@version P12
+@return bool
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA470POS( oModel )
+
+	Local lRet := .T.
+	Local nOperation := oModel:GetOperation()
+	Local nTamTot		:= 0
+	Local nInd			:= 0
+	Local aEstrutura	:= {}
+
+	oTPN := NGMovBem():New()
+	oTPN:setOperation(nOperation)
+
+	If nOperation == MODEL_OPERATION_INSERT
+		oTPN:setValue("TPN_CODBEM",oModel:GetValue('TPNMASTER','TPN_CODBEM'))
+		oTPN:setValue("TPN_DTINIC",oModel:GetValue('TPNMASTER','TPN_DTINIC'))
+		oTPN:setValue("TPN_HRINIC",oModel:GetValue('TPNMASTER','TPN_HRINIC'))
+		oTPN:setValue("TPN_CCUSTO",oModel:GetValue('TPNMASTER','TPN_CCUSTO'))
+		oTPN:setValue("TPN_CTRAB" ,oModel:GetValue('TPNMASTER','TPN_CTRAB'))
+		oTPN:setValue("TPN_UTILIZ",oModel:GetValue('TPNMASTER','TPN_UTILIZ'))
+		oTPN:setValue("TPN_POSCON",oModel:GetValue('TPNMASTER','TPN_POSCON'))
+		oTPN:setValue("TPN_POSCO2",oModel:GetValue('TPNMASTER','TPN_POSCO2'))
+		oTPN:setValue("TPN_OBSERV",oModel:GetValue('TPNMASTER','TPN_OBSERV'))
+
+		dbSelectArea("TPN")
+		aEstrutura := dbStruct()
+		nTamTot    := Len(aEstrutura)
+
+		For nInd := 1 To nTamTot
+			If Posicione("SX3",2,aEstrutura[nInd,1],"X3_PROPRI") == "U"
+				oTPN:setValue( aEstrutura[nInd,1], oModel:GetValue( 'TPNMASTER', aEstrutura[nInd,1] ) )
+			EndIf
+		Next nInd
+
+	ElseIf nOperation == MODEL_OPERATION_UPDATE .Or. nOperation == MODEL_OPERATION_DELETE
+		cCodBem := oModel:GetValue('TPNMASTER','TPN_CODBEM')
+		dDtInic := oModel:GetValue('TPNMASTER','TPN_DTINIC')
+		cHrInic := oModel:GetValue('TPNMASTER','TPN_HRINIC')
+		oTPN:Load( { xFilial("TPN") + cCodBem + DTOS(dDtInic) + cHrInic } )
+
+	EndIf
+
+	lRet := oTPN:valid()
+
+	If !lRet
+		Help(,,'HELP',, oTPN:getErrorList()[1],1,0)
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA470GRV
+Funcao de gravacao do Model
+
+@author Felipe Nathan Welter
+@since 12/04/2013
+@version P12
+@return bool
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA470GRV( oModel )
+
+	Local lOk        := .T.
+	Local lMnt470    := ExistBlock("MNTA470")
+	Local nOperation := oModel:GetOperation()
+
+	If nOperation == MODEL_OPERATION_INSERT .Or.;
+		nOperation == MODEL_OPERATION_UPDATE
+		lOk := oTPN:upsert()
+	ElseIf nOperation == MODEL_OPERATION_DELETE
+		lOk := oTPN:delete()
+	EndIf
+
+	//Adicionado ponto de entrada 'MODELCOMMITTTS' sendo chamado após a gravação total do modelo e dentro da transação,
+	// para padronização das chamadas de ponto de entrada MVC.
+	If lMnt470
+		ExecBlock("MNTA470",.F.,.F.,{oTPN,'MODELCOMMITTTS','MNTA470'})
+	EndIf
+
+	If !lOk
+		Help(,,'HELP',, oTPN:getErrorList()[1],1,0)
+	EndIf
+
+	//Adicionado ponto de entrada 'MODELCOMMITNTTS' sendo chamado após a gravação total do modelo e fora da transação,
+	// para padronização das chamadas de ponto de entrada MVC.
+	If lMnt470
+		ExecBlock("MNTA470",.F.,.F.,{oTPN,'MODELCOMMITNTTS','MNTA470'})
+	EndIf
+
+	oTPN:Free()
+
+Return lOk
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MTA470CAN
+Ajusta o mBrowse pois desposiciona o resgitro
+
+@author Tainã Alberto Cardoso
+@since 21/01/2016
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MTA470CAN( oModel )
+
+	Local lRet := .T.
+
+	dbSelectArea("TPN")
+	dbSetOrder(1)
+	dbSeek(xFilial("TPN") + ST9->T9_CODBEM )
+
+	If ExistBlock("MNTA470")
+		lRet := ExecBlock("MNTA470",.F.,.F.,{oModel,'FORMCANCEL','MNTA470'})
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVActivate
+Validação para mostrar a tela
+
+@author Tainã Alberto Cardoso
+@since 28/06/2016
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fVActivate( oView )
+
+	Local cCodBemPai := ''
+	Local aArraySTZ := {}
+	Local nOperation := oView:GetOperation()
+
+	If nOperation == MODEL_OPERATION_DELETE
+
+		cCodBemPai := NGBEMPAI(TPN->TPN_CODBEM)
+		//Busca a Data de Entrada e Saida do Filho na estrutura do Bem Pai
+
+		aArraySTZ := NGRETSTCDT(cCodBemPai,TPN->TPN_DTINIC,TPN->TPN_HRINIC)
+		nPosScan   := aScan(aArraySTZ, {|x| x[1] == TPN->TPN_CODBEM })
+
+		If nPosScan > 0
+
+			ShowHelpDlg(STR0042,; // "Atencao"
+			{STR0063},1,; // "Não é permitido excluir movimentação para um bem filho de estrutura."
+			{STR0064+ Alltrim(cCodBemPai)},1) // "Excluir movimentação para o bem Pai "
+			Return .F.
+
+		EndIf
+
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSetCnt
+Carrega o valor no campo de contador quando campo está boqueado
+
+@author Wexlei Silveira
+@since 13/12/2017
+@version P12
+@return Boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fSetCnt(oModel, oView)
+
+	Local lRet := .F.
+
+	If FindFunction("NGBlCont") .And. !NGBlCont( M->TPN_CODBEM )
+
+		lRet := FWFldPut('TPN_POSCON', NGTpCont(M->TPN_CODBEM, M->TPN_DTINIC, M->TPN_HRINIC, M->TPN_POSCON),,oModel,,.T.)
+
+		oView:Refresh()
+
+	EndIf
+
+Return lRet

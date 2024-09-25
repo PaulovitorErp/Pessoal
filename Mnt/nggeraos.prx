@@ -1,0 +1,1419 @@
+#INCLUDE "Nggeraos.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWADAPTEREAI.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGGERAOS
+
+Gerar O.S. de manutenção, com Insumo, Bloqueios, Problemas Solicitação
+de Compras e Ordem de Produção
+
+@author Inacio Luiz Kolling
+@Since 11/11/1998
+@version 1.0
+
+@param PTIPO       , string  , Tipo de manutenção da O.S. Sendo: C-Corretiva ou P-Preventiva
+@param PDATA       , date    , Data de início da O.S.
+@param PCODBEM     , string  , Código do Bem da O.S.
+@param PSERVICO    , string  , Código do serviço da O.S.
+@param PSEQUENC    , string  , Número da sequencia (Somente p/ PTIPO = 'P' e deve existir no STF
+@param PBLOPROD    , caracter, Indicação de bloqueio de Produto ( Somente p/ PTIPO = 'P'- S/N )
+@param PBLOFUNC    , caracter, Indicação de bloqueio de Funcionário ( Somente p/ PTIPO = 'P' - S/N)
+@param PBLOFERR    , caracter, Indicação de bloqueio de Ferramenta  ( Somente p/ PTIPO = 'P' - S/N)
+@param PFIL        , string  , Indica a filial onde será aberta a OS
+@param CSIT        , caracter, Situação da OS
+@param lInsumo     , boolean , Indica se insere Insumo automaticamente nas OS Preventiva de acordo com a Manutenção
+@param lEtapa      , boolean , Indica se insere Etapa automaticamente nas OS Preventiva de acordo com a Manutenção
+@param aCamps      , array   , Campos específicos a serem gravados na STJ - Utilizado na Classe de SS.
+@param [cBemLoc]   , caracter, tipo do cadastro ( "B" para Bem-ST9 ou "L" Localização-TAF ).
+@param [cRequest]  , string  , código da solicitação de serviço - TQB
+@param [dDtParReal], data    , data da parada real da O.S
+@param [cHrParReal], string  , hora da parada real da O.S.
+@param [dDataOrig] , data    , data original da O.S.
+@param [aTareMulti], array   , Itens da manutenção múltipla.
+
+@obs: Retorna a Data da proxima manutencao prevista
+@return array,
+			[1], caracter, 'S' se obteve sucesso ou 'N' se não obteve sucesso
+			[2], string, descrição do erro
+			[3], string, código da ordem gerada
+
+/*/
+//---------------------------------------------------------------------
+Function NGGERAOS( PTIPO, PDATA, PCODBEM, PSERVICO, PSEQ, PBLOPROD, PBLOFUNC, PBLOFERR, PFIL,;
+	CSIT, lInsumo, lEtapa, aCamps, cBemLoc, cRequest, dDtParReal, cHrParReal, dDataOrig, aTareMulti )
+
+	Local nIndGeros := 0
+	Local cAlial
+	Local lPeGeraOs := ExistBlock("NGGERAOS")
+	Local aAreaST9  := ST9->( GetArea() )
+
+	Private ROPERACA  := 'S'
+	Private RERROR    := Space(1)
+	Private RARRAY    := {}
+	Private aIAglu    := {}
+	Private INCLUI    := .T.
+	Private OBRIGSTE  := .T. // Obriga o tipo de serviço (Preventivo ou Corretivo)
+
+	//Verifica se Gera Solicit. ao Armazem em vez de Solic. Compras
+	Private cUsaIntEs := AllTrim(GETMV("MV_NGMNTES"))
+	Private lGeraSA   := .F.
+	Private aRetSA    := {}
+
+	Private cTRB
+	Private oTmpTRB
+
+	Default lInsumo    := .T.
+	Default lEtapa     := .T.
+	Default aCamps     := {}
+	Default cBemLoc    := "B"
+	Default cRequest   := ""
+	Default cHrParReal := ""
+	Default dDtParReal := CtoD("")
+	Default dDataOrig  := dDataBase
+	Default aTareMulti := {}
+
+	If NGCADICBASE('TL_NUMSA','A','STL',.F.) .And. FindFunction("NGGERASA")
+		If GetNewPar("MV_NGGERSA","N") == "S" .And. cUsaIntEs == "S"
+			lGeraSA := .T.
+		EndIf
+	EndIf
+
+	If PSEQ <> Nil
+		PSEQUENC := IIf(ValType(PSEQ) = "C",PSEQ,Str(PSEQ,3))
+	Else
+		PSEQUENC := PSEQ
+	EndIf
+
+	cAlial    := Alias()
+	nIndGeros := IndexOrd()
+
+	If lPeGeraOs
+		RARRAY := ExecBlock("NGGERAOS",.F.,.F.,{PCODBEM,PSERVICO,PSEQUENC})
+	EndIf
+
+	If Empty(RARRAY)
+
+		GERAOSNG2( PTIPO, PDATA, PCODBEM, PSERVICO, PSEQUENC, PBLOPROD, PBLOFUNC, PBLOFERR, PFIL,;
+			CSIT, lInsumo, lEtapa, aCamps, cBemLoc, cRequest, dDtParReal, cHrParReal, dDataOrig, aTareMulti )
+	
+	EndIf
+
+	dbSelectArea(cAlial)
+	dbSetOrder(nIndGeros)
+
+	RestArea( aAreaST9 )
+
+Return RARRAY
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GERAOSNG2
+Grava as O.S. da manutencao
+
+@author   Inacio Luiz Kolling
+@since   date
+@version p12
+
+@param PTIPO       , Caractere, Tipo da O.S.
+@param PDATA       , Data     , data da O.S.
+@param PCODBEM     , Caractere, Código do Bem
+@param PSERVICO    , Caractere, Código do Serviço
+@param PSEQUENC    , Numérico , sequencia da O.S.(Preventiva)
+@param PBLOPROD    , Caractere, Se tem bloqueia produto
+@param PBLOFUNC    , Caractere, Se tem bloqueia Funcionário
+@param PBLOFERR    , Caractere, Se tem Bloqueio de Ferramenta
+@param PFIL        , Caractere, Filial para troca
+@param CSIT        , Caractere, Situação da O.S.
+@param lInsumo     , Lógico   , Se possui Insumos
+@param lEtapa      , Lógico   , Se possui etapas
+@param aCamps      , Array    , Array de Campos
+@param [cBemLoc]   , Caracter , Caso seja "B" é Bem caso "L" é Localização.
+@param [cRequest]  , string   , código da solicitação de serviço
+@param [dDtParReal], data     , data da parada real da O.S
+@param [cHrParReal], string   , hora da parada real da O.S.
+@param [dDataOrig] , data     , data original da O.S.
+@param [aTareMulti], array    , Itens da manutenção múltipla.
+/*/
+//-------------------------------------------------------------------
+Function GERAOSNG2( PTIPO, PDATA, PCODBEM, PSERVICO, PSEQUENC, PBLOPROD, PBLOFUNC, PBLOFERR, PFIL, CSIT,; 
+	lInsumo, lEtapa, aCamps, cBemLoc, cRequest, dDtParReal, cHrParReal, dDataOrig, aTareMulti )
+
+	Local cFil2ST9 := NGTROCAFILI("ST9",PFIL)
+	Local cFil2ST4 := NGTROCAFILI("ST4",PFIL)
+	Local cFil2STE := NGTROCAFILI("STE",PFIL)
+	Local cFil2STF := NGTROCAFILI("STF",PFIL)
+	Local cFil2TAF := NGTROCAFILI("TAF",PFIL)
+	Local aTypeRet := {} //Array para retornar mensagem para MostraErro via JOB
+
+	Private cORDGEROS := Space(6)
+
+	Default lInsumo    := .T.
+	Default lEtapa     := .T.
+	Default aCamps     := {}
+	Default cBemLoc    := "B"
+	Default cRequest   := ""
+	Default cHrParReal := ""
+	Default dDtParReal := CtoD("")
+	Default dDataOrig  := PDATA
+	Default aTareMulti := {}
+
+	PTIPO    := UPPER(PTIPO)
+	PBLOPROD := UPPER(PBLOPROD)
+	PBLOFUNC := UPPER(PBLOFUNC)
+	PBLOFERR := UPPER(PBLOFERR)
+
+	M->TI_TIPOMDO := 'E'  //Usado na geracao de insumos
+	If PTIPO = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0001 //"Tipo de Manutencao e obrigatorio.."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Elseif Empty(PTIPO)
+		ROPERACA := 'N'
+		RERROR   := STR0002 //"Nao foi informado o Tipo de Manutencao..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Endif
+
+	If !(PTIPO = 'P' .Or. PTIPO = 'C')
+		ROPERACA := 'N'
+		RERROR   := STR0003 //"Tipo de Manutencao dever  ser igual a P ou C.."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Endif
+
+	If PDATA = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0004 //"Data de Inicio da Ordem de Servico e obrigatorio.."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Elseif Empty(PDATA)
+		ROPERACA := 'N'
+		RERROR   := STR0005 //"Nao foi informado a Data de Inicio da Ordem de Servico.."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Endif
+
+	If PCODBEM = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0006 //"Codigo do Bem e  obrigatorio.."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Elseif Empty(PCODBEM)
+		ROPERACA := 'N'
+		RERROR   := STR0007 //"Nao foi informado o Codigo do Bem para O.S. ...."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Else
+
+		If cBemLoc == "B" // Caso seja um bem.
+			// Verifica se o Bem existe.
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			If !dbSeek( cFil2ST9 + PCODBEM )
+				ROPERACA := 'N'
+				RERROR   := STR0008 //"Codigo do Bem nao cadastrado...."
+				aAdd(RARRAY,{ROPERACA,RERROR})
+				Return RARRAY
+			Endif
+		Else
+			// Verifica se a localização existe.
+			dbSelectArea( 'TAF' )
+			dbsetorder( 8 )
+			If !dbseek( cFil2TAF + PCODBEM )
+				ROPERACA := 'N'
+				RERROR   := STR0037 // "Código da Localização não cadastrado."
+				aAdd(RARRAY,{ROPERACA,RERROR})
+				Return RARRAY
+			EndIf
+		EndIf
+
+	EndIf
+
+	If PSERVICO = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0009 //"Codigo do Servico e  obrigatorio..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Elseif Empty(PSERVICO)
+		ROPERACA := 'N'
+		RERROR   := STR0010 //"Nao foi informado o Codigo do Servico para O.S. ...."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	Else
+		dbSelectArea("ST4")
+		dbSetOrder(1)
+		If !dbSeek(cFil2ST4+PSERVICO)
+			ROPERACA := 'N'
+			RERROR   := STR0011 //"Codigo do Servico nao cadastrado.."
+			aAdd(RARRAY,{ROPERACA,RERROR})
+			Return RARRAY
+		Else
+			If OBRIGSTE
+				dbSelectArea("STE")
+				dbSetOrder(1)
+				If !dbSeek(cFil2STE+ST4->T4_TIPOMAN)
+					ROPERACA := 'N'
+					RERROR   := STR0012 //"Tipo de Servico nao cadastrado.."
+					aAdd(RARRAY,{ROPERACA,RERROR})
+					Return RARRAY
+				Elseif PTIPO = 'P' .And. STE->TE_CARACTE <> 'P'
+					ROPERACA := 'N'
+					RERROR   := STR0013 //"Tipo de Servico devera ser PREVENTIVO..."
+					aAdd(RARRAY,{ROPERACA,RERROR})
+					Return RARRAY
+				Elseif PTIPO == 'C' .And. STE->TE_CARACTE != 'C' .And. STE->TE_CARACTE != 'O'
+					ROPERACA := 'N'
+					RERROR   := STR0014 //"Tipo de Servico devera ser CORRETIVO..."
+					aAdd(RARRAY,{ROPERACA,RERROR})
+					Return RARRAY
+				Endif
+			Endif
+		Endif
+	Endif
+
+	If PTIPO = 'P' .And. PSEQUENC = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0016 //"Sequencia do Servico e obrigatorio..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	ElseIf PTIPO = 'P' .And. Empty(PSEQUENC)
+		ROPERACA := 'N'
+		RERROR   := STR0017 //"Nao foi informado a Sequencia do Servico da O.S. ..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return RARRAY
+	ElseIf PTIPO = 'P'
+		dbSelectArea("STF")
+		dbSetOrder(1)
+		If !dbSeek(cFil2STF+PCODBEM+PSERVICO+PSEQUENC)
+			ROPERACA := 'N'
+			RERROR   := STR0018 //"Sequencia da Manutencao nao cadastrado...."
+			aAdd(RARRAY,{ROPERACA,RERROR})
+			Return RARRAY
+		Endif
+		cMENS := NGPREVBSS("B",PCODBEM,PSERVICO,PDATA,PSEQUENC,.F.)
+		If !Empty(cMENS)
+			ROPERACA := 'N'
+			RERROR   := cMENS
+			aAdd(RARRAY,{ROPERACA,RERROR})
+			Return RARRAY
+		EndIf
+	Endif
+
+	If PTIPO = 'P'
+		If !VERBLOQU(PBLOPROD,STR0019) //"Produto"
+			Return RARRAY
+		Endif
+
+		If !VERBLOQU(PBLOFUNC,STR0020) //"Funcionario"
+			Return RARRAY
+		Endif
+
+		If !VERBLOQU(PBLOFERR,STR0021) //"Ferramenta"
+			Return RARRAY
+		Endif
+	Endif
+
+	//Fim do Bloco de Consistências dos Parâmetros
+	dDATAINI := PDATA
+	cAlias   := 'STF'
+	nOpcao   := 3
+
+	If PTIPO = 'P'
+
+	 	//O.S. Preventiva.. Transação Identica ao MNTA410.prx...
+		cBLOQITE := PBLOPROD
+		cBLOQFUN := PBLOFUNC
+		cBLOQFER := PBLOFERR
+		VCODBEM  := PCODBEM
+		VSERVICO := PSERVICO
+		VSEQUENC := PSEQUENC
+		cCalendS := Space(1)
+
+		If !NGIFDBSEEK("SH7",ST9->T9_CALENDA,1)
+			cCalendS := ST9->T9_CALENDA
+		Endif
+
+		If !NGIFDBSEEK("SH7",STF->TF_CALENDA,1)
+			cCalendS += IIf(Empty(cCalendS)," ",", ")+STF->TF_CALENDA
+		Endif
+
+		If Empty(cCalendS)
+			laSIM := .F.
+
+			//Se Manutencao é Única verifica se ja foi confirmada em outros planos
+			If NGSEEK("STF",PCODBEM+PSERVICO+PSEQUENC,1,"TF_PERIODO") = "U"
+				vaSIM := NGJAMANUNICA(PCODBEM,PSERVICO,PSEQUENC)
+				laSIM := vaSIM[1]
+			Endif
+
+			If !laSIM
+
+				lGravaOk := PREVGRAVA( cAlias, nOpcao, PFIL, cSIT, lInsumo, lEtapa, cRequest,;
+					aCamps, dDtParReal, cHrParReal, PDATA, dDataOrig, aTareMulti )
+
+				If !lGravaOk .And. Empty( RARRAY )
+					ROPERACA := 'N'
+					RERROR   := STR0022 //"Error de Gravacao..."
+					aAdd(RARRAY,{ROPERACA,RERROR})
+				ElseIf lGravaOk
+					aAdd(RARRAY,{ROPERACA,RERROR,cORDGEROS})
+					EvalTrigger()
+				EndIf
+			Else
+				aAdd(RARRAY,{"N",vaSIM[2]})
+			Endif
+		Else
+			aAdd(RARRAY,{"N",STR0034+" "+Alltrim(cCalendS)}) //"Calendario nao cadastrado:"
+		EndIf
+	Else
+
+		//O.S. Corretivo.. Transação Identica ao MNTA420.prx...
+		Store "S" To cBLOQITE,cBLOQFUN,cBLOQFER
+		M->TS_CODBEM  := PCODBEM
+		M->TS_SERVICO := PSERVICO
+
+		aTypeRet := CORRGRAVA(cAlias,nOpcao,PFIL,CSIT,PDATA,aCamps,cRequest,cBemLoc,dDtParReal,cHrParReal)
+		lGravaOk := aTypeRet[1]
+
+		If !lGravaOk .And. Empty( RARRAY )
+			ROPERACA := 'N'
+			If Len(aTypeRet) > 1
+				RERROR   := aTypeRet[2] //"Conteúdo do MostraErro()"
+			Else
+				RERROR   := STR0022 //"Error de Gravacao..."
+			EndIf
+			aAdd(RARRAY,{ROPERACA,RERROR})
+		ElseIf lGravaOk
+			aAdd(RARRAY,{ROPERACA,RERROR,cORDGEROS})
+			EvalTrigger()
+		EndIf
+	Endif
+
+Return RARRAY
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PREVGRAVA
+Grava ordem de serviço preventiva
+
+@author Inacio Luiz Kolling
+@version 12
+
+@param cAlias      , string , indefinido
+@param nOpcao      , integer, indefinido
+@param pfil        , string , código da filial
+@param cSit        , string , situação da ordem de serviço
+@param lInsumo     , boolean, se deve gerar os insumos da manutenção
+@param lEtapa      , boolean, se deve gerar as etapas da manutenção
+@param [cRequest]  , string , código da solicitação de serviço
+@param [aCamps]    , array  , Campos específicos a serem gravados na STJ - Utilizado na Classe de SS.
+@param [dDtParReal], data   , data da parada real da O.S
+@param [cHrParReal], string , hora da parada real da O.S.
+@param [dDtProx]   , data   , data da próxima O.S.
+@param [dDtOrig]   , data   , data original da O.S.
+@param [aTareMulti], array  , Lista de tarefas utilizadas na manutenção.
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function PREVGRAVA( cAlias, nOpcao, PFIL, CSIT, lInsumo, lEtapa, cRequest,;
+	aCamps, dDtParReal, cHrParReal, dDtProx, dDtOrig, aTareMulti )
+
+	Local i				:= 0
+	Local x				:= 0
+	Local y 			:= 0
+	Local nTOT			:= 0
+	Local nPOS			:= 0
+	Local nRegGeosp		:= 0
+	Local nIndGeosp		:= 0
+	Local nDecTlCus		:= TAMSX3("TL_CUSTO")[2]
+	Local cSeekSTH  	:= ""
+	Local cRecSFC   	:= ""
+	Local cErro     	:= ""
+	Local cFilOTPE  	:= NGTROCAFILI("TPE",PFIL)
+	Local cFilOSTH  	:= NGTROCAFILI("STH",PFIL)
+	Local cFilOSTQ  	:= NGTROCAFILI("STQ",PFIL)
+	Local cFilOSTL  	:= NGTROCAFILI("STL",PFIL)
+	Local cFilOST9  	:= NGTROCAFILI("ST9",PFIL)
+	Local cIntSFC   	:= IIf( FindFunction("NGINTSFC"), NGINTSFC(.F.), "" ) //Verifica se ha integracao com modulo Chao de Fabrica [SIGASFC]
+	Local cCusto    	:= ""
+	Local lOKOS     	:= .T.
+	Local lNgAddEtapa	:= ExistBlock("NgAddEtapa")
+	Local lOSAuto       := FwIsInCallStack( 'NGGEROSAUT' )
+	Local cPRODMNT		:= GetMV("MV_PRODMNT")
+	Local cNGUNIDT		:= AllTrim(GetMv("MV_NGUNIDT"))
+	Local lNGTARGE      := SuperGetMV( 'MV_NGTARGE', .F., '2' ) == '1'
+	Local lNGGERSA      := SuperGetMV( 'MV_NGGERSA', .F., 'N' ) == 'S'
+	Local lNGMNTAS      := SuperGetMV( 'MV_NGMNTAS', .F., '2' ) == '1'
+	Local lMMoeda   	:= NGCADICBASE("TL_MOEDA","A","STL",.F.) // Multi-Moeda
+	Local cPxSeq        := Space(3)
+	Local cTarefa       := ''
+	Local xRet
+
+	// Define se utiliza produto alternativo
+	Local lUsePrAlt     := AllTrim( SuperGetMv( 'MV_MNTPRAL', .F., '2' ) ) == '1' .And. FindFunction( 'NGALTPROD' ) .And. AllTrim( SuperGetMv( 'MV_NGGERSA', .F., 'N' ) ) == 'N'
+
+	Local lIntRM   := AllTrim(GetNewPar("MV_NGINTER","N")) == "M"
+	Local lFunCust := FindFunction("MNTCusPro")
+	Local aInsAtu  := {}
+	Local cOrdBkp  := ""
+
+	Private cORDEM := ""
+
+	Private dINI1,dFIM1,HINI1,hFIM1
+	Private aDIAMAN
+	Private TI_BLOQFER, TI_BLOQFUN, TI_BLOQITE, TI_PLANO
+	Private nQTDCOMP
+	Private cUsaIntPc := AllTrim(GetMV("MV_NGMNTPC"))
+	Private cUsaIntCm := AllTrim(GetMV("MV_NGMNTCM"))
+	Private cUsaIntEs := AllTrim(GetMV("MV_NGMNTES"))
+
+	Private cTIPOOS   := "B"
+	Private aBLO      := { {},{},{},{},{}}
+	Private nPRO      := 1
+
+	//Usado na funcao NGGERASA.. Nao mexer
+	Private cNumSA    := Space(Len(SCP->CP_NUM))
+
+	Default aCamps     := {}
+	Default lInsumo    := .T.
+	Default lEtapa     := .T.
+	Default cRequest   := ""
+	Default cHrParReal := ""
+	Default dDtParReal := CtoD('')
+	Default dDtProx    := dDataBase
+	Default dDtOrig    := dDataBase
+	Default aTareMulti := {}
+
+	//Caso haja integracao com modulo de Chao de Fabrica (SIGASFC)
+	//Valida existencia de parametro de motivo de parada (MV_SFCMTSP)
+	If !Empty(cIntSFC) .And. !Empty(NGVRFMAQ(VCODBEM))
+		If !Empty(cErro := NGSFCPARAM(.F.) )
+			ROPERACA := 'N'
+			RERROR   := cErro
+			aAdd(RARRAY,{ROPERACA,RERROR})
+			Return .F.
+		ElseIf !Empty( cErro := NGSFCRESP(.F., .F.) )
+			ROPERACA := 'N'
+			RERROR   := cErro
+			aAdd(RARRAY,{ROPERACA,RERROR})
+			Return .F.
+		Endif
+	Endif
+
+	dbSelectArea( 'STJ' )
+
+	nRegGeosp := Recno()
+	nIndGeosp := IndexOrd()
+
+	dbSetOrder( 1 )
+
+	M->TI_BLOQFUN := cBLOQFUN
+	M->TI_BLOQFER := cBLOQFER
+	M->TI_BLOQITE := cBLOQITE
+	M->TI_PLANO   := "000001"
+
+	dbSelectArea("ST9")
+	dbSeek(cFiLOST9+VCODBEM)
+
+	dbSelectArea("STF")
+	aCampos  := DbStruct()
+	aAdd(aCAMPOS,{"DTULTPROC" ,"D",8,0})
+	aAdd(aCAMPOS,{"POSCONT"   ,"N",9,0})
+	aAdd(aCAMPOS,{"CONPROX"   ,"N",9,0})
+	aAdd(aCAMPOS,{"DTPROX"    ,"D",8,0})
+	aAdd(aCAMPOS,{"DTULTMA"   ,"D",8,0})
+	aAdd(aCAMPOS,{"DTREAL"    ,"D",8,0})
+	aAdd(aCAMPOS,{"TEMPO"     ,"N",4,0})
+	aAdd(aCAMPOS,{"UNID"      ,"C",1,0})
+	aAdd(aCAMPOS,{"PRIOBEM"   ,"C",1,0})
+	aAdd(aCAMPOS,{"CALENDA"   ,"C",Len(sh7->h7_codigo) ,0})
+	aAdd(aCAMPOS,{"CCUSTO"    ,"C",Len(stj->tj_ccusto) ,0})
+	aAdd(aCAMPOS,{"CENTRAB"   ,"C",Len(st9->t9_centrab),0})
+	aAdd(aCAMPOS,{"VARDIA"    ,"N",6,0})
+	aAdd(aCAMPOS,{"FERRAMENTA","C",1,0})
+	aAdd(aCAMPOS,{"FILIAL","C",If(FindFunction("FWSizeFilial"),FWSizeFilial(),2),0})
+
+	//Variavel recebe GetNextAlias()
+	cTRB := GetNextAlias()
+	//Intancia classe FWTemporaryTable
+	oTmpTRB := FWTemporaryTable():New( cTRB, aCampos )
+	//Cria indices
+	oTmpTRB:AddIndex( "Ind01" , {"TF_FILIAL","TF_PRIORID","PRIOBEM"} )
+	//Cria a tabela temporaria
+	oTmpTRB:Create()
+
+	OLDDAT := STF->TF_DTULTMA
+	Store dDATAINI To dReal,_DTPROX
+	_CONPROX := 0
+
+	(cTRB)->(DbAppend())
+	For i := 1 TO STF->(FCount())
+		x := "STF->" +STF->(FieldName(i))
+		y := "(cTRB)->" + STF->(FieldName(i))
+		Replace &y. with &x.
+	Next i
+
+	(cTRB)->DTULTPROC  := MAX(STF->TF_DTULTMA,ST9->T9_DTULTAC)
+	(cTRB)->POSCONT    := IIf( lOSAuto, 0, ST9->T9_POSCONT )
+	(cTRB)->PRIOBEM    := ST9->T9_PRIORID
+	(cTRB)->CALENDA    := ST9->T9_CALENDA
+	(cTRB)->DTULTMA    := OLDDAT
+	(cTRB)->DTPROX     := _DTPROX
+	(cTRB)->CONPROX    := _CONPROX
+	(cTRB)->DTREAL     := dREAL
+	(cTRB)->CCUSTO     := ST9->T9_CCUSTO
+	(cTRB)->CENTRAB    := ST9->T9_CENTRAB
+	(cTRB)->VARDIA     := ST9->T9_VARDIA
+	(cTRB)->FERRAMENTA := ST9->T9_FERRAME
+	(cTRB)->TF_DTULTMA := dREAL
+	(cTRB)->FILIAL     := ST9->T9_FILIAL
+
+	aDIAMAN := NG_H7((cTRB)->TF_CALENDA)
+
+	If Len(aDIAMAN) == 0
+
+		aAdd( RARRAY, { 'N', STR0038 } ) // Código do calendário da manutenção não cadastrado.
+
+		oTmpTRB:Delete()
+
+		dbSelectArea("ST9")
+		dbSetOrder(1)
+		dbSelectArea("STJ")
+		dbSetOrder(1)
+		dbSelectArea(cAlias)
+		Return .F.
+
+	EndIf
+
+	dbSelectArea(cTRB)
+	dbGoTop()
+
+	nTot := LASTREC()
+	Store 1 To nPos,nRecno
+
+	While !(cTRB)->(Eof())
+
+		// Busca código disponível
+		cORDGEROS := fRetOrdem()
+		cORDEM := cORDGEROS
+
+
+		dbSelectArea(cTRB)
+
+		If lInsumo
+
+			aTAREFA := a330TAREFA( Nil, Nil, Nil, Nil, Nil, aTareMulti )   //Retorna aTAREFA contendo Inicio e Fim das Tarefas
+			
+			If lUsePrAlt .And. cUsaIntEs == 'S'
+				// Posições definidas no a330tarefa que devem ser passadas a função NGALTPROD.
+				// { Tipo Reg, Código, Quantidade, Tarefa, Local, Destino, Custo }
+				aTAREFA[ 1, 5 ] := NGALTPROD( aTAREFA[ 1, 5 ], NIL, (cTRB)->TF_CODBEM, 'TG', 'NGGERAOS', { 01, 02, 04, 16, 13, 06, 00 } )
+			EndIf
+
+		Else
+
+			aTAREFA := {}
+			
+		Endif
+
+		If !Empty(aTAREFA)
+			dINI1 := aTAREFA[1][4][1]
+			HINI1 := aTAREFA[1][4][2]
+			dFIM1 := aTAREFA[Len(aTAREFA)][4][3]
+			hFIM1 := aTAREFA[Len(aTAREFA)][4][4]
+		Else
+			nSEM  := If(DOW((cTRB)->DTREAL)==1,7,DOW((cTRB)->DTREAL)-1)
+			hINI1 := aDIAMAN[nSEM][1]
+			hFIM1 := aDIAMAN[nSEM][1]
+			dINI1 := (cTRB)->DTREAL
+			dFIM1 := (cTRB)->DTREAL
+		EndIf
+
+		Store CtoD("  /  /  ") To dPRE,dPOS
+		Store Space(05) To hPRE,hPOS
+
+		If (cTRB)->TF_PARADA == "S" .OR. (cTRB)->TF_PARADA == "T"
+			dPRE := dINI1
+			hPRE := hINI1
+			dPOS := dFIM1
+			hPOS := hFIM1
+
+			PRE_STOP(dINI1,hINI1)
+			POS_STOP(dFIM1,hFIM1)
+
+	      	//Caso integrado ao modulo Chao de Fabrica, realiza a tentiva de geracao da parada programada a partir da O.S.
+			If !Empty(cIntSFC) .And. !Empty(cRecSFC := NGVRFMAQ(STJ->TJ_CODBEM)) .And. ;
+			   !Empty(cErro := NGSFCINCPP(cRecSFC, dPRE, hPRE, dPOS, hPOS, cORDGEROS, cIntSFC, (cTRB)->TF_CALENDA, .F., .F., .F.))
+
+				ROPERACA := 'N'
+				RERROR   := STR0035 // "Não foi possível gerar uma parada programada no Chao de Fabrica (SIGASFC) ..."
+				aAdd(RARRAY, {ROPERACA, RERROR})
+
+				RollBackSX8()
+
+				oTmpTRB:Delete()
+
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+
+				dbSelectArea("STJ")
+				dbSetOrder(nIndGeosp)
+				dbGoTo(nRegGeosp)
+
+				dbSelectArea(cAlias)
+				Return .F.
+			EndIf
+
+		Endif
+
+		ConfirmSX8()
+
+		// Verifica integracao Mensagem Unica
+		If GetNewPar("MV_NGINTER","") == "M" .And. (cSit = Nil .Or. cSit == "L")
+			M->TJ_ORDEM   := cORDEM
+			M->TJ_CODBEM  := (cTRB)->TF_CODBEM
+			M->TJ_OBSERVA := ''
+			M->TJ_SITUACA := If(CSIT=Nil,"L",cSIT)
+			M->TJ_TERMINO := "N"
+			M->TJ_POSCON2 := IIf( lOSAuto, 0, TPE->TPE_POSCON )
+			M->TJ_POSCONT := (cTRB)->POSCONT
+			M->TJ_USUARIO := If(Len(STJ->TJ_USUARIO) > 15,cUsername,Substr(cUsuario,7,15))
+			M->TJ_DTORIGI := (cTRB)->DTPROX
+			M->TJ_SERVICO := (cTRB)->TF_SERVICO
+			M->TJ_INTPRJ  := ''
+			M->TJ_INTTSK  := ''
+			lOKOS         := NGMUMntOrd(STJ->(RecNo()),3,.T.)
+		Endif
+
+		If cUsaIntPc == "S"
+			If CSIT == Nil .Or. CSIT == "L"
+				cCODPRO := If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], cPRODMNT) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+				cCusto  := NgFilTPN((cTRB)->TF_CODBEM,dDtProx,SubStr(Time(),1,5), , FwXFilial('ST9'))[2]               //Buscar o C.C. do bem na TPN
+				// backup da variável cOrdem ocasionalemnte é alterada pela função Pergunte que é acionada posteriormente
+				// haverá uma correção por parte do framework para este ajuste mas por via das dúvidas é realizado este backup
+				cOrdBkp := cOrdem
+
+				xRet := GERAOPNEW( cCODPRO, 1, cORDEM, dDtProx, dDtProx, , , cCusto, 'PLANO 000001', , .T. )
+
+				If ValType( xRet ) == 'L' .And. !xRet
+					Return .F.
+				ElseIf ValType( xRet ) == 'A' .And. !xRet[1]
+					aAdd( RARRAY, { 'N', xRet[2] } )
+					Return .F.
+				EndIf
+				cOrdem := cOrdBkp
+
+			Endif
+		Endif
+
+		dbSelectArea('TPE')
+		dbSetOrder(1)
+		dbSeek(cFilOTPE+(cTRB)->TF_CODBEM)
+		If lOKOS
+			If !NGGERAOSTJ(cORDEM,'000001',(cTRB)->TF_CODBEM,(cTRB)->TF_SERVICO,(cTRB)->TF_SEQRELA,(cTRB)->DTPROX,(cTRB)->TF_TIPO,(cTRB)->TF_CODAREA,(cTRB)->CCUSTO,;
+					       (cTRB)->CENTRAB,(cTRB)->TF_PRIORID,(cTRB)->POSCONT, IIf( lOSAuto, 0, TPE->TPE_POSCON ),dINI1,HINI1,PFIL,CSIT,aCamps,cRequest, , , ,dDtOrig)
+
+				oTmpTRB:Delete()
+
+				If GetNewPar("MV_NGINTER","") == "M"
+					NGMUMntOrd(STJ->(RecNo()),5,.T.)
+				EndIf
+				dbSelectArea("STJ")
+				dbGoTo(nRegGeosp)
+				Return .F.
+			Endif
+		Else
+			oTmpTRB:Delete()
+
+			aAdd( RARRAY, { 'N', STR0039 } ) // Inconsistência na integração com BackOffice RM. Para mais detalhes consulte o log do EAI.
+			dbSelectArea("STJ")
+			dbGoTo(nRegGeosp)
+			Return .F.
+		EndIf
+
+	   	//Determina a criação das etapas da manutenção automaticamente
+	   	//.T. -> Inclui Etapas | .F. -> Não Inclui as Etapas
+		If lEtapa
+
+		   	//GERA ETAPAS E OPCOES DA ETAPA
+			dbSelectArea('STH')
+			dbSetOrder(1)
+			cSeekSTH := (cTRB)->TF_CODBEM+(cTRB)->TF_SERVICO+(cTRB)->TF_SEQRELA
+			If dbSeek(cFilOSTH+cSeekSTH)
+				While !Eof() .And. sth->th_filial  == cFilOSTH .And.sth->th_codbem == (cTRB)->tf_codbem .And. sth->th_servico == (cTRB)->tf_servico;
+						     .And. sth->th_seqrela == (cTRB)->tf_seqrela
+
+					//Checa se tarefa esta ativa
+					If !f330TRFAT((cTRB)->TF_CODBEM,(cTRB)->TF_SERVICO,(cTRB)->TF_SEQRELA,STH->TH_TAREFA)
+						NGDBSELSKIP("STH")
+						Loop
+					EndIf
+
+					If !Empty( aTareMulti ) .And.;
+						aScan( aTareMulti, { |x| x == STH->TH_TAREFA } ) == 0
+
+						STH->( dbSkip() )
+
+						Loop
+
+					EndIf
+
+					dbSelectArea( 'STQ' )
+					dbSetOrder( 1 ) // TQ_FILIAL + TQ_ORDEM + TQ_PLANO + TQ_TAREFA + TQ_ETAPA + TQ_SEQTARE + TQ_SEQRELA
+					If !msSeek( cFilOSTQ + STJ->TJ_ORDEM + STJ->TJ_PLANO + STH->TH_TAREFA + STH->TH_ETAPA )
+						
+						RecLock( 'STQ', .T. )
+
+							STQ->TQ_FILIAL := cFilOSTQ
+							STQ->TQ_ORDEM  := STJ->TJ_ORDEM
+							STQ->TQ_PLANO  := STJ->TJ_PLANO
+							STQ->TQ_TAREFA := STH->TH_TAREFA
+							STQ->TQ_ETAPA  := STH->TH_ETAPA
+							STQ->TQ_SEQETA := STH->TH_SEQETA
+
+							If STQ->( FieldPos( 'TQ_SEQRELA' ) ) > 0
+
+								STQ->TQ_SEQRELA := '0  '
+
+							EndIf
+
+						MsUnLock()
+
+					EndIf
+
+					dbSelectArea('STH')
+					Dbskip()
+
+				End
+
+			EndIf
+
+		EndIf
+
+		If lNgAddEtapa
+			ExecBlock("NgAddEtapa",.F.,.F.)
+		Endif
+
+		dINIREAL := IIf(Empty(dPRE),dINI1,dPRE)
+		hINIREAL := IIf(Empty(hPRE),hINI1,hPRE)
+		dFIMREAL := IIf(Empty(dPOS),dFIM1,dPOS)
+		hFIMREAL := IIf(Empty(hPOS),hFIM1,hPOS)
+
+		dORIGINAL := dDataBase
+		If (cTRB)->TF_PARADA == "S" .Or. (cTRB)->TF_PARADA == "T"
+			a330BEM(dINIREAL,hINIREAL,dFIMREAL,hFIMREAL,(cTRB)->TF_CODBEM,(cTRB)->TF_PARADA,(cTRB)->CCUSTO)
+		EndIf
+
+		If (cTRB)->FERRAMENTA == "F"
+			cCodFer := NGSEEK("ST9",(cTRB)->TF_CODBEM,1,"T9_RECFERR")
+			If !Empty(cCodFer)
+				aFer := {}
+				aAdd(aFER, {"0",cCodFer,1,dINIREAL,hINIREAL,dFIMREAL,hFIMREAL,cORDEM,"000001",(cTRB)->CCUSTO})
+				a330FER(aFER[1],(cTRB)->TF_CODBEM)
+			Endif
+		EndIf
+
+		For i := 1 To Len(aTAREFA)
+	      	//checa se tarefa esta ativa
+			If !f330TRFAT((cTRB)->TF_CODBEM,(cTRB)->TF_SERVICO,(cTRB)->TF_SEQRELA,aTAREFA[i][1])
+				Loop
+			EndIf
+
+			For x := 1 To Len(aTAREFA[i][5])
+
+				// Se o insumo for do tipo produto e estiver bloqueado, gera inconsistência na tabela STA.
+				If aTAREFA[i][5][x][1] == "P" .And. !NGPROBLQ(aTAREFA[i][5][x][2], .T.)
+					MNTGRAVSTA( STJ->TJ_ORDEM, STJ->TJ_PLANO, aTAREFA[i][1], 'P', aTAREFA[i][5][x][2], 'Produto Bloqueado' ) //"Produto Bloqueado."
+					Loop
+				EndIf
+
+				cLOCAL := Space(Len(sb1->b1_locpad))
+				//[1] Tipo de insumo  - [2] Código do insumo - [13] Local do insumo
+				If aTAREFA[i][5][x][1] $ "P/M" .And. aScan(aInsAtu,{|y| y[1] + y[2] + y[3] == aTAREFA[i][5][x][1] + aTAREFA[i][5][x][2] + aTAREFA[i][5][x][13]}) == 0
+					//Atualiza saldo e custo
+					If lIntRM .And. lFunCust
+						MNTCusPro( aTAREFA[i][5][x][1], aTAREFA[i][5][x][2], aTAREFA[i][5][x][13] )
+						aAdd(aInsAtu,{aTAREFA[i][5][x][1], aTAREFA[i][5][x][2], aTAREFA[i][5][x][13]})
+					EndIf
+				EndIf
+
+				dbSelectArea( "STL" )
+				STL->(RecLock("STL",.T.))
+				STL->TL_FILIAL  := cFilOSTL
+				STL->TL_ORDEM   := cORDEM
+				STL->TL_PLANO   := "000001"
+				STL->TL_TAREFA  := aTAREFA[i][1]
+				STL->TL_DTINICI := aTAREFA[i][5][x][7]
+				STL->TL_HOINICI := aTAREFA[i][5][x][8]
+				STL->TL_DTFIM   := aTAREFA[i][5][x][9]
+				STL->TL_HOFIM   := aTAREFA[i][5][x][10]
+				STL->TL_TIPOREG := aTAREFA[i][5][x][1]
+				STL->TL_CODIGO  := aTAREFA[i][5][x][2]
+				STL->TL_QUANREC := aTAREFA[i][5][x][3]
+				STL->TL_QUANTID := aTAREFA[i][5][x][4]
+				STL->TL_UNIDADE := aTAREFA[i][5][x][5]
+				STL->TL_DESTINO := aTAREFA[i][5][x][6]
+				STL->TL_SEQRELA := "0  "
+				STL->TL_TIPOHOR := cNGUNIDT
+				STL->TL_USACALE := "N"
+				//Incrementa o sequencial do SeqTare
+				cPxSeq          := PadR( Soma1Old( cPxSeq ), 3)
+				STL->TL_SEQTARE := cPxSeq
+
+				If STL->TL_TIPOREG = 'P' .Or. STL->TL_TIPOREG == 'T'
+	           		//STL->TL_LOCAL := NGALMOXA((cTRB)->TF_CODBEM,STL->TL_CODIGO,STL->TL_TIPOREG,.T.)
+					STL->TL_LOCAL := aTAREFA[i][5][x][13]
+					cLOCAL        := STL->TL_LOCAL
+				Endif
+
+				If lMMoeda
+					STl->TL_MOEDA := "1"
+				Endif
+
+				//Grava Fornecedor e Loja do insumo
+				If Len(aTAREFA[i][5][x]) > 21
+					STL->TL_FORNEC := aTAREFA[i][5][x][21]
+					STL->TL_LOJA := aTAREFA[i][5][x][22]
+				EndIf
+
+				STL->TL_CUSTO := Round( NGCALCUSTI( STL->TL_CODIGO , STL->TL_TIPOREG, STL->TL_QUANTID , STL->TL_LOCAL , , , , STL->TL_QUANREC, STL->TL_SEQRELA ), nDecTlCus )
+
+				MsUnlock("STL")
+				cLOCAL := IIf(Empty(cLOCAL),'01',cLOCAL)
+
+				nTIP := 0
+				If aTAREFA[i][5][x][1] == "F"
+					nTIP := IIf(M->TI_BLOQFER == "S",1,0)
+				ElseIf aTAREFA[i][5][x][1] == "M"
+					nTIP := IIf(M->TI_BLOQFUN == "S",2,0)
+				ElseIf aTAREFA[i][5][x][1] == "E"
+					nTIP := IIf(M->TI_BLOQFUN == "S",3,0)
+				ElseIf aTAREFA[i][5][x][1] == "P"
+					nTIP := IIf(M->TI_BLOQITE == "S",4,0)
+				ElseIf aTAREFA[i][5][x][1] == "T"
+					nTIP := IIf(M->TI_BLOQITE == "S",5,0)
+				EndIf
+
+				If nTIP > 0
+
+					lGrvBLO := .T.
+					
+					If nTIP == 4
+
+						If lNGTARGE .And. lNGGERSA .And. !lNGMNTAS
+
+							nPosBlo := aScan( aBlo[nTip], { |aArray| aArray[1] + aArray[2] + aArray[18] == aTarefa[i][1] + aTarefa[i][5][x][2] + cLOCAL } )
+
+						Else
+
+							nPosBlo := aScan( aBlo[nTip], { |aArray| aArray[2] + aArray[18] == aTarefa[i][5][x][2] + cLOCAL } )
+
+						EndIf
+						
+						If nPosBlo > 0
+							
+							aBLO[nTIP][nPosBlo][3] += If(aTAREFA[i][5][x][1]$"E/F",aTAREFA[i][5][x][3],aTAREFA[i][5][x][4])
+							
+							lGrvBLO := .F.
+						
+						Else
+							
+							lGrvBLO := .T.
+						
+						EndIf
+
+					EndIf
+
+					If lGrvBLO
+						// Estrutura array aBlo
+						aAdd(aBLO[nTIP]              ,;
+						   {aTAREFA[i][1]            ,; //1
+							aTAREFA[i][5][x][2]      ,; //2
+							IIf(aTAREFA[i][5][x][1]$"E/F",aTAREFA[i][5][x][3],aTAREFA[i][5][x][4]),; //3
+							aTAREFA[i][5][x][7]      ,; //4
+							aTAREFA[i][5][x][8]      ,; //5
+							aTAREFA[i][5][x][9]      ,; //6
+							aTAREFA[i][5][x][10]     ,; //7
+							cORDEM                   ,; //8 Ordem de serviço
+							"000001"                 ,; //9 Plano da manutenção
+							(cTRB)->CCUSTO              ,; //10 Centro de Ccusto
+							SPACE(LEN(SC1->C1_NUM))  ,; //11 Numero solicitacao compra
+							SPACE(LEN(SC1->C1_ITEM)) ,; //12 Item da solicitacao de compra
+							0.00                     ,; //13 QUANTIDADE DO ESTOQUE DA OPERACAO   TL_QTDOPER
+							SPACE(LEN(SB2->B2_LOCAL)),; //14 CODIGO DO ALMOXARIFADO OPERACAO     TL_ALMOPERA
+							0.00                     ,; //15 QUANTIDADE DO ESTOQUE DA MATRIZ     TL_QTDOMAT
+							SPACE(LEN(SB2->B2_LOCAL)),; //16 CODIGO DO ALMOXARIFADO DA MATRIZ    TL_ALMOMAT
+							0.00					 ,; //17 QUANTIDADE DA SOLICITACAO DE COMPRA TL_QTDSC1
+							cLOCAL                   ,; //18 Local
+							STL->TL_UNIDADE          ,; //19 Unidade de medida
+							''                       ,; //20 Observação do insumo
+							0.0                      ,; //21 QUANTIDADE DA SOLICITACAO DE COMPRA TL_QTDSC1
+							aTAREFA[i][5][x][21]     ,; //22 Fornecedor
+							aTAREFA[i][5][x][22]})      //23 Loja
+					EndIf
+				EndIf
+			Next
+		Next
+
+		(cTRB)->(dbSkip(1))
+	End
+
+	For i := 1 to Len(aBLO[1])
+		a330FER(aBLO[1][i])
+	Next
+
+	For i := 1 to Len(aBLO[2])
+		a330FUN(aBLO[2][i])
+	Next
+
+	For i := 1 to Len(aBLO[3])
+		a330ESP(aBLO[3][i])
+	Next
+
+	nPRO := 1
+
+	//Novo processo de solicitação
+	While nPRO <= Len(aBLO[4])
+
+		cTarefa := aBlo[4,nPRO,1]
+		cCodPro	:= Left( aBLO[4,nPRO,2], Len( SB1->B1_COD ) )
+		cLocSTL	:= aBLO[4,nPRO,18]
+
+		If lNGTARGE .And. lNGGERSA .And. !lNGMNTAS
+
+			nPosSC := aScan( aIAglu, { |x| x[5] + x[1] + x[2] == cTarefa + cCodPro + cLocSTL } )
+
+		Else
+		
+			nPosSC := aScan( aIAglu, { |x| x[1] + x[2] == cCodPro + cLocSTL } )
+
+		EndIf
+
+		If nPosSC > 0
+
+			aIAglu[nPosSC][3] += aBLO[4][nPRO][3]
+
+		Else
+
+			aAdd(aIAglu,{cCodPro,cLOCSTL,aBLO[4][nPRO][3],aBLO[4][nPRO][8] + "OS001",aBLO[4][nPRO][1],;
+				         STJ->TJ_CCUSTO,aBLO[4][nPRO][4],"S",STJ->TJ_ORDEM,STJ->TJ_PLANO})
+
+		EndIf
+
+		nPRO++
+		
+	End
+
+	If CSIT == Nil .Or. CSIT == "L"
+		//Esta função está no fonte ngutil02 utiliza a matriz aIAglu
+		NGINTCOMPEST(STJ->TJ_DTMPINI,STJ->TJ_DTMPFIM,"NGGERAOS")
+	EndIf
+
+	For i := 1 to Len(aBLO[5])
+		a340TER(aBLO[5][i],aBLO[5][i][18],aBLO[5][i][3],aBLO[5][i][19],.F.,i)
+	Next
+
+	// Se Integrado ao modulo de Chao de Fabrica (SIGASFC), e haja necessidade de Parada do Bem/Estrutura
+	// Gera Parada Programada
+	If !Empty(cIntSFC) .And. ((cTRB)->TF_PARADA == "S" .Or. (cTRB)->TF_PARADA == "T") .And. !Empty(cRecSFC := NGVRFMAQ(STJ->TJ_CODBEM))
+		NGSFCINCPP(cRecSFC,STJ->TJ_DTPPINI,STJ->TJ_HOPPINI,STJ->TJ_DTPPFIM,STJ->TJ_HOPPFIM,STJ->TJ_ORDEM,cIntSFC, .F.) // Gera Parada Programada
+	EndIf
+
+	oTmpTRB:Delete()
+
+	dbSelectArea("STJ")
+	dbSetOrder(1)
+	dbSeek(xFILIAL("STJ")+cORDGEROS)
+	If ExistBlock("NGETAPNEX")
+		ExecBlock("NGETAPNEX",.F.,.F.)
+	Endif
+
+	dbSelectArea("STJ")
+	dbGoTo(nRegGeosp)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CORRGRAVA
+Grava as O.S. da manutencao ( CORRETIVA )
+
+@author  Inacio Luiz Kolling
+@since   date
+@version p12
+
+@param cAlias, Caractere, Alias da tabela
+@param nOpcao, Numérico, Opção
+@param PFIL, Caractere, Filial para troca
+@param cSIT, Caractere, Situação da O.S.
+@param dDtPrIni, Data, Data Original
+@param aCamps, Array, Array de Campos
+@param [cRequest], Caractere, código da solicitação
+@param [cBemLoc], Caractere, Tipo da O.S. (B=Bem ou L=Localização)
+@param [dDtParReal], data, data da parada real da O.S
+@param [cHrParReal], string, hora da parada real da O.S.
+
+/*/
+//-------------------------------------------------------------------
+Function CORRGRAVA(cAlias,nOpcao,PFIL,CSIT,dDtPrIni,aCamps,cRequest, cBemLoc,dDtParReal,cHrParReal)
+
+	Local cFilVTPE := NGTROCAFILI("TPE",PFIL)
+	Local nPoscont := 0
+	Local nObserva := 0
+	Local aTypeRet := {.T., ''} //Array para retornar mensagem do MostraErro sem interface gráfica
+	Local xRetAux  := {}
+	Local cCentroCus := ''
+	Local cCentroTra := ''
+	Local cPriorid   := ''
+	Local nPoContST9 := 0
+	Local nPosConTPE := 0
+
+	Default dDtPrIni := dDataBase
+	Default aCamps   := {}
+	Default cRequest := ""
+	Default cBemLoc := "B"
+	Default cHrParReal := ""
+	Default dDtParReal := CtoD("")
+
+	Private cUsaIntPc := AllTrim(GetMV("MV_NGMNTPC"))
+	Private cUsaIntCm := AllTrim(GetMV("MV_NGMNTCM"))
+	Private cUsaIntEs := AllTrim(GetMV("MV_NGMNTES"))
+
+	// Usado na funcao NGGERASA.. Nao mexer
+	Private cNumSA    := Space(Len(SCP->CP_NUM))
+
+	If !Empty(aCamps)
+		nPoscont := aScan(aCamps,{|x| AllTrim(Upper(X[1])) == "TJ_POSCONT" })
+		nObserva := aScan(aCamps,{|x| AllTrim(Upper(X[1])) == "TJ_OBSERVA" })
+	EndIf
+
+	dbSelectArea('TPE')
+	dbSetOrder(1)
+	dbSeek(cFilVTPE+M->TS_CODBEM)
+
+	dbSelectArea("STJ")
+	M->TS_ORDEM := Space(6)
+	If ExistBlock("NGGEROS2")
+		M->TS_ORDEM := ExecBlock("NGGEROS2",.F.,.F.)
+	Else
+		// Busca código disponível
+		M->TS_ORDEM := fRetOrdem()
+
+	EndIf
+	ConfirmSX8()
+
+	// Verifica integracao Mensagem Unica
+	If GetNewPar("MV_NGINTER","") == "M" .And. (cSit = Nil .Or. cSit == "L")
+		M->TJ_ORDEM   := M->TS_ORDEM
+		M->TJ_CODBEM  := M->TS_CODBEM
+		M->TJ_OBSERVA := IIf(nObserva > 0, aCamps[nObserva, 2], "")
+		M->TJ_SITUACA := If(CSIT=Nil,"L",cSIT)
+		M->TJ_TERMINO := "N"
+		M->TJ_POSCON2 := tpe->tpe_poscon
+		M->TJ_POSCONT := IIf(nPoscont > 0, aCamps[nPoscont, 2], 0)
+		M->TJ_USUARIO := If(Len(STJ->TJ_USUARIO) > 15,cUsername,Substr(cUsuario,7,15))
+		M->TJ_DTORIGI := dDtPrIni
+		M->TJ_SERVICO := M->TS_SERVICO
+		M->TJ_INTPRJ  := ''
+		M->TJ_INTTSK  := ''
+		aTypeRet[1]   := NGMUMntOrd(STJ->(RecNo()),3,.T.)
+
+		If !aTypeRet[1]
+			aAdd( RARRAY, { 'N', STR0039 } ) // Inconsistência na integração com BackOffice RM. Para mais detalhes consulte o log do EAI.
+		EndIf
+	Endif
+
+	If aTypeRet[1]
+
+		If cBemLoc == 'L'
+			// Caso seja uma localização utiliza os valores da TAF
+			cCentroCus := TAF->TAF_CCUSTO
+			cCentroTra := TAF->TAF_CENTRA
+		Else
+			// Caso seja um bem utiliza os valores da ST9/TPE
+			cCentroCus := ST9->T9_CCUSTO
+			cCentroTra := ST9->T9_CENTRAB
+			cPriorid   := ST9->T9_PRIORID
+			nPoContST9 := ST9->T9_POSCONT
+			nPosConTPE := TPE->TPE_POSCON
+		EndIf
+
+	EndIf
+
+	If cUsaIntPc == "S" .And. aTypeRet[1]
+		If CSIT == Nil .Or. CSIT == "L"
+			cCODPRO := If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], GetMV("MV_PRODMNT") ) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+
+			xRetAux := GERAOPNEW(cCODPRO,1,M->TS_ORDEM,dDtPrIni,dDtPrIni,,,cCentroCus,"PLANO 000000",,.T.)
+			//Condição para tratar chamada GERAOPNEW desatualizada (retorno lógico)
+			If Valtype(xRetAux) == 'L'
+				aTypeRet[1] := xRetAux
+			Else
+				aTypeRet := aClone(xRetAux)
+				If !aTypeRet[1]
+					aAdd( RARRAY, { 'N', xRetAux[2] } )
+				EndIf
+			EndIf
+		Endif
+	Endif
+
+	If aTypeRet[1]
+
+		NGGERAOSTJ(M->TS_ORDEM,'000000',M->TS_CODBEM,M->TS_SERVICO,If(NGVerify('STF'),'000',000),dDtPrIni,ste->te_tipoman,st4->t4_codarea,;
+			cCentroCus, cCentroTra, cPriorid, nPoContST9, nPosConTPE, dDATAINI, Substr(time(),1,5),PFIL,CSIT,aCamps,cRequest, cBemLoc,dDtParReal,cHrParReal)
+
+	EndIf
+
+Return aTypeRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ VERBLOQU ³ Autor ³ Inacio Luiz Kolling   ³ Data ³ 11/11/98 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Consistˆncia dos bloqueios da manutencao ( PARAMETROS )    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ NGGERAOS                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function VERBLOQU(VBLOQUEIO,VDESINSN)
+
+	If VBLOQUEIO = NIL
+		ROPERACA := 'N'
+		RERROR   := STR0024+ VDESINSN + STR0025 //"Indicacao de Bloqueio de "###" e  obrigatorio..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return .F.
+	Elseif Empty(VBLOQUEIO)
+		ROPERACA := 'N'
+		RERROR   := STR0026+ VDESINSN + STR0027 //"Nao foi informado a Indicacao de Bloqueio de "###" ..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return .F.
+	Endif
+
+	If VBLOQUEIO = 'S' .Or. VBLOQUEIO = 'N'
+		Return .T.
+	Else
+		ROPERACA := 'N'
+		RERROR   := STR0024+ VDESINSN + STR0028 //"Indicacao de Bloqueio de "###" devera ser igual a S ou N ..."
+		aAdd(RARRAY,{ROPERACA,RERROR})
+		Return .F.
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGGERAOSTJ
+Gera a ordem de servico
+
+@author  Inacio Luiz Kolling
+@since   31/07/2002
+@version p12
+
+@param cVORDEM, Caractere, Código da Ordem
+@param cVPLANO, Caractere, Código do Plano
+@param cVBEM, Caractere, Código do Bem
+@param cVSER, Caractere, Código do Serviço
+@param nVSEQ, Numérico, Sequencia da O.S.
+@param dDTORI, Data, Data d Origem
+@param cVTIPO, Caractere, Tipo da O.S.
+@param cVAREA, Caractere, Código da Area
+@param cVCCUST, Caractere, Centro de Custo
+@param cVCENTR, Caractere, Centro de Trabalho
+@param cVPRIOR, Caractere, Prioridade
+@param nVCONT1, Numérico, Contador
+@param nVCONT2, Numérico,Contador 2
+@param dVDTPI, Data, data de Inicio
+@param cVHOPI, Caractere, Hora de Inicio
+@param PFIL, Caractere, Filial para troca
+@param CSIT, Caractere, Situação da O.S.
+@param aCamps, Array, Campos da O.S.
+@param cRequest, Caractere, código da solicitação de serviço
+@param [cBemLoc], Caractere, Tipo da O.S. (B=Bem ou L=Localização)
+@param [dDtParReal], data, data da parada real da O.S
+@param [cHrParReal], string, hora da parada real da O.S.
+@param [dDtOrig], data original da O.S.
+
+/*/
+//-------------------------------------------------------------------
+Function NGGERAOSTJ(cVORDEM,cVPLANO,cVBEM,cVSER,nVSEQ,dDTORI,cVTIPO,cVAREA,cVCCUST,cVCENTR,cVPRIOR,nVCONT1,nVCONT2,;
+					dVDTPI,cVHOPI,PFIL,CSIT,aCamps,cRequest, cBemLoc,dDtParReal,cHrParReal, dDtOrig)
+
+	Local cFilESTJ := NGTROCAFILI("STJ",PFIL)
+	Local lMMoeda  := NGCADICBASE("TL_MOEDA","A","STL",.F.) // Multi-Moeda
+	Local nInd     := 0
+	Local xRet
+
+	Default aCamps := {}
+	Default cRequest := ""
+	Default cBemLoc := "B"
+	Default cHrParReal := ""
+	Default dDtParReal := CtoD("")
+	Default dDtOrig    := dDataBase
+
+	If cVPLANO <> '000000'
+
+		xRet := NGNOVAOS( cVBEM, cVSER, nVSEQ, .T. )
+
+		If ValType( xRet ) == 'A' .And. !xRet[1]
+			aAdd( RARRAY, { 'N', xRet[2] } )
+			Return .F.
+		ElseIf ValType( xRet ) == 'L' .And. !xRet
+			Return .F.
+		ElseIf dVDTPI < dDataBase
+			dVDTPI := dDATABASE
+			dFIM1  := dDATABASE
+		EndIf
+
+	Endif
+
+	dbSelectArea("STJ")
+	STJ->(RecLock("STJ",.T.))
+	STJ->TJ_FILIAL  := cFilESTJ
+	STJ->TJ_ORDEM   := cVORDEM
+	STJ->TJ_PLANO   := cVPLANO
+	STJ->TJ_TIPOOS  := cBemLoc
+	STJ->TJ_CODBEM  := cVBEM
+	STJ->TJ_SERVICO := cVSER
+	STJ->TJ_SEQRELA := nVSEQ
+	STJ->TJ_DTORIGI := dDtOrig
+	STJ->TJ_HOPRINI := cHrParReal
+	STJ->TJ_DTPRINI := dDtParReal
+	STJ->TJ_TIPO    := cVTIPO
+	STJ->TJ_CODAREA := cVAREA
+	STJ->TJ_CCUSTO  := cVCCUST
+
+	If CSIT == Nil 
+		STJ->TJ_SITUACA := "L"
+	Else
+		STJ->TJ_SITUACA := CSIT
+	EndIf
+
+	STJ->TJ_TERMINO := "N"
+	STJ->TJ_USUARIO := If(Len(STJ->TJ_USUARIO) > 15,cUsername,Substr(cUsuario,7,15))
+	STJ->TJ_CENTRAB := cVCENTR
+	STJ->TJ_PRIORID := cVPRIOR
+	STJ->TJ_POSCONT := nVCONT1
+	STJ->TJ_POSCON2 := nVCONT2
+	STJ->TJ_DTMPINI := dVDTPI
+	STJ->TJ_HOMPINI := cVHOPI
+	STJ->TJ_LUBRIFI := NGSEEK('ST4',cVSER,1,'T4_LUBRIFI')
+
+	If Val(cVPLANO) > 0
+		STJ->TJ_DTULTMA := (cTRB)->DTULTMA
+		STJ->TJ_COULTMA := (cTRB)->TF_CONMANU
+
+		If dFIM1 == cToD("01/01/80")
+			dFIM1 := dVDTPI
+			hFIM1 := cVHOPI
+		EndIf
+
+		STJ->TJ_DTMPFIM := dFIM1
+		STJ->TJ_HOMPFIM := hFIM1
+		STJ->TJ_DTPPINI := dPRE
+		STJ->TJ_HOPPINI := hPRE
+		STJ->TJ_DTPPFIM := dPOS
+		STJ->TJ_HOPPFIM := hPOS
+	Else
+		STJ->TJ_DTMPFIM := STJ->TJ_DTMPINI
+		STJ->TJ_HOMPFIM := STJ->TJ_HOMPINI
+	Endif
+
+	If FieldPos('TJ_CONTFIM') > 0 .And. FieldPos('TJ_USUAFIM') > 0
+		STJ->TJ_CONTINI := STJ->TJ_POSCONT
+		STJ->TJ_USUAINI := If(Len(STJ->TJ_USUAINI) > 15,cUsername,Substr(cUsuario,7,15))
+	EndIf
+
+	If lMMoeda
+		STJ->TJ_MOEDA := "1"
+	Endif
+
+	cORDGEROS       := cVORDEM
+	STJ->TJ_TERCEIR := '1'
+
+	If Len(aCamps) > 0
+		For nInd := 1 To Len(aCamps)
+			&("STJ->"+aCamps[nInd,1]) := aCamps[nInd,2]
+		Next nInd
+	EndIf
+
+	STJ->TJ_SOLICI := cRequest
+
+	//----------------------------------------
+	// Ajuste de data e hora fim incorretos
+	//----------------------------------------
+	If DToS(STJ->TJ_DTMPFIM) + STJ->TJ_HOMPFIM < DToS(STJ->TJ_DTMPINI) + STJ->TJ_HOMPINI
+		STJ->TJ_DTMPFIM := STJ->TJ_DTMPINI
+		STJ->TJ_HOMPFIM := STJ->TJ_HOMPINI
+	EndIf
+
+	MsUnlock("STJ")
+
+	If FindFunction("MNTW215") .And. STJ->TJ_SITUACA == 'L'
+		MNTW215(,{STJ->TJ_ORDEM})
+	Endif
+
+	//Gera nao-conformidade
+	If Val(STJ->TJ_PLANO) == 0 .And. FindFunction("NGGERAFNC")
+		NGGERAFNC(STJ->TJ_ORDEM,STJ->TJ_CODBEM,STJ->TJ_SERVICO,STJ->TJ_DTORIGI)
+	EndIf
+
+	If ExistBlock("NGGEROS1")
+		ExecBlock("NGGEROS1",.F.,.F.,{ cVORDEM, cVPLANO, cVBEM })
+	EndIf
+
+	If AllTrim(GetNewPar("MV_NGINTER","N")) == "M" .And. STJ->TJ_SITUACA == "L" //Mensagem Unica
+		If !NGMUMntOrd(STJ->(RecNo()),3)
+			aAdd( RARRAY, { 'N', STR0039 } ) // Inconsistência na integração com BackOffice RM. Para mais detalhes consulte o log do EAI.
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fRetOrdem
+Busca código da ordem de serviço disponível
+
+@author Maria Elisandra de Paula
+@since 09/12/2019
+@version p12
+@return string, código da ordem de serviço
+/*/
+//-------------------------------------------------------------------
+Static Function fRetOrdem()
+
+	Local cRet := ""
+	Local aArea := STJ->( GetArea() )
+
+	//-----------------------------------------------------------------------------------------------
+	// Tratamento para não pular código da ordem pois em alguns casos esse código já está definido
+	//-----------------------------------------------------------------------------------------------
+	dbSelectArea( "STJ" )
+	dbSetOrder( 01 )
+	If Valtype( M->TJ_ORDEM ) == "C" .And. !Empty( M->TJ_ORDEM ) .And. !dbSeek( xFilial( "STJ" ) + M->TJ_ORDEM )
+
+		cRet := M->TJ_ORDEM
+
+	Else
+
+		cRet := GetSXENum( "STJ","TJ_ORDEM" )
+
+		//------------------------------------------------------------------
+		//Tratamento para evitar duplicação de número de O.S. em base
+		//------------------------------------------------------------------
+		dbSelectArea( "STJ" )
+		dbSetOrder( 01 )
+		While dbSeek( xFilial( "STJ" ) + cRet )
+			ConfirmSX8()
+			cRet := GetSXENum( "STJ","TJ_ORDEM" )
+		End While
+
+	EndIf
+
+	RestArea( aArea )
+
+Return cRet

@@ -1,0 +1,2301 @@
+#INCLUDE "Protheus.ch"
+#INCLUDE "mnta716.ch"
+#INCLUDE "APWIZARD.CH"
+#INCLUDE "TCBROWSE.CH"
+
+Static lIsBlind := isBlind()
+Static lParPrSb2
+Static lParPrEne
+Static lParCoNeg 
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA716 - Importação de Abastecimentos
+
+Importação dos Abastecimentos conforme layout do MNTA715
+
+@return Nil
+
+@sample MNTA716
+
+@author Maicon André Pinheiro
+@since 27/05/2016
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+ Function MNTA716()
+
+	Local aDadosImp := {}
+
+	Private cCodLay    := ""
+ 	Private cDesLay    := ""
+ 	Private aTexto     := {}
+ 	Private lBreak     := .F.
+	Private aMNTLog    := {}
+
+	Default lParPrSb2 := SuperGetMv( 'MV_NGPRSB2' ) == 'S'
+	Default lParPrEne := SuperGetMV( 'MV_NGPRENE' ) == 'S'
+	Default lParCoNeg := SuperGetMV( 'MV_NGCONEG' ) == 'S'
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 95 )
+
+		If !f716VldEnt() // Validação de Entrada no Sistema
+			Return .F.
+		EndIf
+
+		If lIsBlind .And. ExistBlock( "MNTA716A" )
+			aDadosImp := ExecBlock( "MNTA716A", .F., .F. )
+			f716Import(aDadosImp)
+		Else
+
+			cCodLay := Space(TAMSX3("TQ7_CODLAY")[1])
+			cDesLay := Space(TAMSX3("TQ7_DESLAY")[1])
+
+			fGeraTexts()
+
+			//Inicia Wizard para importação de Layout
+			DEFINE WIZARD oWizard TITLE STR0001 HEADER STR0002 MESSAGE STR0003 TEXT aTexto[1] NEXT {||.T.} FINISH {||.T.}
+
+				//Cria painel para seleção de layout a ser importado
+				CREATE PANEL oWizard HEADER STR0002 MESSAGE STR0003 BACK {||fZeraCod()} NEXT {||f716Import()}
+
+				TSay():New(030,015,{||aTexto[2]},oWizard:oMPanel[2],,,,,,.T.,,,245,45)
+				@ 55,015 MsGet cCodLay Picture "@!" F3 "TQ7" Valid fBuscaDesc(cCodLay) Size 065,008 HASBUTTON Of oWizard:oMPanel[2] PIXEL
+				@ 55,092 MsGet cDesLay Picture "@!"                           When .F. Size 200,008 HASBUTTON Of oWizard:oMPanel[2] PIXEL
+
+				CREATE PANEL oWizard HEADER STR0002 MESSAGE STR0004 BACK {||fZeraCod()} NEXT {||.T.}
+
+				TSay():New(030,015,{||aTexto[3]},oWizard:oMPanel[3],,,,,,.T.,,,230,45)
+
+			ACTIVATE WIZARD oWizard CENTERED
+		
+		EndIf
+	
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGeraTexts
+
+Gera os textos para utilização da Wizard
+
+@author Maicon André Pinheiro
+@since 27/05/2016
+@version 1.0
+@sample MNTA716
+/*/
+//---------------------------------------------------------------------
+ Static Function fGeraTexts()
+
+	aAdd(aTexto,{})
+	aTexto[1] := STR0005 // "Através desse assistente será possível realizar a importação de registros de abastecimento para os layouts"
+	aTexto[1] += STR0006 // " pré-configurados no sistema."
+	aTexto[1] += CRLF
+	aTexto[1] += STR0007 // "Antes de confirmar a execução do processo recomenda-se realizar uma cópia de segurança dos"
+	aTexto[1] += STR0008 // " arquivos/tabelas TR6 em uso. Caso ocorra algum problema durante a execução do processo, as cópias"
+	aTexto[1] += STR0009 // " de segurança devem ser restauradas."
+	aTexto[1] += CRLF
+	aTexto[1] += STR0010 // "O processo pode demorar algum tempo para ser executado."
+	aTexto[1] += CRLF
+	aTexto[1] += STR0011 // "Clique em avançar para continuar."
+
+	aAdd(aTexto,{})
+	aTexto[2] := STR0012 // "Utilize a consulta abaixo para selecionar o tipo de layout de abastecimento a ser importado. "
+	aTexto[2] += CRLF
+	aTexto[2] += STR0013 // "Após selecionar o Layout clique em avançar para selecionar o arquivo."
+
+	aAdd(aTexto,{}) // 3
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fZeraCod
+Zera váriaveis ao voltar a tela.
+
+@sample MNTA716
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fZeraCod()
+
+	cCodLay := Space(TAMSX3("TQ7_CODLAY")[1])
+	cDesLay := Space(TAMSX3("TQ7_DESLAY")[1])
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716VldLay
+Validação de Layout
+
+@sample MNTA716
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+ Static Function f716VldLay(cCodigo)
+
+ 	If Empty(cCodigo)
+		If !lIsBlind
+			MsgStop(STR0015,STR0016) // "Selecione o Código de Layout"##"ATENCAO"
+		Else
+			aAdd(aMNTLog, {STR0015})
+		EndIf
+		Return .F.
+ 	EndIf
+
+	dbSelectArea("TQ7")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ7") + cCodigo)
+		If TQ7->TQ7_MSBLQL == "1"
+			If !lIsBlind
+				MsgStop(STR0057,STR0016) // "Layout bloqueado para importação"##"ATENCAO"
+			Else
+				aAdd(aMNTLog, {STR0057})
+			EndIf
+			Return .F.
+		Else
+			cDesLay := TQ7->TQ7_DESLAY
+		EndIf
+	Else
+		cDesLay := ""
+	EndIf
+
+	If !ExistCpo("TQ7",cCodigo)
+		Return .F.
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaDesc
+
+Busca descrição do Layout.
+
+Por falha da classe Wizard foi necessário jogar o Valid para dentro do
+Next da tela (f716VldLay).
+
+@sample MNTA716
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaDesc(cCodigo)
+
+	dbSelectArea("TQ7")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ7") + cCodigo)
+		cDesLay := TQ7->TQ7_DESLAY
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc}f716Import
+
+Importação Layout
+
+@sample MNTA716
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version 1.0
+
+@param aDadosImp, array, Informações utilizadas para a importação de abastecimento via Schedule
+					Posição 1 - Código do layout usado na importação
+					Posição 2 - Nome do arquivo a ser importado
+
+/*/
+//---------------------------------------------------------------------
+Function f716Import( aDadosImp )
+
+	Local aCamposTRB := {}
+	Local oTempTable
+
+	Default aDadosImp := {}
+
+	Private cArquivo1
+	Private nRegLi     := 0
+	Private nHdlArq    := 0
+	Private nQtdImport := 0
+	Private _lRetTodo_ := .T.
+	Private cNewAlias  := GetNextAlias()
+	Private cLayout    := ""
+	Private cTipArq    := ""
+	Private cSepard    := ""
+	Private cTabela    := ""
+	Private cForDta    := ""
+	Private cSepDec    := ""
+	Private cIndCab    := ""
+	Private cIndRod    := ""
+
+	If lIsBlind
+		cCodLay := aDadosImp[1]
+	EndIf
+
+	If !f716VldLay(cCodLay)
+		fMNTLog()
+		Return .F.
+	EndIf
+
+	fBscFormat()
+
+	//Realiza a montagem do TRB
+	aAdd(aCamposTRB,{"LINHA" ,"C",005,0})
+	aAdd(aCamposTRB,{"DESCRI","C",600,0})
+	aAdd(aCamposTRB,{"CONTEU","C",100,0})
+
+	//Criação Tabela Temporária
+	oTempTable := NGFwTmpTbl(cNewAlias,aCamposTRB,{{ "LINHA" }})
+
+	cType     := "Texto     | *.txt"
+	If lIsBlind
+		cArquivo1 := aDadosImp[2]
+	Else
+		cArquivo1 := cGetFile(cType,OemToAnsi(STR0017),,,,GETF_LOCALHARD + GETF_NETWORKDRIVE)
+	EndIf
+	nPos      := Rat("\",cArquivo1)
+
+	If Empty(cArquivo1)
+		Return .F.
+	Else
+
+		If !lIsBlind
+
+			If nPos > 0
+				cArqLoc := AllTrim(Subst(cArquivo1, nPos+1,25 ))
+			Else
+				cArqLoc := cArquivo1
+			EndIf
+			
+			cPath := GETTEMPPATH()
+		
+			If Right(AllTrim(cPath),1) != "\"
+				cPath += "\"
+			EndIf
+
+		Else
+
+			cPath := ''
+			cArqLoc := cArquivo1
+
+		EndIf
+
+		Processa({|lEnd|fTextProc()},STR0022) //"Aguarde...Importanto Abastecimento"
+		If nQtdImport > 0
+			
+			If !_lRetTodo_
+				
+				If !lIsBlind
+					If MsgYesNo(STR0029 + Chr(13) + STR0030,STR0016) //"Foram encontrados erros na importacao. Deseja Imprimir?"
+						fPrintInc()
+					EndIf
+					aTexto[3] := STR0028 // "A importação não foi concluída. Clique em finalizar para sair."
+				Else
+					fPrintInc()
+					aAdd(aMNTLog, {STR0028}) // "A importação não foi concluída. Clique em finalizar para sair."
+				EndIf
+				/*Alterado o DisarmTransaction para o após a impressão do relatório de inconsistências
+				pois os dados do relatório é gravado em uma tabela temporária.*/
+				DisarmTransaction()
+
+			EndIf
+
+		Else
+			If !lIsBlind
+				MsgInfo(STR0023 + Alltrim(cDesLay) + STR0045,STR0016) //"Abastecimento "##" não importado"##"ATENCAO"
+				aTexto[3] := STR0046 // "Não existem linhas para serem importadas de acordo com o Layout."
+			Else
+				aAdd(aMNTLog, {STR0046})  // "Não existem linhas para serem importadas de acordo com o Layout."
+			EndIf
+		EndIf
+	EndIf
+
+	If lIsBlind
+
+		fMNTLog()
+		
+	EndIf
+
+	oTempTable:Delete()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTextProc
+Faz a leitura do arquivo texto e grava no TR6
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+ Static Function fTextProc()
+
+	Local nRecno     := 0
+	Local nLin       := 0
+	Local nUltLin    := 0
+	Local aCamposTQ8 := {}
+	Local aRegTXT    := {} //Linha do TXT que deve ser incluída
+	Local aLinha     := {}
+	Local aDelAbast  := {}
+	Local aLogImport := {}
+	Local nTotLay    := f716BscToL()
+	Local lMNTA7161  := ExistBlock("MNTA7161")
+	Local lGrava     := .T.
+	Local lIsTR6     := cTabela == 'TR6'
+	Local lBscSX3    := .F.
+
+	Private bBlock   := ErrorBlock()
+	//A função ErrorBlock define a atuação de um manipulador (handler)
+	//de erros sempre que ocorrer um erro em tempo de execução.
+	//Para isso, o manipulador de erro, é especificado com um bloco de código
+
+	Private cRegistro := ""
+	Private cFuncaoEr := ""
+	Private aInclTR6  := {}
+	Private aPosicao  := {}
+
+	If !lIsBlind
+		
+		ErrorBlock({|e|ChecErro(e)})
+		//A função ChecErro é padrão do sistema, ela se encarrega
+		//de receber o erro e exibir um alerta na tela para o usuario
+	
+	EndIf
+	
+	nHdlArq := fOpen(cArquivo1, 0 )
+	nTamArq := fSeek(nHdlArq,0,2)
+
+	FT_FUSE(cArquivo1)
+	FT_FGOTOP()
+
+	ProcRegua(Int(nTamArq/299))
+
+	If cIndRod == "1"
+		nUltLin := FT_FLastRec()
+	EndIf
+
+	aCamposTQ8 := fBuscaTQ8()
+	nQtdImport := 0
+
+	BEGIN SEQUENCE
+	//O comando BEGIN SEQUENCE define uma estrutura sequencial
+	//de controle dentro do fluxo de execução de um programa,
+	//permitindo a sua interrupção na ocorrência de um determinado evento.
+
+	    While (!FT_FEof())
+
+			lBreak    := .T.
+	    	cFuncaoEr := "fTextProc()"
+			cLinha    := FT_FREADLN()
+			++nRecno
+
+			If nRecno == 1 .And. cIndCab = "1" // Verifica se tem cabeçalho e é a primeira linha, dessa forma ignora a mesma.
+				FT_FSKIP()
+				cLinha  := FT_FREADLN()
+				++nRecno
+			EndIf
+
+			If nUltLin = nRecno
+				Exit
+			EndIf
+
+			If Empty(cLinha)
+				Exit
+			EndIf
+
+			nQtdImport++
+			IncProc(STR0025 + AllTrim(Str(nRecno))) //"Importando Registro: "
+
+			nRegLi += 1
+
+			TEXLINHA  := SubStr(cLinha,1,800)
+			cTexLinha := TEXLINHA
+			aPosicao  := {}
+			aLinha    := {}
+			aInclTR6  := {}
+
+			If cTipArq = "2"
+
+				aLinha := StrTokArr2(cTexLinha,cSepard,.T.)
+				If Len(aLinha) != nTotLay
+					fGravaTrb(nRegLi,STR0026,"") // Quantidade de campos do arquivo incompativel com a configuração do layout
+					_lRetTodo_ := .F.
+				Else
+
+					For nLin := 1 To Len(aLinha)
+
+						lBscSX3 := f716BscSX3(aCamposTQ8[nLin][1])
+
+						If lBscSX3
+							aAdd(aInclTR6,{aLinha[nLin],aCamposTQ8[nLin][1]})
+						EndIf
+
+						aAdd(aPosicao,{aLinha[nLin],aCamposTQ8[nLin][1],aCamposTQ8[nLin][2],aCamposTQ8[nLin][3]})
+
+						If !Empty(aCamposTQ8[nLin][2])
+
+							nPos1 := At("(",aCamposTQ8[nLin][2])
+							nPos2 := At(")",aCamposTQ8[nLin][2])
+
+							If (nPos2 - nPos1) == 1
+								cFuncao := SubStr(aCamposTQ8[nLin][2],1,nPos2-1) + "aInclTR6,aLinha[nLin])"
+							Else
+								cFuncao := SubStr(aCamposTQ8[nLin][2],1,nPos2-1) + ",aInclTR6,aLinha[nLin])"
+							EndIf
+
+							cFuncaoEr := cFuncao
+							&(AllTrim(cFuncao))
+							cFuncaoEr := "fTextProc()"
+
+						EndIf
+
+						If lBscSX3
+							cRegistro := f716VldCpo(aInclTR6[len(aInclTR6), 1],aCamposTQ8[nLin][3])
+							aInclTR6[len(aInclTR6), 1] := cRegistro
+						Else
+							cRegistro := f716VldCpo(aLinha[nLin],aCamposTQ8[nLin][3])
+						EndIf
+						
+						/* Como o valor do cRegistro pode ser alterado por funções específicas e também
+						 pode ter sua tipagem alterada pela função f716VldCpo realizamos novamente
+						a atribuição de valor quando necessário */
+						If ValType(aPosicao[len(aPosicao), 1]) == ValType(cRegistro)
+							If aPosicao[len(aPosicao), 1] != cRegistro
+								aPosicao[len(aPosicao), 1] := cRegistro
+							EndIf
+						Else
+							aPosicao[len(aPosicao), 1] := cRegistro
+						EndIf
+
+					Next nLin
+
+				EndIf
+
+			Else
+
+				If Len(cTexLinha) > aCamposTQ8[nTotLay][4] + aCamposTQ8[nTotLay][5] // Se o TXT é maior que o Aceito pelo Layout, gera inconsitência.
+					fGravaTrb(nRegLi,STR0047,"") // "Tamanho do TXT é maior que o aceito pelo layout. Favor verificar as configurações."
+					_lRetTodo_ := .F.
+				Else
+
+					For nLin := 1 To nTotLay
+
+						lBscSX3 := f716BscSX3(aCamposTQ8[nLin][1])
+
+						cRegistro := AllTrim(SubStr(cTexLinha,aCamposTQ8[nLin][4],aCamposTQ8[nLin][5]))
+						
+						If lBscSX3
+							aAdd(aInclTR6,{cRegistro,aCamposTQ8[nLin][1]})
+						EndIf
+
+						aAdd(aPosicao,{cRegistro,aCamposTQ8[nLin][1],aCamposTQ8[nLin][2],aCamposTQ8[nLin][3]})
+
+						If !Empty(aCamposTQ8[nLin][2])
+
+							nPos1 := At("(",aCamposTQ8[nLin][2])
+							nPos2 := At(")",aCamposTQ8[nLin][2])
+
+							If (nPos2 - nPos1) == 1
+								cFuncao := SubStr(aCamposTQ8[nLin][2],1,nPos2-1) + "aInclTR6,cRegistro)"
+							Else
+								cFuncao := SubStr(aCamposTQ8[nLin][2],1,nPos2-1) + ",aInclTR6,cRegistro)"
+							EndIf
+
+							cFuncaoEr := cFuncao
+							&(AllTrim(cFuncao))
+							cFuncaoEr := "fTextProc()"
+
+						EndIf
+
+						If lBscSX3
+							cRegistro := f716VldCpo(aInclTR6[len(aInclTR6), 1],aCamposTQ8[nLin][3])
+							aInclTR6[len(aInclTR6), 1] := cRegistro
+						Else
+							cRegistro := f716VldCpo(cRegistro,aCamposTQ8[nLin][3])
+						EndIf
+
+						/* Como o valor do cRegistro pode ser alterado por funções específicas e também
+						 pode ter sua tipagem alterada pela função f716VldCpo realizamos novamente
+						a atribuição de valor quando necessário */
+						If ValType(aPosicao[len(aPosicao), 1]) == ValType(cRegistro)
+							If aPosicao[len(aPosicao), 1] != cRegistro
+								aPosicao[len(aPosicao), 1] := cRegistro
+							EndIf
+						Else
+							aPosicao[len(aPosicao), 1] := cRegistro
+						EndIf
+
+					Next nLin
+
+					If Len(aPosicao) != nTotLay
+						fGravaTrb(nRegLi,STR0026,"") // "Quantidade de campos do arquivo incompativel com a configuração do layout"
+						_lRetTodo_ := .F.
+					EndIf
+				EndIf
+
+			EndIf
+
+			If !_lRetTodo_
+				Exit
+			EndIf
+
+			//Ponto de entrada que verifica se o registro será importado ou não.
+			If lMNTA7161
+				lGrava := ExecBlock("MNTA7161",.F.,.F.,{aInclTR6,cCodLay})
+			EndIf
+
+			If lGrava
+
+				If !lIsTR6 .Or. fCheckTR6( nRecno, aInclTR6, @aLogImport, @aDelAbast )
+					aAdd(aRegTXT,aInclTR6)
+					fVerDtHra(aRegTXT,aInclTR6)
+				EndIf
+
+			EndIf
+
+			FT_FSKIP()
+	    End
+
+	RECOVER
+		//RECOVER - Define um ponto de recuperação,
+		//dentro do bloco de sequência, para o qual o
+		//fluxo de execução será desviado após a
+		//execução de um comando BREAK.
+
+		ErrorBlock(bBlock)
+
+	END SEQUENCE
+
+	If nQtdImport == 0
+		_lRetTodo_ := .F.
+	EndIf
+
+	If _lRetTodo_
+		dbSelectArea(cNewAlias)
+		dbGoTop()
+		If RecCount() = 0
+			fIncluiTab(aRegTXT, aDelAbast)
+
+			If lIsTR6
+				fGeraLog(aLogImport) // Gera a mensagem de log com o resultado da importação
+			EndIf
+		EndIf
+
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ChecErro
+Verifica a ocorrencia de erro.log dentro da execusão da função fTextProc e
+cancela a importação por possível erro em funções de usuário.
+
+@author Maicon André Pinheiro
+@since 13/06/2016
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+Static Function ChecErro(e)
+
+	Local cChave    := ""
+	Local nPosFil   := 0
+	Local nPosNAb   := 0
+	Local nPosPla   := 0
+	Local nPosDta   := 0
+	Local nPosHra   := 0
+
+	If e:gencode > 0 .And. lBreak
+		_lRetTodo_ := .F.
+		If e:gencode = 2 .And. cFuncaoEr == "fTextProc()"
+			fGravaTrb(nRegLi,STR0031,cFuncaoEr) // "O Arquivo importado possui menos campos que o layout informado. Verifique as configurações."
+		ElseIf e:gencode = 56 .Or. e:gencode = 46
+
+			nPosFil := aScanX(aLinErro,{|x,y|x[2] = "TR6_FILIAL" .And. y > 0 })
+			IIf(nPosFil > 0,cChave  += "|" + aLinErro[nPosFil][1],)
+
+			nPosNAb := aScanX(aLinErro,{|x,y|x[2] = "TR6_NUMABA" .And. y > 0 })
+			IIf(nPosNAb > 0,cChave  += "|" + aLinErro[nPosNAb][1],)
+
+			nPosPla := aScanX(aLinErro,{|x,y|x[2] = "TR6_PLACA"  .And. y > 0 })
+			IIf(nPosPla > 0,cChave  += "|" + aLinErro[nPosPla][1],)
+
+			nPosDta := aScanX(aLinErro,{|x,y|x[2] = "TR6_DTABAS" .And. y > 0 })
+			IIf(nPosDta > 0,cChave  += "|" + dToC(aLinErro[nPosDta][1]),)
+
+			nPosHra := aScanX(aLinErro,{|x,y|x[2] = "TR6_HRABAS" .And. y > 0 })
+			IIf(nPosHra > 0,cChave  += "|" + aLinErro[nPosHra][1],)
+
+			fGravaTrb(nRegLi,STR0033,cChave) // "Já existe um abastecimento para esse veículo."
+		Else
+			fGravaTrb(nRegLi,STR0032,cFuncaoEr) // "Foi encontrado um erro inesperado na execução da importação. Isso pode ter ocorrido por mau funcionamento do sistema, função de usúario ou por importar um arquivo diferente do layout informado. Tente novamente, ou entre em contato com o administrador do sistema."
+		EndIf
+
+		Break
+
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBscFormat
+Busca as parametrizações da TQ7
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+ Static Function fBscFormat()
+
+	dbSelectArea("TQ7")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ7") + cCodLay)
+		cLayout := TQ7->TQ7_DESLAY
+	 	cTipArq := TQ7->TQ7_TIPARQ
+	 	cSepard := fRetSepard(TQ7->TQ7_SEPARD)
+	 	cTabela := TQ7->TQ7_TABELA
+	 	cForDta := TQ7->TQ7_FORDTA
+	 	cSepDec := TQ7->TQ7_SEPDEC
+	 	cIndCab := TQ7->TQ7_INDCAB
+	 	cIndRod := TQ7->TQ7_INDROD
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaTQ8
+
+Busca campos da TQ8.
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return aCpos
+/*/
+//---------------------------------------------------------------------
+ Static Function fBuscaTQ8(nSeq)
+
+	Local cTipo := ""
+	Local aCpos := {}
+
+ 	dbSelectArea("TQ8")
+ 	dbSetOrder(1)
+ 	If dbSeek(xFilial("TQ8") + cCodLay)
+ 		While !Eof() .And. TQ8->TQ8_FILIAL == xFilial("TQ8") .And. TQ8->TQ8_CODLAY == cCodLay
+
+ 			cTipo := fBsInfoAdd(TQ8->TQ8_CPOTAB,"TIPO")
+ 			aAdd(aCpos,{TQ8->TQ8_CPOTAB,TQ8->TQ8_FUNCAO,cTipo,TQ8->TQ8_POSINI,TQ8->TQ8_TAMARQ})
+
+			dbSelectArea("TQ8")
+ 			dbSkip()
+ 		End
+ 	EndIf
+
+ Return aCpos
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716VldCpo
+
+Validação dos campos do Layout
+
+@author Maicon André Pinheiro
+@since 06/06/2016
+@version MP11
+@Return cRegistro
+/*/
+//---------------------------------------------------------------------
+ Function f716VldCpo(cRegistro,cTipo)
+
+	Do Case
+		Case cTipo == 'N'
+			cRegistro := f716VldNum(cRegistro)
+
+		Case cTipo == 'D'
+			cRegistro := f716VldDta(cRegistro)
+
+		Case cTipo == 'H'
+			cRegistro := SubStr(cRegistro,1,5)
+	EndCase
+
+ Return cRegistro
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716VldNum
+
+Validação dos campos numéricos
+
+@author Maicon André Pinheiro
+@since 06/06/2016
+@version MP11
+@Return nValRet
+/*/
+//---------------------------------------------------------------------
+ Static Function f716VldNum(cRegistro)
+
+	nValRet := 0
+
+	If cSepDec = "1"
+		If At(",",cRegistro) > 0
+			fGravaTrb(nRegLi,STR0034,cRegistro) // "Padrão do Campo Numérico Inválido."
+			_lRetTodo_ := .F.
+		EndIf
+	Else
+		If At(".",cRegistro) > 0
+			fGravaTrb(nRegLi,STR0034,cRegistro) // "Padrão do Campo Numérico Inválido."
+			_lRetTodo_ := .F.
+		EndIf
+		cRegistro := StrTran(cRegistro,",",".")
+	EndIf
+
+	If !Empty(cRegistro) .And. Type(cRegistro) <> "N"
+		fGravaTrb(nRegLi,STR0048,cRegistro) // "O Padrão do campo não é númerico."
+		_lRetTodo_ := .F.
+	EndIf
+
+	nValRet := Val(cRegistro)
+
+ Return nValRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716VldDta
+
+Validação dos campos data.
+
+@author Maicon André Pinheiro
+@since 06/06/2016
+@version MP11
+@Return cRegistro
+/*/
+//---------------------------------------------------------------------
+ Static Function f716VldDta(cRegistro)
+
+	If !Empty(cRegistro)
+		Do Case
+
+			Case cForDta = "2"
+				cRegistro := SubStr(cRegistro,1,2) + "/" + SubStr(cRegistro,3,2) + "/" + SubStr(cRegistro,5,4)
+
+			Case cForDta = "3"
+				cRegistro := SubStr(cRegistro,9,2) + "/" + SubStr(cRegistro,6,2) + "/" + SubStr(cRegistro,1,4)
+
+			Case cForDta = "4"
+				cRegistro := SubStr(cRegistro,7,2) + "/" + SubStr(cRegistro,5,2) + "/" + SubStr(cRegistro,1,4)
+
+		EndCase
+
+		If Empty(cToD(cRegistro))
+			fGravaTrb(nRegLi,STR0044,cRegistro) // "Formato da Data Inválido ou data inexistente."
+			_lRetTodo_ := .F.
+		EndIf
+	EndIf
+
+ Return cToD(cRegistro)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716BscToL
+
+Busca tamanho total do layout.
+
+@author Maicon André Pinheiro
+@since 06/06/2016
+@version MP11
+@Return nTotLayout
+/*/
+//---------------------------------------------------------------------
+ Static Function f716BscToL()
+
+ 	Local nTotLayout := 0
+
+	cAliasQry := GetNextAlias()
+
+	cQuery := " SELECT SUM(1) As  Total"
+	cQuery += "   FROM "              + RetSQLName("TQ8")
+	cQuery += "  WHERE TQ8_FILIAL = " + ValToSql(xFilial("TQ8"))
+	cQuery += "    AND TQ8_CODLAY = " + ValToSql(cCodLay)
+	cQuery += "    AND D_E_L_E_T_ = '' "
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	While !Eof()
+		nTotLayout := (cALIASQRY)->Total
+		dbSelectArea(cALIASQRY)
+		dbSkip()
+	End
+	(cALIASQRY)->( dbCloseArea() )
+
+ Return nTotLayout
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fIncluiTab
+
+Faz a inclusão dos campos na tabela principal
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+
+@param aRegTXT  , Array, Registros de abastecimento do txt a serem importados.
+@param aDelAbast, Array, Recnos da TR6 a serem excluídos antes da 
+                         importação de novos abastecimentos.
+						 aDel[ x ] - Recno da TR6
+
+@Return True
+/*/
+//---------------------------------------------------------------------
+ Static Function fIncluiTab(aRegTXT, aDelAbast)
+
+ 	Local nInd      := 0
+ 	Local nLinha    := 1
+	Local nRegTR6   := 0
+ 	Local cRegTQ8   := ""
+
+	Private lValImport := .F.
+	Private aTanque    := {}
+	Private cTanUpd    := ""
+	Private aLinErro   := {}
+
+	lBreak  := .F.
+
+	If ExistBlock("MNTA1301")
+		lValImport := .T.
+	EndIf
+
+	nRegLi := 0
+
+	BEGIN TRANSACTION
+
+		// Exclui registros da TR6 que serão reimportados
+		dbSelectArea('TR6')
+		For nRegTR6 := 1 To Len( aDelAbast )
+			dbGoTo( aDelAbast[nRegTR6] )
+			RecLock('TR6',.F.)
+			dbDelete()
+			TR6->(MsUnLock())
+		Next nRegTR6
+
+		While nLinha <= Len(aRegTXT)
+
+			lBreak := .T.
+
+			If fVldUpd(aRegTXT[nLinha])
+
+				RecLock(cTabela,.T.)
+
+				nRegLi++
+
+				aRegTXT[nLinha] := f716GerObg(aRegTXT[nLinha]) // Alimenta campos que são obrigatorios para a importação.
+
+				//Seta os valores que serão incluidos na Tabela
+				For nInd := 1 To Len(aRegTXT[nLinha])
+					cFuncaoEr  := aRegTXT[nLinha][nInd][2]
+					cRegTQ8    := cTabela + "->" + aRegTXT[nLinha][nInd][2]
+					&(cRegTQ8) := aRegTXT[nLinha][nInd][1]
+				Next nInd
+
+				aLinErro := aClone(aRegTXT[nLinha])
+
+				&(cTabela + "->(MsUnlock())")
+
+			EndIf
+			nLinha++
+
+		End
+
+	END TRANSACTION
+
+	lBreak := .F.
+
+	If lValImport
+		ExecBlock("MNTA1301",.F.,.F.,{aValImport})
+	EndIf
+
+	// PE - Gravação de campos de usuários
+	If ExistBlock( "MNTA1311" )
+		ExecBlock( "MNTA1311", .F., .F. )
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716GerObg
+
+@author Maicon André Pinheiro
+@since 18/11/2016
+@version MP11
+@Return True
+/*/
+//---------------------------------------------------------------------
+Static Function f716GerObg(aRegistros)
+
+ 	Local nPosCampo  := 0
+ 	Local nPosHora   := 0
+	Local nCusto1    := 0
+	Local nPosTipCom := 0
+	Local nPosTanque := 0
+	Local nPosBomba  := 0
+	Local nPosValCom := aScanX( aRegistros, { |x,y|x[2] = 'TR6_VLCOMB' } )
+	Local nPosValTot := aScanX( aRegistros, { |x,y|x[2] = 'TR6_VLTOT'  } )
+	Local nPosQtdCom := aScanX( aRegistros, { |x,y|x[2] = 'TR6_QTDCOM' } )
+ 	Local cOldAbast  := ""
+ 	Local cNumAbast  := ""
+ 	Local cPosto     := ""
+ 	Local cLoja      := ""
+	Local cAlsQryTQH := ''
+	Local cTipoPos   := ''
+
+	If aScanX(aRegistros,{|x,y|x[2] = "TR6_FILIAL" .And. y > nPosCampo }) == 0
+		cFuncaoEr       := "TR6_FILIAL"
+		TR6->TR6_FILIAL := xFilial(cTabela)
+		aAdd(aRegistros,{xFilial(cTabela),"TR6_FILIAL"})
+	EndIf
+
+	If !Empty(cTanUpd) .And. aScanX(aRegistros,{|x,y|x[2] = "TR6_TANQUE" .And. y > nPosCampo }) == 0
+		cFuncaoEr       := "TR6_TANQUE"
+		aAdd(aRegistros,{cTanUpd,"TR6_TANQUE"})
+	EndIf
+
+	If aScanX(aRegistros,{|x,y|x[2] = "TR6_NABANT" .And. y > nPosCampo }) == 0
+		cFuncaoEr := "TR6_NABANT"
+		cOldAbast := f716NAba()
+		aAdd(aRegistros,{cOldAbast,"TR6_NABANT"})
+	EndIf
+
+	If aScanX(aRegistros,{|x,y|x[2] = "TR6_NUMABA" .And. y > nPosCampo }) == 0
+		cFuncaoEr := "TR6_NUMABA"
+		cNumAbast := ""
+		cNumAbast := GETSXENUM("TR6","TR6_NUMABA","UNICOTR6")
+		ConfirmSX8()
+		aAdd(aRegistros,{cNumAbast,"TR6_NUMABA"})
+	EndIf
+
+	nPosHora := aScanX(aRegistros,{|x,y|x[2] = "TR6_HRABAS" .And. y > nPosHora })
+	If nPosHora == 0 .Or. Empty(aRegistros[nPosHora][2])
+		cFuncaoEr               := "TR6_HRABAS"
+		aRegistros[nPosHora][2] := SubStr(Time(),1,5)
+		aAdd(aRegistros,{cNumAbast,"TR6_HRABAS"})
+	EndIf
+
+	nPosCNPJ   := aScanX(aRegistros,{|x,y|x[2] = "TR6_CNPJ"   .And. y > nPosCampo })
+	nPosPosto  := aScanX(aRegistros,{|x,y|x[2] = "TR6_POSTO"  .And. y > nPosCampo })
+	nPosLoja   := aScanX(aRegistros,{|x,y|x[2] = "TR6_LOJA"   .And. y > nPosCampo })
+	nPosTanque := aScanX(aRegistros,{|x,y|x[2] = 'TR6_TANQUE' .And. y > nPosCampo })
+	nPosBomba  := aScanX(aRegistros,{|x,y|x[2] = 'TR6_BOMBA'  .And. y > nPosCampo })
+
+	If nPosPosto == 0 .And. nPosCNPJ != 0
+		aAdd(aRegistros, {Posicione('TQF', 2, FWxFilial('TQF')+aRegistros[nPosCNPJ, 1], 'TQF_CODIGO'), 'TR6_POSTO'})
+		nPosPosto := len(aRegistros)
+	EndIf
+	If nPosLoja == 0 .And. nPosCNPJ != 0
+		aAdd(aRegistros, {Posicione('TQF', 2, FWxFilial('TQF')+aRegistros[nPosCNPJ, 1], 'TQF_LOJA'), 'TR6_LOJA'})
+		nPosLoja  := len(aRegistros)
+	EndIf
+
+	If nPosCNPJ != 0
+
+		cTipoPos := Posicione( 'TQF', 2, FWxFilial( 'TQF' ) + aRegistros[ nPosCNPJ, 1 ], 'TQF_TIPPOS' )
+
+	EndIf
+	
+	If lParPrSb2 .And. cTipoPos == '2' .And. nPosTanque != 0 .And. nPosBomba != 0
+		
+		dbSelectArea( 'TQI' )
+		dbSetOrder( 1 ) // TQI_FILIAL+TQI_CODPOS+TQI_LOJA+TQI_TANQUE+TQI_CODCOM
+		If dbSeek( FWxFilial( 'TQI' ) + aRegistros[ nPosPosto, 1] + aRegistros[ nPosLoja, 1 ] +;
+		aRegistros[ nPosTanque, 1 ] )
+
+			dbSelectArea( 'SB2' )
+			dbSetOrder( 1 ) // B2_FILIAL+B2_COD+B2_LOCAL
+			If !dbSeek( FWxFilial( 'SB2' ) + TQI->TQI_PRODUT + TQI->TQI_TANQUE )
+				
+				CriaSB2( TQI->TQI_PRODUT, TQI->TQI_TANQUE )
+
+			EndIf
+
+				nCusto1   := SB2->B2_CM1
+
+		EndIf
+
+	Else
+		
+		If lParPrEne
+		
+			If nPosValCom == 0
+
+				If nPosQtdCom > 0 .And. nPosValTot > 0
+				
+					nCusto1 := aRegistros[nPosValTot, 1] / aRegistros[nPosQtdCom, 1]
+				
+				Else
+				
+					nCusto1 := 0
+				
+				EndIf
+
+			Else
+			
+				nCusto1 := aRegistros[nPosValCom, 1]
+			
+			EndIf
+
+		Else
+
+			nPosTipCom := aScanX( aRegistros, { |x,y|x[ 2 ] == 'TR6_TIPCOM' })
+
+			If lParCoNeg .And. nPosPosto != 0 .And. nPosLoja != 0 .And. nPosTipCom != 0
+
+				cAlsQryTQH := GetNextAlias()
+
+				BeginSql Alias cAlsQryTQH
+					SELECT TQH_PRENEG FROM %Table:TQH% TQH
+						WHERE TQH.TQH_FILIAL = %xFilial:TQH% AND
+						TQH.TQH_CODPOS = %exp:aRegistros[ nPosPosto,  1 ]% AND
+						TQH.TQH_LOJA   = %exp:aRegistros[ nPosLoja,   1 ]% AND
+						TQH.TQH_CODCOM = %exp:aRegistros[ nPosTipCom, 1 ]% AND
+						TQH.%NotDel%
+						ORDER BY TQH.TQH_DTNEG || TQH.TQH_HRNEG DESC
+				EndSql
+
+				If (cAlsQryTQH)->( !Eof() )
+
+					nCusto1 := (cAlsQryTQH)->TQH_PRENEG
+
+				EndIf
+
+				(cAlsQryTQH)->( dbCloseArea() )
+			
+			Else
+
+				nCusto1 := 0
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	If nPosValCom != 0
+
+		aRegistros[ nPosValCom, 1 ] := nCusto1
+
+	Else
+
+		aAdd( aRegistros, { nCusto1, 'TR6_VLCOMB' } )
+
+	EndIf
+
+	If nPosQtdCom != 0
+
+		If nPosValTot != 0
+
+			aRegistros[ nPosValTot, 1 ] := nCusto1 * aRegistros[ nPosQtdCom, 1 ]
+
+		Else
+
+			aAdd( aRegistros, { nCusto1 * aRegistros[ nPosQtdCom, 1 ], 'TR6_VLTOT' })
+
+		EndIf
+
+	EndIf
+
+	If nPosCNPJ > 0 .And. (nPosPosto = 0 .Or. nPosLoja = 0)
+
+		dbSelectArea("TQF")
+		dbSetOrder(2)
+		If dbSeek(xFilial("TQF") + aRegistros[nPosCNPJ][1])
+			While !Eof() .And. TQF->TQF_FILIAL == xFilial("TQF") .And. TQF->TQF_CNPJ == AllTrim(aRegistros[nPosCNPJ][1])
+
+				If nPosPosto = 0
+					cFuncaoEr := "TR6_POSTO"
+					cPosto    := TQF->TQF_CODIGO
+					aAdd(aRegistros,{cPosto,"TR6_POSTO"})
+				EndIf
+
+				If nPosLoja = 0
+					cFuncaoEr := "TR6_LOJA"
+					cLoja     := TQF->TQF_LOJA
+					aAdd(aRegistros,{cLoja,"TR6_LOJA"})
+				EndIf
+				Exit
+
+				dbSelectArea("TQF")
+				dbSkip()
+			End
+		EndIf
+	EndIf
+
+Return aRegistros
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716BscSX3
+
+Faz a verificação se campo existe no SX3 e se é o mesmo da tabela principal.
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Static Function f716BscSX3(cCampo)
+
+ 	Local lRet := .F.
+	Local cArquivo	:= Posicione("SX3",2,cCampo,"X3_ARQUIVO")
+
+	If cArquivo == cTabela
+		lRet := .T.
+	EndIf
+
+ Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetData
+
+Retorna a data conforme layout.
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function fRetData(cData)
+
+	Local dRet := cData
+
+	Do Case
+		Case cForDta = "1"
+			//dRet := cToD(cData)
+		Case cForDta = "2"
+			dRet := SubStr(cData,1,2) + "/" + SubStr(cData,3,2) + "/" + SubStr(cData,5,4)
+			dRet := cToD(dRet)
+		Case cForDta = "3"
+			dRet := SubStr(cData,9,2) + "/" + SubStr(cData,6,2) + "/" + SubStr(cData,1,4)
+			dRet := cToD(dRet)
+		Case cForDta = "4"
+			dRet := sToD(cData)
+	EndCase
+
+ Return dRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716NAba
+
+Busca abastecimento anterior.
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function f716NAba()
+
+	cAliasQry := GetNextAlias()
+
+	cQuery := " SELECT MAX (TR6_NUMABA) AS OLDABAST "
+	cQuery += " FROM " + RetSQLName("TR6")
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	While !Eof()
+		cOldAbast := (cALIASQRY)->OLDABAST
+		dbSelectArea(cALIASQRY)
+		dbSkip()
+	End
+	(cALIASQRY)->( dbCloseArea() )
+
+	If Empty(cOldAbast)
+		cOldAbast := Replicate('0',TAMSX3("TR6_NUMABA")[1])
+	EndIf
+
+ Return cOldAbast
+
+//------------------Funções executadas nos Layouts padrão--------------------------//
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldUpd
+
+Validação de abastecimento para update.
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function fVldUpd(aCamposInc)
+
+	Local lAbasNew   := .T.
+	Local lTanqBomba := .F.
+	Local lAchou     := .F.
+	Local nPosTanq   := 0
+
+	If NGCADICBASE("TR6_TANQUE","D","TR6",.F.) .AND. NGCADICBASE("TR6_BOMBA","D","TR6",.F.)
+		lTanqBomba := .T.
+	EndIf
+
+	nBomba  := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_BOMBA" })
+	nC      := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_TIPCOM"})
+	nPlaca  := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_PLACA" })
+	nPosKM  := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_KMABAS"})
+	nPosQtd := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_QTDCOM"})
+	nPosTot := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_VLTOT" })
+	nPosDta := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_DTABAS"})
+	nPosHra := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_HRABAS"})
+	nCGC    := aScan(aCamposInc,{|x| AllTrim(Upper(x[2])) == "TR6_CNPJ"  })
+
+	If nBomba = 0 .Or. nC = 0 .Or. nPlaca = 0 .Or. nPosKM = 0 .Or. nPosQtd = 0 .Or. nPosTot = 0 .Or. nPosDta = 0 .Or. nPosHra = 0 .Or. nCGC = 0
+		Return lAbasNew
+	EndIf
+
+	cBomba   := aCamposInc[nBomba][1]
+	cC       := aCamposInc[nC][1]
+	cPlaca   := aCamposInc[nPlaca][1]
+	nKM      := aCamposInc[nPosKM][1]
+	nQtd     := aCamposInc[nPosQtd][1]
+	nTotal   := aCamposInc[nPosTot][1]
+	dDtAbast := aCamposInc[nPosDta][1]
+	cHrAbast := aCamposInc[nPosHra][1]
+	cCGC     := aCamposInc[nCGC][1]
+
+	cTanUpd  := ""
+	If lTanqBomba
+		nPosTanq := aScan(aTanque,{|x| x[1]+x[2] == cCGC + cBomba })
+		If nPosTanq > 0
+			cTanUpd := aTanque[nPosTanq,3]
+		Else
+			dbSelectArea("TQF")
+			dbSetOrder(2)
+			If dbSeek(xFilial("TQF")+cCGC)
+				While !EoF() .And. xFilial("TQF")  == TQF->TQF_FILIAL .And. TQF->TQF_CNPJ == AllTrim(cCGC)
+					If  TQF->TQF_TIPPOS == "2" .And. TQF->TQF_CONVEN == "2"
+						lAchou := .T.
+						dbSelectArea("TQJ")
+						dbSetOrder(1)
+						dbSeek(If(NGSX2MODO("TQJ")=="C" .Or. Empty(TQF->TQF_CODFIL),xFilial("TQJ"),TQF->TQF_CODFIL) + TQF->TQF_CODIGO + TQF->TQF_LOJA )
+
+						While !Eof() .and. If(NGSX2MODO("TQJ")=="C" .Or. Empty(TQF->TQF_CODFIL),xFilial("TQJ"),TQF->TQF_CODFIL) + TQF->TQF_CODIGO + TQF->TQF_LOJA == TQJ->(TQJ_FILIAL + TQJ_CODPOS + TQJ_LOJA)
+							If Alltrim(TQJ->TQJ_BOMBA) == AllTrim(cBomba)
+
+								cTanUpd := TQJ->TQJ_TANQUE
+								aAdd(aTanque,{cCGC,cBomba,TQJ->TQJ_TANQUE})
+								Exit
+
+							EndIf
+							TQJ->(dbSkip())
+						End
+					EndIf
+					TQF->(dbSkip())
+				End
+				If !lAchou
+					cBomba := " "
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+   	//aglutinacao de abastecimentos com mesma data+posto+comb+placa+contador e hora diferente
+	dbSelectArea("TR6")
+	dbSetOrder(2)
+	If dbSeek(xFilial("TR6") + cPlaca + Space(Len(TR6->TR6_PLACA) - Len(cPlaca)) + dToS(dDtAbast))
+		If TR6->TR6_HRABAS <> cHrAbast    .And. TR6->TR6_CNPJ == cCGC .And. TR6->TR6_KMABAS == nKm .And.;
+		   AllTrim(TR6->TR6_TIPCOM) == cC .And. If(lTanqBomba,AllTrim(TR6->TR6_BOMBA) == AllTrim(cBomba),.T.) .And. Empty(TR6->TR6_DTPROC)
+
+			lAbasNew := .F.
+			RecLock("TR6",.F.)
+			TR6->TR6_QTDCOM += Round(nQtd  ,TAMSX3("TR6_QTDCOM")[2])
+			TR6->TR6_VLTOT  += Round(nTotal,TAMSX3("TR6_VLTOT" )[2])
+			TR6->(MsUnLock())
+		EndIf
+	EndIf
+
+ Return lAbasNew
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMontaDTHR
+
+@author Maicon André Pinheiro
+@since 30/05/2016
+@version MP11
+@Return .F. // Não necessita fazer a validação de inclusão, visto que
+o append foi feito nessa função
+/*/
+//---------------------------------------------------------------------
+ Function fMontaDTHR(aTR6Incl,cRegistro)
+
+	cRegistro := cRegistro
+	dAbast    := f716VldCpo(SubStr(cRegistro,1,10),"D")
+	cRegistro := RTrim(cRegistro)
+	If At(":",cRegistro) > 0
+		cHrAbas := SubStr(cRegistro,Len(cRegistro)-4,5)
+	Else
+		cHrAbas := ""
+	EndIf
+
+	aAdd(aTR6Incl,{dAbast ,"TR6_DTABAS"})
+	aAdd(aTR6Incl,{cHrAbas,"TR6_HRABAS"})
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGrvCpoGen
+
+Grava campos genéricos.
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function fGrvCpoGen(cCampo,cTipo,aTR6Incl,cRegistro)
+
+	Local xRegTQ8   := Nil
+	Local lRPORel17 := GetRPORelease() <= '12.1.017'
+
+	If !lRPORel17 .And. cCampo == "TR6_CODOBS"
+		cCampo := "TR6_OBSERV" // Ajuste feito pois está ocorrendo erro ao modificar diretamente a tabela.
+	EndIf
+
+    Do Case
+    	Case cTipo == "C"
+			aAdd(aTR6Incl,{cRegistro,cCampo})
+
+    	Case cTipo == "N"
+    		xRegTQ8 := f716VldCpo(cRegistro,cTipo)
+			aAdd(aTR6Incl,{xRegTQ8,cCampo})
+
+    	Case cTipo == "D"
+    		xRegTQ8 := f716VldCpo(cRegistro,cTipo)
+			aAdd(aTR6Incl,{xRegTQ8,cCampo})
+
+    	Case cTipo == "H"
+    		xRegTQ8 := AllTrim(SubStr(cRegistro,1,5))
+			aAdd(aTR6Incl,{xRegTQ8,cCampo})
+
+    EndCase
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716BsAbst
+
+Busca proximo numero de abastecimento
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function f716BsAbst(aTR6Incl,cRegistro)
+
+ 	Local cNumAbast := ""
+
+	cNumAbast := GETSXENUM("TR6","TR6_NUMABA","UNICOTR6")
+	ConfirmSX8()
+
+	aAdd(aTR6Incl,{cNumAbast,"TR6_NUMABA"})
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716COM
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function f716COM(aTR6Incl,cRegistro)
+
+	Local cComb     := " "
+	Local lConsComb := IIf(SuperGetMv("MV_NGIMPOR",.F.,"1") == "2",.T.,.F.)
+	Local cLike     := "%'%" + Trim( cRegistro ) + "%'%"
+	Local cAliasQry := GetNextAlias()
+
+	BeginSQL Alias cAliasQry
+
+		SELECT
+			TQM_CODCOM,
+			TQM_CODCON
+		FROM
+			%table:TQM%
+		WHERE
+			TQM_FILIAL = %xFilial:TQM%  AND
+			TQM_NOMCOM LIKE %exp:cLike% AND
+			%NotDel%
+
+	EndSQL
+
+	Do While (cAliasQry)->( !EoF() )
+
+		If lConsComb
+			cComb := (cAliasQry)->TQM_CODCOM
+		Else
+			cComb := (cAliasQry)->TQM_CODCON
+		EndIf
+
+		(cAliasQry)->( dbSkip() )
+
+	EndDo
+
+	(cAliasQry)->( dbCloseArea() )
+
+	aAdd(aTR6Incl,{cComb,"TR6_TIPCOM"})
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBscMot
+
+@author Maicon André Pinheiro
+@since 01/06/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function fBscMot(nInd,aTR6Incl,cRegistro)
+
+	Local cCpfMot := ""
+
+    If nInd = 1 // Generico.
+	    cCpfMot := NGSEEK("DA4",cRegistro,2,"DA4_CGC")
+	    If Empty(cCpfMot)
+            cCpfMot := SuperGetMV("MV_NGMOTGE",.F.,"")
+        EndIf
+    Else // Registro
+		dbSelectArea("DA4")
+		dbSetOrder(1) //DA4_FILIAL + DA4_COD
+		dbSeek(xFilial("DA4") + AllTrim(cRegistro))
+		cCpfMot := DA4->DA4_CGC
+		If Empty(cCpfMot)
+			cCpfMot := cRegistro
+		EndIf
+	EndIf
+
+	aAdd(aTR6Incl,{cCpfMot,"TR6_CPFMOT"})
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f716VldGTF
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function f716VldGTF(lGrvTransf,aTR6Incl,cRegistro)
+
+ 	Local lPrSB2     := (SuperGetMv("MV_NGPRSB2") == "S" ) //Parametro que indica se busca custo da SB2
+ 	Local nTTXMOTIVO := If(AliasInDic("TTX"), TAMSX3("TTX_MOTIVO")[1], 6)
+
+    //Variáveis do Layout
+    Local nPosBem   := 0
+	Local nPosQtdC  := 0
+	Local nPosTem   := 0
+	Local nPosBomb  := 0
+	Local nPosDtAb  := 0
+	Local nPosHora  := 0
+	Local cCodPlaca  := ""
+	Local nQtdComb  := 0
+	Local cTerminal := ""
+	Local cBomba    := ""
+	Local dDatAbast := ""
+	Local cHorAbast := ""
+
+ 	//Variáveis do Abastecimento
+ 	Local nQuant     := 0
+ 	Local cCPFMotGen := SuperGetMV("MV_NGMOTGE",.F.,"")
+
+	//Variáveis das Informações do Posto
+	Local cCodPosto  := ""
+	Local cCodLoja   := ""
+	Local cCNPJ      := ""
+	Local cTanque    := ""
+	Local cCombustiv := ""
+	Local cCodConven := ""
+	Local nValUni    := 0
+	Local nValTot    := 0
+	Local cProduto   := ""
+
+	// Variáveis da transferências
+	Local cCodEmpOri := ""
+	Local cCodFilOri := ""
+	Local cCodEmpDes := ""
+	Local cCodFilDes := ""
+	Local cPostoDest := ""
+	Local cLojaDest  := ""
+	Local cTanqDest  := ""
+
+	// Variáveis do Bem
+	Local cCodFilBem := ""
+	Local cPlacaBem  := ""
+
+	// Variáveis de Parâmetros
+	Local cCodMotiv := PADR(SuperGetMv("MV_NGMOTTR",.F.,""),nTTXMOTIVO," ") //Parâmetro que indica o código do Motivo da Transferência de Combustível (tabela TTX - Motivo de Saída)
+	Local lConsComb := (SuperGetMv("MV_NGIMPOR",.F.,"1") == "2" ) //Parâmetro que indica se a Importação é pelo código do Convênio ("1") ou do Combustível ("2")
+
+	nPosBem   := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TR6_PLACA" })
+	nPosCtCom := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TR6_QTDCOM"})
+	nPosQtdC  := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TR6_KMABAS"})
+	nPosTem   := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TERMINAL"  })
+	nPosBomb  := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "BOMBA"     })
+	nPosDtAb  := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TR6_DTABAS"})
+	nPosHora  := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "HORA"      })
+
+	cCodPlaca := aPosicao[nPosBem][1]
+	nQuant    := aPosicao[nPosCtCom][1]
+	nQtdComb  := aPosicao[nPosQtdC][1]
+	cTerminal := PADR(aPosicao[nPosTem][1],TAMSX3("TR0_TERMIN")[1]," ")
+	cBomba    := PADR(aPosicao[nPosBomb][1],TAMSX3("TQJ_BOMBA")[1]," ")
+	dDatAbast := fRetData(aPosicao[nPosDtAb][1])
+	cHorAbast := SubStr(aPosicao[nPosHora][1],1,5)
+
+	dbSelectArea("ST9")
+	dbSetOrder(14)
+	If dbSeek(cCodPlaca)
+		cCodFilBem := ST9->T9_FILIAL
+		cPlacaBem  := ST9->T9_PLACA
+	Else
+		cCodFilBem := cFilAnt
+	EndIf
+
+	// Busca o Posto com a relação Terminal X Bomba (cadastro do MNTA616)
+	dbSelectArea("TR0")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TR0",cCodFilBem) + cTerminal + cBomba)
+		cCodEmpOri := cEmpAnt
+		cCodFilOri := TR0->TR0_FILIAL
+		cCodPosto  := TR0->TR0_CODPOS
+		cCodLoja   := TR0->TR0_LOJPOS
+		cTanque    := TR0->TR0_TANPOS
+
+	EndIf
+	If !Empty(cCodPosto) .And. !Empty(cCodLoja) .And. !Empty(cTanque)
+
+		// Cadastro do Posto
+		dbSelectArea("TQF")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQF",cCodFilBem) + cCodPosto + cCodLoja)
+
+			cCNPJ := TQF->TQF_CNPJ
+			// Cadastro do Tanque
+			dbSelectArea("TQI")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TQI",TQF->TQF_FILIAL) + cCodPosto + cCodLoja + cTanque)
+
+				cCombustiv := TQI->TQI_CODCOM
+				// Cadastro dos Preços Negociados
+				dbSelectArea("TQH")
+				dbSetOrder(1)
+				dbSeek(xFilial("TQH",TQF->TQF_FILIAL) + cCodPosto + cCodLoja + cCombustiv + DTOS(dDatAbast) + cHorAbast, .T.)
+
+				// Do último para o primeiro
+				If Eof() .Or. TQH->TQH_FILIAL <> xFilial("TQH",TQF->TQF_FILIAL) .Or. TQH->TQH_CODPOS <> cCodPosto;
+				         .Or. TQH->TQH_LOJA   <> cCodLoja                       .Or. TQH->TQH_CODCOM <> cCombustiv
+
+					dbSkip(-1)
+				EndIf
+
+				While !Bof() .And. TQH->TQH_FILIAL == xFilial("TQH",TQF->TQF_FILIAL) .And. TQH->TQH_CODPOS == cCodPosto;
+				             .And. TQH->TQH_LOJA   == cCodLoja                       .And. TQH->TQH_CODCOM == cCombustiv
+
+					If TQH->TQH_DTNEG == dDatAbast
+
+						If TQH->TQH_HRNEG <= cHorAbast
+							nValUni := TQH->TQH_PRENEG
+							Exit
+						EndIf
+
+					ElseIf TQH->TQH_DTNEG < dDatAbast
+
+						nValUni := TQH->TQH_PRENEG
+						Exit
+
+					EndIf
+
+					dbSelectArea("TQH")
+					dbSkip(-1)
+				End
+
+				nValTot := ( nValUni * nQuant )
+
+				// Cadastro dos Tipos de Combustíveis
+				dbSelectArea("TQM")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TQM",TQF->TQF_FILIAL) + cCombustiv + "7")
+					cCodConven := TQM->TQM_CODCON
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	cCombustiv := If(lConsComb, cCombustiv, cCodConven)
+
+	//Inicia gravação dos campos cálculados na função.
+	aAdd(aTR6Incl,{cPlacaBem ,"TR6_PLACA" })
+	aAdd(aTR6Incl,{cCodPosto ,"TR6_POSTO" })
+	aAdd(aTR6Incl,{cCodLoja  ,"TR6_LOJA"  })
+	aAdd(aTR6Incl,{cCNPJ     ,"TR6_CNPJ"  })
+	aAdd(aTR6Incl,{cCombustiv,"TR6_TIPCOM"})
+	aAdd(aTR6Incl,{cCPFMotGen,"TR6_CPFMOT"})
+	aAdd(aTR6Incl,{nQtdComb  ,"TR6_KMABAS"})
+	aAdd(aTR6Incl,{nQuant    ,"TR6_QTDCOM"})
+	aAdd(aTR6Incl,{nValUni   ,"TR6_VLCOMB"})
+	aAdd(aTR6Incl,{nValTot   ,"TR6_VLTOT" })
+	aAdd(aTR6Incl,{dDatAbast ,"TR6_DTABAS" })
+	aAdd(aTR6Incl,{cHorAbast ,"TR6_HRABAS" })
+	aAdd(aTR6Incl,{cTanque   ,"TR6_TANQUE"})
+	aAdd(aTR6Incl,{cBomba    ,"TR6_BOMBA" })
+
+	//Inicia Transferência
+	aAdd(aTR6Incl,{cCodEmpOri,"TR6_EMPORI"})
+	aAdd(aTR6Incl,{cCodFilOri,"TR6_FILORI"})
+
+	If lGrvTransf
+    	aAdd(aTR6Incl,{cCodEmpDes,"TR6_EMPDES"})
+    	aAdd(aTR6Incl,{cCodFilDes,"TR6_FILDES"})
+    	aAdd(aTR6Incl,{cPostoDest,"TR6_POSDES"})
+    	aAdd(aTR6Incl,{cLojaDest ,"TR6_LOJDES"})
+    	aAdd(aTR6Incl,{cTanqDest ,"TR6_TANDES"})
+	EndIf
+
+	aAdd(aTR6Incl,{cCodMotiv,"TR6_MOTTRA"})
+	aAdd(aTR6Incl,{"7"      ,"TR6_CONVEN"})
+	//Fim Transferência
+
+	If lPrSB2
+		cProduto := NgSeek("TQI",cCodPosto+cCodLoja+cTanque+cCombustiv,1,"TQI->TQI_PRODUT")
+		dbSelectArea("SB2")
+		dbSetOrder(01)
+		dbSeek(xFilial("SB2") + cProduto + cTanque)
+
+		aAdd(aTR6Incl,{SB2->B2_CM1           ,"TR6_VLCOMB"})
+		aAdd(aTR6Incl,{nQuant * SB2->B2_CM1,"TR6_VLTOT" })
+
+	EndIf
+	//Finaliza gravação dos campos cálculados na função.
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldGTFTrn
+
+@author Maicon André Pinheiro
+@since 31/05/2016
+@version MP11
+@Return .T.
+/*/
+//---------------------------------------------------------------------
+ Function fVldGTFTrn(aTR6Incl,cRegistro)
+
+	Local cCodEmpDes := ""
+	Local cCodFilDes := ""
+	Local cPostoDest := ""
+	Local cLojaDest  := ""
+	Local cTanqDest  := ""
+	Local cTermDest  := ""
+	Local cBombDest  := ""
+	Local nTermExtra := 0
+	Local nBombExtra := 0
+
+	//Variáveis do Layout
+    Local nPosBem   := 0
+	Local nPosSit   := 0
+	Local cCodPlaca   := ""
+	Local cSituacao := ""
+
+	//Variáveis do Bem
+	Local cCodFilBem := ""
+	Local cPlacaBem  := ""
+
+
+	f716VldGTF(.F.,aTR6Incl,cRegistro)
+
+	nPosBem   := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "TR6_PLACA" })
+	nPosSit   := aScan(aPosicao,{|x| AllTrim(Upper(x[2])) == "SITUACAO"  })
+	cCodPlaca   := aPosicao[nPosBem][1]
+	cSituacao := aPosicao[nPosSit][1]
+
+	dbSelectArea("ST9")
+	dbSetOrder(14)
+	If dbSeek(cCodPlaca)
+		cCodFilBem := ST9->T9_FILIAL
+		cPlacaBem  := ST9->T9_PLACA
+	Else
+		cCodFilBem := cFilAnt
+	EndIf
+
+	// Painél On-Line E é uma Transferência?
+	If AllTrim(cSituacao) == "T"
+
+		// Verifica qual Informação Extra representa o Terminal
+		dbSelectArea("TR0")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TR0") + "#")
+			nTermExtra := Val(TR0->TR0_EXTRA)
+		EndIf
+		// Verifica qual Informação Extra representa a Bomba
+		dbSelectArea("TR0")
+		dbSetOrder(2)
+		If dbSeek(xFilial("TR0") + "#")
+			nBombExtra := Val(TR0->TR0_EXTRA)
+		EndIf
+
+		// Busca o Posto/Loja destino da transferência de acordo com a tabela DE/PARA de Terminal x Bomba
+		If nTermExtra > 0 .And. nBombExtra > 0
+
+			cTermDest := PADR(aPosicao[nTermExtra+11][1],TAMSX3("TR0_TERMIN")[1]," ") // Terminal destino
+			cBombDest := PADR(aPosicao[nBombExtra+11][1],TAMSX3("TQJ_BOMBA")[1] ," ") // Bomba destino
+
+			dbSelectArea("TR0")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TR0",cCodFilBem) + cTermDest + cBombDest)
+				cCodEmpDes := cEmpAnt
+				cCodFilDes := TR0->TR0_FILIAL
+				cPostoDest := TR0->TR0_CODPOS
+				cLojaDest  := TR0->TR0_LOJPOS
+				cTanqDest  := TR0->TR0_TANPOS
+
+
+
+			EndIf
+		EndIf
+	EndIf
+
+    aAdd(aTR6Incl,{cCodEmpDes,"TR6_EMPDES"})
+    aAdd(aTR6Incl,{cCodFilDes,"TR6_FILDES"})
+    aAdd(aTR6Incl,{cPostoDest,"TR6_POSDES"})
+    aAdd(aTR6Incl,{cLojaDest ,"TR6_LOJDES"})
+    aAdd(aTR6Incl,{cTanqDest ,"TR6_TANDES"})
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravaTrb
+Carrega TRB com inconssistencias
+
+@author
+@since
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+ Static Function fGravaTrb(nItem,cDes,cConteu)
+
+    //GRAVACAO NA TABELA TRB DOS REGISTROS ERRADOS ENCONTRADOS NO ARQUIVO TXT
+    dbSelectArea( cNewAlias )
+    ( cNewAlias )->( DbAppend() )
+    ( cNewAlias )->LINHA	:= Str( nItem , 5 )
+    ( cNewAlias )->DESCRI	:= cDes
+    ( cNewAlias )->CONTEU	:= cConteu
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintInc
+Impressao de inconssistencias da importacao
+
+@author
+@since
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+ Static Function fPrintInc()
+
+	Local cDescErro := ""
+	Local nPosUltEp := 0
+	Local nPosUltCr := 0
+	Local aError    := {}
+
+	Private oPrint
+	Private oFont12,oFont13,oFont20
+	Private lin
+
+	oFont12	:= TFont():New("Arial",10,10,,.T.,,,,.F.,.F.)
+	oFont13	:= TFont():New("Arial",09,09,,.F.,,,,.F.,.F.)
+	oFont20	:= TFont():New("Arial",12,12,,.T.,,,,.F.,.F.)
+
+	If !lIsBlind
+
+		oPrint	:= TMSPrinter():New(OemToAnsi(STR0035)) // "Erro na Importação"
+		oPrint:Setup()
+		oPrint:SetLandscape()
+
+	EndIf
+
+	lin      := 9999
+	nPag1    := 0
+	lNaoImpr := .T.
+
+	dbSelectArea( cNewAlias )
+	dbGoTop()
+	While !Eof()
+
+		cDescErro := AllTrim((cNewAlias)->DESCRI)
+
+		If !lIsBlind
+
+			If Len(cDescErro) > 172
+
+				nPosUltEp := RAt(" ",SubStr(cDescErro,1,172))
+				nPosUltCr := Len(cDescErro)
+
+				Somalin1(50,.T.)
+				oPrint:Say(lin,0110,(cNewAlias)->LINHA ,oFont13)
+				oPrint:Say(lin,0260,SubStr(cDescErro,1,nPosUltEp),oFont13)
+				oPrint:Say(lin,2800,(cNewAlias)->CONTEU,oFont13)
+
+				Somalin1(50,.T.)
+				oPrint:Say(lin,0110,"",oFont13)
+				oPrint:Say(lin,0260,SubStr(cDescErro,nPosUltEp+1,nPosUltCr),oFont13)
+				oPrint:Say(lin,2800,"",oFont13)
+			Else
+				Somalin1(50,.T.)
+				oPrint:Say(lin,0110,(cNewAlias)->LINHA ,oFont13)
+				oPrint:Say(lin,0260,(cNewAlias)->DESCRI,oFont13)
+				oPrint:Say(lin,2800,(cNewAlias)->CONTEU,oFont13)
+			EndIf
+
+		Else
+			aAdd(aError, cDescErro)
+		EndIf
+
+		dbSelectArea( cNewAlias )
+		dbSkip()
+	EndDo
+
+	aAdd(aMNTLog, aError)
+
+	If !lIsBlind
+
+		oPrint:EndPage()
+		oPrint:Preview()
+
+	EndIf
+
+ Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintInc
+Impressao de inconssistencias da importacao
+
+@author
+@since
+@version MP10,MP11
+@Return Nil
+/*/
+//---------------------------------------------------------------------
+ Static Function Somalin1(nLinha,lCabec)
+
+	Local cNomCpl := AllTrim(cCodLay) + " - " + AllTrim(cLayout)
+	Local cNomTab := AllTrim(cTabela) + " - " + AllTrim(A715DesTab(cTabela))
+	Local cExeDta := AllTrim(cForDta) + " - " + AllTrim(fMontaData(cForDta))
+	Local cExeDec := AllTrim(cSepDec) + " - " + STR0036 + AllTrim(IIf(cSepDec=='1','"."','","')) // "Separado por "
+
+	lin += nLinha
+	If lin > 2300
+		If !lNaoImpr
+			oPrint:EndPage()
+		Endif
+		nPag1++
+		oPrint:StartPage()
+
+		cFileLogo := NGLOCLOGO()
+
+		If File(cFileLogo)
+			oPrint:SayBitMap(150,150,cFileLogo,250,120)
+		EndIf
+
+		oPrint:Say(200,0450,STR0037 + AllTrim(cNomCpl),oFont20) // "Cód. Layout..: "
+		oPrint:Say(260,0450,STR0038 + AllTrim(cNomTab),oFont20) // "Tabela Prin...: "
+		oPrint:Say(200,1900,STR0039 + AllTrim(cExeDta),oFont20) // "Formato Data: "
+		oPrint:Say(260,1900,STR0040 + AllTrim(cExeDec),oFont20) // "Sep. Decimal.: "
+
+		lin := 400
+		If lCabec
+			oPrint:Line(lin-10,100,lin-10,3500)
+			oPrint:Line(lin+60,100,lin+60,3500)
+			oPrint:Say(lin,0110,STR0041,oFont12) // "Linha"
+			oPrint:Say(lin,0260,STR0042,oFont12) // "Mensagem"
+			oPrint:Say(lin,2800,STR0043,oFont12) // "Registro"
+			lin := 470
+		Endif
+		lNaoImpr := .F.
+
+	Endif
+
+ Return .T.
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} fVerDtHra()
+
+Essa função é baseada na função fVerAbast do MNTA631 a qual verifica se o cliente não está
+informando hora na importação. Caso o mesmo não esteja informando, irá fazer validações para que
+some um minuto a cada abastecimento para o mesmo Posto/Frota.
+
+@author Maicon André Pinheiro
+@since 20/09/2016
+
+@return .T.
+/*/
+//----------------------------------------------------------------
+Static Function fVerDtHra(aRegTXT,aTR6Incl)
+
+	Local nLinha    := 0
+	Local nTamTXT   := Len(aRegTXT)
+	Local cHrAbast  := ""
+
+	nPosFil  := aScan(aTR6Incl,{|x| AllTrim(Upper(x[2])) == "TR6_FILIAL"})
+	nPosPla  := aScan(aTR6Incl,{|x| AllTrim(Upper(x[2])) == "TR6_PLACA" })
+	nPosDta  := aScan(aTR6Incl,{|x| AllTrim(Upper(x[2])) == "TR6_DTABAS"})
+	nPosHra  := aScan(aTR6Incl,{|x| AllTrim(Upper(x[2])) == "TR6_HRABAS"})
+	cPlaca   := aTR6Incl[nPosPla][1]
+	dDtAbast := aTR6Incl[nPosDta][1]
+
+	If nPosFil == 0
+		cFilTR6 := xFilial("TR6")
+	Else
+		cFilTR6 := aTR6Incl[nPosFil][1]
+	EndIf
+
+	If nPosHra > 0
+		cHrAbast := aTR6Incl[nPosHra][1]
+	EndIf
+
+	//Verifica se a hora do TXT é vázia, pois caso tenha sido preenchida não necessita dessa validação.
+	If nPosHra == 0 .Or. (nPosHra > 0 .And. Empty(cHrAbast) )
+
+		cHrAbast := SubStr(Time(),1,5)
+
+		//Verifica se existe uma entrada no mesmo minuto
+		dbSelectArea("TR6")
+		dbSetOrder(2)
+		If dbSeek(cFilTR6+cPlaca+DtoS(dDtAbast)+cHrAbast)
+			While !Eof() .And. TR6->TR6_FILIAL == cFilTR6 .And. TR6->TR6_PLACA == cPlaca .And. TR6->TR6_DTABAS == dDtAbast .And. TR6->TR6_HRABAS == cHrAbast
+
+				cHrAbast := MtoH((HtoM(cHrAbast) + 1 ))
+				If cHrAbast = "24:00"
+					cHrAbast := "00:00"
+				EndIf
+
+				If cHrAbast = "00:00"
+					dDtAbast := dDtAbast + 1
+				EndIf
+
+				dbSeek(cFilTR6+cPlaca+DtoS(dDtAbast)+cHrAbast)
+
+			End
+		EndIf
+
+		For nLinha := 1 To nTamTXT
+
+			nPosPla := aScanX(aRegTXT[nLinha],{|x,y|x[2] = "TR6_PLACA"  .And. y > 0 })
+			nPosDta := aScanX(aRegTXT[nLinha],{|x,y|x[2] = "TR6_DTABAS" .And. y > 0 })
+			nPosHr2 := aScanX(aRegTXT[nLinha],{|x,y|x[2] = "TR6_HRABAS" .And. y > 0 })
+
+			If nPosHr2 > 0 .And. aRegTXT[nLinha][nPosPla][1] == cPlaca .And. aRegTXT[nLinha][nPosDta][1] == dDtAbast .And. aRegTXT[nLinha][nPosHr2][1] == cHrAbast
+				cHrAbast := MtoH((HtoM(cHrAbast) + 1 ))
+				If cHrAbast = "24:00"
+					cHrAbast := "00:00"
+				EndIf
+
+				If cHrAbast = "00:00"
+					dDtAbast := dDtAbast + 1
+				EndIf
+			EndIf
+
+		Next nLinha
+
+		nPosDta := aScanX(aRegTXT[nTamTXT],{|x,y|x[2] = "TR6_DTABAS" .And. y > 0 })
+		nPosHr2 := aScanX(aRegTXT[nTamTXT],{|x,y|x[2] = "TR6_HRABAS" .And. y > 0 })
+		If nPosHr2 > 0
+			aRegTXT[nTamTXT][nPosHr2][1] := cHrAbast
+		Else
+			aAdd(aRegTXT[nTamTXT],{cHrAbast,"TR6_HRABAS"})
+		EndIf
+
+		aRegTXT[nTamTXT][nPosDta][1] := dDtAbast
+
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f716VldEnt
+
+Validações de entrada no sistema.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 21/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f716VldEnt()
+
+	If !AliasInDic("TQ7")
+		If !lIsBlind
+			MsgStop("Sistema não parametrizado para o uso desse programa. Favor entrar em contato com o Administrador do sistema.") // ""
+		EndIf
+		Return .F.
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fCheckTR6
+Monta o log para exibição após a finalização da importação.
+
+@type static function
+
+@author Wexlei Silveira
+@since 05/04/2021
+
+@param nRecno    , Numerico, Linha do arquivo de importacao
+@param aInclTR6  , Array   , Dados da importacao
+@param aLogImport, Array   , Log da importacao para atualizacao
+@param aDelAbast , Array   , Recnos da TR6 a serem excluidos ao final do processo
+
+@return lImportOK, Se o registro será gravado na TR6
+/*/
+//------------------------------------------------------------------
+Static Function fCheckTR6( nRecno, aInclTR6, aLogImport, aDelAbast )
+
+	Local cFilTR6    := ''
+	Local lImportOK  := .T.
+	Local cAliasQry
+
+	Local nTamPlaca  := GetSx3Cache('TR6_PLACA','X3_TAMANHO')
+	Local nPosFil    := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_FILIAL' })
+	Local nPosPlaca  := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_PLACA'  })
+	Local nPosDtAba  := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_DTABAS' })
+	Local nPosHrAba  := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_HRABAS' })
+	Local nPosCNPJ   := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_CNPJ'   })
+	Local nPosTipCom := aScan(aInclTR6, {|x| AllTrim(Upper(x[2])) == 'TR6_TIPCOM' })
+
+	If nPosPlaca > 0 .And. nPosDtAba > 0 .And. nPosHrAba > 0 .And. nPosCNPJ > 0 .And. nPosTipCom > 0
+
+		If nPosFil == 0
+			cFilTR6 := xfilial('TR6')
+		Else
+			cFilTR6 := aInclTR6[nPosFil,1]
+		EndIf
+
+		// -----------------------------------------------------------
+		// Verifica se o abastecimento já foi importado (repetido)
+		// -----------------------------------------------------------
+		dbSelectArea('TR6')
+		dbSetOrder(2) // TR6_FILIAL, TR6_PLACA, TR6_DTABAS, TR6_HRABAS
+		If dbSeek(cFilTR6+Padr(aInclTR6[nPosPlaca,1], nTamPlaca)+DToS(aInclTR6[nPosDtAba,1])+aInclTR6[nPosHrAba,1])
+
+			If !Empty(TR6->TR6_DTPROC) // Verifica se a importação já foi analisada
+
+				// -----------------------------------------------------------
+				// Verifica se o abastecimento já foi consistido e validado (repetido) TQN/TQQ
+				// -----------------------------------------------------------
+				cAliasQry := GetNextAlias()
+
+				BeginSQL Alias cAliasQry
+
+					SELECT
+						'TQN' TABELA, COUNT(TQN_PLACA) TOTABAST
+					FROM
+						%table:TQN% TQN
+					WHERE   TQN.TQN_DTABAS = %exp:aInclTR6[ nPosDtAba , 1 ]%
+						AND TQN.TQN_HRABAS = %exp:aInclTR6[ nPosHrAba , 1 ]%
+						AND TQN.TQN_PLACA  = %exp:aInclTR6[ nPosPlaca , 1 ]%
+						AND TQN.TQN_CODCOM = %exp:aInclTR6[ nPosTipCom, 1 ]%
+						AND TQN.%NotDel%
+
+					UNION
+
+					SELECT
+						'TQQ' TABELA, COUNT(TQQ_PLACA) TOTABAST
+					FROM
+						%table:TQQ% TQQ
+					WHERE   TQQ.TQQ_FILIAL = %xFilial:TQQ%
+						AND TQQ.TQQ_PLACA  = %exp:aInclTR6[ nPosPlaca , 1 ]%
+						AND TQQ.TQQ_DTABAS = %exp:aInclTR6[ nPosDtAba , 1 ]%
+						AND TQQ.TQQ_HRABAS = %exp:aInclTR6[ nPosHrAba , 1 ]%
+						AND TQQ.TQQ_CODCOM = %exp:aInclTR6[ nPosTipCom, 1 ]%
+						AND TQQ.%NotDel%
+
+				EndSQL
+
+				// Primeiro registro sempre será referente à TQN
+				If (cAliasQry)->TOTABAST == 0
+
+					(cAliasQry)->( dbSkip() )
+
+					// Segundo registro sempre será referente à TQQ
+					If (cAliasQry)->TOTABAST == 0
+
+						// Registro já consistido e não existente nas tabelas de Abatecimento rejeitados (TQQ) e Abastecimento Manual (TQN), excluído da tabela de abastecimentos importados (TR6) e importado novamente com os dados atuais
+						aAdd( aLogImport, {nRecno, 4} )
+						aAdd( aDelAbast, TR6->(Recno()) )
+
+					Else
+						// Registro não importado. Abastecimento já consistido e encontrado na tabela de Abastecimentos rejeitados (TQQ)
+						aAdd( aLogImport, {nRecno, 2} )
+						lImportOK := .F.
+
+					EndIf
+
+				Else
+					// Registro não importado. Abastecimento já consistido e encontrado na tabela de Abastecimentos (TQN)
+					aAdd( aLogImport, {nRecno, 3} )
+					lImportOK := .F.
+
+				EndIf
+
+				(cAliasQry)->( dbCloseArea() )
+
+			Else
+
+				// Registro de mesma chave econtrando na tabela abastecimentos importados (TR6) ainda não consistido, importado novamente com os dados atuais
+				aAdd( aLogImport, {nRecno, 5} )
+				aAdd( aDelAbast, TR6->(Recno()) ) // Armazena recno TR6 a ser excluída
+
+			EndIf
+
+		Else
+
+			// Adiciona o abastecimento ao log como importado
+			aAdd(aLogImport, {nRecno, 1})
+
+		EndIf
+
+	Else
+
+		// Adiciona o abastecimento ao log como importado
+		aAdd(aLogImport, {nRecno, 1})
+
+	EndIf
+
+Return lImportOK
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fGeraLog
+Monta o log para exibição após a finalização da importação.
+
+@type static function
+
+@author Wexlei Silveira
+@since 05/04/2021
+
+@param aLogImport, Array, Array com as linhas do arquivo e seu respectivo
+resultado: {{nLinha, nAção},{nLinha, nAção}}
+
+@return Nil
+/*/
+//------------------------------------------------------------------
+Static Function fGeraLog(aLogImport)
+
+	Local cLog   := ''
+	Local nLog   := 1
+	Local cLinha := ''
+
+	cLog := STR0053 // "Importação realizada com sucesso!"
+	cLog += Chr(10) // Quebra de linha
+	cLog += Chr(10) // Quebra de linha
+	cLog += STR0051 + '   ' + STR0056 // Linha   Ação
+	cLog += Chr(10) // Quebra de linha
+
+	For nLog := 1 To Len(aLogImport)
+
+		cLinha := cValToChar(aLogImport[nLog, 1])
+		cLog   += Padr(cLinha, 9) // Linha
+
+		// Ação
+		If aLogImport[nLog, 2] == 1
+			cLog += STR0052 // "Registro importado"
+		ElseIf aLogImport[nLog, 2] == 2
+			cLog += STR0050 // "Registro não importado. Abastecimento já consistido e encontrado na tabela de Abastecimentos rejeitados (TQQ)"
+		ElseIf aLogImport[nLog, 2] == 3
+			cLog += STR0055 // "Registro não importado. Abastecimento já consistido e encontrado na tabela de Abastecimentos (TQN)"
+		ElseIf aLogImport[nLog, 2] == 4
+			cLog += "Registro já consistido e não existente nas tabelas de Abatecimento rejeitados (TQQ) e Abastecimento Manual (TQN), excluído da tabela de abastecimentos importados (TR6) e importado novamente com os dados atuais"
+		ElseIf aLogImport[nLog, 2] == 5
+			cLog += "Registro de mesma chave econtrando na tabela abastecimentos importados (TR6) ainda não consistido, importado novamente com os dados atuais"
+		EndIf
+
+		cLog += Chr(10) // Quebra de linha
+
+	Next nLog
+
+	If !lIsBlind
+
+		NGMSGMEMO(STR0001, cLog) // Importação de Abastecimento
+		
+	Else
+
+		aAdd(aMNTLog, {cLog})
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SchedDef
+Execução de Parâmetros na Definição do Schedule
+@type function
+
+@author João Ricardo Santini Zandoná
+@since 23/03/2023
+
+@return Array, Conteudo com as definições de parâmetros para Schedule
+/*/
+//---------------------------------------------------------------------
+Static Function SchedDef()
+Return {"P", "PARAMDEF", "", {}, "Param"}
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMNTLog
+Gera arquivo log no formato TXT com as informações recebidas.
+@type function
+
+@author  João Ricardo Santini Zandoná
+@since   23/03/2023
+
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function fMNTLog()
+
+	Local nInd    := 0
+	Local nHandle := 0
+	Local cFile   := 'MNTIMPLOG.txt'
+	
+	If File( cFile )
+
+		Ferase( cFile )
+
+	EndIf
+
+	nHandle := fCreate( cFile )
+
+	For nInd := 1 To Len( aMNTLog )
+
+		fWrite( nHandle, aMNTLog[nInd, 1] + ';' ) 
+
+	Next nInd
+
+	FWrite( nHandle, Chr( 13 ) + Chr( 10 ) )
+
+	FClose( nHandle )
+	
+Return

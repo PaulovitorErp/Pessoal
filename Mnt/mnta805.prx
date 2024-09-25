@@ -1,0 +1,1859 @@
+#INCLUDE "MNTA805.ch"
+#include "Protheus.ch"
+
+// A partir do release 12.1.33 o tipo modelo '*' representa TODOS, assim o campo de tipo modelo
+// que estiver preenchido com '*' não tem um tipo modelo especifico.
+Static lRel12133 := GetRPORelease() >= '12.1.033'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA805
+Cadastro de Documentos Obrigatorios por Veículo
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA805()
+
+	Local aNGBEGINPRM := {}
+	Local aCores      := {  { "ST9->T9_SITBEM == 'A' .And. ST9->T9_SITMAN == 'A'", 'BR_VERDE'   },;
+							{ "ST9->T9_SITBEM == 'A' .And. ST9->T9_SITMAN == 'I'", 'BR_AMARELO' },;
+							{ "ST9->T9_SITBEM == 'I' .And. ST9->T9_SITMAN == 'A'", 'BR_AZUL'    },;
+							{ "ST9->T9_SITBEM == 'I' .And. ST9->T9_SITMAN == 'I'", 'BR_VERMELHO'},;
+							{ "ST9->T9_SITBEM == 'T'"                            , 'BR_CINZA'   } }
+
+	Private aChkDel   := {}
+	Private bNGGRAVA  := { || MNTA805GRA() }
+	Private cCadastro := OemtoAnsi( STR0004 ) //Cadastro de Documentos Obrigatórios por Veículo
+	Private lExiste   := .T.
+	Private lVencim   := .T.
+	Private lIntegTMS := If(Alltrim(GetMv('MV_NGMNTMS')) <> 'N',.T.,.F.)
+	Private lModoTS1  := If(NGSX2MODO("TS1") = 'C',.T.,.F.)
+	Private aRotina   := {	{ STR0001, 'AxPesqui'  , 0, 1       },; // Pesquisar
+					 		{ STR0003, 'MNA805DOC' , 0, 3       },; // Documento
+					 		{ STR0061, 'NG805LEGE' , 0, 7,, .F. } } // Legenda
+
+	// Variaveis Integracao com modulo Financeiro
+	Private lIntFin    := SuperGetMv("MV_NGMNTFI",.F.,"N") == "S" //Verifica se ha integracao com modulo Financeiro
+	Private lConPag    := .T.
+	Private cParSE2Doc := NGFI1DUP()                              	// Retorna conteudo do parametro MV_1DUP
+
+	If !IsInCallStack( 'MNTA806' )
+
+		If GetRPORelease() >= '12.1.025'
+
+			// A rotina Documentos Obrig. por Veiculo (MNTA805) não deve ser utilizada diretamente pelo menu a partir da versão 12.1.25
+			// Substitua a rotina MNTA805 presente no menu do módulo SIGAMNT pela nova rotina MNTA806.'
+			Help( '', 1, 'MNTA805',, STR0064, 2, 0,,,,,, { STR0065 } )
+
+		Else
+
+			// Ponto de entrada para adicionar opções ao menu funcional.
+			If ExistBlock( 'MNTA8053' )
+
+				aRotina := ExecBlock( 'MNTA8053', .F., .F., { aRotina } )
+
+			EndIf
+
+			aNGBEGINPRM := NGBEGINPRM() // Guarda conteúdo e declara variaveis padroes
+
+			DbSelectArea("ST9")
+			DbSetOrder(01)
+			Dbgotop()
+			If ExistBlock("MNTA8051")
+				cFilMbroST9 := ExecBlock("MNTA8051",.F.,.F.)
+			Else
+				cFilMbroST9 := "T9_CATBEM = '2' OR T9_CATBEM = '4'"
+			EndIf
+
+			// Exibe somente veículos da mesma filial
+			cFilMbroST9 += "AND T9_FILIAL = '" + xFilial( "ST9" ) + "'"
+
+			//+--------------------------------------------------------------+
+			//| Inibe a tela de escolha da Filial 							 |
+			//+--------------------------------------------------------------+
+			SetBrwCHGAll( .F. )
+
+			MBROWSE(6,1,22,75,"ST9",,,,,,aCores,,,,,,,,cFilMbroST9)
+
+			Dbselectarea("ST9")
+			Set Filter TO
+			Dbsetorder(1)
+
+			NGRETURNPRM( aNGBEGINPRM ) // Retorna conteudo de variaveis padroes
+
+		EndIf
+
+	Else
+
+		MNA805DOC()
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805DOC
+Tela de cadastro de Documentos
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805DOC()
+
+	Local aOldRot      := aClone(aRotina)
+	Local aOldArea     := GetArea()
+	Local cOldProg     := FunName()
+	Local lAnoModelo   := .F.
+
+	Private aIndTS1    := {}
+	Private cUfEmis    := Space(02)
+	Private cRenava    := Space(15)
+	Private cCusto     := Space(20)
+	Private cNGFilCad  := xFilial("TS1")
+	Private cFilCad    := cNGFilCad
+	Private cAnoST9    := "ST9->T9_ANOMOD"
+	Private lMostraMsg := .T.
+
+	SetFunName( 'MNTA805' ) // Assume a função posicionada como Pai.
+
+	If ExistBlock("MNTA8052")
+		ExecBlock("MNTA8052",.F.,.F.)
+	Endif
+
+	lAnoModelo := Empty( &( cAnoST9 ) )
+
+	If lAnoModelo
+
+		If 'FAB' $ cAnoST9
+
+			MsgInfo(STR0036+Chr(13)+Chr(10)+; 				  //"Ano de Fabricação do Bem não está preenchido."
+			STR0037+Chr(13)+Chr(10)+Chr(13)+Chr(10)+; //"Favor preencher este campo no cadastro do Bem (T9_ANOFAB)."
+			STR0035,STR0017) 						  //"Recursos se encontram limitados."###"Atenção"
+
+		Else
+
+			MsgInfo(STR0033+Chr(13)+Chr(10)+; 		   //"Ano do Modelo do Bem não está preenchido."
+			STR0034+Chr(13)+Chr(10)+Chr(13)+Chr(10)+;  //"Favor preencher este campo no cadastro do Bem (T9_ANOMOD)."
+			STR0035,STR0017) 						   //"Recursos se encontram limitados."###"Atenção"
+
+		EndIf
+
+	EndIf
+
+	aRotina := MenuDef( lAnoModelo )
+
+	cCusto := ST9->T9_CCUSTO
+	cRenava := ST9->T9_RENAVAM
+	cUfEmis := ST9->T9_UFEMPLA
+	If lIntegTMS
+		dbSelectArea("DA3")
+		dbSetOrder(01)
+		If dbSeek(xFilial("DA3")+ST9->T9_CODTMS)
+			cUfEmis := DA3->DA3_ESTPLA
+			cRenava := DA3->DA3_RENAVA
+
+		Endif
+	Endif
+
+	SetBrwCHGAll( .F. ) // Nao apresentar a tela para informar a filial
+
+	Dbselectarea("TS1")
+	cFilMbroTS1 := "TS1_FILIAL = '"+xFilial('TS1')+"' And TS1_CODBEM = '"+ST9->T9_CODBEM+"'"
+	MBROWSE(6,1,22,75,"TS1",,,,,,,,,,,,,,cFilMbroTS1)
+
+	Dbselectarea("TS1")
+	Set Filter TO
+	Dbsetorder(1)
+
+	SetFunName( cOldProg ) // Retoma a função de origem como Pai.
+
+	aRotina := aClone(aOldRot)
+	RestArea(aOldArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805DPA
+Tela de cadastro de Documento Padrao
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param cAlias, characters, descricao
+@param nReg, numeric, descricao
+@param nOpcX, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805DPA(cAlias,nReg,nOpcX)
+
+	Local i
+	Local aOldArea   := GetArea()
+	Local oPnlClient
+	Local oPnlTop
+	Local oPnlBottom
+	Local oTmpTbl1
+	Local aAreaST9
+	Local cAliasQry := GetNextAlias()
+	Local cQuery    := ''
+
+	Private aSize    := MsAdvSize(,.F.,430)
+	Private aObjects := {}
+	Private aChoice  := {}
+	Private lInverte := .F.
+	Private aMark 	 := {}
+	Private oMark
+	Private oMenu
+	Private cMarca   := GetMark()
+	Private nOpca
+	Private dVencim  := CTOD('  /  /    '), dEmissao := CTOD('  /  /    ')
+	Private aDoctos  := {}
+	Private aVencim  := {}
+	Private aParUnit := {}
+	Private cGerSeq  := ""
+	Private cTRBB    := GetNextAlias()
+
+	If ST9->T9_SITBEM == "I"
+		If !MsgYesNo(STR0044,STR0017) //"O bem se encontra inativo! Deseja prosseguir com a operação?"###"Atenção"
+			Return .f.
+		EndIf
+	Endif
+
+	// Consiste conteudo do parametro MV_1DUP
+	If !NGFIV1DUP()
+		Return .F.
+	Endif
+
+	Aadd(aObjects,{050,050,.t.,.t.})
+	Aadd(aObjects,{100,100,.t.,.t.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+	bCampo  := {|nCPO| Field(nCPO) }
+
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	FOR i := 1 TO FCount()
+		cCampoSim := (EVAL(bCampo,i))
+		M->&(EVAL(bCampo,i)) := &(EVAL(bCampo,i))
+	Next i
+
+	aDBF := {}
+	Aadd(aDBF,{"ASSI"    , "C" , 02,0})
+	Aadd(aDBF,{"DOCTO"   , "C" , 06,0})
+	Aadd(aDBF,{"DESDOC"  , "C" , 30,0})
+	Aadd(aDBF,{"VALOR"   , "N" , 09,2})
+	Aadd(aDBF,{"PARCELAS", "N" , 03,0})
+	If lIntFin
+		Aadd(aDBF,{"NUMSE2"	, "C" , TAMSX3("E2_NUM")[1],0})
+		Aadd(aDBF,{"TIPO"		, "C" , 03,0})
+		Aadd(aDBF,{"NATURE"	, "C" , 10,0})
+		Aadd(aDBF,{"PREFIX"	, "C" , 03,0})
+		Aadd(aDBF,{"FORNEC"	, "C" , TAMSX3("A2_COD")[1],0})
+		Aadd(aDBF,{"LOJA"		, "C" , TAMSX3("A2_LOJA")[1],0})
+	Endif
+	If lConPag
+		Aadd(aDBF,{"CONPAG"	, "C" , TAMSX3("TS1_CONPAG")[1],0})
+	Endif
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1  := FWTemporaryTable():New( cTRBB, aDBF )
+	//Cria indices
+	oTmpTbl1:AddIndex( "Ind01" , {"DOCTO"}  )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	aAdd(aMark,{"ASSI"    ,NIL," "    ,})
+	aAdd(aMark,{"DOCTO"   ,NIL,STR0003,})  //"Documento"
+	aAdd(aMark,{"DESDOC"  ,NIL,STR0011,})  //"Descrição"
+	aAdd(aMark,{"VALOR"   ,NIL,STR0012,})  //"Valor"
+
+	If !lIntFin .And. !lConpag
+		aAdd(aMark,{"PARCELAS",NIL,STR0013,}) //"Parcelas"
+	ElseIf lIntFin
+		Aadd(aMark,{"TIPO"	 ,NIL,AllTrim(NGRETTITULO("TS1_TIPO")) ,})
+		Aadd(aMark,{"NATURE"	 ,NIL,AllTrim(NGRETTITULO("TS1_NATURE")) ,})
+		Aadd(aMark,{"PREFIX"	 ,NIL,AllTrim(NGRETTITULO("TS1_PREFIX")) ,})
+		Aadd(aMark,{"FORNEC"	 ,NIL,AllTrim(NGRETTITULO("TS1_FORNEC")) ,})
+		Aadd(aMark,{"LOJA"	 ,NIL,AllTrim(NGRETTITULO("TS1_LOJA")) ,})
+	Endif
+
+	If lConpag
+		Aadd(aMark,{"CONPAG"  ,NIL,AllTrim(NGRETTITULO("TS1_CONPAG")) ,})
+	Endif
+
+	cQuery := " SELECT DISTINCT(TS1.TS1_DOCTO)"
+	cQuery += " FROM " + RetSqlName("TS1")+" TS1 "
+	cQuery += " WHERE   TS1.TS1_CODBEM =  '" + ST9->T9_CODBEM  + "'"
+	cQuery += " AND   TS1.D_E_L_E_T_ <> '*' AND TS1_FILIAL = "+ ValToSql(xFilial('TS1'))
+	cQuery += " ORDER BY TS1.TS1_DOCTO "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	dbGotop()
+	While !Eof()
+		AADD(aDoctos,{(cAliasQry)->TS1_DOCTO})
+		dbSkip()
+	End
+	(cAliasQry)->(dbCloseArea())
+
+	cAliasQry := GetNextAlias()
+
+	cQuery := " SELECT TS7.TS7_DOCTO, TS7.TS7_VALOR"
+	cQuery += " FROM " + RetSqlName("TS7")+" TS7 "
+	cQuery += " WHERE TS7.TS7_CODFAM =  '" + ST9->T9_CODFAMI + "'"
+	If lRel12133
+		// ----------------------------------------------------------------------------------------
+		// Busca documentos do veículo de acordo com a família e tipo modelo
+		// Prioriza registros da TS7 que possuam exatamente a mesma família e tipo modelo do veículo
+		// Caso não encontre, busca por registros da mesma família mas com o tipo modelo '*' (TODOS)
+		// ----------------------------------------------------------------------------------------
+		cQuery += "AND ( TS7.TS7_TIPMOD = " + ValToSQL( ST9->T9_TIPMOD )
+		cQuery += "    OR ( TS7.TS7_TIPMOD = '*' "
+		cQuery += "        AND NOT EXISTS ( "
+		cQuery += "            SELECT TS5.TS5_TIPMOD "
+		cQuery += "                FROM " + RetSqlName( 'TS5' ) + " TS5 "
+		cQuery += "            WHERE   TS5.TS5_FILIAL = " + ValToSQL( xFilial( 'TS5' ) )
+		cQuery += "                AND TS5.TS5_CODFAM = " + ValToSQL( ST9->T9_CODFAMI )
+		cQuery += "                AND TS5.TS5_TIPMOD = " + ValToSQL( ST9->T9_TIPMOD )
+		cQuery += "                AND TS5.TS5_DOCTO  = TS7.TS7_DOCTO "
+		cQuery += "                AND TS5.D_E_L_E_T_ <> '*' ) ) )"
+	Else
+		cQuery += " AND   TS7.TS7_TIPMOD =  '" + ST9->T9_TIPMOD  + "'"
+	EndIf
+	cQuery += " AND   TS7.TS7_ANO    =  '" + &(cAnoST9) 		+ "'"
+	For i := 1 to Len(aDoctos)
+		cQuery += " AND TS7.TS7_DOCTO <>  '" + aDoctos[i][1]  + "'"
+	Next
+	cQuery += " AND   TS7.D_E_L_E_T_ <> '*' AND TS7_FILIAL = "+ ValToSql(xFilial('TS7'))
+	cQuery += " ORDER BY TS7.TS7_DOCTO "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+
+	(cAliasQry)->( dbGoTop() )
+	If (cAliasQry)->( !Eof() )
+		While (cAliasQry)->( !Eof() )
+			IncProc(STR0014,STR0015) //"Aguarde..."###"Processando Registros..."
+			DbSelectArea(cTRBB)
+			DbSetOrder(01)
+			If !DbSeek((cAliasQry)->TS7_DOCTO)
+				RecLock((cTRBB), .T.)
+				(cTRBB)->ASSI     := '  '
+				(cTRBB)->DOCTO    := (cAliasQry)->TS7_DOCTO
+				dbSelectArea("TS0")
+				dbSetOrder(01)
+				If dbSeek(xFilial("TS0")+(cAliasQry)->TS7_DOCTO)
+					(cTRBB)->DESDOC := TS0->TS0_NOMDOC
+					If lIntFin
+						(cTRBB)->TIPO   := TS0->TS0_TIPO
+						(cTRBB)->NATURE := TS0->TS0_NATURE
+						(cTRBB)->PREFIX := TS0->TS0_PREFIX
+						(cTRBB)->FORNEC := TS0->TS0_FORNEC
+						(cTRBB)->LOJA   := TS0->TS0_LOJA
+					Endif
+					If lConPag
+						(cTRBB)->CONPAG := TS0->TS0_CONPAG
+					Endif
+				Else
+					(cTRBB)->DESDOC := ''
+				Endif
+				(cTRBB)->VALOR    := (cAliasQry)->TS7_VALOR
+				(cTRBB)->PARCELAS := 1
+				MsUnLock(cTRBB)
+			Endif
+			DbSelectArea(cAliasQry)
+			DbSkip()
+		End
+		(cAliasQry)->(dbCloseArea())
+
+		DbSelectArea("ST9")
+		Define MsDialog oDlg Title Ccadastro From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd Pixel
+		aAreaST9 := GetArea()
+
+		// Busca tipo modelo e sua descrição
+		DbSelectArea("TQR")
+		DbSetOrder(01)
+		dbSeek( xFilial( 'TQR' ) + M->T9_TIPMOD )
+
+		DbSelectArea("ST6")
+		DbSetOrder(01)
+		dbSeek(xFilial("ST6") + M->T9_CODFAMI)
+
+		oPnlClient := TPanel():New(00,00,,oDlg,,,,,,aSize[6],aSize[5])
+		oPnlClient:Align := CONTROL_ALIGN_ALLCLIENT
+		oPnlTop := TPanel():New(00,00,,oPnlClient,,,,,,0,50)
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+		@ 10,001 Say 'Bem' of oPnlTop Color CLR_HBLUE Pixel
+		@ 10,035 MsGet oCod Var M->T9_CODBEM Picture "@!" SIZE 75,06 When .F. of oPnlTop Pixel
+		@ 10,150 Say 'Nome do Bem' of oPnlTop Color CLR_HBLUE Pixel
+		@ 10,190 MsGet oDesc Var M->T9_NOME Picture "@!" SIZE 160,06 When .F. of oPnlTop Pixel
+		@ 22,001 Say 'Tipo Modelo' of oPnlTop Color CLR_HBLUE Pixel
+		@ 22,035 MsGet oTip Var M->T9_TIPMOD Picture "@!" SIZE 75,06 When .F. of oPnlTop Pixel
+		@ 22,150 Say 'Desc. Mod.' of oPnlTop Color CLR_BLACK Pixel
+		@ 22,190 MsGet oDesm Var TQR->TQR_DESMOD Picture "@!" SIZE 160,06 When .F. of oPnlTop Pixel
+		@ 34,001 Say 'Familia' of oPnlTop Color CLR_HBLUE Pixel
+		@ 34,035 MsGet oCodf Var M->T9_CODFAMI Picture "@!" SIZE 75,06 When .F. of oPnlTop Pixel
+		@ 34,150 Say 'Desc. Fam.' of oPnlTop Color CLR_BLACK Pixel
+		@ 34,190 MsGet oDesf Var ST6->T6_NOME Picture "@!" SIZE 160,06 When .F. of oPnlTop Pixel
+
+		RestArea(aAreaST9)
+		DbSelectarea(cTRBB)
+		DbGotop()
+
+		oPnlBottom := TPanel():New(00,00,,oPnlClient,,,,,,aSize[6]-120,aSize[5])
+		oPnlBottom:Align := CONTROL_ALIGN_ALLCLIENT
+		oMark := MsSelect():New((cTRBB),"ASSI",,aMark,@lInverte,@cMarca,{aPosObj[2,1] - 120,aPosObj[2,2],aPosObj[2,3],aPosObj[2,4] + 3,},,,oPnlBottom)
+		oMark:oBrowse:lHasMark = .t.
+		oMark:oBrowse:lCanAllMark := .f.
+		oMark:bMark := { || MNA805MA( cMarca ) }
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+		Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{|| IF(MNA805VEN(),(nOpca:=1,oDlg:End()),nOpca := 0)},{||nOpca:= 0,oDlg:End()}) Centered
+
+		If nOpca == 1
+			Processa( { |lEnd| ProcDocPd() }, STR0017 ) //"Atenção"
+		Endif
+
+	Else
+		If Len(aDoctos) == 0
+			MsgInfo(STR0045,STR0017) //"Não há Documento Padrão disponível."###"Atenção"
+		Else
+			MsgInfo(STR0016,STR0017) //"Não existe Documento Padrão diferente do(s) já selecionado(s)."###"Atenção"
+		Endif
+	Endif
+
+	// Retorna conteudo do parametro MV_1DUP
+	cParSE2Doc := NGFI1DUP()
+
+	oTmpTbl1:Delete()
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ProcDocPd
+Processa documento.
+@author Hugo R. Pereira
+@since 17/09/12
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function ProcDocPd()
+
+	Local n
+	Local xIndParc
+
+	Local lRet       := .T.
+	Local nSomaParc  := 0
+	Local nPosVencim := 0
+
+	Local cCvSE2     := NGSEEKDIC("SX2","SE2",1,"X2_ARQUIVO")
+	Local lExSE2     := NGSX2MODO("SE2") == "C"
+
+	//BeginTran()
+	dbSelectArea(cTRBB)
+	dbGotop()
+	ProcRegua(RecCount())
+
+	While !Eof()
+		IncProc(STR0062 + AllTrim((cTRBB)->DOCTO) + "...") //"Atualizando Documento"
+		cGerSeq := ""
+
+		If !Empty((cTRBB)->ASSI)
+			dVencOld := dVencim
+			dVencim := dDataBase
+
+			If Len(aVencim) > 0
+				nPosVencim := aScan(aVencim, {|x| x[1] == AllTrim((cTRBB)->DOCTO)})
+
+				If nPosVencim > 0
+					dVencim    := aVencim[nPosVencim][2]
+					dEmissao   := aVencim[nPosVencim][3]
+
+					If lIntFin
+						cGerSeq    := aVencim[nPosVencim][4]
+					Endif
+
+					If lConPag
+						cCondPag   := aVencim[nPosVencim][10]
+					Endif
+
+				EndIf
+			EndIf
+
+			lTemParc := .F.
+			If lConPag
+				If (nPosPar := aScan(aParUnit,{|x| x[1] == (cTRBB)->DOCTO })) > 0
+					aParcelas := aClone(aParUnit[nPosPar][2])
+				Else
+					NGFICONDP(.F.,.F.,(cTRBB)->VALOR,cCondPag,dEmissao)
+				Endif
+				lTemParc := .T.
+			EndIf
+
+			If lIntFin
+				oIntFIN := NGIntFin():New()
+				oIntFIN:setOperation(3)
+				oIntFIN:setRelated("TS2")
+				oIntFIN:setValue("E2_PREFIXO",aVencim[nPosVencim][7])
+				oIntFIN:setValue("E2_NUM",aVencim[nPosVencim][4])
+				oIntFIN:setValue("E2_TIPO",aVencim[nPosVencim][5])
+				oIntFIN:setValue("E2_NATUREZ",aVencim[nPosVencim][6])
+				oIntFIN:setValue("E2_FORNECE",aVencim[nPosVencim][8])
+				oIntFIN:setValue("E2_LOJA",aVencim[nPosVencim][9])
+				oIntFIN:setValue("E2_EMISSAO",dEmissao)
+				oIntFIN:setValue("E2_ORIGEM",FunName())
+				oIntFIN:setValue("E2_MOEDA",1)
+				oIntFIN:setValue("E2_CCD",ST9->T9_CCUSTO)
+
+				oIntFIN:setValue("E2_ITEMD",ST9->T9_ITEMCTA)
+
+				oIntFIN:setParcelas(aParcelas)
+
+				If !oIntFIN:geraTitulo()
+					Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+					lRet := .F.
+					If !Empty(cGerSeq)
+						UnLockByName(cGerSeq+cCvSE2,.T.,lExSE2)
+					Endif
+				EndIf
+			EndIf
+
+			If lRet
+				// lTemParc := .F.
+				RecLock("TS1",.T.)
+				TS1->TS1_FILIAL := xFilial("TS1")
+				TS1->TS1_CODBEM := ST9->T9_CODBEM
+				TS1->TS1_PLACA  := ST9->T9_PLACA
+				TS1->TS1_DOCTO  := (cTRBB)->DOCTO
+				TS1->TS1_VALOR  := (cTRBB)->VALOR
+				TS1->TS1_UFEMIS := cUfEmis
+				TS1->TS1_DTEMIS := dEmissao
+
+				If lConPag
+
+					TS1->TS1_DTVENC := aParcelas[1][1]
+
+					If lIntFin
+						TS1->TS1_NUMSE2 := aVencim[nPosVencim][4]
+						TS1->TS1_TIPO   := aVencim[nPosVencim][5]
+						TS1->TS1_NATURE := aVencim[nPosVencim][6]
+						TS1->TS1_PREFIX := aVencim[nPosVencim][7]
+						TS1->TS1_FORNEC := aVencim[nPosVencim][8]
+						TS1->TS1_LOJA   := aVencim[nPosVencim][9]
+					Endif
+
+					TS1->TS1_CONPAG := cCondPag
+					TS1->TS1_QTDPAR := Len(aParcelas)
+				Else
+					TS1->TS1_DTVENC := dVencim
+					TS1->TS1_QTDPAR := (cTRBB)->PARCELAS
+				Endif
+				MsUnLock("TS1")
+			EndIf
+
+			If lRet
+				nSomaParc := 0
+
+				// Retorna conteudo do parametro MV_1DUP
+				cParSE2Doc := NGFI1DUP()
+
+				dbSelectArea("TS2")
+				For n := 1 to IIF(lTemParc,Len(aParcelas),(cTRBB)->PARCELAS)
+
+					// Verifica tipo do campo TS2_PARCEL [Numerico / Caracter]
+					xIndParc := If(Valtype(TS2->TS2_PARCEL) == "C",If(lTemParc,aParcelas[n][3],cParSE2Doc),n)
+
+					RecLock("TS2",.T.)
+					TS2->TS2_FILIAL := xFilial("TS2")
+					TS2->TS2_PLACA  := ST9->T9_PLACA
+					TS2->TS2_CODBEM := ST9->T9_CODBEM
+					TS2->TS2_DOCTO  := (cTRBB)->DOCTO
+					TS2->TS2_DTEMIS := dEmissao
+					TS2->TS2_UFEMIS := cUfEmis
+					TS2->TS2_PARCEL := xIndParc
+
+					If lTemParc
+						TS2->TS2_DTVENC := aParcelas[n][1]
+						TS2->TS2_VALOR  := aParcelas[n][2]
+					Else
+						TS2->TS2_DTVENC := dVencim
+						If n == (cTRBB)->PARCELAS .AND. ((cTRBB)->VALOR != nSomaParc + Round((cTRBB)->VALOR/(cTRBB)->PARCELAS,2))
+							TS2->TS2_VALOR  := (cTRBB)->VALOR - nSomaParc
+						Else
+							TS2->TS2_VALOR  := Round((cTRBB)->VALOR/(cTRBB)->PARCELAS,2)
+						Endif
+					Endif
+
+					TS2->TS2_CCUSTO := cCusto
+					nSomaParc += Round((cTRBB)->VALOR/(cTRBB)->PARCELAS,2)
+					MsUnLock("TS2")
+
+					cParSE2Doc := MNTPARCELA(cParSE2Doc)
+
+					dbSelectArea("TS0")
+					dbSetOrder(01)
+					If dbSeek(xFilial("TS0")+(cTRBB)->DOCTO)
+						dVencim := NGSomaMes(dVencim,1)
+					Endif
+
+				Next
+
+				dVencim := dVencOld
+			EndIf
+
+
+		Endif
+
+		dbSelectArea(cTRBB)
+		dbSkip()
+
+		If !Empty(cGerSeq)
+			UnLockByName(cGerSeq+cCvSE2,.T.,lExSE2)
+		Endif
+
+	End
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805MA
+Marca a linha e atualiza os dados no rodape da tela
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param cMarca, characters, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805MA(cMarca)
+
+	Private nOpcao
+	Private oMenu
+
+	If lIntFin .Or. lConPag
+		Return .T.
+	Endif
+
+	If !Empty((cTRBB)->ASSI)
+		cParcelas := (cTRBB)->PARCELAS
+
+		Define MsDialog oDlg3 From 300,120 To 400,475 Title STR0018 Pixel //"Informe a Quantidade de Parcelas!"
+
+		@ 1.5,1 Say OemtoAnsi(STR0019) //"Parcela(s): "
+		@ 1.5,6 MsGet cParcelas Picture '99' Valid Positivo() .AND. cParcelas > 0 .AND. MNT805PAR(cParcelas) When .t. SIZE 40,10
+		@ 022,070 Button "&OK" Size 30,10
+
+		Activate MsDialog oDlg3 On Init EnchoiceBar(oDlg3,{||nOpcao:=1,oDlg3:End()},{||nOpcao:=0,oDlg3:End()}) Centered
+
+		If nOpcao == 1
+			RecLock((cTRBB), .F.)
+			(cTRBB)->PARCELAS := cParcelas
+			MsUnLock(cTRBB)
+		Else
+			(cTRBB)->ASSI := '  '
+		Endif
+	Else
+		(cTRBB)->PARCELAS := 1
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805DATA
+Data de Vencimento nao podera ser vazia
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param _nPar, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805DATA(_nPar)
+
+	If _nPar == 1
+		If Empty(dVencim)
+			MsgStop(STR0020,STR0017) //"Data de Vencimento deverá ser digitada!"###"Atenção"
+			Return .F.
+		Endif
+	ElseIf _nPar == 2
+
+		If Empty(dEmissao)
+			MsgStop(STR0039,STR0017) //"Data de Emissão deverá ser digitada!"###"Atenção"
+			Return .F.
+		ElseIf dEmissao > dDATABASE
+			MsgStop(STR0040,STR0017) //"Data de Emissão não poderá ser maior que a Data Atual!"###"Atenção"
+			Return .F.
+		Endif
+
+		// Verifica se o documento ja foi gerado no periodo informado
+		If !MNT805ULTD(ST9->T9_CODBEM,(cTRBB)->DOCTO,dEmissao)
+			Return .F.
+		Endif
+
+		If !MNT805VENC(2,1)
+			Return .T.
+		Endif
+
+	Endif
+
+	If !Empty(dVencim) .AND. !Empty(dEmissao) .AND. dEmissao > dVencim
+		MsgStop(STR0024,STR0017) //"Data de Vencimento deverá ser maior que Data de Emissão!"###"Atenção"
+		Return .F.
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805VEN
+Consiste data de vencimento
+@author Marcos Wagner Junior douglas.constancio
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805VEN()
+
+	Local aENCHBTN := {}
+
+	//Utilizada na verificação do número sequencia da TRX
+	Local cCvSE2   := NGSEEKDIC("SX2","SE2",1,"X2_ARQUIVO")
+	Local lExSE2   := NGSX2MODO("SE2") == "C"
+	Local lIntErpM := (AllTrim(GetNewPar("MV_NGINTER","N")) == "M")
+
+	Private oMenu
+	Private nOpco      := 0
+	Private cNumSE2    := ''
+	Private cTipoSE2
+	Private cNaturSE2
+	Private cPrefixSE2
+	Private cFornecSE2
+	Private cLojaSE2
+	Private cCondPag
+	Private cCHANGEKEY := ""
+	Private aParcelas  := {}
+
+	If lConPag
+		INCLUI := .T.
+		Aadd(aENCHBTN,{"OMSDIVIDE" ,{|| MNT805PARC(1) },STR0046,STR0046})//"Parcelas"###"Parcelas"
+	Endif
+
+	aVencim := {}
+	dbSelectArea(cTRBB)
+	dbGotop()
+	While !Eof()
+		nOpco := 0
+		aParcelas := {}
+		cCHANGEKEY := ""
+		If !Empty((cTRBB)->ASSI)
+			dbSelectArea("TS0")
+			dbSetOrder(01)
+			dbSeek(xFilial("TS0")+(cTRBB)->DOCTO)
+			cDocumento := TS0->TS0_NOMDOC
+			If Empty(cNumSE2)
+				cNumSE2 := NGSEQSE2()
+			Else
+				If FindFunction("Soma1Old")
+					cNumSE2 := PADL(Soma1Old(cNumSE2),9)
+				Else
+					cNumSE2 := PADL(Soma1(cNumSE2),9)
+				EndIf
+				While !LockByName(cNumSE2+cCvSE2,.T.,lExSE2)
+					cNumSE2 := If(FindFunction("Soma1Old"),PADL(Soma1Old(cSeqSE2),9),PADL(Soma1(cSeqSE2),9))
+				EndDo
+			Endif
+			If lIntFin
+				cTipoSE2   := TS0->TS0_TIPO
+				cNaturSE2  := TS0->TS0_NATURE
+				cPrefixSE2 := TS0->TS0_PREFIX
+				cFornecSE2 := TS0->TS0_FORNEC
+				cLojaSE2   := TS0->TS0_LOJA
+			Endif
+			If lConPag
+				cCondPag   := TS0->TS0_CONPAG
+			Endif
+
+			nPosIni := 3.5
+			dEmissao := CTOD("")
+			dVencim  := CTOD("")
+			nHeightSc := 465
+			If lIntFin
+				nHeightSc := 635
+			ElseIf lConPag
+				nHeightSc := 490
+			Endif
+
+			Define MsDialog oDlg3 From 300,120 To nHeightSc,550 Title STR0021 Pixel //"Informe a Data de Vencimento!"
+
+			oPNL01GRDOC := TPanel():New(0,0,Nil,oDlg3,Nil,.t.,.f.,Nil,Nil,0,0,.f.,.f. )
+			oPNL01GRDOC:Align := CONTROL_ALIGN_ALLCLIENT
+
+			@ 0.5,1 Say OemtoAnsi(STR0022) OF oPNL01GRDOC //"Documento: "
+			@ 0.5,5 MsGet cDocumento Picture '@!' When .f. SIZE 145,10 OF oPNL01GRDOC
+			@ 1.5,1 Say OemtoAnsi(STR0038) Color CLR_BLUE OF oPNL01GRDOC //"Emissão: "
+			@ 1.5,5 MsGet dEmissao Picture '99/99/9999' When .t. SIZE 50,10 Valid MNA805DATA(2) OF oPNL01GRDOC HasButton
+			@ 2.5,1 Say OemtoAnsi(STR0023) Color CLR_BLUE OF oPNL01GRDOC //"Vencimento: "
+			@ 2.5,5 MsGet dVencim Picture '99/99/9999' When !lIntFin .And. !lConpag SIZE 50,10 Valid MNA805DATA(1) OF oPNL01GRDOC HasButton
+			If lIntFin
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_FORNEC"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cFornecSE2 Picture '@!' When .t. SIZE 50,10 Valid NaoVazio() .AND. ExistCpo("SA2",cFornecSE2) .AND. MNT805GAT() F3 'FOR' OF oPNL01GRDOC HasButton
+				nPosIni++
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_LOJA"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cLojaSE2 Picture '@!' When .t. SIZE 20,10 Valid NaoVazio() .AND. ExistCpo("SA2",cFornecSE2+cLojaSE2) OF oPNL01GRDOC
+				nPosIni++
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_NUMSE2"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cNumSE2 Picture '@!' When .t. SIZE 35,10 OF oPNL01GRDOC
+				nPosIni++
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_TIPO"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cTipoSE2 Picture '@!' When !lIntErpM SIZE 35,10 Valid ExistCpo("SX5","05"+cTipoSE2) F3 '05' OF oPNL01GRDOC HasButton
+				nPosIni++
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_NATURE"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cNaturSE2 Picture '@!' When !lIntErpM SIZE 35,10 Valid ExistCpo("SED",cNaturSE2) F3 'SED' OF oPNL01GRDOC HasButton
+				nPosIni++
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_PREFIX"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cPrefixSE2 Picture '@!' When !lIntErpM SIZE 25,10 OF oPNL01GRDOC
+				nPosIni++
+			Endif
+			If lConPag
+				@ nPosIni,1 Say OemtoAnsi(AllTrim(NGRETTITULO("TS1_CONPAG"))) Color CLR_BLUE OF oPNL01GRDOC
+				@ nPosIni,5 MsGet cCondPag Picture '@!' When .t. SIZE 25,10 Valid ExistCpo("SE4",cCondPag) .AND. MNT805VENC(2) F3 'SE4' OF oPNL01GRDOC HasButton
+			Endif
+
+			oDlg3:lEscClose := .f.
+			//@ 200,070 Button "&OK" Size 30,10
+			NGPOPUP(asMenu,@oMenu)
+			oPNL01GRDOC:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPNL01GRDOC)}
+			Activate MsDialog oDlg3 ON INIT EnchoiceBar(oDlg3,{||If(MNT805BTOK(),(nOpco:=1,oDlg3:End()),)},;
+			{||oDlg3:End()},,aENCHBTN) CENTERED
+			If nOpco == 0
+				Return .f.
+			Else
+				If !lIntFin //Caso nao esteja integrado ao financeiro
+					If lConPag //Caso exista o campo Cond. Pag.
+						aAdd(aVencim,{AllTrim((cTRBB)->DOCTO),dVencim,dEmissao,,,,,,,cCondPag})
+						If NGFICONDP(,.F.,(cTRBB)->VALOR,cCondPag,dEmissao)
+							aAdd(aParUnit,{(cTRBB)->DOCTO,aParcelas})
+						Endif
+					Else //Caso nao exista o campo Cond. Pag.
+						aAdd(aVencim,{AllTrim((cTRBB)->DOCTO),dVencim,dEmissao})
+					Endif
+				Else //Caso esteja integrado ao modulo financeiro
+					aAdd(aVencim,{AllTrim((cTRBB)->DOCTO),dVencim,dEmissao,cNumSE2,cTipoSE2,cNaturSE2,cPrefixSE2,cFornecSE2,cLojaSE2,cCondPag})
+					If NGFICONDP(,.F.,(cTRBB)->VALOR,cCondPag,dEmissao)
+						aAdd(aParUnit,{(cTRBB)->DOCTO,aParcelas})
+					Endif
+				Endif
+			Endif
+
+		Endif
+		dbSelectArea(cTRBB)
+		dbSkip()
+	End
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA805VAL
+Carrega Valor da tabela TS7
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA805VAL()
+
+	If lRel12133
+		lExiste := !MNTSeekPad( 'TS7', 1, ST9->T9_CODFAMI, ST9->T9_TIPMOD, M->TS1_DOCTO + &( cAnoST9 ) )
+	Else
+		dbSelectArea( 'TS7' )
+		dbSetOrder( 1 )
+		lExiste := !dbSeek( xFilial( 'TS7' ) + ST9->T9_CODFAMI + ST9->T9_TIPMOD + M->TS1_DOCTO + &( cAnoST9 ) )
+	EndIf
+
+	M->TS1_VALOR := IIf( !lExiste, TS7->TS7_VALOR, 0 )
+
+	// Verifica se o documento ja foi gerado no periodo informado
+	If !Empty(M->TS1_DTEMIS) .And. !Empty(M->TS1_DOCTO)
+		If !(lVerDocGer := MNT805ULTD(M->TS1_CODBEM,M->TS1_DOCTO,M->TS1_DTEMIS))
+			Return .t.
+		Endif
+	Endif
+
+	// Caso nao haja condicao de pagamento a ser utilizada para definição das parcelas
+	If !lIntFin .And. !lConPag
+		lVencim := .t. // Habilita campo em tela para alteração
+	Else
+		aParcelas := {}
+		MNT805VENC(1,2)
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA805DT
+Data Emissao nao pode ser maior que Data Vencimento
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA805DT()
+
+	If !Empty(M->TS1_DTEMIS) .And. DTOS(M->TS1_DTEMIS) > DTOS(dDataBase)
+		MsgStop(STR0040,STR0017) //"Data de Emissão não poderá ser maior que a Data Atual!"###"Atenção"
+		Return .F.
+	Endif
+
+	If !Empty(M->TS1_DTEMIS) .AND. !Empty(M->TS1_DTVENC)
+		If M->TS1_DTEMIS > M->TS1_DTVENC
+			MsgStop(STR0024,STR0017) //"Data de Vencimento deverá ser maior que Data de Emissão!"###"Atenção"
+			Return .F.
+		Endif
+	Endif
+
+	// Verifica existencia de documento com mesma data de vencimento
+	If ReadVar() == "M->TS1_DTVENC" .And. !Empty(M->TS1_DTVENC) .And. !ExistChav("TS1",M->TS1_CODBEM+M->TS1_DOCTO+DTOS(M->TS1_DTVENC))
+		Return .F.
+	Endif
+
+	// Verifica se o documento ja foi gerado no periodo informado
+	If ReadVar() == "M->TS1_DTEMIS" .And. !Empty(M->TS1_DTEMIS) .And. !Empty(M->TS1_DOCTO)
+		If !(lVerDocGer := MNT805ULTD(M->TS1_CODBEM,M->TS1_DOCTO,M->TS1_DTEMIS))
+			Return .F.
+		Endif
+	Endif
+
+	MNT805VENC(1,1)
+
+	aRetFil := NgFilTPN(M->TS1_CODBEM,M->TS1_DTEMIS,Time())
+	If aRetFil[1] <> nil
+		cFilCad := aRetFil[1]
+	Else
+		If NGIFDBSEEK("ST9",M->TS1_PLACA,14,.F.)
+			cFilCad := POSICIONE('ST9',14,M->TS1_PLACA,'T9_FILIAL')
+		Else
+			If NGIFDBSEEK("TMS",M->TS1_CODBEM,5,.F.)
+				cFilCad := NGSEEK('TMS',M->TS1_CODBEM,5,'DA3_FILIAL')
+			ElseIf NGIFDBSEEK("TS3",M->TS1_CODBEM,1,.F.)
+				cFilCad := NGSEEK('TS3',M->TS1_CODBEM,1,'TS3_FILIAL')
+			Endif
+		Endif
+	Endif
+
+	cFilCad := xFilial("TS1")
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA805GRA
+Grava na TS2
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA805GRA()
+
+	Local lTemParc := .F.
+	Local lRet     := .T.
+
+	If (Type("lVerDocGer") != "L" .Or. !lVerDocGer) .And. !MNT805ULTD(M->TS1_CODBEM,M->TS1_DOCTO,M->TS1_DTEMIS)
+		Return .F.
+	Endif
+
+	// Caso haja condicao de pagamento a ser considerada para a geracao de parcelas
+	If lConpag .AND. !Empty(M->TS1_CONPAG)
+		lTemParc := .T.
+
+		If Inclui
+			If !NGFICONDP(,,M->TS1_VALOR,M->TS1_CONPAG,M->TS1_DTEMIS)
+				M->TS1_DTVENC := CTOD("")
+				Return .F.
+			Endif
+
+			M->TS1_QTDPAR := Len(aParcelas)
+			M->TS1_DTVENC := aParcelas[1][1]
+		Endif
+	Endif
+
+	MsgRun( "Atualizando Documento...", "Aguarde", {|| lRet := ProcGrDoc(lTemParc) } )
+
+	// Retorna conteudo do parametro MV_1DUP
+	cParSE2Doc := NGFI1DUP()
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ProcGrDoc
+Processa documento.
+@author Hugo R. Pereira
+@since 17/09/12
+@version undefined
+@param lTemParc, logical, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function ProcGrDoc(lTemParc)
+
+	Local y
+	Local lRet      := .T.
+	Local nSomaParc
+	Local xIndParc
+	Local lTitFin   := .T. //variável para confirmar geração de título financeiro
+	Local aArea     := GetArea()
+	Local aAreaSE2  := SE2->(GetArea())
+
+	dbSelectArea("ST9")
+	dbSetOrder(01)
+	dbSeek(xFilial("ST9")+M->TS1_CODBEM)
+
+	If Inclui
+		//	BeginTran()
+		dVencimen := M->TS1_DTVENC
+		nSomaParc := 0
+
+		For y := 1 to IIF(lTemParc,Len(aParcelas),M->TS1_QTDPAR)
+			dbSelectArea("TS2")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TS2")+M->TS1_CODBEM+M->TS1_DOCTO+DTOS(If(lTemParc,aParcelas[y][1],dVencimen)))
+				MsgStop(STR0042,STR0017) //"Já existe uma parcela com a mesma data de vencimento do Bem/Documento informado!"###"Atenção"
+				Return .f.
+			Endif
+		Next y
+
+		//Ponto de entrada para confirmar geração de título financeiro
+		If ExistBlock("MNTA8055")
+			lTitFin := ExecBlock("MNTA8055",.F.,.F.)
+		EndIf
+
+		If lIntFin .And. lTitFin
+			oIntFIN := NGIntFin():New()
+			oIntFIN:setOperation(3)
+			oIntFIN:setRelated("TS2")
+			oIntFIN:setValue("E2_PREFIXO",M->TS1_PREFIX)
+			oIntFIN:setValue("E2_NUM",M->TS1_NUMSE2)
+			oIntFIN:setValue("E2_TIPO",M->TS1_TIPO)
+			oIntFIN:setValue("E2_NATUREZ",M->TS1_NATURE)
+			oIntFIN:setValue("E2_FORNECE",M->TS1_FORNEC)
+			oIntFIN:setValue("E2_LOJA",M->TS1_LOJA)
+			oIntFIN:setValue("E2_EMISSAO",M->TS1_DTEMIS)
+			oIntFIN:setValue("E2_ORIGEM",FunName())
+			oIntFIN:setValue("E2_MOEDA",1)
+			oIntFIN:setValue("E2_CCD",ST9->T9_CCUSTO)
+
+			oIntFIN:setValue("E2_ITEMD",ST9->T9_ITEMCTA)
+
+			oIntFIN:setParcelas(aParcelas)
+
+			If !oIntFIN:geraTitulo()
+				Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+				lRet := .F.
+			EndIf
+		EndIf
+
+		If lRet
+			For y := 1 to IIF(lTemParc,Len(aParcelas),M->TS1_QTDPAR)
+
+				// Verifica tipo do campo TS2_PARCEL [Numerico / Caracter]
+				xIndParc := If(Valtype(TS2->TS2_PARCEL) == "C",If(lTemParc,aParcelas[y][3],cParSE2Doc),y)
+
+				RecLock("TS2",.T.)
+				TS2->TS2_FILIAL := cFilCad
+				TS2->TS2_PLACA  := M->TS1_PLACA
+				TS2->TS2_CODBEM := M->TS1_CODBEM
+				TS2->TS2_DOCTO  := M->TS1_DOCTO
+				TS2->TS2_DTEMIS := M->TS1_DTEMIS
+				TS2->TS2_UFEMIS := cUfEmis
+				TS2->TS2_PARCEL := xIndParc
+				If lTemParc
+					TS2->TS2_DTVENC := aParcelas[y][1]
+					TS2->TS2_VALOR  := aParcelas[y][2]
+				Else
+					TS2->TS2_DTVENC := dVencimen
+					If y == M->TS1_QTDPAR .AND. (M->TS1_VALOR != nSomaParc + Round(M->TS1_VALOR/M->TS1_QTDPAR,2))
+						TS2->TS2_VALOR  := M->TS1_VALOR - nSomaParc
+					Else
+						TS2->TS2_VALOR  := Round(M->TS1_VALOR/M->TS1_QTDPAR,2)
+					Endif
+				Endif
+				TS2->TS2_CCUSTO := cCusto
+				nSomaParc += Round(M->TS1_VALOR/M->TS1_QTDPAR,2)
+				MsUnLock("TS2")
+				cParSE2Doc := MNTPARCELA(cParSE2Doc)
+				dVencimen := NGSomaMes(dVencimen,1)
+			Next
+		EndIf
+
+	Else
+
+		If lIntFin .AND. lNaoValida
+			dbSelectArea("SE2")
+			dbSetOrder(1)
+			If dbSeek(xFilial("SE2") + M->TS1_PREFIX + M->TS1_NUMSE2)
+				oIntFIN := NGIntFin():New()
+				oIntFIN:setOperation(5)
+				oIntFIN:setRelated("TS2")
+				oIntFIN:setValue("E2_PREFIXO",TS1->TS1_PREFIX)
+				oIntFIN:setValue("E2_NUM",TS1->TS1_NUMSE2)
+				oIntFIN:setValue("E2_TIPO",TS1->TS1_TIPO)
+				oIntFIN:setValue("E2_FORNECE",TS1->TS1_FORNEC)
+				oIntFIN:setValue("E2_LOJA",TS1->TS1_LOJA)
+
+				oIntFIN:setParcelas(aParcelas)
+
+				If !oIntFIN:geraTitulo()
+					Help(,,'HELP',, oIntFIN:getErrorList()[1],1,0)
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		RestArea(aAreaSE2)
+		RestArea(aArea)
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805DOC
+Visualiza o registro (TS0) referente ao Documento selecionado
+@type function
+
+@author	Marcos Wagner Junior
+@since	22/08/2007
+
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT805DOC()
+
+	Local aArea := GetArea()
+
+	dbSelectArea( 'TS0' )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( 'TS0' ) + TS1->TS1_DOCTO )
+
+		NGCAD01( 'TS0', TS0->( RecNo() ), 1 )
+
+	EndIf
+
+	RestArea( aArea )
+
+Return .T.
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilização de menu funcional.
+@type static
+
+@author Rafael Diogo Richter
+@since 02/02/2008
+
+@sample MenuDef( .T. )
+
+@param lAnoMod, Lógico, Define se o campo Ano modelo foi preenchido.
+@return Array , [1] - Nome que é apresentado no cabeçalho.
+				[2] - Nome da rotina associada.
+				[3] - Reservado.
+				[4] - Tipo de transação a ser efetuada.
+				[5] - Nível de acesso.
+				[6] - Habilita menu funcional.
+
+@obs Reescrito por: Alexandre Santos, 28/03/2019.
+/*/
+//----------------------------------------------------------------------
+Static Function MenuDef( lAnoMod )
+
+	Local lPyme     := IIf( Type( '__lPyme' ) <> 'U', __lPyme, .F. )
+	Local aRotina   := { { STR0001, 'AxPesqui'  , 0, 1, , .F. },; // Pesquisar
+						 { STR0002, 'MNA805ALT' , 0, 2, , .F. } } // Visualizar
+
+	Default lAnoMod := .F.
+
+	If !lAnoMod
+
+		aAdd( aRotina, { STR0006, 'MNA805ALT' , 0, 3   } ) // Incluir
+		aAdd( aRotina, { STR0008, 'MNA805ALT' , 0, 5, 3} ) // Excluir
+		aAdd( aRotina, { STR0009, 'MNT805MENU', 0, 3   } ) // Doc. Padrão
+		aAdd( aRotina, { STR0063, 'MNT805DOC' , 0, 2   } ) // Vis. Documento
+
+		//Ponto de entrada para adicionar botões na rotina
+		If ExistBlock( 'MNTA8054' )
+			aRotina := ExecBlock( 'MNTA8054', .F., .F., { aRotina } )
+		EndIf
+
+	EndIF
+
+	If !lPyme
+		aAdd( aRotina, { STR0043, 'MsDocument', 0, 4, , .F. } )  // Conhecimento
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG805LEGE
+Cria uma janela contendo a legenda da mBrowse
+@author André Felipe Joriatti
+@since 01/06/2012
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG805LEGE()
+
+	BrwLegenda(cCADASTRO,STR0061,{	{"ENABLE",OEMTOANSI(STR0056+" "+STR0057+" "+STR0058+" "+STR0057)},; //"Bem  Ativo  Manutencao Ativo
+									{"BR_AMARELO",STR0056+" "+STR0057+" "+STR0058+" "+STR0059},;        //"Bem  Ativo  Manutencao Inativo
+									{"BR_AZUL",STR0056+" "+STR0059+" "+STR0058+" "+STR0057},;           //"Bem  Ativo  Manutencao Inativo
+									{"BR_VERMELHO",STR0056+" "+STR0059+" "+STR0058+" "+STR0059},;       //"Bem Inativo  Manutencao Inativo
+									{"BR_CINZA",STR0060}}) 										        //"Bem Transferido"
+
+Return .T.
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA805ALT
+Funcao criada para deletar os registros relacionados a doc.
+@author Marcos Wagner Junior
+@since 17/07/08
+@version undefined
+@param cAlias, characters, descricao
+@param nReg, numeric, descricao
+@param nOpcX, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNA805ALT(cAlias,nReg,nOpcX)
+
+	Local lRet     := .T.
+	Local aOldArea := GetArea()
+	Local aOldNgBt := If(Type("aNGBUTTON") == "A",aClone(aNGBUTTON),{})
+
+	Private lNaoValida := .T.
+	Private cCHANGEKEY := ""
+	Private aParcelas  := {}
+	Private aCAMPOSN   := {}
+	Private lVerDocGer := .T.
+
+	aNGBUTTON := {}
+
+	If ExistBlock('MntObriFin')
+
+		lIntFin := !ExecBlock('MntObriFin')
+
+	EndIf
+
+	// Consiste conteudo do parametro MV_1DUP
+	If nOpcX == 3 .And. !NGFIV1DUP()
+		Return .F.
+	Endif
+
+	// Retorna conteudo do parametro MV_1DUP
+	cParSE2Doc := NGFI1DUP()
+
+	If ST9->T9_SITBEM == "I" .And. nOpcX <> 2
+		If lMostraMsg .And. !MsgYesNo(STR0044,STR0017) //"O bem se encontra inativo! Deseja prosseguir com a operação?"###"Atenção"
+			Return .F.
+		Else
+			lMostraMsg := .F.
+		EndIf
+	Endif
+
+	If lConPag //Caso o campo Cond. Pag. exista
+
+		//Caso esteja dentre as opções da rotina
+		If cVALTOCHAR(nOpcX) $ "3/2/4"
+			Aadd(aNGBUTTON,{"OMSDIVIDE" ,{|| MNT805PARC(2,nOpcX) },STR0046,STR0046})//"Parcelas"###"Parcelas"
+		Endif
+
+		//Retira campos não utilizados conforme existencia de determinados campos
+		If (Inclui .And. !lIntFin) .Or. (!INCLUI .And. Empty(TS1->TS1_PREFIX) .And. Empty(TS1->TS1_TIPO) .And. Empty(TS1->TS1_NUMSE2) .And.;
+		Empty(TS1->TS1_NATURE) .And. Empty(TS1->TS1_FORNEC) .And. Empty(TS1->TS1_LOJA))
+
+			lNaoValida  := .F.
+			aCAMPOSN 	:= {'TS1_PREFIX','TS1_TIPO','TS1_NUMSE2','TS1_NATURE','TS1_FORNEC','TS1_LOJA','TS1_NOMFOR','TS1_CONPAG', 'TS1_DTVENC'}
+
+			If !Inclui .And. Empty(TS1->TS1_CONPAG)
+				aAdd(aCAMPOSN,'TS1_CONPAG')
+			Endif
+		Endif
+
+		//Define campos que serao utilizados
+		aCHOICE   := NGCAMPNSX3("TS1",aCAMPOSN)
+
+		//Caso nao for uma inclusao, inicializa parcelas da chave atual
+		If nOpcX != 3
+			If lIntFin .And. lNaoValida
+				MNT765PARC( TS1->TS1_PREFIX, TS1->TS1_NUMSE2, TS1->TS1_TIPO, TS1->TS1_FORNEC, TS1->TS1_LOJA, 2 )
+			Else
+				aParcelas := MNT805CPAR(TS1->TS1_CODBEM, TS1->TS1_DOCTO, TS1->TS1_DTEMIS, TS1->TS1_FILIAL)
+			Endif
+			cCHANGEKEY := DTOS(TS1->TS1_DTEMIS) + TS1->TS1_CONPAG + cVALTOCHAR(TS1->TS1_VALOR)
+		Endif
+
+	Endif
+
+	aOldRot := aClone(aRotina)
+	aRotina := {{ "", "", 0, 1},;  //"Pesquisar"
+				{ "", "", 0, 2},;  //"Visualizar"
+				{ "", "", 0, 3},;  //"Incluir"
+				{ "", "", 0, 4},;  //"Excluir"
+				{ "", "", 0, 5},;  //"Doc. Padrão"
+				{ "", "", 0, 6}}   //"Doc. Padrão"
+
+	If nOpcX == 4
+		lTemPagto := .F.
+
+		// Verifica se houve pagamento parcial/tadminotal do documento
+		If !MNT805PRPG(TS1->TS1_CODBEM, TS1->TS1_DOCTO, TS1->TS1_DTEMIS, TS1->TS1_FILIAL)
+			lTemPagto := .T.
+			lRet 	  := .F.
+			MsgStop(STR0027,STR0017) //"Exclusão não permitida. Já ocorreu o pagamento total ou parcial deste Documento."###"Atenção"
+		Endif
+
+		If !lTemPagto
+
+			nRET := NgCad01(cAlias,nReg,5)
+
+			// Se confimou a exclusao, deleta as parcelas relacionadas
+			If nRET == 1
+				MNT805EXPR(TS1->TS1_CODBEM, TS1->TS1_DOCTO, TS1->TS1_DTEMIS, TS1->TS1_FILIAL)
+			Endif
+
+		Endif
+	Else
+		nRET := NgCad01(cAlias,nReg,nOpcX)
+	Endif
+
+	lMostraMsg := .T.
+	If nOpcX == 3 .And. nRET == 1
+		lMostraMsg := .F.
+	Endif
+
+	aRotina   := aClone(aOldRot)
+	aNgButton := aClone(aOldNgBt)
+	RestArea(aOldArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805PARC
+Define parcelas.
+@author Hugo Rizzo Pereira
+@since 25/07/11
+@version undefined
+@param nAux, numeric, descricao
+@param nOpc, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT805PARC(nAux,nOpc)
+
+	Local lRet := .T.
+
+	If FindFunction( 'MntParcVld' )
+
+		lRet := IIf( nAux == 1, MntParcVld( (cTRBB)->VALOR, dEmissao, cCondPag, 0 ), MntParcVld( M->TS1_VALOR,;
+		 M->TS1_DTEMIS,M->TS1_CONPAG,0 ) )
+
+	EndIf
+
+	If lRet
+
+		If nAux == 1
+			NGPARCELAS( (cTRBB)->VALOR, dEmissao, cCondPag, 0, ,2 )
+		Else
+			NGPARCELAS( M->TS1_VALOR, M->TS1_DTEMIS, M->TS1_CONPAG, 0, , 2 )
+		Endif
+
+
+		If Len(aParcelas) > 0
+			If nAux == 1
+				dVencim :=  aParcelas[1][1]
+			Else
+				M->TS1_DTVENC := aParcelas[1][1]
+			Endif
+		Endif
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805MENU
+'Engana' a aRotina para o botao modelo ser passado com parametro correto
+@author Marcos Wagner Junior
+@since 30/06/09
+@version undefined
+@param cAlias, characters, descricao
+@param nRecno, numeric, descricao
+@param nOpcx, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT805MENU(cAlias,nRecno,nOpcx)
+	Local aOldRot := aClone(aRotina)
+
+	aRotina := {{ STR0001,"AxPesqui"   ,0,1},;  // "Pesquisar"
+	{ STR0002,"NGCAD02"    ,0,2},;  //"Visualizar"
+	{ STR0006,"MNT805MENU" ,0,3},;  //"Incluir"
+	{ STR0008,"MNT805MENU" ,0,4},;  //"Excluir"
+	{ STR0009,"MNT805MENU" ,0,5},;  //"Doc. Padrão"
+	{ STR0009,"MNT805MENU" ,0,6}}   //"Doc. Padrão"
+
+	MNA805DPA(cAlias,nRecno,6)
+	aRotina := aClone(aOldRot)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805BTOK
+Verifica se todos campos obrigatorios foram preenchidos
+@author Marcos Wagner Junior
+@since 30/06/09
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT805BTOK()
+
+	Local lRet := .T.
+
+	If lIntFin
+		If Empty(cCondPag) .OR. Empty(cFornecSE2) .OR. Empty(cLojaSE2)   .OR. Empty(cNumSE2) .OR.;
+		Empty(cTipoSE2) .OR. Empty(cNaturSE2) .OR. Empty(cPrefixSE2) .OR. Empty(dEmissao)
+			Help(" ",1,"OBRIGAT")
+			Return .f.
+		Endif
+	ElseIf lConPag
+		If Empty(cCondPag)
+			Help(" ",1,"OBRIGAT")
+			Return .f.
+		Endif
+	Endif
+
+	If lConPag
+		lRet := NGFICONDP(,,(cTRBB)->VALOR,cCondPag,dEmissao)
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805GAT
+Executa o gatilho
+@author Marcos Wagner Junior
+@since 30/06/09
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805GAT()
+
+	Local aOldArea := GetArea()
+
+	If Empty(cLojaSE2)
+		dbSelectArea("SA2")
+		dbSetOrder(01)
+		dbSeek(xFilial("SA2")+cFornecSE2)
+		cLojaSE2 := SA2->A2_LOJA
+	Endif
+
+	RestArea(aOldArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805PAR
+Marca a linha e atualiza os dados no rodape da tela
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param _nParcelas, , descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT805PAR(_nParcelas)
+
+	If _nParcelas < 1 .Or. _nParcelas > 35
+		MsgStop(STR0041,STR0017) //"Informe um valor maior que ou igual a 1 e menor que ou igual a 35!"###"Atenção"
+		Return .F.
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTPARCELA
+Marca a linha e atualiza os dados no rodape da tela
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param cParSE2Doc, characters, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTPARCELA(cParSE2Doc)
+
+	// Atualiza indicador de parcela
+	cParSE2Doc := Soma1Old(cParSE2Doc)
+
+	// Verifica se indicador de parcela nao possui caracteres minusculos
+	While cParSE2Doc <> Upper(cParSE2Doc)
+		cParSE2Doc := Soma1Old(cParSE2Doc)
+	EndDo
+
+Return cParSE2Doc
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805VENC
+Carrega a data de vencimento quando integrado ao Financeiro
+@author Marcos Wagner Junior
+@since 15/03/07
+@version undefined
+@param _nPar, , descricao
+@param nCall, numeric, descricao
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT805VENC(_nPar,nCall)
+
+	Default nCall := 0
+
+	If lIntFin .Or. lConpag
+		If _nPar == 1
+			If !Empty(M->TS1_CONPAG) .AND. !Empty(M->TS1_DTEMIS) .AND. M->TS1_VALOR > 0
+				If cCHANGEKEY <> DTOS(M->TS1_DTEMIS)+M->TS1_CONPAG+cVALTOCHAR(M->TS1_VALOR) .Or. ;
+				DTOS(M->TS1_DTEMIS)+M->TS1_CONPAG+cVALTOCHAR(M->TS1_VALOR) <> cCHANGEKEY
+
+					// Caso nao haja parcelas definidas, gera novas parcelas a apartir da chave atual
+					If !NGFICONDP(,,M->TS1_VALOR,M->TS1_CONPAG,M->TS1_DTEMIS) .Or.;
+					( IIf( FindFunction( 'MntParcVld' ), !MntParcVld( IIf( M->TS1_VALOR == 0, 1, M->TS1_VALOR ), M->TS1_DTEMIS,;
+					 M->TS1_CONPAG, nCall ), !NGPARCELAS( IIf( M->TS1_VALOR == 0, 1, M->TS1_VALOR ), M->TS1_DTEMIS, M->TS1_CONPAG, 0, nCall, , 2 ) ) )
+
+						M->TS1_DTVENC := CTOD("")
+						If nCall == 0
+							Return .F.
+						Endif
+					Else
+
+						If FindFunction( 'MntParcVld' )
+							NGPARCELAS( IIf( M->TS1_VALOR == 0, 1, M->TS1_VALOR ), M->TS1_DTEMIS, M->TS1_CONPAG, 0, , 2 )
+						EndIf
+
+						M->TS1_DTVENC := aParcelas[1][1]
+
+					Endif
+				Endif
+			Endif
+		Else
+			If !Empty(cCondPag) .AND. !Empty(dEmissao) .And. (cTRBB)->VALOR > 0
+				If cCHANGEKEY <> DTOS(dEmissao)+cCondPag+cVALTOCHAR((cTRBB)->VALOR) .Or. ;
+				DTOS(dEmissao)+cCondPag+cVALTOCHAR((cTRBB)->VALOR) <> cCHANGEKEY
+
+					// Caso nao haja parcelas definidas, gera novas parcelas a apartir da chave atual
+					If !NGFICONDP( , , (cTRBB)->VALOR, cCondPag,dEmissao ) .Or.;
+					( IIf( FindFunction( 'MntParcVld' ), !MntParcVld( IIf( (cTRBB)->VALOR == 0, 1, (cTRBB)->VALOR ), dEmissao,;
+					 cCondPag, 0 ), !NGPARCELAS( IIf( (cTRBB)->VALOR == 0, 1, (cTRBB)->VALOR ), dEmissao, cCondPag, 0, nCall, , 2 ) ) )
+						dVencim := CTOD("")
+						If nCall == 0
+							Return .F.
+						Endif
+					Else
+
+						If FindFunction( 'MntParcVld' )
+							NGPARCELAS( IIf( (cTRBB)->VALOR == 0, 1, (cTRBB)->VALOR ), dEmissao, cCondPag, 0, , 2 )
+						EndIf
+
+						dVencim := aParcelas[1][1]
+					Endif
+
+				Endif
+			Endif
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805ULTD
+Verifica se o documento ja foi gerado no periodo informado.
+@param cCodBem  Codigo do Bem relacionado do documento.
+@param cDocto   Codigo do Documento.
+@param dDtEmiss Data de Emissao do documento.
+@author Hugo R. Pereira
+@since 28/05/2012
+@version MP10
+@return lRet Indica se a geracado do documento e' valida [.T.].
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805ULTD(cCodBem, cDocto, dDtEmiss)
+
+	Local lRet     := .T.
+	Local aArea    := GetArea()
+	Local aAreaTS0 := TS0->(GetArea())
+
+	Private lAnswer := .F. // Verifica resposta em referencia a uma possivel inconsistencia entre documentos
+
+	// Valida existencia do documento informado
+	dbSelectArea("TS0")
+	dbSetOrder(01)
+	If !dbSeek(xFilial("TS0") + cDocto)
+		ShowHelpDlg(STR0007, {STR0047},1, ; // "Documento não encontrado."
+		{STR0048},1)   // "Verifique o documento informado."
+		lRet := .F.
+	Endif
+
+	// Verifica se data de emissao informada e' valida perante documentos ja gerados
+	lRet := MNT805DGER(cCodBem, cDocto, dDtEmiss, .F.) .And. ( lAnswer .Or. MNT805DGER(cCodBem, cDocto, dDtEmiss) )
+
+	RestArea(aAreaTS0)
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805DGER
+Verifica documento gerado posterior/anterior a data informada.
+@param cCodBem  Codigo do Bem relacionado do documento.
+@param cDocto   Codigo do Documento.
+@param dDtEmiss Data de Emissao do documento.
+@param lNext    Verifica ordem de pesquisa utilizada.
+[.T.] Proximo Documento.
+[.F.] Documento Anterior.
+@author Hugo R. Pereira
+@since 28/05/2012
+@version MP10
+@return lRet Indica se ha' conflitos entre documentos no periodo informado [.F.].
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805DGER(cCodBem, cDocto, dDtEmiss, lNext)
+
+	Local dDtEmissAux
+	Local dDtProxDoc
+	Local lRet        := .T.
+	Local aAreaTS1    := TS1->(GetArea())
+
+	Default lNext := .T.
+
+	dbSelectArea("TS1")
+	dbSetOrder(2)
+	If !dbSeek(xFilial("TS1") + cCodBem + cDocto + DTOS(dDtEmiss),.T.) .And. !lNext
+		dbSkip(-1)
+	Endif
+
+	// Verifica se o registro atual refere-se a mesma chave requerida
+	If ( !Eof() .And. !Bof() ) .And. TS1->TS1_CODBEM == cCodBem  .And. TS1->TS1_DOCTO == cDocto
+
+		// Verifica validade do documento e gera previsao de geracao para o proximo documento, baseada na ultima emissao do mesmo
+		dDtEmissAux := TS1->TS1_DTEMIS
+
+		// Verifica validade do documento
+		If TS0->TS0_UNIDAD == "1"
+			dDtProxDoc  := If(lNext, dDtEmissAux - TS0->TS0_VALID, dDtEmissAux + TS0->TS0_VALID) // Unidade da Validade em dias
+		Else
+			dDtProxDoc  := If(lNext, NGSomaMes(dDtEmissAux, TS0->TS0_VALID*(-1)) ,NGSomaMes(dDtEmissAux, TS0->TS0_VALID) ) // Unidade da Validade em meses
+		Endif
+
+		// Verifica se a data de emissao informada e' a mesma do documento gerado
+		If dDtEmissAux == dDtEmiss
+
+			lRet := .F.
+			ShowHelpDlg(STR0007, {STR0049 + Space(1) + ;  // "O documento já foi emitido para a data informada."
+			STR0050 + DTOC(dDtProxDoc) + "."},1, ; 	  // "Conforme o mesmo, sua validade estende-se até "
+			{STR0051},1)			                	  // "Informe outra data de emissão."
+
+		Else
+			// Verifica se a data de emissao informada e' inferior do que a data prevista para o proximo documento
+			If !lNext .And. dDtEmiss <= dDtProxDoc
+				lRet := MsgYesNo(STR0052 + DTOC(dDtEmissAux) + "." + CRLF + ;   // "Há uma emissão do documento no dia "
+				STR0050 + DTOC(dDtProxDoc) + "." + CRLF + ;	 					// "Conforme o mesmo, sua validade estende-se até "
+				STR0053)									 					// "Deseja realmente gerar o documento requisitado?"
+				lAnswer := lRet
+			ElseIf lNext .And. dDtEmiss >= dDtProxDoc
+				lRet := MsgYesNo(STR0052 + DTOC(dDtEmissAux) + "." + CRLF + ;	// "Há uma emissão do documento no dia "
+				STR0054 + DTOC(dDtProxDoc - 1) + ", " + ; 	    // "A data esperada para uma emissão anterior, seria "
+				STR0055 + CRLF + ; 							// "conforme o período válido do mesmo."
+				STR0053)									    // "Deseja realmente gerar o documento requisitado?"
+				lAnswer := lRet
+			Endif
+		Endif
+	Endif
+	RestArea(aAreaTS1)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805CPAR
+Carrega parcelas do documento, a partir da tabela TS2 [Detalhes do Documento].
+Utilizado quando nao ha integracao com modulo Financeiro.
+Caso haja integracao utiliza a funcao MNT765PARC().
+
+@param cCodBem  Codigo do Bem relacionado do documento.
+@param cDocto   Codigo do Documento.
+@param dDtEmiss Data de Emissao do documento.
+@param cFilPesq Filial de pesquisa, para os detalhes do documento.
+@param aFields  Campos a serem considerados na busca pelos detalhes dos documentos.
+
+@author Hugo R. Pereira
+@since 29/05/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805CPAR(cCodBem, cDocto, dDtEmis, cFilPesq, aFields)
+
+	Local cQuery    := "", nField
+	Local aParcAux  := {}
+
+	Private cArqTS2 := GetNextAlias()
+
+	Default cFilPesq := xFilial("TS2")
+	Default aFields  := {}
+
+	cQuery := " SELECT TS2.TS2_PARCEL, TS2.TS2_DTVENC, TS2.TS2_VALOR "
+
+	// Todo campo adicional a query, deve ser informado antes do processo de verificacao do aFields
+	For nField := 1  To Len(aFields)
+		cQuery += ", " + aFields[nField] + " "
+	Next nField
+
+	cQuery += " FROM " + RetSQLName("TS2") + " TS2 "
+	cQuery += " WHERE TS2.TS2_CODBEM   = '" + cCodBem + "'
+	cQuery += "   AND   TS2.TS2_DOCTO  = '" + cDocto  + "'
+	cQuery += "   AND   TS2.TS2_DTEMIS = '" + DTOS(dDtEmis) + "'
+	cQuery += "   AND   TS2.TS2_FILIAL = '" + cFilPesq + "'
+	cQuery += "   AND   D_E_L_E_T_    <> '*' AND TS2_FILIAL = "+ ValToSql(xFilial('TS2'))
+	cQuery += "   ORDER BY TS2.TS2_PARCEL "
+
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .t., "TOPCONN", TCGENQRY(,,cQuery),cArqTS2, .f., .t.)
+
+	dbSelectArea(cArqTS2)
+	dbGoTop()
+	While (cArqTS2)->( !EoF() )
+		aAdd(aParcAux, { StoD((cArqTS2)->TS2_DTVENC), (cArqTS2)->TS2_VALOR, (cArqTS2)->TS2_PARCEL } )
+
+		For nField := 1 To Len(aFields)
+			aAdd(aParcAux[Len(aParcAux)], &( "(cArqTS2)->" + aFields[nField]) )
+		Next nField
+
+		dbSelectArea(cArqTS2)
+		(cArqTS2)->( dbSkip() )
+	EndDo
+
+	(cArqTS2)->( dbCloseArea() )
+
+Return aParcAux
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805PRPG
+Verifica se houve pagamento parcial ou total do documento.
+Impossibilitando a exclusado do mesmo.
+
+@param cCodBem  Codigo do Bem relacionado do documento.
+@param cDocto   Codigo do Documento.
+@param dDtEmiss Data de Emissao do documento.
+@param cFilPesq Filial de pesquisa, para os detalhes do documento.
+
+@author Hugo R. Pereira
+@since 29/05/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805PRPG(cCodBem, cDocto, dDtEmis, cFilPesq)
+
+	Local aParcelas := {}
+	Local lParcela  := 0
+
+	aParcelas := MNT805CPAR(cCodBem, cDocto, dDtEmis, cFilPesq, {"TS2_DTPGTO"})
+	lParcela  := aScan(aParcelas,{|x| !Empty(x[Len(x)]) } ) == 0
+
+Return lParcela
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT805EXPR
+Exclui parcelas relacionadas ao documento.
+
+@param cCodBem  Codigo do Bem relacionado do documento.
+@param cDocto   Codigo do Documento.
+@param dDtEmiss Data de Emissao do documento.
+@param cFilPesq Filial de pesquisa, para os detalhes do documento.
+
+@author Hugo R. Pereira
+@since 29/05/2012
+@version MP10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function MNT805EXPR(cCodBem, cDocto, dDtEmis, cFilPesq)
+
+	Local aParcelas := MNT805CPAR(cCodBem, cDocto, dDtEmis, cFilPesq, {"R_E_C_N_O_"})
+	Local nParcela  := 0
+
+	// Deleta todas as parcelas
+	For nParcela := 1 To Len(aParcelas)
+		dbSelectArea("TS2")
+		dbGoTo(aParcelas[nParcela][Len(aParcelas[nParcela])])
+		RecLock("TS2",.f.)
+		dbDelete()
+		TS2->(MsUnLock())
+	Next nParcela
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA805DtV
+Exclui parcelas relacionadas ao documento.
+@type function
+
+@author Alexandre Santos
+@since 15/09/2022
+
+@param cDocument, string, Código do Documento.
+@param dDtEmiss , date  , Data de Emissão.
+
+@return date    , Data de Validade do Documento. 
+/*/
+//---------------------------------------------------------------------
+Function MNTA805DtV( cDocument, dDtEmiss )
+
+	Local aAreaTS0 := TS0->( GetArea() )
+	Local dDtValid := CToD( '' )
+
+	dbSelectArea( 'TS0' )
+	dbSetOrder( 1 ) // TS0_FILIAL + TS0_DOCTO
+	If msSeek( FWxFilial( 'TS0' ) + cDocument )
+
+		Do Case
+
+			Case TS0->TS0_UNIDAD == '1'
+
+				dDtValid := dDtEmiss + TS0->TS0_VALID
+
+			Case TS0->TS0_UNIDAD == '2'
+
+				dDtValid := MonthSum( dDtEmiss, TS0->TS0_VALID )
+
+		End Case
+
+	EndIf
+
+	RestArea( aAreaTS0 )
+
+	/*------------------------------------------------+
+	| Libera consumo de memória p/ melhor performance |
+	+------------------------------------------------*/
+	aSize( aAreaTS0, 0 )
+	aAreaTS0 := Nil
+	
+Return dDtValid

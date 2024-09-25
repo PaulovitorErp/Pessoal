@@ -1,0 +1,944 @@
+#INCLUDE "Mdta556.ch"
+#Include "Protheus.ch"
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDTA556      ³ Autor ³Andre E. Perez Alvarez ³ Data ³02/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³       Retorno Simplificado das Inspecoes em Extintores.        ³±±
+±±³          ³ Permite finalizar em uma unica tela varias ordens de inspecao  ³±±
+±±³          ³ de extintores ao mesmo tempo.                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ SIGAMDT - Medicina e Seguranca do Trabalho                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function MDTA556()
+
+	//Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local nOpca := 0, nOpcx := 3
+	Local oPanelTop, oPanelMid, oPanelGet, oPanel2
+	Local nTamVertical
+	Local nTamGet
+	Local aAlter := {},i, aHeadTemp := {}
+	Local oTempTRB
+	Local nFld
+	Local aFields := { "TK5_ORDEM" , ;
+				       "TK5_EVENTO", ;
+				       "TK4_DESCRI", ;
+				       "TK5_REALIZ"  }
+
+	Private aTRB1 := {}//Array com campos do MarkBrowse
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	//Variaveis para When e relacao
+	Private lFinaliza := .T.
+	Private M->TLD_CODEXT := Space(Len(TLD->TLD_CODEXT)), M->TLD_CODTIP := Space(Len(TLD->TLD_CODTIP))
+	Private aHeaderIns := {}
+	Private aColsIns   := {}
+	Private aEvents    := {}
+	Private aAlterGDa  := {"TK5_REALIZ"}
+	Private nMaxLin    := 0
+
+	//Estas rotinas so servem para montar o painel da tela,
+	//ja que o mBrowse nao eh utilizado (P.O.G.)
+	Private aRotina :=	{ { STR0016, "AxPesqui", 0 ,1 },; 	 //Pesquisar
+						{ STR0017, "NGCAD02" , 0 ,2 },;   //Visualizar
+						{ STR0018, "MDTA556" , 0 ,3 } }   //Incluir
+
+	Private aVETINR := {}  //Usado na criacao do arquivo temporario
+	Private dDeData := dDataBase, dAteData := dDataBase//Datas Iniciais
+	Private oDlg556, oGet556, oGet2, oMenu//Variaveis de tela
+	Private cPrograma := "MDTA556"
+
+	//Variaveis de Prestador
+	Private cDeCliente	:= Space( If((TAMSX3("A1_COD")[1]) < 1,6,(TAMSX3("A1_COD")[1])) )
+	Private cDeLoja		:= Space( If((TAMSX3("A1_LOJA")[1]) < 1,4,(TAMSX3("A1_LOJA")[1])) )
+	Private cAteCliente	:= cDeCliente
+	Private cAteLoja	:= cDeLoja
+	Private cDeNome 	:= ""
+	Private cAteNome 	:= ""
+	Private cCliMdtps := ""  //Usado no inicializador padrão, apenas por fins de compatibilidade.
+	Private M->TLD_CATEGO := "1"
+
+	//Variaveis de tamanho de tela e objetos
+	Private aSize := MsAdvSize(,.f.,430), aObjects := {}
+	Aadd(aObjects,{050,050,.t.,.t.})
+	Aadd(aObjects,{020,020,.t.,.t.})
+	Aadd(aObjects,{100,100,.t.,.t.})
+	Aadd(aObjects,{100,100,.t.,.t.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.t.)
+
+	If !NGCADICBASE("TK5_EVENTO","A","TK5",.F.)
+		If !NGINCOMPDIC("UPDMDT04","00000017302/2010")
+			Return .F.
+		Endif
+	Endif
+
+	//Seta de Inclusão
+	SetInclui(.T.)
+
+	//Monta o cabecalho
+	aHeader := {}
+	aHeaderIns := {}
+
+	//Se prestador adiciona os campos de cliente e loja
+	If lSigaMdtPS
+		aHeader := NGHeadExc( { 'TLD_CLIENT', 'TLD_LOJA' }, .F. )
+	EndIf
+
+	aHeadTemp := CABECGETD("TLD", {})
+	For i:=1 to Len(aHeadTemp)
+		aAdd(aHeader, {})
+		aHeader[Len(aHeader)] := aHeadTemp[i]
+	Next i
+
+	aHeaderIns := NGHeadExc( aFields, , .F., .F. )
+
+	//Inicializa as variaveis
+	aCols := BlankGetd(aHeader)
+	aColsIns := BlankGetd(aHeaderIns)
+
+	If lSigaMdtps
+		Private nCLIENT := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_CLIENT"})
+		Private nLOJA   := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_LOJA"})
+	Endif
+	Private nORDEM  := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_ORDEM"})
+	Private nCODEXT := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_CODEXT"})
+	Private nCODTIP := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_CODTIP"})
+	Private nDTPREV := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_DTPREV"})
+	Private nDTREAL := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_DTREAL"})
+	Private nCODUSU := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_CODUSU"})
+	Private nDTRECA := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_DTRECA"})
+	Private nCATEGO := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_CATEGO"})
+	Private nRECEBI := aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == "TLD_RECEBI"})
+
+	//Cria arquivo temporario
+	aCampos := {}
+	AADD(aCampos,{ "TLD_OK"		, "C",02,0})
+	If lSigaMdtps
+		AADD(aCampos,{ "TLD_CLIENT"	, "C",If(TAMSX3("TLD_CLIENT")[1] < 1, 6, TAMSX3("TLD_CLIENT")[1]),0})
+		AADD(aCampos,{ "TLD_LOJA"	, "C",If(TAMSX3("TLD_LOJA")[1] < 1, 2, TAMSX3("TLD_LOJA")[1]),0})
+		AADD(aCampos,{ "A1_NOME"    , "C",30,0})
+	Endif
+	AADD(aCampos,{ "TLD_ORDEM"	, "C",If(TAMSX3("TLD_ORDEM")[1] < 1, 6, TAMSX3("TLD_ORDEM")[1]),0   })
+	AADD(aCampos,{ "TLD_PLANO"	, "C",If(TAMSX3("TLD_PLANO")[1] < 1, 6, TAMSX3("TLD_PLANO")[1]),0   })
+	AADD(aCampos,{ "TLD_CATEGO"	, "C",If(TAMSX3("TLD_CATEGO")[1] < 1, 6, TAMSX3("TLD_CATEGO")[1]),0 })
+	AADD(aCampos,{ "TLD_DESCAT"	, "C",30                            , 0                             })
+	AADD(aCampos,{ "TLD_CODEXT"	, "C",If(TAMSX3("TLD_CODEXT")[1] < 1, 10, TAMSX3("TLD_CODEXT")[1]),0})
+	AADD(aCampos,{ "TLD_CODTIP"	, "C",If(TAMSX3("TLD_CODTIP")[1] < 1, 10, TAMSX3("TLD_CODTIP")[1]),0})
+	AADD(aCampos,{ "TLD_DTPREV"	, "D",If(TAMSX3("TLD_DTPREV")[1] < 1, 8, TAMSX3("TLD_DTPREV")[1]),0 })
+	AADD(aCampos,{ "NACOLS"		, "N",3,0})//Numero da Linha no aCols, caso seja alteração
+	cAliasTRB:= GetNextAlias()
+
+	oTempTRB := FWTemporaryTable():New( cAliasTRB, aCampos )
+	If lSigaMdtps
+		oTempTRB:AddIndex( "1", {"TLD_CLIENT","TLD_LOJA","TLD_ORDEM"} )
+	Else
+		oTempTRB:AddIndex( "1", {"TLD_ORDEM"} )
+	EndIf
+	oTempTRB:Create()
+
+	//Colunas que aparecem no markBrowse
+	aTRB1 := {}
+	AADD(aTRB1,{ "TLD_OK"    , NIL, " "    ,})
+	If lSigaMdtps
+		AADD(aTRB1,{ "TLD_CLIENT", NIL, STR0028,}) //"Cliente"
+		AADD(aTRB1,{ "TLD_LOJA"  , NIL, STR0025,}) //"Loja"
+		AADD(aTRB1,{ "A1_NOME"   , NIL, STR0026,}) //"Nome"
+	Endif
+	AADD(aTRB1,{ "TLD_ORDEM" , NIL, STR0008,}) //"Número Ordem"
+	AADD(aTRB1,{ "TLD_DESCAT", NIL, STR0029,}) //"Categoria"
+	AADD(aTRB1,{ "TLD_CODEXT", NIL, STR0009,}) //"Sis. de Extinção"
+	AADD(aTRB1,{ "TLD_CODTIP", NIL, STR0010,}) //"Inspeção"
+	AADD(aTRB1,{ "TLD_DTPREV", NIL, STR0011,}) //"Data Prevista"
+
+	//Montagem do Array com os campos que podem ser alterados
+	For i:=1 to Len(aHeader)
+		If aScan(aCampos, {|x| Trim(Upper(x[1])) == Trim(Upper(aHeader[i][2])) }) == 0
+			aAdd(aAlter, aHeader[i][2])
+		Endif
+	Next i
+
+	PutFileInEof( "SA1" )
+
+	dbSelectArea( "TLD" )
+	PutFileInEof( "TLD" )
+
+	Define MsDialog oDlg556 TITLE OemToAnsi(STR0001) From aSize[7],0 To aSize[6],aSize[5] Of oMainWnd Pixel//"Retorno Simplificado de Ordem de Inspeção"
+
+		//Tamanho do oPanelGet (responsável pela GetDados do meio da tela)
+		//É formado pelo tamanho da tela utilizada pelo sistema menos o
+		//tamanho do Panel dos campos, menos o panel do botão
+		nTamVertical:= aSize[4]/2
+		nTamGet		:= nTamVertical - aPosObj[1,3]
+
+		oPnlPai := TPanel():New( , , , oDlg556 , , , , , , , , .F. , .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//Monta Painel com Campos
+			oPanelTop := TPanel():New(,,,oPnlPai,,,,,RGB(255,255,255),, aPosObj[1,3], .F., .F. )
+				oPanelTop:Align	:= CONTROL_ALIGN_TOP
+
+				@ 0.7 , 0.8  SAY OemToAnsi(STR0005 + ":") of oPanelTop  //"De Data Inspeção:"
+				@ 0.5 , 8.0  MSGET dDeData SIZE 45,10 Picture '@! 99/99/9999' VALID NaoVazio() .AND. MDT556VDT(dDeData,dAteData)  WHEN .T. of oPanelTop HasButton
+				@ 1.9 , 0.8  SAY OemToAnsi(STR0006 + ":")  of oPanelTop   //"Até Data Inspeção:"
+				@ 1.7 , 8.0  MSGET dAteData SIZE 45,10 Picture '@! 99/99/9999' VALID NaoVazio() .AND. MDT556VDT(dDeData,dAteData,.f.) WHEN .T. of oPanelTop HasButton
+
+				If lSigaMdtps
+					//De Cliente
+					@ 0.7 ,15  SAY OemToAnsi(STR0024) of oPanelTop  //"De Cliente"
+					@ 0.5 ,18.5  MSGET cDeCliente SIZE 40,10 Picture '@!' VALID MDT556VLCLI(1)  F3 "SA1001" WHEN .T. of oPanelTop HasButton
+
+					@ 0.7 ,24.8  SAY OemToAnsi(STR0025)  of oPanelTop  //"Loja"
+					@ 0.5 ,26.5  MSGET cDeLoja SIZE 30,10 Picture '@!' VALID MDT556VLCLI(2) WHEN .T. of oPanelTop
+
+					@ 0.7 ,31.7  SAY OemToAnsi(STR0026)  of oPanelTop  //"Nome"
+					@ 0.5 ,34  MSGET cDeNome SIZE 110,10 Picture '@!' WHEN .F. of oPanelTop
+
+					//Ate Cliente
+					@ 1.9 ,15  SAY OemToAnsi(STR0027) of oPanelTop  //"Até Cliente"
+					@ 1.7 ,18.5  MSGET cAteCliente SIZE 40,10 Picture '@!' VALID MDT556VLCLI(3)  F3 "SA1001" WHEN .T. of oPanelTop HasButton
+
+					@ 1.9 ,24.8  SAY OemToAnsi(STR0025)  of oPanelTop   //"Loja"
+					@ 1.7 ,26.5  MSGET cAteLoja SIZE 30,10 Picture '@!' VALID MDT556VLCLI(4) WHEN .T. of oPanelTop
+
+					@ 1.9 ,31.7  SAY OemToAnsi(STR0026)  of oPanelTop   //"Nome"
+					@ 1.7 ,34  MSGET cAteNome SIZE 110,10 Picture '@!' WHEN .F. of oPanelTop
+				Endif
+
+			//Monta Painel do Botão
+			oPanelMid := TPanel():New(,,,oPnlPai,,,,,RGB(255,255,255),, 20, .F., .F. )
+				oPanelMid:Align := CONTROL_ALIGN_TOP
+
+				@ 03,05 Button STR0007 Size 62,12 Pixel Action (MDT556Busca()) Of oPanelMid//"&Buscar pela data"
+
+			//Monta GetDados
+			oPanelGet := TPanel():New(,,,oPnlPai,,,,,RGB(255,255,255),, nTamGet, .F., .F. )
+				oPanelGet:Align := CONTROL_ALIGN_TOP
+
+				oGet556 := MSGetDados():New(aPosObj[3,1],aPosObj[3,2],aPosObj[3,3],aPosObj[3,4],nOpcx,"AllwaysTrue()","NG556TudOk",,.T.,aAlter,,,1,,,,,oPanelGet)
+				oGet556:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+				oGet556:oBrowse:bChange := {|| MDTA556CHG() }
+
+			//Monta GetDados das Ordens
+			oPanel2 := TPanel():New(,,,oPnlPai,,,,,RGB(255,255,255),,, .F., .F. )
+				oPanel2:Align := CONTROL_ALIGN_ALLCLIENT
+
+				oGet2 := MsNewGetDados():New(aPosObj[4,1],aPosObj[4,2],aPosObj[4,3],aPosObj[4,4],nOpcx,"AllwaysTrue()","AllwaysTrue()",,aAlterGDa,,nMaxLin,"NaoVazio() .And. MDTA556ATU()",,,oPanel2,aHeaderIns,aColsIns)
+				oGet2:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//Implementa Click da Direita
+			If Len(aSMenu) > 0
+				NGPOPUP(aSMenu,@oMenu)
+				oDlg556:bRClicked	:= { |o,x,y| oMenu:Activate(x,y,oDlg556)}
+				oPanelTop:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg556)}
+				oPanelMid:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg556)}
+			Endif
+
+	ACTIVATE MSDIALOG oDlg556 ON INIT ( EnchoiceBar(oDlg556,{||nOpca:=1,If(oGet556:TudoOk(),oDlg556:End(),nOpca := 0)},{||oDlg556:End(),nOpca := 0} ) ,;
+										AlignObject(oDlg556,{oPanelTop,oGet556:oBrowse},1,,{85}))
+
+	If nOpca == 1
+		Begin Transaction
+			lGravaOk := NG556GRAV()
+			If lGravaOk
+				EvalTrigger() //Processa Gatilhos
+			EndIf
+		End Transaction
+	EndIf
+
+	oTempTRB:Delete()
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Devolve variaveis armazenadas (NGRIGHTCLICK)                          ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	NGRETURNPRM(aNGBEGINPRM)
+
+	If nOpca == 1
+		MDTA556()
+	Endif
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ NG556TudOk   ³ Autor ³ Andre E. Perez Alvarez³ Data ³17/10/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Critica se a nota toda esta' Ok                                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MDT161Ag                                                       ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function NG556TudOk()
+Local f
+
+If Len(aCols) == 1
+	If Empty(aCols[1][nOrdem]) .or. aCols[1][Len(aCols[1])]
+		Return .T.
+	Endif
+Endif
+
+//Percorre aCols
+For f:=1 to Len(aCols)
+	If !aCols[f][Len(aCols[f])]
+		//Verifica se os campos obrigatórios estão preenchidos
+		If Empty(aCols[f][nDTREAL])
+			//Mostra mensagem de Help
+			Help(1," ","OBRIGAT2",,aHeader[nDTREAL][1],3,0)
+			Return .F.
+		Endif
+		If Empty(aCols[f][nCODUSU])
+			Help(1," ","OBRIGAT2",,aHeader[nCODUSU][1],3,0)
+			Return .F.
+		Endif
+		If aCols[f][nDTREAL] > dDataBase
+			Help(" ",1,"NGATENCAO",,STR0022,3,1)  //"A data de realização da inspeção não pode ser maior que a data atual."
+			Return .F.
+		Endif
+	Endif
+Next f
+
+PutFileInEof("TLD")
+
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDT556Busca  ³ Autor ³Andre E. Perez Alvarez ³ Data ³02/11/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Seleciona as ordens de inspecao pendentes durante o periodo    ³±±
+±±³          ³ selecionado, e coloca num MarkBrowse.                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MDTA556                                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function MDT556Busca()
+
+	Local OldCols := aCLONE(aCols), nOldn := 0
+	Local i,j
+	Local lGrava := .F.
+	Local aArea := GetArea()
+	Local oDlgF, oFont, oGroup
+	Local oMark556
+	Local nCont,nCols
+	Local cDescri
+	Local cTipo
+	//Define indices
+	Local nInd  := 7, cSeek := DtoS(dDeData), cCond := DTOS(dAteData), cCond2 := "DTOS(TLD->TLD_DTPREV)"
+
+	Private nPosCod := aScan( aHeader,{|x| Trim(Upper(x[2])) == "TLD_ORDEM"})
+
+	If lSigaMdtps
+		nInd := 14
+		cSeek:= cDeCliente+cDeLoja //dDeData
+		cCond:= cAteCliente+cAteLoja //dAteData
+		cCond2:= "TLD->TLD_CLIENT+TLD->TLD_LOJA" //TLD->TLD_DTPREV
+	Endif
+	lInverte:= .F.
+	cMARCA := GetMark()
+	nOpca := 2
+
+	dbSelectArea( cAliasTRB )
+	Zap
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³Seleciona as ordens de inspecao para deixar no MarkBrowse³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	dbSelectArea("TLD")
+	dbSetOrder(nInd)
+	dbSeek( xFilial("TLD")+cSeek , .T. )
+	While !EoF() .AND. TLD->TLD_FILIAL == xFilial("TLD") .AND. &(cCond2) <= cCond
+
+		If TLD->TLD_SITUAC != "1" .OR. !Empty(TLD->TLD_DTREAL)//Se Ordem nao esta pendente
+			dbSelectArea("TLD")
+			dbSkip()
+			Loop
+		Endif
+		If lSigaMdtps
+			If TLD->TLD_DTPREV < dDeData .or. TLD->TLD_DTPREV > dAteData
+				dbSelectArea("TLD")
+				dbSkip()
+				Loop
+			Endif
+		Endif
+
+		dbSelectArea( cAliasTRB )
+		If lSigaMdtps
+			nOldn := aScan(aCols, {|x| Trim(Upper(x[nClient]+x[nLoja]+x[nOrdem])) == Trim(Upper(TLD->TLD_CLIENT+TLD->TLD_LOJA+TLD->TLD_ORDEM)) })
+		Else
+			nOldn := aScan(aCols, {|x| Trim(Upper(x[nOrdem])) == Trim(Upper(TLD->TLD_ORDEM)) })
+		Endif
+		If nOldn > 0
+			If aCols[nOldn][Len(aCols[nOldn])]
+				nOldn := 0
+			Endif
+		Endif
+		Reclock(cAliasTRB,.T.)
+		(cAliasTRB)->TLD_OK     := If(nOldn == 0, Space(02), cMarca)//Se encontra no Acols Marca
+		(cAliasTRB)->NACOLS 	:= nOldn
+		(cAliasTRB)->TLD_ORDEM  := TLD->TLD_ORDEM
+		If lSigaMdtps
+			(cAliasTRB)->TLD_CLIENT := TLD->TLD_CLIENT
+			(cAliasTRB)->TLD_LOJA   := TLD->TLD_LOJA
+			(cAliasTRB)->A1_NOME    := NGSEEK("SA1",TLD->TLD_CLIENT+TLD->TLD_LOJA,1,"SA1->A1_NOME")
+		Endif
+		(cAliasTRB)->TLD_CATEGO := TLD->TLD_CATEGO
+		(cAliasTRB)->TLD_DESCAT := If(TLD->TLD_CATEGO == "1",NGRETSX3BOX("TLD_CATEGO","1"),NGRETSX3BOX("TLD_CATEGO","2"))
+		(cAliasTRB)->TLD_CODEXT := TLD->TLD_CODEXT
+		(cAliasTRB)->TLD_CODTIP := TLD->TLD_CODTIP
+		(cAliasTRB)->TLD_DTPREV := TLD->TLD_DTPREV
+		(cAliasTRB)->TLD_PLANO	:= TLD->TLD_PLANO
+		MsUnlock(cAliasTRB)
+
+		dbSelectArea( "TLD" )
+		dbSkip()
+	End
+
+	If (cAliasTRB)->( RecCount() ) == 0
+		MsgInfo( STR0015 )  //"Nao existem ordens de inspeção pendentes neste período selecionado."
+		Return .F.
+	Endif
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	*********************************************************
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³Monta janela com MarkBrowse³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	DEFINE FONT oFont NAME "Arial" SIZE 0,-12
+
+	DEFINE MSDIALOG oDlgF TITLE OemToAnsi(STR0012) From 08,15 To 42,87 OF oMainWnd //"Ordens de Inspeção Pendentes"
+	oPnlTop := TPanel():New(00,00,,oDlgF,,,,,,87,30,.F.,.F.)
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	@ 0.1,5.8 TO 2.1,29 OF oPnlTop
+	@ 05,57 SAY STR0013  SIZE 220,10 of oPnlTop PIXEL FONT oFont //"Estas são as ordens de inspeção pendentes durante o período selecionado."
+	@ 15,57 SAY STR0014 SIZE 220,10 of oPnlTop PIXEL FONT oFont  //"Selecione as ordens que deseja finalizar."
+
+	oPanelMark := TPanel():New(00,00,,oDlgF,,,,,,87,30,.F.,.F.)
+		oPanelMark:Align := CONTROL_ALIGN_ALLCLIENT
+	oMark556 := MsSelect():NEW(cAliasTRB,"TLD_OK",,aTRB1,@lINVERTE,@cMARCA,{45,5,254,281},,,oPanelMark)
+	oMark556:oBROWSE:lHASMARK := .T.
+	oMark556:oBROWSE:lCANALLMARK := .T.
+	oMark556:oBROWSE:bALLMARK := {|| MDTA556INV(cMarca) }
+	oMark556:oBROWSE:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Activate MsDialog oDlgF ON INIT EnchoiceBar(oDlgF,{|| nOpca := 1,If(MDT556OK(oMark556),oDlgf:End(),Nil)},{|| nOpca := 2,oDlgf:End()}) Centered
+
+	*********************************************************
+
+	If nOpca == 1
+		For nCols := Len(aCols) To 1 Step -1 //Deleta do aCols os registros - não marcados no MarkBrowse;
+			dbSelectArea(cAliasTRB)
+			dbSetOrder(1)
+			cOrdem := aCols[nCols,nPosCod]
+			If !dbSeek(aCols[nCols,nPosCod]) .OR. Empty((cAliasTRB)->TLD_OK)
+				aDel(aCols,nCols)
+				aSize(aCols,Len(aCols)-1)
+			EndIf
+		Next nCols
+
+		//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+		//³Carrega novo aCols         ³
+		//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+		aCols := {}
+		i := 0
+		dbSelectArea(cAliasTRB)
+		dbSetOrder(1)
+		dbGoTop()
+		While !eof()
+			//Verifica quantos estão marcados para montagem de array
+			If !Empty((cAliasTRB)->TLD_OK)
+				i ++
+			Endif
+			dbSelectArea(cAliasTRB)
+			dbSkip()
+		End
+		//Monta aCols no tamanho correto
+		If i > 0
+			aCols := Array(i, Len(aHeader)+1)
+		Endif
+		i := 1
+		dbSelectArea(cAliasTRB)
+		dbSetOrder(1)
+		dbGoTop()
+		While !eof()
+			//Somente adiciona no aCols os marcados
+			If !Empty((cAliasTRB)->TLD_OK)
+				If (cAliasTRB)->NACOLS > 0
+					aCols[i] := aClone(OldCols[(cAliasTRB)->NACOLS])
+				Else
+					//Seta campos para incializador padrão
+					If lSigaMdtps
+						cCliMdtps := (cAliasTRB)->TLD_CLIENT+(cAliasTRB)->TLD_LOJA
+					Endif
+					M->TLD_CODEXT := (cAliasTRB)->TLD_CODEXT
+					M->TLD_CODTIP := (cAliasTRB)->TLD_CODTIP
+					For j:=1 to Len(aHeader)
+						If Trim(Upper(aHeader[j][2])) $ "TLD_CLIENT"
+							aCols[i][j] := (cAliasTRB)->TLD_CLIENT
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_LOJA"
+							aCols[i][j] := (cAliasTRB)->TLD_LOJA
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_ORDEM"
+							aCols[i][j] := (cAliasTRB)->TLD_ORDEM
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_PLANO"
+							aCols[i][j] := (cAliasTRB)->TLD_PLANO
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_CATEGO"
+							aCols[i][j] := (cAliasTRB)->TLD_CATEGO
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_CODEXT"
+							aCols[i][j] := (cAliasTRB)->TLD_CODEXT
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_CODTIP"
+							aCols[i][j] := (cAliasTRB)->TLD_CODTIP
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_DTPREV"
+							aCols[i][j] := (cAliasTRB)->TLD_DTPREV
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_DTREAL"
+							aCols[i][j] := dDataBase
+						ElseIf Trim(Upper(aHeader[j][2])) $ "TLD_SITUAC"
+							aCols[i][j] := "2"//Finalizado
+						Elseif Trim(Upper(aHeader[j][2])) $ "TLD_RECEBI"
+							aCols[i][j] := "1"//Sim para recebido
+						Else
+							If Trim(Upper(aHeader[j][2])) $ "TLD_DESEXT"
+								M->TLD_CATEGO := (cAliasTRB)->TLD_CATEGO
+								aCols[i][j] := MDT555R1(.F.)
+							Else
+								If ExistIni(aHeader[j][2])
+									aCols[i][j] := InitPad( GetSx3Cache( aHeader[j][2], "X3_RELACAO" ) )
+								Else
+									cTipo := GetSx3Cache( aHeader[j][2], "X3_TIPO" )
+									If cTipo == "C"
+										aCols[i][j] := Space(TamSX3( aHeader[j][2] )[1])
+									ElseIf cTipo == "N"
+										aCols[i][j] := 0
+									ElseIf cTipo == "D"
+										aCols[i][j] := SToD(Space(8))
+									ElseIf cTipo == "M"
+										aCols[i][j] := ""
+									Else
+										aCols[i][j] := .F.
+									Endif
+								Endif
+							Endif
+						Endif
+					Next j
+					//Deixa linha não deletada e incrementa contador
+					aCols[i][Len(aCols[i])] := .F.
+				Endif
+				i++
+			EndIf
+			dbSelectArea(cAliasTRB)
+			dbSkip()
+		End
+	Endif
+
+	If Len(aCols) == 0
+		aCols := aCLONE(OldCols)
+	Endif
+	n := 1
+	oGet556:nMax := Len(aCols)
+	oGet556:Refresh()
+
+	aColsIns := {}
+	aEvents  := {}
+	If Len(aCols) > 0
+		For nCont := 1 To Len(aCols)
+			dbSelectArea("TK5")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TK5")+aCols[nCont][nORDEM])
+				While !Eof() .And. TK5->TK5_ORDEM == aCols[nCont][nORDEM]
+					cDescri := NGSEEK("TK4",TK5->TK5_EVENTO,1,"TK4->TK4_DESCRI")
+
+					aAdd(aEvents,{TK5->TK5_ORDEM,TK5->TK5_EVENTO,cDescri,TK5->TK5_REALIZ})
+
+					dbSelectArea("TK5")
+					dbSkip()
+				End
+			EndIf
+		Next nCont
+
+		MDTA556CHG()
+	EndIf
+
+	RestArea(aArea)
+	lRefresh := .T.
+
+Return
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDTA556INV   ³ Autor ³Andre E. Perez Alvarez ³ Data ³13/11/06  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Inverte a marcacao do browse.                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MDT556Busca                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function MDTA556INV( cMarca )
+Local aArea := GetArea()
+
+Dbselectarea(cAliasTRB)
+dbGoTop()
+While !eof()
+	RecLock(cAliasTRB, .F.)
+	(cAliasTRB)->TLD_OK := IF((cAliasTRB)->TLD_OK == "  ",cMARCA,"  ")
+	MsUnlock(cAliasTRB)
+	dbSelectArea(cAliasTRB)
+	Dbskip()
+End
+
+RestArea(aArea)
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ NG556GRAV    ³ Autor ³Andre E. Perez Alvarez ³ Data ³16/10/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Grava os dados na tabela TLD                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MDT555Inc/MDT555Fim                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function NG556GRAV()
+Local i, j, x, y
+//Variaveis de Indice
+Local nInd := 1, nIndexTLA := 1, nIndTKS := 1
+Local cSeek, cSeekTLA, cSeekTKS
+Local nCont
+Local nORDTK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_ORDEM"})
+Local nEVETK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_EVENTO"})
+Local nREATK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_REALIZ"})
+
+//Se prestador altera indices
+If lSigaMdtps
+	nIndexTLA := 7
+	nInd := 8
+Endif
+
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³Grava na tabela os valores da GetDados³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+For i:= 1 to Len(aCols)
+	If lSigaMdtps
+		cSeek:= aCols[i][nCLIENT]+aCols[i][nLOJA]+aCols[i][nORDEM]
+	Else
+		cSeek := aCols[i][nORDEM]
+	Endif
+	//Verifica se a linha foi deletada
+	If aCols[i][Len(aCols[i])]
+		Loop
+	EndIf
+	//Se a Ordem estiver preenchida
+	If !Empty(aCols[i][nORDEM])
+		dbSelectArea("TLD")
+		dbSetOrder(nInd)
+		If !dbSeek(xFilial("TLD")+cSeek)
+			Loop
+		EndIf
+
+		RecLock("TLD",.F.)
+
+		//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+		//³ Atualiza dados das ordens de inspecao                    ³
+		//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+		TLD->TLD_SITUAC := "2"  //Situacao finalizada
+		TLD->TLD_RECEBI := "1"  //Sim para recebido
+
+		//Atualiza Campos
+		For j := 1 TO FCount()
+			If(	FieldName(j) == "TLD_FILIAL" .OR. FieldName(j) == "TLD_ORDEM"  .OR. FieldName(j) == "TLD_PLANO"  .OR.;
+				FieldName(j) == "TLD_CODEXT" .OR. FieldName(j) == "TLD_CODTIP" .OR. FieldName(j) == "TLD_DTPREV" .OR.;
+				FieldName(j) == "TLD_SITUAC" .OR. FieldName(j) == "TLD_DTINCL" .OR. FieldName(j) == "TLD_CLIENT" .OR.;
+				FieldName(j) == "TLD_LOJA"   .OR. FieldName(j) == "TLD_RECEBI" .OR.;
+				aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == FieldName(j) }) < 1)
+				Loop
+			EndIf
+			x   := "M->"+FieldName(j)
+			&x. := aCols[i][aSCAN(aHeader, {|x| AllTrim(Upper(X[2])) == FieldName(j) })]
+			y   := "TLD->"+FieldName(j)
+			&y := &x
+		Next j
+		MsUnlock("TLD")
+
+		If TLD->TLD_CATEGO == "1"
+			cSeekTLA := TLD->TLD_CODEXT
+			If lSigaMdtps
+				cSeekTLA := TLD->TLD_CLIENT+TLD->TLD_LOJA+TLD->TLD_CODEXT
+			Endif
+			//Atualiza data da ultima recarga
+			dbSelectArea("TLA")
+			dbSetOrder(nIndexTLA)
+			If dbSeek(xFilial("TLA")+cSeekTLA)
+				RecLock("TLA",.F.)
+				If TLA->TLA_DTRECA < TLD->TLD_DTRECA .and. !Empty(TLD->TLD_DTRECA)
+					TLA->TLA_DTRECA := TLD->TLD_DTRECA
+				Endif
+				If TLA->TLA_DTMANU < TLD->TLD_DTREAL
+					TLA->TLA_DTMANU := TLD->TLD_DTREAL
+				Endif
+				MsUnlock("TLA")
+			Endif
+		Elseif TLD->TLD_CATEGO == "2"
+			cSeekTKS := TLD->TLD_CODEXT
+			//Atualiza data da ultima manutencao
+			dbSelectArea("TKS")
+			dbSetOrder(nIndTKS)
+			If dbSeek(xFilial("TKS")+cSeekTKS)
+				RecLock("TKS",.F.)
+				If TKS->TKS_DTMANU < TLD->TLD_DTREAL
+					TKS->TKS_DTMANU := TLD->TLD_DTREAL
+				Endif
+				MsUnlock("TKS")
+			Endif
+		Endif
+	EndIf
+Next i
+
+If Len(aEvents) > 0
+	For nCont := 1 To Len(aEvents)
+		dbSelectArea("TK5")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TK5")+aEvents[nCont][nORDTK5]+aEvents[nCont][nEVETK5])
+			RecLock("TK5",.F.)
+			TK5->TK5_REALIZ := aEvents[nCont][nREATK5]
+			MsUnlock("TK5")
+		EndIf
+	Next nCont
+EndIf
+
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDT556VLCLI  ³ Autor ³Andre E. Perez Alvarez ³ Data ³08/02/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Valida a pergunta Cliente/Loja                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ MDTA556                                                        ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function MDT556VLCLI(nTipo)
+Local lRet := .t.
+
+If nTipo == 1
+	If Empty(cDeCliente)
+		Return .T.
+	Endif
+	If Empty(cDeLoja)
+		cDeLoja := "0000"
+	Endif
+	lRet := ExistCpo('SA1',cDeCliente + cDeLoja)
+	cDeNome := SA1->A1_NOME
+	PutFileInEof('SA1')
+	Return lRet
+Elseif nTipo == 2
+	If Empty(cDeLoja) .and. Empty(cDeCliente)
+		Return .T.
+	Endif
+	If !ExistCpo('SA1',cDeCliente+cDeLoja)
+		Return .f.
+	Endif
+	cDeNome := SA1->A1_NOME
+	PutFileInEof('SA1')
+
+Elseif nTipo == 3
+	If cAteCliente = Replicate("Z",6)
+		PutFileInEof('SA1')
+		Return .T.
+	Endif
+	If Empty(cAteLoja)
+		cAteLoja := "0000"
+	Endif
+	If !ExistCpo('SA1',cAteCliente + cAteLoja)
+		PutFileInEof('SA1')
+		Return .f.
+	Endif
+	If cAteCliente+cAteLoja < cDeCliente+cDeLoja
+		Help(" ",1,"DEATEINVAL")
+		PutFileInEof('SA1')
+		Return .f.
+	Endif
+	cAteNome := SA1->A1_NOME
+	PutFileInEof('SA1')
+	Return .T.
+Elseif nTipo == 4
+	If cAteLoja = Replicate("Z",4)
+		Return .T.
+	Endif
+	If !ExistCpo('SA1',cAteCliente+cAteLoja)
+		Return .f.
+	Endif
+	If cAteCliente+cAteLoja < cDeCliente+cDeLoja
+		Help(" ",1,"DEATEINVAL")
+		lRet := .F.
+	Endif
+	cAteNome := SA1->A1_NOME
+	PutFileInEof('SA1')
+	Return lRet
+Endif
+
+Return .t.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFuncao    ³MDTA556CHGºAutor  ³Wagner S. de Lacerdaº Data ³  09/07/2010 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³ Ao selecionar um registro da GetDados das Ordens, carrega  º±±
+±±º          ³ a aCols da GetDados dos Eventos.                           º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ MDTA556                                                    º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MDTA556CHG()
+
+	Local nCont
+	Local nORDTK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_ORDEM"})
+	Local nEVETK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_EVENTO"})
+	Local nDESTK4 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK4_DESCRI"})
+	Local nREATK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_REALIZ"})
+	Local cResp
+	aColsIns := {}
+	M->TLD_CATEGO := aCols[oGet556:oBrowse:nAT][nCATEGO]
+	// Carrega os Eventos
+	If Len(aEvents) > 0
+		dbSelectArea("TK5")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TK5")+aCols[oGet556:oBrowse:nAT][nORDEM])
+			For nCont := 1 To Len(aEvents)
+					If aCols[oGet556:oBrowse:nAT][nORDEM] == aEvents[nCont][nORDEM]
+						aAdd(aColsIns,{aEvents[nCont][nORDTK5],aEvents[nCont][nEVETK5],aEvents[nCont][nDESTK4],aEvents[nCont][nREATK5],.F.})
+					EndIf
+			Next nCont
+		EndIf
+	EndIf
+
+	If Len(aColsIns) > 0
+		oGet2:SetArray(aColsIns)
+		oGet2:GoTop()
+		oGet2:Refresh()
+	Else
+		aAdd(aColsIns,{"","","","",.F.})
+		oGet2:SetArray(aColsIns)
+		oGet2:GoTop()
+		oGet2:Refresh()
+	EndIf
+
+Return Nil
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFuncao    ³MDTA556ATUºAutor  ³Wagner S. de Lacerdaº Data ³  09/07/2010 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³ Armazena no array dos Eventos a resposta.                  º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ MDTA556                                                    º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MDTA556ATU()
+
+Local nCont, nFor
+Local nORDTK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_ORDEM"})
+Local nEVETK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_EVENTO"})
+Local nREATK5 := aScan(aHeaderIns,{|x| TRIM(UPPER(x[2])) == "TK5_REALIZ"})
+
+// Sobreescreve as respostas dos eventos
+If Len(aEvents) > 0
+	For nFor := 1 To Len(aCols)
+		For nCont := 1 To Len(aEvents)
+			If aColsIns[n][nORDTK5] == aEvents[nCont][nORDEM]
+				If aColsIns[n][nEVETK5] == aEvents[nCont][nEVETK5]
+					aEvents[nCont][nREATK5] := M->TK5_REALIZ
+				EndIf
+			EndIf
+		Next nCont
+	Next nFor
+EndIf
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFuncao    ³MDT556VDT ºAutor  ³Jackson Machado	  º Data ³  29/07/2011 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³ Validação das datas							                    º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ MDTA556                                                    º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function MDT556VDT(dDeDate,dAteDate,lIni)
+Default lIni := .t.
+If !Empty(dDeDate) .and. !Empty(dAteDate)
+	If dDeDate > dAteDate
+		If lIni
+			HELP("",1,"DATAMAIOR")
+		Else
+			HELP("",1,"DATAMENOR")
+		Endif
+		Return .F.
+	Endif
+Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT556OK
+Verificar se possui no minimo uma ordem selecionada.
+
+@author Jean Pytter da Costa
+@since 21/02/14
+@version 11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+
+Static Function MDT556OK(oBrwMrk)
+
+Local lRet := .F.
+
+dbSelectArea( cAliasTRB )
+dbGoTop()
+While ( cAliasTRB)->( !Eof() )
+	If !Empty((cAliasTRB)->TLD_OK)
+		lRet := .T.
+		Exit
+	EndIf
+	(cAliasTRB)->( dbSkip() )
+End
+
+If !lRet
+	ShowHelpDlg( STR0032 ,{ STR0033 } , 1 ,{ STR0034 } , 2 )//"ATENÇÃO"##"Não é possível confirmar sem nenhuma Ordem de Inspeção selecionada."##"Selecione no minímo uma Ordem de Inspeção."
+EndIf
+
+dbSelectArea( cAliasTRB )
+dbGoTop()
+oBrwMrk:oBrowse:SetFocus() // Define foco no markbrowse
+
+Return lRet

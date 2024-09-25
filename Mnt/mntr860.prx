@@ -1,0 +1,1129 @@
+#INCLUDE "MNTR860.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR860
+Custo por Ordem de Servico
+@author	Paulo Pego
+@since		18/06/99
+@version	MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Function MNTR860()
+
+	//----------------------------------------------
+	// Guarda conteudo e declara variaveis padroes |
+	//----------------------------------------------
+	Local aNGBEGINPRM	:= NGBEGINPRM()
+
+	Local cString		:= "STJ"
+	Local cdesc1		:= STR0001 //"Relatorio de Custos por Ordem de Servico "
+	Local cdesc2		:= STR0002 //"Este programa seleciona por default OS finalizadas e as"
+	Local cdesc3		:= STR0003 //"em aberto conforme parametro selecionado."
+	Local wnrel			:= "MNTR860"
+
+	Private nTamPro	:= 15
+	Private aReturn	:= { STR0004, 1,STR0005, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+	Private nLastKey:= 0
+	Private Titulo	:= STR0006 //"Relatorio de Custo por Ordem de Servico"
+	Private Tamanho	:= "G"
+	Private nomeprog:= "MNTR860"
+	Private lmaqui	:= .F.
+	Private cperg	:= "MNT860"
+	Private cTRB	:= GetNextAlias() //Alias oTmpTbl1
+	Private cTRB2	:= GetNextAlias() //Alias oTmpTbl2
+
+	//----------------------------------------------------------------
+	// Variaveis utilizadas para parametros!
+	// mv_par01	// Do Ordem de Servico
+	// mv_par02	// Ate Ordem de Servi‡o
+	// mv_par03	// De centro de custo
+	// mv_par04	// Ate centro de custo
+	// mv_par05	// De Data Manutencao
+	// mv_par06	// Ate Data Manutencao
+	// mv_par07	// De Bem
+	// mv_par08	// Ate Bem
+	// mv_par09	// Aglutina M-D-O         ( Sim/Nao )
+	// mv_par10	// Detalhado ou Resumido  ( Detalhado/Resumido )
+	// mv_par11	// Considera Data (Da O.S\Do Insumo)
+	// mv_par12	// Considera OS(Liberada,Pendente,Abertas,Finalizadas)
+	// mv_par13	// Tipo de Custo          ( Medio/Standard)
+	// mv_par14	// Custo Maquina Parada   ( Sim/Nao )
+	// mv_par15	// Considerar Produtos    ( Sim/Nao )
+	// mv_par16	// De Produto
+	// mv_par17	// Ate Produto
+	// mv_par18	// Considerar Ferramenta  ( Sim/Nao )
+	// mv_par19	// De Ferramenta
+	// mv_par20	// Ate Ferramenta
+	// mv_par21	// Considerar Mao de Obra ( Sim/Nao )
+	// mv_par22	// De Mao de Obra
+	// mv_par23	// Ate Mao de Obra
+	// mv_par24	// Considerar Terceiros   ( Sim/Nao )
+	// mv_par25	// De Terceiros
+	// mv_par26	// Ate Terceiro
+	// mv_par27	// Imprimir Localizcacao ?   Sim/Nao
+	// mv_par28	// "Tipo da Ordem Serviço ?" ( "Bem" # "Localização" # "Ambos" )
+	//----------------------------------------------------------------
+
+	If Pergunte( cperg,.T. )
+
+		//----------------------------------------
+		// Envia controle para a funcao SETPRINT
+		//----------------------------------------
+		wnrel:=SetPrint( cString,wnrel,"",titulo,cDesc1,cDesc2,cDesc3,.F.,"" )
+
+		If nLastKey == 27
+			Set Filter To
+			NGRETURNPRM( aNGBEGINPRM )
+			Return
+		EndIf
+
+		SetDefault( aReturn,cString )
+		RptStatus({|lEnd| R860Imp( @lEnd,wnRel,titulo,tamanho)},titulo )
+
+	EndIf
+
+	//--------------------------------------
+	// Retorna conteudo de variaveis padroes
+	//--------------------------------------
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R860Imp
+Chamada do Relatório
+
+@author	 Inacio Luiz Kolling
+@since	 18/06/99
+@version MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Static Function R860Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local cRodaTxt := ""
+	Local nCntImpr := 0
+	Local i, cLocal
+	Local oTmpTbl1 //Obj. Tab. Temp.
+	Local oTmpTbl2 //Obj. Tab. Temp.
+
+	/* Liberado ajute na picture do campo TL_QUANTID, visto que para utilização de casas decimais é indispensavel o identificador "@E"
+	desta forma, para as versões iqe não possuem o ajuste, é assumido o tamanho maximo da picture. Esta verificação deve ser removida
+	a partir do momento que a realese .25 estiver descontinuada. */
+	Local cPictuQnt  := IIf( GetRPORelease() >= '12.1.027', X3Picture( 'TL_QUANTID' ), '@E 9,999,999,999,999.99' )
+
+	Private li := 80 ,m_pag := 1
+	Private CABEC1, CABEC2
+
+	Private nMaxCarac := 0
+	Private cCodigo   := ""
+	Private aLocal		:= {}
+
+	If MV_PAR10 == 1
+		CABEC1 := STR0024//"Tip  Codigo Insumo   "+Space(nTamPro)+"Nome Insumo                     ..........Previsto.......... ........Realizado........."
+		CABEC2 := STR0032//Space(nTamPro)+"                                                         Quantid. Uni       Custo   Quantid. Uni       Custo   Diferenca       Var.%"
+	Else
+		CABEC1 := STR0035 //"Ordem  Bem              Descricao              Servico Descricao           Custo Previsto  Custo Realizado    Diferenca       Var.%"
+		CABEC2 := " "
+	EndIf
+	nTipo := IIF( aReturn[4]==1,15,18 )
+
+
+	/*/
+
+	MV_PAR10 = 1 Detalhado
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	************************************************************************************************************************************
+	Tip Codigo Insumo   Nome Insumo                      ..........Previsto.......... ........Realizado.........
+	Quantid. Uni       Custo   Quantid. Uni       Custo   Diferenca       Var.%
+	************************************************************************************************************************************
+
+	Ordem.: xxxxxx      Bem.....: xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx  Servico.: xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx
+	Localização: xxxxxxxxxx > xxxxxxxxxx > xxxxxxxxxx > xxxxxxxxxx
+	Dt. Original: xx/xx/xxxx   Dt.Real Inic.: 99/99/9999  Dt.Real Fim: 99/99/9999
+	xxx xxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxx.xxx,xx xxx  xxx.xxx,xx xxx.xxx,xx xxx  xxx.xxx,xx xxxxx.xxx,xx xxxx,xxx.x
+	xxx xxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxx.xxx,xx xxx  xxx.xxx,xx xxx.xxx,xx xxx  xxx.xxx,xx xxxxx.xxx,xx xxxx,xxx,x
+	xxx xxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxx.xxx,xx xxx  xxx.xxx,xx xxx.xxx,xx xxx  xxx.xxx,xx xxxxx.xxx,xx xxxx,xxx,x
+	xxx xxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxx.xxx,xx xxx  xxx.xxx,xx xxx.xxx,xx xxx  xxx.xxx,xx xxxxx.xxx,xx xxxx,xxx,x
+
+	*** Total da O.S                                                       xxx.xxx,xx                 xxx.xxx,xx xxxxx.xxx,xxxxxxx,xxx,x
+
+	*** Total Geral                                                      x,xxx.xxx,xx               x,xxx.xxx,xx xxxxx.xxx,x xxxxx,xxx,x
+
+
+	MV_PAR10 = 2 Resumido
+
+	1         2         3         4         5         6         7         8         9         0         1         2         3
+	012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901
+	************************************************************************************************************************************
+	Ordem  Bem              Descricao              Servico Descricao           Custo Previsto  Custo Realizado    Diferenca       Var.%
+	************************************************************************************************************************************
+
+	xxxxxx  xxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxx  xxxxxx   xxxxxxxxxxxxxxxxxxxx  xxx.xxx,xx   xxx.xxx,xx   xxxxx.xxx,x  xxxx,xxx.x
+	Local:  xxxxxxxxx > xxxxxxxxx > xxxxxxxxx > xxxxxxxxxx
+
+	xxxxxx  xxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxx  xxxxxx   xxxxxxxxxxxxxxxxxxxx  xxx.xxx,xx   xxx.xxx,xx   xxxxx.xxx,x  xxxx,xxx.x
+
+	xxxxxx  xxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxx  xxxxxx   xxxxxxxxxxxxxxxxxxxx  xxx.xxx,xx   xxx.xxx,xx   xxxxx.xxx,x  xxxx,xxx.x
+	Local:  xxxxxxxxx > xxxxxxxxx > xxxxxxxxx > xxxxxxxxxx
+
+	xxxxxx  xxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxx  xxxxxx   xxxxxxxxxxxxxxxxxxxx  xxx.xxx,xx   xxx.xxx,xx   xxxxx.xxx,x  xxxx,xxx.x
+
+	*** Total Geral                                                            xxx.xxx.xxx,xx   xxx.xxx.xxx,xx  xxxxx.xxx,x  xxxx,xxx.x
+
+	/*/
+
+	aCampos  := {}
+		AAdd(aCAMPOS,{"PLANO"    ,"C",06,0})
+		AAdd(aCAMPOS,{"CODBEM"   ,"C",16,0})
+		AAdd(aCAMPOS,{"TIPOOS"   ,"C",01,0})
+		AAdd(aCAMPOS,{"SERVICO"  ,"C",06,0})
+		AAdd(aCAMPOS,{"SEQRELA"  ,"C",03,0})
+		AAdd(aCAMPOS,{"ORDEM"    ,"C",06,0})
+		AAdd(aCAMPOS,{"TIPOREG"  ,"C",01,0})
+		AAdd(aCAMPOS,{"NOMTIPO"  ,"C",04,0})
+		AAdd(aCAMPOS,{"PRODUTO"  ,"C",TamSX3("TL_CODIGO")[1],0})
+		AAdd(aCAMPOS,{"NOMPROD"  ,"C",40,0})
+		AAdd(aCAMPOS,{"QUANTPRE" ,"N",TamSX3("TL_QUANTID")[1],2})
+		AAdd(aCAMPOS,{"UNIDPRE"  ,"C",03,0})
+		AAdd(aCAMPOS,{"VALORPRE" ,"N",TamSX3("TL_CUSTO")[1],2})
+		AAdd(aCAMPOS,{"QUANTREA" ,"N",TamSX3("TL_QUANTID")[1],2})
+		AAdd(aCAMPOS,{"UNIDREA"  ,"C",03,0})
+		AAdd(aCAMPOS,{"VALORREA" ,"N",TamSX3("TL_CUSTO")[1],2})
+		AAdd(aCAMPOS,{"OBS"      ,"M",10,0})
+		AAdd(aCAMPOS,{"ORIGI"    ,"D",08,0})
+		AAdd(aCAMPOS,{"DTPRIN"   ,"D",08,0})
+		AAdd(aCAMPOS,{"DTPRFIM"  ,"D",08,0})
+		AAdd(aCAMPOS,{"DTRINI"   ,"D",08,0})
+		AAdd(aCAMPOS,{"DTRFIM"   ,"D",08,0})
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1 := FWTemporaryTable():New( cTRB, aCAMPOS )
+	//Cria indices
+	oTmpTbl1:AddIndex( "Ind01" , {"ORDEM","PLANO","TIPOREG","PRODUTO"}  )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	aCampos  := {}
+		AAdd(aCAMPOS,{"PLANO"    ,"C",06,0})
+		AAdd(aCAMPOS,{"ORDEM"    ,"C",06,0})
+		AAdd(aCAMPOS,{"QUANTPRE" ,"N",TamSX3("TL_QUANTID")[1],2})
+		AAdd(aCAMPOS,{"VALORPRE" ,"N",TamSX3("TL_CUSTO")[1],2})
+		AAdd(aCAMPOS,{"QUANTREA" ,"N",TamSX3("TL_QUANTID")[1],2})
+		AAdd(aCAMPOS,{"VALORREA" ,"N",TamSX3("TL_CUSTO")[1],2})
+
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2:= FWTemporaryTable():New( cTRB2, aCAMPOS )
+	//Cria indices
+	oTmpTbl2:AddIndex( "Ind01" , {"ORDEM","PLANO"}  )
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+
+	//-------------------------------------------
+	// Possiciona os arquivos para processamento
+	//-------------------------------------------
+	DbSelectArea("STL")
+	DbSetOrder(1)
+
+	DbSelectArea("STT")
+	DbSetOrder(1)
+
+	DbSelectArea( "STJ" )
+	DbSetOrder( 01 )
+	DbSeek(xFilial( "STJ" )+MV_PAR01,.T. )
+	SetRegua(LastRec())
+	While !Eof() .And. STJ->TJ_FILIAL == xFilial( "STJ" ) .And. STJ->TJ_ORDEM <= MV_PAR02
+		IncRegua()
+
+		If MV_PAR28 == 1 //Bem
+			If STJ->TJ_TIPOOS <> "B" //Se o tipo da ordem de serviço for diferente de 'Bem'.
+				DbSkip()
+				Loop
+			EndIf
+		ElseIf MV_PAR28 == 2 //Localização
+			If STJ->TJ_TIPOOS <> "L" //Se o tipo da ordem de serviço for diferente de 'Localização'.
+				DbSkip()
+				Loop
+			EndIf
+		EndIf
+
+		Do Case
+			Case MV_PAR12 = 1 //Liberadas
+				If STJ->TJ_SITUACA != "L"
+					DbSkip()
+					Loop
+				EndIf
+			Case MV_PAR12 = 2 //Pendente
+				If STJ->TJ_SITUACA != "P"
+					DbSkip()
+					Loop
+				EndIf
+			Case MV_PAR12 = 3 //Abertas
+				If STJ->TJ_TERMINO != "N" .Or. STJ->TJ_SITUACA == "C"
+					DbSkip()
+					Loop
+				EndIf
+			Case MV_PAR12 = 4 //Finalizadas
+				If STJ->TJ_TERMINO != "S"
+					DbSkip()
+					Loop
+				EndIf
+		EndCase
+
+		// Considera Data ( Da O.S. )
+		If MV_PAR11 == 1
+
+			If STJ->TJ_SITUACA == 'L' .And. STJ->TJ_TERMINO == 'S'
+
+				// Considera se a data real fim da O.S. está contida no range definido por parâmetro.
+				If STJ->TJ_DTMRFIM < MV_PAR05 .Or. STJ->TJ_DTMRFIM > MV_PAR06
+					Dbskip()
+					Loop
+				EndIf
+
+			Else
+
+				If STJ->TJ_DTMPINI < MV_PAR05 .Or. STJ->TJ_DTMPINI > MV_PAR06
+					Dbskip()
+					Loop
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		If STJ->TJ_CCUSTO < MV_PAR03 .Or. STJ->TJ_CCUSTO > MV_PAR04
+			Dbskip()
+			Loop
+		EndIf
+
+		If STJ->TJ_CODBEM < MV_PAR07 .Or. STJ->TJ_CODBEM > MV_PAR08
+			Dbskip()
+			Loop
+		EndIf
+
+		DbSelectArea("STL")
+		DbSeek( xFilial("STL") + STJ->TJ_ORDEM + STJ->TJ_PLANO)
+		While STL->TL_FILIAL == xFILIAL("STL")   .And. ;
+		STL->TL_ORDEM  == STJ->TJ_ORDEM       .And. ;
+		STL->TL_PLANO  == STJ->TJ_PLANO
+
+			If MV_PAR11 = 2
+				If STL->TL_DTINICI < MV_PAR05 .Or. STL->TL_DTINICI > MV_PAR06
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			//Calcula o custo do Insumo
+			MNTA901STL()
+			DbSelectArea("STL")
+
+			If (STL->TL_TIPOREG == "P" .And. MV_PAR15 != 1) .Or.;
+			(STL->TL_TIPOREG == "F" .And. MV_PAR18 != 1) .Or.;
+			((STL->TL_TIPOREG == "M" .Or. STL->TL_TIPOREG == "E") .And. MV_PAR21 != 1) .Or.;
+			(STL->TL_TIPOREG == "T" .And. MV_PAR24 != 1)
+				DbSkip()
+				Loop
+			Endif
+
+			If STL->TL_TIPOREG == "P" .And. MV_PAR15 == 1
+				nLen := Len(SB1->B1_COD)
+				If Substr(STL->TL_CODIGO,1,nLen) < MV_PAR16 .Or. Substr(STL->TL_CODIGO,1,nLen) > MV_PAR17
+					DbSelectArea("STL")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf STL->TL_TIPOREG == "F" .And. MV_PAR18 == 1
+				If Substr(STL->TL_CODIGO,1,6) < MV_PAR19 .Or. Substr(STL->TL_CODIGO,1,6) > MV_PAR20
+					DbSelectArea("STL")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf  STL->TL_TIPOREG == "M"  .And. MV_PAR21 == 1
+				If Substr(STL->TL_CODIGO,1,6) < MV_PAR22 .Or. Substr(STL->TL_CODIGO,1,6) > MV_PAR23
+					DbSelectArea("STL")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf STL->TL_TIPOREG == "T" .And. MV_PAR24 == 1
+				nLen := Len(SA2->A2_COD)
+				If Substr(STL->TL_CODIGO,1,nLen) < MV_PAR25 .Or. Substr(STL->TL_CODIGO,1,nLen) > MV_PAR26
+					DbSelectArea("STL")
+					DbSkip()
+					Loop
+				Endif
+			Endif
+
+			nExtra   := If(MV_PAR13 == 2, 1+( If(NGCADICBASE('TL_PCTHREX','A','STL',.F.),STL->TL_PCTHREX,VAL(STL->TL_HREXTRA)) /100), 1)
+			aVETCUST := NGCUSTSTAN(STL->TL_CODIGO,STL->TL_TIPOREG,nExtra,MV_PAR09)
+
+			nCUSTO   := aVETCUST[1] //Custo standard
+			cNOMTIPO := aVETCUST[2] //Nome do tipo de insumo
+			cTIPOREG := aVETCUST[3] //Tipo do Insumo
+			cNOME    := aVETCUST[4] //Nome do Insumo
+			cCODPROD := aVETCUST[5] //Codigo do insumo
+
+			ckey := STJ->TJ_ORDEM + STJ->TJ_PLANO + cTIPOREG + cCODPROD
+
+			If NGCADICBASE("TJ_MMSYP","A","STJ",.F.)
+				cObs := NGMEMOSYP(STJ->TJ_MMSYP)
+			Else
+				cObs := STJ->TJ_OBSERVA
+			EndIf
+
+			If !(cTRB)->(DbSeek(cKey))
+				(cTRB)->(DbAppend())
+				(cTRB)->PLANO    := STJ->TJ_PLANO
+				(cTRB)->CODBEM   := STJ->TJ_CODBEM
+				(cTRB)->TIPOOS   := STJ->TJ_TIPOOS
+				(cTRB)->SERVICO  := STJ->TJ_SERVICO
+				(cTRB)->SEQRELA  := STJ->TJ_SEQRELA
+				(cTRB)->ORDEM    := STJ->TJ_ORDEM
+				(cTRB)->TIPOREG  := cTIPOREG
+				(cTRB)->NOMTIPO  := cNOMTIPO
+				(cTRB)->PRODUTO  := STL->TL_CODIGO
+				(cTRB)->NOMPROD  := cNOME
+				(cTRB)->OBS	  := cObs
+				(cTRB)->ORIGI    := STJ->TJ_DTORIGI
+				(cTRB)->DTPRIN   := STJ->TJ_DTMPINI
+				(cTRB)->DTPRFIM  := STJ->TJ_DTMPFIM
+				(cTRB)->DTRINI   := STJ->TJ_DTMRINI
+				(cTRB)->DTRFIM   := STJ->TJ_DTMRFIM
+			EndIf
+
+			If MV_PAR13 == 1
+
+				nCUSTO := STL->TL_CUSTO * nEXTRA
+
+			Else
+
+				nCUSTO := nCusto * IIf( ( STL->TL_TIPOHOR == 'D' .Or. STL->TL_TIPOREG == 'P' ) , STL->TL_QUANTID,;
+					NGRETHORDDH( STL->TL_QUANTID )[2] )
+
+			EndIf
+
+			If Alltrim(STL->TL_SEQRELA) = "0"
+				(cTRB)->QUANTPRE += STL->TL_QUANTID
+				(cTRB)->UNIDPRE  := STL->TL_UNIDADE
+				(cTRB)->VALORPRE += nCUSTO
+			Else
+				(cTRB)->QUANTREA += STL->TL_QUANTID
+				(cTRB)->UNIDREA  := STL->TL_UNIDADE
+				(cTRB)->VALORREA += nCUSTO
+			EndIf
+
+			DbSelectArea("STL")
+			DbSkip()
+		End While
+
+		DbSelectArea("STJ")
+		If MV_PAR14 == 1
+			DbSelectArea("STF")
+			DbSeek(xFilial("STF") + STJ->TJ_CODBEM + STJ->TJ_SERVICO + STJ->TJ_SEQRELA)
+			If STF->TF_PARADA == "S" .or. STJ->TJ_PLANO == "000000"
+				If !Empty(STJ->TJ_DTPPINI)
+					dINI := STJ->TJ_DTPPINI
+					hINI := STJ->TJ_HOPPINI
+				Else
+					dINI := STJ->TJ_DTMPINI
+					hINI := STJ->TJ_HOMPINI
+				EndIf
+
+				If !Empty(STJ->TJ_DTPPFIM)
+					dFIM := STJ->TJ_DTPPFIM
+					hFIM := STJ->TJ_HOPPFIM
+				Else
+					dFIM := STJ->TJ_DTMPFIM
+					hFIM := STJ->TJ_HOMPFIM
+				EndIf
+
+				nPRE := NGCALEBEM(dINI, hINI, dFIM, hFIM, STJ->TJ_CODBEM)
+				If nPRE <> "00:00"
+					nPRE := HtoM(nPRE)/60
+				Else
+					nPRE := 0.00
+				EndIf
+
+				If !Empty(STJ->TJ_DTPRINI)
+					dINI := STJ->TJ_DTPRINI
+					hINI := STJ->TJ_HOPRINI
+				Else
+					dINI := STJ->TJ_DTMRINI
+					hINI := STJ->TJ_HOMRINI
+				EndIf
+
+				If !Empty(STJ->TJ_DTPRFIM)
+					dFIM := STJ->TJ_DTPRFIM
+					hFIM := STJ->TJ_HOPRFIM
+				Else
+					dFIM := STJ->TJ_DTMRFIM
+					hFIM := STJ->TJ_HOMRFIM
+				EndIf
+
+				nREA := NGCALEBEM(dINI, hINI, dFIM, hFIM, STJ->TJ_CODBEM)
+				If nREA <> "00:00"
+					nREA := HtoM(nREA)/60
+				Else
+					nREA := 0.00
+				EndIf
+
+				lPARADA := .T.
+
+				If STJ->(FIELDPOS("TJ_PARADA")) > 0
+					If STJ->TJ_PARADA == "N"
+						lPARADA := .F.
+					EndIf
+				EndIf
+
+				DbSelectArea("ST9")
+				DbSeek(xFilial("ST9") + STJ->TJ_CODBEM )
+				If !Empty(ST9->T9_CUSTOHO) .and. lPARADA
+					DbSelectArea(cTRB2)
+					If !DbSeek(STJ->TJ_ORDEM + STJ->TJ_PLANO)
+						DbAppend()
+						(cTRB2)->ORDEM  := STJ->TJ_ORDEM
+						(cTRB2)->PLANO  := STJ->TJ_PLANO
+					EndIf
+					(cTRB2)->QUANTPRE := (cTRB2)->QUANTPRE + nPRE
+					(cTRB2)->QUANTREA := (cTRB2)->QUANTREA + nREA
+					(cTRB2)->VALORPRE := (cTRB2)->VALORPRE + (nPRE * ST9->T9_CUSTOHO)
+					(cTRB2)->VALORREA := (cTRB2)->VALORREA + (nREA * ST9->T9_CUSTOHO)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STJ")
+		Dbskip()
+	End While
+
+	DbSelectArea("STJ")
+	DbSetOrder(01)
+
+
+	DbSelectArea("STS")
+	DbSetOrder(01)
+	DbSeek(xFilial("STS")+MV_PAR01,.t.)
+	SetRegua(LastRec())
+	While !Eof() .And. STS->TS_FILIAL  == xFilial("STS") .And. ;
+	STS->TS_ORDEM <= MV_PAR02
+
+		//IncRegua()
+		If STS->TS_SITUACA != "L" .or. STS->TS_TIPOOS != "B"
+			DbSkip()
+			Loop
+		EndIf
+
+		If STS->TS_CCUSTO < MV_PAR03 .Or. STS->TS_CCUSTO > MV_PAR04
+			Dbskip()
+			Loop
+		EndIf
+
+		// Considera Data ( Da O.S. )
+		If MV_PAR11 == 1
+
+			// Considera se a data real fim da O.S. está contida no range definido por parâmetro.
+			If STS->TS_DTMRFIM < MV_PAR05 .Or. STS->TS_DTMRFIM > MV_PAR06
+				Dbskip()
+				Loop
+			EndIf
+
+		EndIf
+
+		If STS->TS_CODBEM < MV_PAR07 .Or. STS->TS_CODBEM > MV_PAR08
+			Dbskip()
+			Loop
+		EndIf
+
+		DbSelectArea("STT")
+		DbSeek(xFilial("STT") + STS->TS_ORDEM + STS->TS_PLANO)
+		While STT->TT_FILIAL == xFILIAL("STT") .And. STT->TT_ORDEM  == STS->TS_ORDEM .And. ;
+		STT->TT_PLANO  == STS->TS_PLANO
+
+			If MV_PAR11 = 2
+				If STT->TT_DTINICI < MV_PAR05 .Or. STT->TT_DTINICI > MV_PAR06
+					dbSkip()
+					Loop
+				EndIf
+			EndIf
+
+			//Calcula o custo do Insumo
+
+			MNTA901STT()
+			DbSelectArea("STT")
+			If (STT->TT_TIPOREG == "P" .And. MV_PAR15 != 1) .Or.;
+			(STT->TT_TIPOREG == "F" .And. MV_PAR18 != 1) .Or.;
+			((STT->TT_TIPOREG == "M"  .Or. STL->TL_TIPOREG == "E" ) .And. MV_PAR21 != 1) .Or.;
+			(STT->TT_TIPOREG == "T" .And. MV_PAR24 != 1)
+				DbSkip()
+				Loop
+			Endif
+
+			If STT->TT_TIPOREG == "P" .And. MV_PAR15 == 1
+				nLen := Len(SB1->B1_COD)
+				If Substr(STT->TT_CODIGO,1,nLen) < MV_PAR16 .Or. Substr(STT->TT_CODIGO,1,nLen) > MV_PAR17
+					DbSelectArea("STT")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf STT->TT_TIPOREG == "F" .And. MV_PAR18 == 1
+				If Substr(STT->TT_CODIGO,1,6) < MV_PAR19 .Or. Substr(STT->TT_CODIGO,1,6) > MV_PAR20
+					DbSelectArea("STT")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf STT->TT_TIPOREG == "M" .And. MV_PAR21 == 1
+				If Substr(STT->TT_CODIGO,1,6) < MV_PAR22 .Or. Substr(STT->TT_CODIGO,1,6) > MV_PAR23
+					DbSelectArea("STT")
+					DbSkip()
+					Loop
+				Endif
+			ElseIf STT->TT_TIPOREG == "T" .And. MV_PAR24 == 1
+				nLen := Len(SA2->A2_COD)
+				If Substr(STT->TT_CODIGO,1,nLen) < MV_PAR25 .Or. Substr(STT->TT_CODIGO,1,nLen) > MV_PAR26
+					DbSelectArea("STT")
+					DbSkip()
+					Loop
+				Endif
+			Endif
+
+			nEXTRA   := If(MV_PAR13 == 2, 1+( If(NGCADICBASE('TT_PCTHREX','A','STT',.F.),STT->TT_PCTHREX,VAL(STT->TT_HREXTRA)) /100), 1)
+			aVETCUST := NGCUSTSTAN(STT->TT_CODIGO,STT->TT_TIPOREG,nExtra,MV_PAR09)
+
+			nCUSTO   := aVETCUST[1] //Custo standard
+			cNOMTIPO := aVETCUST[2] //Nome do tipo de insumo
+			cTIPOREG := aVETCUST[3] //Tipo do Insumo
+			cNOME    := aVETCUST[4] //Nome do Insumo
+			cCODPROD := aVETCUST[5] //Codigo do insumo
+
+			ckey := STS->TS_ORDEM + STS->TS_PLANO + cTIPOREG + cCODPROD
+
+			If NGCADICBASE("TS_MMSYP","A","STS",.F.)
+				cObs := NGMEMOSYP(STS->TS_MMSYP)
+			Else
+				cObs := STS->TS_OBSERVA
+			EndIf
+
+			If !(cTRB)->(DbSeek(cKey))
+				(cTRB)->(DbAppend())
+				(cTRB)->PLANO    := STS->TS_PLANO
+				(cTRB)->CODBEM   := STS->TS_CODBEM
+				(cTRB)->SERVICO  := STS->TS_SERVICO
+				(cTRB)->SEQRELA  := STS->TS_SEQRELA
+				(cTRB)->ORDEM    := STS->TS_ORDEM
+				(cTRB)->TIPOREG  := cTIPOREG
+				(cTRB)->NOMTIPO  := cNOMTIPO
+				(cTRB)->PRODUTO  := STT->TT_CODIGO
+				(cTRB)->NOMPROD  := cNOME
+				(cTRB)->OBS      := cObs
+				(cTRB)->ORIGI    := STS->TS_DTORIGI
+				(cTRB)->DTPRIN   := STS->TS_DTMPINI
+				(cTRB)->DTPRFIM  := STS->TS_DTMPFIM
+				(cTRB)->DTRINI   := STS->TS_DTMRINI
+				(cTRB)->DTRFIM   := STS->TS_DTMRFIM
+			EndIf
+
+			If MV_PAR13 == 1
+
+				nCUSTO := STT->TT_CUSTO * nEXTRA
+
+			Else
+
+				nCUSTO := nCusto * IIf( ( STT->TT_TIPOHOR == 'D' .Or. STT->TT_TIPOREG == 'P' ) , STT->TT_QUANTID,;
+					NGRETHORDDH( STT->TT_QUANTID )[2] )
+
+			EndIf
+
+			If Alltrim(STT->TT_SEQRELA) = "0"
+				(cTRB)->QUANTPRE += STT->TT_QUANTID
+				(cTRB)->UNIDPRE  := STT->TT_UNIDADE
+				(cTRB)->VALORPRE += nCUSTO
+			Else
+				(cTRB)->QUANTREA += STT->TT_QUANTID
+				(cTRB)->UNIDREA  := STT->TT_UNIDADE
+				(cTRB)->VALORREA += nCUSTO
+			EndIf
+			DbSelectArea("STT")
+			DbSkip()
+		End While
+
+		DbSelectArea("STS")
+		If MV_PAR14 == 1
+			DbSelectArea("STF")
+			DbSeek(xFilial("STF") + STS->TS_CODBEM + STS->TS_SERVICO + STS->TS_SEQRELA)
+			If STF->TF_PARADA == "S" .Or. STS->TS_PLANO == "000000"
+				If !Empty(STS->TS_DTPPINI)
+					dINI := STS->TS_DTPPINI
+					hINI := STS->TS_HOPPINI
+				Else
+					dINI := STS->TS_DTMPINI
+					hINI := STS->TS_HOMPINI
+				EndIf
+
+				If !Empty(STS->TS_DTPPFIM)
+					dFIM := STS->TS_DTPPFIM
+					hFIM := STS->TS_HOPPFIM
+				Else
+					dFIM := STS->TS_DTMPFIM
+					hFIM := STS->TS_HOMPFIM
+				Endif
+
+				nPRE := NGCALEBEM(dINI, hINI, dFIM, hFIM, STS->TS_CODBEM)
+				If nPRE <> "00:00"
+					nPRE := HtoM(nPRE)/60
+				Else
+					nPRE := 0.00
+				EndIf
+
+				If !Empty(STS->TS_DTPRINI)
+					dINI := STS->TS_DTPRINI
+					hINI := STS->TS_HOPRINI
+				Else
+					dINI := STS->TS_DTMRINI
+					hINI := STS->TS_HOMRINI
+				EndIf
+
+				If !Empty(STS->TS_DTPRFIM)
+					dFIM := STS->TS_DTPRFIM
+					hFIM := STS->TS_HOPRFIM
+				Else
+					dFIM := STS->TS_DTMRFIM
+					hFIM := STS->TS_HOMRFIM
+				Endif
+
+				nREA := NGCALEBEM(dINI, hINI, dFIM, hFIM, STS->TS_CODBEM)
+				If nREA <> "00:00"
+					nREA := HtoM(nREA)/60
+				Else
+					nREA := 0.00
+				EndIf
+
+				lPARADA := .T.
+				If STS->(FIELDPOS("TS_PARADA")) > 0
+					If STS->TS_PARADA == "N"
+						lPARADA := .F.
+					EndIf
+				EndIf
+
+				DbSelectArea("ST9")
+				DbSeek(xFilial("ST9")+STS->TS_CODBEM)
+				If !Empty(ST9->T9_CUSTOHO) .And. lPARADA
+					DbSelectArea(cTRB2)
+					If !DbSeek(STS->TS_ORDEM + STS->TS_PLANO)
+						DbAppend()
+						(cTRB2)->ORDEM  := STS->TS_ORDEM
+						(cTRB2)->PLANO  := STS->TS_PLANO
+					EndIf
+					(cTRB2)->QUANTPRE := (cTRB2)->QUANTPRE + nPRE
+					(cTRB2)->QUANTREA := (cTRB2)->QUANTREA + nREA
+					(cTRB2)->VALORPRE := (cTRB2)->VALORPRE + (nPRE * ST9->T9_CUSTOHO)
+					(cTRB2)->VALORREA := (cTRB2)->VALORREA + (nREA * ST9->T9_CUSTOHO)
+				EndIf
+			EndIf
+		EndIf
+		DbSelectArea("STS")
+		Dbskip()
+	End While
+
+	DbSelectArea("STS")
+	DbSetOrder(01)
+
+	nTOTGPRE := 0.00
+	nTOTGREA := 0.00
+	DbSelectArea(cTRB)
+	DbGoTop()
+	SetRegua(LastRec())
+
+	If (cTRB)->( Reccount() ) > 0
+		If MV_PAR10 == 1 //Detalhado
+			While !Eof()
+
+				//IncRegua()
+				DbSelectArea(cTRB)
+
+				nMaxCarac := 118
+
+				// Retorna a Localização completa do Bem/Localizacao
+				// Primeiro Parametro = Codigo do Bem
+				// Segundo Parametro  = 1 - Se for um bem / 2 - Se for uma localizacao
+				If FindFunction("NGLocComp")
+					If (cTRB)->TIPOOS == 'B'
+						cLocal := NGLocComp( (cTRB)->CODBEM,"1" )
+					Else
+						cLocal := NGLocComp( (cTRB)->CODBEM,"2" )
+					EndIf
+				EndIf
+
+				dbSelectArea(cTRB)
+				cORD := (cTRB)->ORDEM
+
+				nORDPRE := 0.00
+				nORDREA := 0.00
+
+				NGSOMALI(58)
+				ST9->(DbSeek(xFilial("ST9") + (cTRB)->CODBEM))
+				ST4->(DbSeek(xFilial("ST4") + (cTRB)->SERVICO))
+
+				@ Li,000 Psay STR0026 + (cTRB)->ORDEM //"Ordem.: "
+
+				If (cTRB)->TIPOOS == 'B' // Tipo de ordem de serviço 'Bem'.
+					@ Li,020 Psay STR0027 + (cTRB)->CODBEM  + " " + SubStr(ST9->T9_NOME,1,27) //"Bem.....: "
+				Else
+					@ Li,020 Psay "Localização..: " + (cTRB)->CODBEM  + " " + SubStr(ST9->T9_NOME,1,27) //"Localização..: "
+				EndIf
+
+				@ Li,075 Psay STR0033 + (cTRB)->SERVICO + " " + SubStr(ST4->T4_NOME,1,30) //"SERVI€O..: "
+				NGSOMALI(58)
+				If MV_PAR27 == 1
+					@ Li,000 Psay STR0048 //"Localização: "
+					If Len(cLocal) > nMaxCarac
+						While Len(cLocal) > nMaxCarac
+							@ Li,013 Psay SubStr(cLocal,1,nMaxCarac)
+							cLocal := SubStr(cLocal,nMaxCarac+1)
+							NGSOMALI(58)
+						End
+					EndIf
+					@ Li,013 Psay cLocal
+					NGSOMALI(58)
+				Endif
+				@ LI,020 Psay STR0045+" "+ DTOC((cTRB)->ORIGI)  //"Dt. Original:"
+				@ LI,047 Psay STR0046+" "+ DTOC((cTRB)->DTRINI) //"Dt.Real Inic.:"
+				@ LI,075 Psay STR0047+" "+ DTOC((cTRB)->DTRFIM) //"Dt.Real Fim:"
+
+				NGSOMALI(58)
+
+				cOBS := (cTRB)->OBS
+				If !Empty(cOBS)
+					NGSOMALI(58)
+					@ li, 000 Psay STR0029 //"Descricao da OS.: "
+					//Função para impressão do memo
+					NG2IMPMEMO(cOBS,100,021)
+				EndIf
+
+				While !Eof() .And. (cTRB)->ORDEM  == cORD
+
+					NGSOMALI(58)
+
+					nDIF := (cTRB)->VALORREA - (cTRB)->VALORPRE
+
+					If (cTRB)->VALORPRE > (cTRB)->VALORREA
+						nPER := -( Round( 100 - ( ( (cTRB)->VALORREA * 100 ) / (cTRB)->VALORPRE ), 2 ) )
+					ElseIf (cTRB)->VALORPRE < (cTRB)->VALORREA
+						nPER := Round( 100 - ( (cTRB)->VALORPRE * 100 ) / (cTRB)->VALORREA, 2 )
+					Else
+						nPER := 0
+					EndIf
+
+					@ Li,000 Psay (cTRB)->NOMTIPO
+					@ Li,005 Psay (cTRB)->PRODUTO
+					@ Li,021+nTamPro Psay Substr((cTRB)->NOMPROD,1,30)
+
+					// QTDE PREVISTA
+					@ Li,062+nTamPro Psay (cTRB)->QUANTPRE // Picture cPictuQnt
+
+					// UNIDADE
+					@ Li,083+nTamPro Psay (cTRB)->UNIDPRE
+
+					// CUSTO PREVISTO
+					@ Li,089 +nTamPro Psay (cTRB)->VALORPRE  Picture "@E 9,999,999,999,999.99"
+
+					// QTDE REALIZADA
+					@ Li,111+nTamPro Psay (cTRB)->QUANTREA Picture cPictuQnt
+
+					// UNIDADE
+					@ Li,132 + nTamPro Psay (cTRB)->UNIDREA
+
+					// CUSTO REALIZADO
+					@ Li,138 + nTamPro Psay (cTRB)->VALORREA  Picture "@E 9,999,999,999,999.99"
+					@ Li,160 + nTamPro Psay nDIF              Picture "@E 9,999,999,999,999.99"
+					@ Li,184 + nTamPro Psay nPER              Picture "@E 9,999,999,999,999.99"
+
+					nORDPRE += (cTRB)->VALORPRE
+					nORDREA += (cTRB)->VALORREA
+
+					DbSelectArea(cTRB)
+					DbSkip()
+				End While
+
+				If MV_PAR14 == 1
+					NGSOMALI(58)
+					If (cTRB2)->( DbSeek(cORD) )
+						@ Li,022 Psay STR0030 //"Custo Hora Parada do Bem "
+						@ Li,055 + nTamPro Psay NGRHODSEXN((cTRB2)->QUANTPRE,"D") Picture cPictuQnt // "@E 999,999.99"
+						@ Li,071 + nTamPro Psay (cTRB2)->VALORPRE Picture "@E 9,999,999,999,999.99"
+						@ Li,082 + nTamPro Psay NGRHODSEXN((cTRB2)->QUANTREA,"D") Picture cPictuQnt // "@E 999,999.99"
+						@ Li,098 + nTamPro Psay (cTRB2)->VALORREA Picture "@E 9,999,999,999,999.99"
+						NGSOMALI(58)
+
+						nORDPRE += (cTRB2)->VALORPRE
+						nORDREA += (cTRB2)->VALORREA
+					EndIf
+				EndIf
+
+				nDIF := nORDREA - nORDPRE
+
+				If nORDPRE > nORDREA
+					nPER := -( Round( 100 - ( ( nORDREA * 100 ) / nORDPRE ), 2 ) )
+				ElseIf nORDPRE < nORDREA
+					nPER := Round( 100 - ( nORDPRE * 100 ) / nORDREA, 2 )
+				Else
+					nPER := 0
+				EndIf
+
+				NGSOMALI(58)
+				@ Li,000 Psay STR0031 //"*** Total da O.S. "
+				@ Li,089 + nTamPro Psay nORDPRE Picture "@E 9,999,999,999,999.99"
+				@ Li,138 + nTamPro Psay nORDREA Picture "@E 9,999,999,999,999.99"
+				@ Li,160 + nTamPro Psay nDIF    Picture "@E 9,999,999,999,999.99"
+				@ Li,184 + nTamPro Psay nPER    Picture "@E 9,999,999,999,999.99"
+				NGSOMALI(58)
+				NGSOMALI(58)
+
+				nTOTGPRE += nORDPRE
+				nTOTGREA += nORDREA
+			End While
+		Else
+			While !Eof()
+
+				IncRegua()
+				DbSelectArea(cTRB)
+
+				nMaxCarac := 122
+				aLocal 	 := {}
+				cCodigo   := AllTrim((cTRB)->CODBEM)
+
+				// Retorna a Localização completa do Bem/Localizacao
+				// Primeiro Parametro = Codigo do Bem
+				// Segundo Parametro  = 1 - Se for um bem / 2 - Se for uma localizacao
+				If FindFunction("NGLocComp")
+					If (cTRB)->TIPOOS == 'B'
+						cLocal := NGLocComp( (cTRB)->CODBEM,"1" )
+					Else
+						cLocal := NGLocComp( (cTRB)->CODBEM,"2" )
+					EndIf
+				EndIf
+
+				If Len(cLocal) > nMaxCarac
+					While Len(cLocal) > nMaxCarac
+						aAdd(aLocal,SubStr(cLocal,1,nMaxCarac))
+						cLocal := SubStr(cLocal,nMaxCarac+1)
+					End
+					aAdd(aLocal,cLocal)
+				EndIf
+
+				dbSelectArea(cTRB)
+				cORD := (cTRB)->ORDEM
+
+				nORDPRE := 0.00
+				nORDREA := 0.00
+
+				NGSOMALI(58)
+				ST9->(DbSeek(xFilial("ST9") + (cTRB)->CODBEM))
+				ST4->(DbSeek(xFilial("ST4") + (cTRB)->SERVICO))
+
+				@ Li,000 Psay (cTRB)->ORDEM
+				@ Li,007 Psay (cTRB)->CODBEM
+				@ Li,024 Psay SubStr(ST9->T9_NOME,1,22)
+				@ Li,047 Psay (cTRB)->SERVICO
+				@ Li,055 Psay SubStr(ST4->T4_NOME,1,20)
+
+				While !Eof() .And. (cTRB)->ORDEM  == cORD
+					nORDPRE += (cTRB)->VALORPRE
+					nORDREA += (cTRB)->VALORREA
+					DbSelectArea(cTRB)
+					DbSkip()
+				End While
+
+				If MV_PAR14 == 1
+					If (cTRB2)->( DbSeek(cORD) )
+						nORDPRE += (cTRB2)->VALORPRE
+						nORDREA += (cTRB2)->VALORREA
+					EndIf
+				EndIf
+
+				nDIF := nORDREA - nORDPRE
+
+				If nORDPRE > nORDREA
+					nPER := -( Round( 100 - ( ( nORDREA * 100 ) / nORDPRE ), 2 ) )
+				ElseIf nORDPRE < nORDREA
+					nPER := Round( 100 - ( nORDPRE * 100 ) / nORDREA, 2 )
+				Else
+					nPER := 0
+				EndIf
+
+				@ Li,076 Psay nORDPRE        Picture "@E 9,999,999,999,999.99"
+				@ Li,098 Psay nORDREA        Picture "@E 9,999,999,999,999.99"
+				@ Li,121 Psay nDIF           Picture "@E 9,999,999,999,999.99"
+				@ Li,143 Psay nPER           Picture "@E 9,999,999,999,999.99"
+
+				If Len(aLocal) > 0
+					NGSOMALI(58)
+					@ Li,000 Psay "Local:  "
+					For i:=1 to Len(aLocal)
+						@ Li,009 Psay aLocal[i]
+						NGSOMALI(58)
+					Next i
+				ElseIf AllTrim(cLocal) != AllTrim(cCodigo)
+					NGSOMALI(58)
+					@ Li,000 Psay "Local:  "
+					@ Li,009 Psay cLocal
+				EndIf
+
+				NGSOMALI(58)
+				nTOTGPRE += nORDPRE
+				nTOTGREA += nORDREA
+			End While
+		EndIf
+
+		If nTOTGPRE > 0 .Or. nTOTGREA > 0
+
+			NGSOMALI(58)
+			NGSOMALI(58)
+
+			nDIF := nTOTGREA - nTOTGPRE
+
+			If nTOTGPRE > nTOTGREA
+				nPER := -( Round( 100 - ( ( nTOTGREA * 100 ) / nTOTGPRE ), 2 ) )
+			ElseIf nTOTGPRE < nTOTGREA
+				nPER := Round( 100 - ( nTOTGPRE * 100 ) / nTOTGREA, 2 )
+			Else
+				nPER := 0
+			EndIf
+
+			If MV_PAR10 == 1
+				@ Li,000 Psay STR0034 //"*** Total Geral"
+				@ Li,089 + nTamPro Psay nTOTGPRE  Picture "@E 9,999,999,999,999.99"
+				@ Li,138 + nTamPro Psay nTOTGREA  Picture "@E 9,999,999,999,999.99"
+				@ Li,160 + nTamPro Psay nDIF      Picture "@E 9,999,999,999,999.99"
+				@ Li,184 + nTamPro Psay nPER      Picture "@E 9,999,999,999,999.99"
+			Else
+				@ Li,000 Psay STR0034 //"*** Total Geral"
+				@ Li,076 Psay nTOTGPRE  Picture "@E 9,999,999,999,999.99"
+				@ Li,098 Psay nTOTGREA  Picture "@E 9,999,999,999,999.99"
+				@ Li,121 Psay nDIF      Picture "@E 9,999,999,999,999.99"
+				@ Li,143 Psay nPER      Picture "@E 9,999,999,999,999.99"
+			EndIf
+
+		EndIf
+
+		Roda(nCntImpr,cRodaTxt,Tamanho)
+
+		//--------------------------------------------------
+		// Devolve a condicao original do arquivo principam
+		//--------------------------------------------------
+		RetIndex("SI3")
+
+		Set Filter To
+		Set device to Screen
+
+		If aReturn[5] == 1
+
+			Set Printer To
+			dbCommitAll()
+			OurSpool(wnrel)
+
+		EndIf
+		MS_FLUSH()
+	Else
+		MsgInfo( STR0073, STR0074 ) // "Não existem dados para montar o relatório." ### "ATENÇÃO"
+	EndIf
+
+	oTmpTbl1:Delete()//Deleta Tabela temporaria 1
+	oTmpTbl2:Delete()//Deleta Tabela temporaria 2
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT86SB1V
+Validacao do parametro de relatorio SB1
+
+@author	 Inacio Luiz Kolling
+@since	 18/06/99
+@version MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Function MNT86SB1V( nTipo )
+
+	If nTipo == 2
+		If mv_par15 == 1
+			Return If(Empty(mv_par16),.T.,ExistCpo('SB1',mv_par16))
+		Endif
+	ElseIf nTipo == 3
+		If mv_par15 == 1
+			Return If(AteCodigo('SB1',mv_par16,mv_par17,15),.T.,.F.)
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT86SH4V
+Validacao do parametro de relatorio SH4
+
+@author	 Inacio Luiz Kolling
+@since	 18/06/99
+@version MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Function MNT86SH4V( nTipo )
+
+	If nTipo == 2
+		If mv_par18 == 1
+			Return If(Empty(mv_par19),.T.,ExistCpo('SH4',mv_par19))
+		Endif
+	ElseIf nTipo == 3
+		If mv_par18 == 1
+			Return If(AteCodigo('SH4',mv_par19,mv_par20,6),.T.,.F.)
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT86ST1V
+Validacao do parametro de relatorio ST1
+
+@author	 Inacio Luiz Kolling
+@since	 18/06/99
+@version MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Function MNT86ST1V( nTipo )
+
+	If nTipo == 2
+		If mv_par21 == 1
+			Return If(Empty(mv_par22),.T.,ExistCpo('ST1',mv_par22))
+		Endif
+	ElseIf nTipo == 3
+		If mv_par21 == 1
+			Return If(AteCodigo('ST1',mv_par22,mv_par23,6),.T.,.F.)
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT86SA2V
+Validacao do parametro de relatorio SA2
+
+@author	 Inacio Luiz Kolling
+@since	 18/06/99
+@version MP11 e MP12
+/*/
+//---------------------------------------------------------------------
+Function MNT86SA2V( nTipo )
+
+	If nTipo == 2
+		If mv_par24 == 1
+			Return If(Empty(mv_par25),.T.,ExistCpo('SA2',mv_par25))
+		Endif
+	ElseIf nTipo == 3
+		If mv_par24 == 1
+			Return If(AteCodigo('SA2',mv_par25,mv_par26,6),.T.,.F.)
+		Endif
+	Endif
+
+Return .T.

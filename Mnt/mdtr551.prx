@@ -1,0 +1,335 @@
+#include "Protheus.ch"
+#include "MDTR551.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTR551
+Lista as medidas de controles definidas com EPC, com campo
+ "Tipo Controle" = 2 - Medida Coletiva.
+
+@author Guilherme Benkendorf
+@since 17/05/13
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDTR551()
+
+	Local nSizeTO4		:= Len(TO4->TO4_CONTRO)
+	Local cOrderTO41	:= "01"
+	Local cOrderTO42	:= "02"
+	Local cTO4Varia1	:= "mv_ch1"
+	Local cTO4Varia2	:= "mv_ch2"
+	Local cTO4Var01		:= "mv_par01"
+	Local cTO4Var02 	:= "mv_par02"
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( )
+
+	// Define Variaveis
+	Local aArea		:= GetArea()
+	Local aPerg		:= {}
+	Local wnrel
+	Local cPerg		:= ""
+	Local cDesc1	:= STR0001 //"Programa de listagem das medidas de controles, definidas com EPC."
+	Local cDesc2	:= STR0002 //"Atraves dos parametros selecionar os itens que devem ser considerados"
+	Local cDesc3	:= STR0003 //"no Relatorio."
+
+	Private lSigaMdtPS	:= If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+
+	Private aReturn  	:= { STR0004, 1,STR0005, 1, 2, 1, "",1 } //"Zebrado"###"Administracao"
+
+	Private cNomeProg	:= "MDTR551"
+	Private Tamanho		:= "M"
+	Private cTitulo		:= STR0006 //"EPC - Medidas de Controle"
+	Private nTipo		:= 0
+	Private nLastKey	:= 0
+
+	Private nSizeSI3	:= If((TAMSX3("I3_CUSTO")[1]) < 1,9,(TAMSX3("I3_CUSTO")[1]))
+	Private cAliasCC	:= "SI3"
+
+	cPerg    :=  If(!lSigaMdtPS,PADR("MDT551", 10),PADR("MDT551PS", 10))
+
+	/*--------------------------------------------
+	//PERGUNTAS PADRÃO								|
+	| MDT551    ¦01       De Medidas de Controle	|
+	| MDT551    ¦02       Ate Medidas de Controle	|
+	|													|
+	//PERGUNTAS PRESTADOR DE SERVIÇO				|
+	| MDT551PS	  01       De Cliente				|
+	| MDT551PS	  02       De Loja					|
+	| MDT551PS	  03       Até Cliente				|
+	| MDT551PS	  04       Até Loja					|
+	| MDT551PS	  05       De Medidas de Controle	|
+	| MDT551PS	  06       Ate Medidas de Controle	|
+	----------------------------------------------*/
+
+	//--------------------------------------------------
+	//  Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//--------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+	If Alltrim(GETMV("MV_MCONTAB")) == "CTB"
+		cAliasCC := "CTT"
+		nSizeSI3 := If((TAMSX3("CTT_CUSTO")[1]) < 1,9,(TAMSX3("CTT_CUSTO")[1]))
+	Endif
+
+	dbSelectArea("TO4")
+	Set Filter To TO4_TIPCTR == "2"
+
+	Pergunte(cPerg,.F.)
+
+	wnrel	:= SetPrint("TO9",cNomeProg,cPerg,cTitulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+	   Set Filter To
+		//Devolve variaveis armazenadas (NGRIGHTCLICK)
+		NGRETURNPRM(aNGBEGINPRM)
+	   Return
+	Endif
+	SetDefault( aReturn, "TO9" )
+
+	If nLastKey = 27
+	   Set Filter To
+		//Devolve variaveis armazenadas (NGRIGHTCLICK)
+		NGRETURNPRM(aNGBEGINPRM)
+	   Return
+	Endif
+
+	RptStatus({|lEnd| fMDT551IMP(wnrel)},cTitulo) //"Processando..."
+
+	RestArea(aArea)
+
+	//Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMDT551IMP
+Impressao do relatorio
+
+@author Guilherme Benkendorf
+@since 17/05/13
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fMDT551IMP(wnrel)
+
+	Local nMedCon, nCont, nLinha, nAg
+	Local nPosMed
+	Local nTam		:= 67
+	Local cCliMdtps	:= SA1->(A1_COD+A1_LOJA)
+	Local aRiscos := {}
+	Local aMedCtr	:= {}
+
+	Local nIndTO9	:= 1
+	Local cSeekTO9	:= "xFilial('TO9')"
+	Local cWhileTO9	:= "xFilial('TO9') == TO9->TO9_FILIAL"
+
+	Local cCliente	:= ""
+	Local cLoja		:= ""
+	Local mx_par01	:= MV_PAR01
+	Local mx_par02	:= MV_PAR02
+
+	//Posicoes do array aMedCtr
+	Local nPosCtr	:= 1
+	Local nPosNom	:= 2
+	Local nPosDes	:= 3
+	Local nPosCli	:= 4
+	Local nPosLoj	:= 5
+
+	Private	m_pag	:= 1
+	Private li		:= 80
+	Private Cabec1	:= ""
+	Private Cabec2	:= ""
+	/*
+	************************************************************************************************************************************
+	*<empresa>                                                                                                        k..: xxxxx   *
+	*SIGA /<nome .04                                   <Relatorio de Medidas de Controle>                             DT.Ref.: dd/mm/aa*
+	*Hora...: xx:xx:xx                                                                                                Emissao: dd/mm/aa*
+	************************************************************************************************************************************
+
+	             1         2         3         4         5         6         7         8         9         0         1         2         3
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+	**************************************************************************************************************************************
+	Medida de Controle   Nome Controle                             Descricao
+	**************************************************************************************************************************************
+
+	xxxxxx               xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+																   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	                                                               xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	*/
+
+	Cabec1 := STR0019 //"Medida de Controle   Nome Controle                             Descricao"
+
+
+	// Verifica se deve comprimir ou nao
+
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	//Define valores dos parametros
+	If lSigaMdtPs
+		mx_par01	:= MV_PAR05
+		mx_par02	:= MV_PAR06
+	EndIf
+
+	If lSigaMdtPs
+		nIndTO9		:= 2
+		cSeekTO9	:= "xFilial('TO9') + MV_PAR01+MV_PAR02"
+		cWhileTO9	:= "xFilial('TO9') == TO9->TO9_FILIAL .And. TO9->TO9_CLIENT+TO9->TO9_LOJA <= MV_PAR03+MV_PAR04"
+	EndIf
+
+	dbSelectArea("TO9")
+	dbSetOrder(nIndTO9)
+	dbSeek(&cSeekTO9.)
+
+	While !Eof() .And. &cWhileTO9.
+		If TO9->TO9_EPC > mx_par02  .Or. TO9->TO9_EPC < mx_par01
+		     dbSelectArea("TO9")
+		     dbSkip()
+		     Loop
+		EndIf
+
+		dbSelectArea("TO4")
+		dbSetOrder(1)
+
+		If !dbSeek(xFilial("TO4") + TO9->TO9_EPC) .And. TO4->TO4_TIPCTR <> "2" .OR. TO9->TO9_OPCEPC <> "2" // Medida Coletiva
+			dbSelectArea("TO9")
+			dbSkip()
+		 	Loop
+		EndIf
+
+		If lSigaMdtPs
+			cCliente	:= TO9->TO9_CLIENT
+			cLoja		:= TO9->TO9_LOJA
+		EndIf
+
+		cCodAge := NGSEEK("TN0",TO9->TO9_NUMRIS, 1, "TN0_AGENTE")
+		cNomAge := NGSEEK("TMA",cCodAge, 1, "TMA_NOMAGE")
+
+		/*Verifica se ja foi registrado conteudo, TO4_CONTRO no array
+		caso for prestador verificara com a chave TO4_CONTRO + cCliente + cLoja*/
+		If ( nPosMed := aScan( aMedCtr, {|x| x[1] + x[4] + x[5] == TO4->TO4_CONTRO + cCliente + cLoja} ) ) == 0
+			aAdd( aMedCtr, { TO4->TO4_CONTRO, TO4->TO4_NOMCTR, TO4->TO4_DESCRI, cCliente, cLoja, { { TO9->TO9_NUMRIS , cNomAge } } } )
+		Else
+			aAdd( aMedCtr[ nPosMed , Len( aMedCtr[ nPosMed ] ) ] , { TO9->TO9_NUMRIS , cNomAge } )
+		EndIf
+
+		dbSelectArea("TO9")
+		dbSkip()
+	End
+
+	//Impressão das Medidas de Controle
+	For nMedCon := 1 To Len( aMedCtr )
+		/*	Quando for prestador, sera verificada se a variavel cCliente eh diferente da posicao do cliente ( aMedCtr[x][nPosCli] );
+			Como cCliente esta atribuido do ultimo valor de cliente, na tabela, e a posicao do array eh a primeira, ira imprimir
+			 a descricao de loja e cliente. Depois eh atribuido a cCliente o valor atual do array, onde podera imprimir a descricao
+			 quando mudar o cliente no array;*/
+		If lSigaMdtPs .And. ( cCliente <> aMedCtr[nMedCon][nPosCli] .Or. Len( aMedCtr ) == 1 )
+			cCliente := aMedCtr[nMedCon][nPosCli]
+			//Soma linha na mudanca de cliente, nao sendo o primeiro registro
+			If nMedcon <> 1
+				Somalinha()
+			EndIf
+
+			Somalinha()
+			@ Li, 000 Psay STR0022 + " : " + AllTrim(aMedCtr[nMedCon][nPosCli]) + "/" + AllTrim(aMedCtr[nMedCon][nPosLoj]) ;
+							+ " - " + SubSTR( NGSEEK("SA1",aMedCtr[nMedCon][nPosCli]+aMedCtr[nMedCon][nPosLoj],1,"SA1->A1_NOME"), 1, 40 )  //"Cliente/Loja: "
+		EndIf
+		Somalinha()
+		@ Li, 000 Psay aMedCtr[nMedCon][nPosCtr]// Codigo medida de controle
+		@ Li, 021 Psay aMedCtr[nMedCon][nPosNom]// Nome da medida de controle
+		//Imprime Meta de EPC - Medidas, atraves de um memo
+		nCont := MLCOUNT(aMedCtr[nMedCon][nPosDes],nTam)
+		For nLinha := 1 To nCont
+		    If nLinha <> 1
+		    	Somalinha()
+			EndIf
+
+			@ Li, 063 Psay MemoLine(aMedCtr[nMedCon][nPosDes],nTam,nLinha)// Meta da medida de controle
+
+		Next nCont
+		aRiscos := aClone( aMedCtr[ nMedCon , Len( aMedCtr[ nMedCon ] ) ] )
+		For nAg := 1 To Len( aRiscos )
+			If nAg == 1
+				Somalinha()
+				@ Li, 021 Psay STR0023//"Risco(s)"
+			EndIf
+			Somalinha()
+			@ Li, 021 Psay aRiscos[ nAg , 1 ] + " - " + aRiscos[ nAg , 2 ]
+		Next nAg
+
+	Next nMedCon
+
+dbSelectArea("TO9")
+Set Filter To
+
+dbSelectArea("TO4")
+Set Filter To
+
+Set device to Screen
+If aReturn[5] = 1 .And. Len( aMedCtr ) > 0
+	Set Printer To
+	dbCommitAll()
+	OurSpool(wnrel)
+Else
+	MsgInfo(STR0020,STR0021)  //"Não há valores para impressão do relatório"###"Atenção"
+Endif
+
+MS_FLUSH()
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT551VLD
+Valida parametros de MDTR551
+@author Guilherme Benkendorf
+@since 17/05/13
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MDT551VLD(nPar)
+	Local lRet		:= .T.
+	Local mx_par01	:= MV_PAR01
+	Local mx_par02	:= MV_PAR02
+
+	If lSigaMdtPs
+		mx_par01	:= MV_PAR05
+		mx_par02	:= MV_PAR06
+	EndIf
+
+
+	If nPar == 1
+		lRet := If(!Empty(mx_par01), ExistCpo( "TO4", mx_par01, 1 ),.T.)
+	ElseIf nPar == 2
+		//Valida a existencia do campo caso não seja "ZZZZZ"
+		If mx_par02 <> Replicate("Z",Len(TO4->TO4_CONTRO))
+			lRet := ExistCpo( "TO4", mx_par02, 1 ) .And. NaoVazio( mx_par02 )
+			//
+			If lRet
+				If mx_par01 > mx_par02
+					Help(" ",1,"DEATEINVAL")
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT551VLD
+Incrementa Linha e Controla Salto de Pagina
+
+@author Guilherme Benkendorf
+@since 17/05/13
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function Somalinha()
+    Li++
+    If Li > 58
+        Cabec(cTitulo,Cabec1,Cabec2,cNomeProg,Tamanho,nTipo)
+    EndIf
+Return

@@ -1,0 +1,1475 @@
+#INCLUDE "MDTA165.ch"
+#Include "Protheus.ch"
+#INCLUDE "FWMVCDEF.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA165
+Programa de Cadastro de Ambiente fisico (MVC)
+
+@sample MDTA165()
+
+@author Julia Kondlatsch
+@since 26/10/2017
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Function MDTA165()
+
+	//-----------------------------------------------------
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	//-----------------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oBrowse
+
+	oBrowse := FWMBrowse():New() //Cria o objeto Browse
+		oBrowse:SetAlias( "TNE" ) //Alias da tabela utilizada
+		oBrowse:SetMenuDef( "MDTA165" ) //Nome do fonte onde esta a função MenuDef
+		oBrowse:SetDescription( STR0006 ) //Descrição do browse - "Ambiente Físico"
+	oBrowse:Activate()
+
+	// Devolve as variáveis armazenadas
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Criação do menu MVC
+
+@return
+
+@sample MenuDef()
+
+@author Julia Kondlatsch
+@since 26/10/2017
+@return aRotina array com o Menu MVC
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	aAdd( aRotina, { STR0002, 'VIEWDEF.MDTA165', 0, 2, 0, NIL } ) //Visualizar
+	aAdd( aRotina, { STR0003, 'VIEWDEF.MDTA165', 0, 3, 0, NIL } ) //Incluir
+	aAdd( aRotina, { STR0004, 'VIEWDEF.MDTA165', 0, 4, 0, NIL } ) //Alterar
+	aAdd( aRotina, { STR0005, 'VIEWDEF.MDTA165', 0, 5, 0, NIL } ) //Excluir
+	aAdd( aRotina, { STR0011, 'VIEWDEF.MDTA165', 0, 8, 0, NIL } ) //Imprimir
+	aAdd( aRotina, { STR0012, 'VIEWDEF.MDTA165', 0, 9, 0, NIL } ) //Copiar
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Criação do modelo de dados (MVC)
+
+@sample ModelDef()
+
+@author Julia Kondlatsch
+@since 26/10/2017
+
+@return oModel objeto do Modelo MVC
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	Local lNR32	  := SuperGetMv( "MV_NG2NR32", .F., "2" ) == "1"
+	Local cEntAmb := SuperGetMv( "MV_NG2EAMB", .F., "1" ) //Indica qual entidade será considerada no relacionamento com o ambiente
+	Local lTOQ	  := AliasInDic( "TOQ" ) //Ambiente x Centro de Custo
+	Local lTOR	  := AliasInDic( "TOR" ) //Ambiente x Departamento
+	Local lTOS	  := AliasInDic( "TOS" ) //Ambiente x Função
+	Local lTOT	  := AliasInDic( "TOT" ) //Ambiente x Tarefa
+	Local lTOU	  := AliasInDic( "TOU" ) //Ambiente x Funcionário
+
+	//Criar o evento para integração com o eSocial
+	Local oEvent := MDTA165A():New()
+
+	//Cria a estrutura a ser usada no Modelo de Dados
+	Private oStructTNE := FWFormStruct( 1 /*Usado no Model*/, "TNE" )
+	Private oStructTI7 := FWFormStruct( 1 /*Usado no Model*/, "TI7" )
+	Private oStructTOQ := FWFormStruct( 1 /*Usado no Model*/, "TOQ" )
+	Private oStructTOR := FWFormStruct( 1 /*Usado no Model*/, "TOR" )
+	Private oStructTOS := FWFormStruct( 1 /*Usado no Model*/, "TOS" )
+	Private oStructTOT := FWFormStruct( 1 /*Usado no Model*/, "TOT" )
+	Private oStructTOU := FWFormStruct( 1 /*Usado no Model*/, "TOU" )
+
+	// Modelo de dados que será construído
+	Private oModel
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New( "MDTA165", /*bPre*/, /*bPos*/, /*bCommit*/, /*bCancel*/ )
+
+	// Adiciona ao modelo um componente de Formulário Principal
+	oModel:AddFields( "TNEMASTER", Nil, oStructTNE, /*bPre*/, /*bPost*/, /*bLoad*/ )
+
+	// Adiciona as grids inferiores ao medelo
+	If lNR32
+		oModel:AddGrid( "TI7DETAIL", "TNEMASTER", oStructTI7, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+		//Relaciona os campos das grids com o registro principal
+		oModel:SetRelation( 'TI7DETAIL', { { 'TI7_FILIAL', 'xFilial( "TI7" )' }, { 'TI7_CODAMB', 'TNE_CODAMB' } }, TI7->( IndexKey( 1 ) ) )
+		//"Valida chave duplicada nas linhas das getdados
+		oModel:GetModel( "TI7DETAIL" ):SetUniqueLine( { "TI7_PONMED" } )
+		//Define Grid como não obrigatória
+		oModel:GetModel( "TI7DETAIL" ):SetOptional( .T. )
+	EndIf
+
+	If cEntAmb == "1" .And. lTOQ // Caso o vínculo definido seja por Centro de Custo
+
+		oModel:AddGrid( "TOQDETAIL", "TNEMASTER", oStructTOQ, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+
+		oModel:GetModel( 'TOQDETAIL' ):SetMaxLine( 10000 ) // Define o limite de linhas de 990 para 10000
+
+		oModel:SetRelation( 'TOQDETAIL', { { 'TOQ_FILIAL', 'xFilial( "TOQ" )' }, { 'TOQ_CODAMB', 'TNE_CODAMB' } }, TOQ->( IndexKey( 1 ) ) )
+
+		oModel:GetModel( "TOQDETAIL" ):SetUniqueLine( { "TOQ_CC" } )
+
+		oModel:GetModel( "TOQDETAIL" ):SetOptional( .T. )
+
+	ElseIf cEntAmb == "2" .And. lTOR // Caso o vínculo definido seja por Departamento
+
+		oModel:AddGrid( "TORDETAIL", "TNEMASTER", oStructTOR, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+
+		oModel:GetModel( 'TORDETAIL' ):SetMaxLine( 10000 ) // Define o limite de linhas de 990 para 10000
+
+		oModel:SetRelation( 'TORDETAIL', { { 'TOR_FILIAL', 'xFilial( "TOR" )' }, { 'TOR_CODAMB', 'TNE_CODAMB' } }, TOR->( IndexKey( 1 ) ) )
+
+		oModel:GetModel( "TORDETAIL" ):SetUniqueLine( { "TOR_DEPTO" } )
+
+		oModel:GetModel( "TORDETAIL" ):SetOptional( .T. )
+	
+	ElseIf cEntAmb == "3" .And. lTOS // Caso o vínculo definido seja por Função
+
+		oModel:AddGrid( "TOSDETAIL", "TNEMASTER", oStructTOS, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+
+		oModel:GetModel( 'TOSDETAIL' ):SetMaxLine( 10000 ) // Define o limite de linhas de 990 para 10000
+
+		oModel:SetRelation( 'TOSDETAIL', { { 'TOS_FILIAL', 'xFilial( "TOS" )' }, { 'TOS_CODAMB', 'TNE_CODAMB' } }, TOS->( IndexKey( 1 ) ) )
+
+		oModel:GetModel( "TOSDETAIL" ):SetUniqueLine( { "TOS_FUNCAO" } )
+
+		oModel:GetModel( "TOSDETAIL" ):SetOptional( .T. )
+
+	ElseIf cEntAmb == "4" .And. lTOT // Caso o vínculo definido seja por Tarefa
+
+		oModel:AddGrid( "TOTDETAIL", "TNEMASTER", oStructTOT, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+
+		oModel:GetModel( 'TOTDETAIL' ):SetMaxLine( 10000 ) // Define o limite de linhas de 990 para 10000
+
+		oModel:SetRelation( 'TOTDETAIL', { { 'TOT_FILIAL', 'xFilial( "TOT" )' }, { 'TOT_CODAMB', 'TNE_CODAMB' } }, TOT->( IndexKey( 1 ) ) )
+
+		oModel:GetModel( "TOTDETAIL" ):SetUniqueLine( { "TOT_TAREFA" } )
+
+		oModel:GetModel( "TOTDETAIL" ):SetOptional( .T. )
+
+	ElseIf cEntAmb == "5" .And. lTOU // Caso o vínculo definido seja por Funcionário
+
+		oModel:AddGrid( "TOUDETAIL", "TNEMASTER", oStructTOU, , /*{|oModelGrid|ValidLinha(oModelGrid)}*/, /*bLoad*/ )
+
+		oModel:GetModel( 'TOUDETAIL' ):SetMaxLine( 10000 ) // Define o limite de linhas de 990 para 10000
+
+		oModel:SetRelation( 'TOUDETAIL', { { 'TOU_FILIAL', 'xFilial( "TOU" )' }, { 'TOU_CODAMB', 'TNE_CODAMB' } }, TOU->( IndexKey( 1 ) ) )
+
+		oModel:GetModel( "TOUDETAIL" ):SetUniqueLine( { "TOU_MAT" } )
+
+		oModel:GetModel( "TOUDETAIL" ):SetOptional( .T. )
+
+	EndIf
+
+	//Instalar evento no Modelo
+	oModel:InstallEvent( "MDTA165A", /*cOwner*/, oEvent )
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Criação da tela (View - MVC)
+
+@sample ViewDef()
+
+@author Julia Kondlatsch
+@since 26/10/2017
+
+@return oView - Objeto Contendo a View MVC
+@version 1.0
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	Local lNR32	  := SuperGetMv( "MV_NG2NR32", .F., "2" ) == "1"
+	Local cEntAmb := SuperGetMv( "MV_NG2EAMB", .F., "1" ) //Indica qual entidade será considerada no relacionamento com o ambiente
+	Local lTOQ	  := AliasInDic( "TOQ" ) //Ambiente x Centro de Custo
+	Local lTOR	  := AliasInDic( "TOR" ) //Ambiente x Departamento
+	Local lTOS	  := AliasInDic( "TOS" ) //Ambiente x Função
+	Local lTOT	  := AliasInDic( "TOT" ) //Ambiente x Tarefa
+	Local lTOU	  := AliasInDic( "TOU" ) //Ambiente x Funcionário
+
+	//Estrutura valores de criação de telas
+	Local nViewTNE := IIf( lNR32 .Or. lTOQ, 60, 100 )
+	Local nViewInf := IIf( lNR32 .And. lTOQ, 50, 100 )
+
+	// Cria um objeto de Modelo de dados baseado no ModelDef() do fonte informado
+	Private oModel := FWLoadModel( "MDTA165" )
+
+	// Cria a estrutura a ser usada na View
+	Private oStructTNE := FWFormStruct( 2 /*Usado na View*/, "TNE" )
+	Private oStructTI7 := FWFormStruct( 2 /*Usado na View*/, "TI7" )
+	Private oStructTOQ := FWFormStruct( 2 /*Usado na View*/, "TOQ" )
+	Private oStructTOR := FWFormStruct( 2 /*Usado na View*/, "TOR" )
+	Private oStructTOS := FWFormStruct( 2 /*Usado na View*/, "TOS" )
+	Private oStructTOT := FWFormStruct( 2 /*Usado na View*/, "TOT" )
+	Private oStructTOU := FWFormStruct( 2 /*Usado na View*/, "TOU" )
+
+	// Interface de visualização que será construída
+	Private oView
+
+	//Remove os campos da estrutura
+	If lNR32
+		oStructTI7:RemoveField( "TI7_CODAMB" )
+	EndIf
+
+	If lTOQ //Caso o ambiente esteja atualizado com a nova funcionalidade dos relacionamentos
+		oStructTNE:RemoveField( "TNE_CODLOT" )
+	EndIf
+
+	//Remove campos de vínculo com o ambiente de acordo com o relacionamento definido
+	If cEntAmb == "1" .And. lTOQ
+		oStructTOQ:RemoveField( "TOQ_CODAMB" ) //Ambiente x Centro de Custo
+	ElseIf cEntAmb == "2" .And. lTOR
+		oStructTOR:RemoveField( "TOR_CODAMB" ) //Ambiente x Departamento
+	ElseIf cEntAmb == "3" .And. lTOS
+		oStructTOS:RemoveField( "TOS_CODAMB" ) //Ambiente x Função
+	ElseIf cEntAmb == "4" .And. lTOT
+		oStructTOT:RemoveField( "TOT_CODAMB" ) //Ambiente x Tarefa
+	ElseIf cEntAmb == "5" .And. lTOU
+		oStructTOU:RemoveField( "TOU_CODAMB" ) //Ambiente x Funcionário
+	EndIf
+
+	//Remove campo não mais utilizado no eSocial
+	oStructTNE:RemoveField( "TNE_DTVINI" )
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+	// Associa o model com a view
+	oView:SetModel( oModel )
+
+	// Adiciona no View componentes do model
+	oView:AddField( "VIEW_TNE", oStructTNE, "TNEMASTER" )
+	//Adiciona um titulo para o formulário
+	oView:EnableTitleView( "VIEW_TNE", STR0006 ) //Descrição do browse "Ambiente Físico"
+	// Cria os componentes "box" horizontais para receberem elementos da View
+	oView:CreateHorizontalBox( "TELATNESUP", nViewTNE, /*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/ )
+	// Associa um View a um box
+	oView:SetOwnerView( "VIEW_TNE", "TELATNESUP" )
+
+	If lNR32 .Or. lTOQ .Or. lTOR .Or. lTOS .Or. lTOT .Or. lTOU //Cria o box horizontal inferior caso haja filhos
+		oView:CreateHorizontalBox( "TELAGRDINF", 40, /*cIDOwner*/, /*lFixPixel*/, /*cIDFolder*/, /*cIDSheet*/ )
+	EndIf
+
+	If lNR32
+		oView:AddGrid( "VIEW_TI7", oStructTI7, "TI7DETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TI7", STR0009 ) //"Radiação de Fuga"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TI7INFESQ", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TI7", "TI7INFESQ" )
+	EndIf
+
+	//Caso o vínculo definido seja por Centro de Custo
+	If cEntAmb == "1" .And. lTOQ
+
+		oView:AddGrid( "VIEW_TOQ", oStructTOQ, "TOQDETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TOQ", STR0024 ) //"Centros de Custo"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TOQINFDIR", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TOQ", "TOQINFDIR" )
+
+		oView:AddUserButton( STR0024, '', { | oView | fButton( oView, "TOQ" ) } ) //"Centros de Custo"
+
+	ElseIf cEntAmb == "2" .And. lTOR //Caso o vínculo definido seja por Departamento
+
+		oView:AddGrid( "VIEW_TOR", oStructTOR, "TORDETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TOR", STR0033 ) //"Departamentos"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TORINFDIR", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TOR", "TORINFDIR" )
+
+		oView:AddUserButton( STR0033, '', { | oView | fButton( oView, "TOR" ) } ) //"Departamentos"
+
+	ElseIf cEntAmb == "3" .And. lTOS //Caso o vínculo definido seja por Função
+
+		oView:AddGrid( "VIEW_TOS", oStructTOS, "TOSDETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TOS", STR0034 ) //"Funções"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TOSINFDIR", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TOS", "TOSINFDIR" )
+
+		oView:AddUserButton( STR0034, '', { | oView | fButton( oView, "TOS" ) } ) //"Funções"
+
+	ElseIf cEntAmb == "4" .And. lTOT //Caso o vínculo definido seja por Tarefa
+
+		oView:AddGrid( "VIEW_TOT", oStructTOT, "TOTDETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TOT", STR0035 ) //"Tarefas"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TOTINFDIR", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TOT", "TOTINFDIR" )
+
+		oView:AddUserButton( STR0035, '', { | oView | fButton( oView, "TOT" ) } ) //"Tarefas"
+
+	ElseIf cEntAmb == "5" .And. lTOU //Caso o vínculo definido seja por Funcionário
+
+		oView:AddGrid( "VIEW_TOU", oStructTOU, "TOUDETAIL" )
+		//Adiciona um titulo para o formulário
+		oView:EnableTitleView( "VIEW_TOU", STR0036 ) //"Funcionários"
+		// Criar os componentes "box" vertical para receber os elementos de grid na parte inferior da tela
+		oView:CreateVerticalBox( "TOUINFDIR", nViewInf, "TELAGRDINF" )
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TOU", "TOUINFDIR" )
+
+		oView:AddUserButton( STR0036, '', { | oView | fButton( oView, "TOU" ) } ) //"Funcionários"
+
+	EndIf
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fButton
+Cria um MarkBrowse para seleção dos centros de custo, departamentos, funções, tarefas ou funcionários
+
+@param  oView, Objeto, Objeto da View
+@param  cTbl, Caracter, Indica a tabela do relacionamento a ser montado o Mark
+@param  lFilSRA, Boolean, Indica se é montagem do Mark para filtragem da SRA (utilizado apenas quando for relacionamento Ambiente x Funcionário)
+
+@sample fButton( oView, "TOU", .F. )
+
+@author Luis Fellipy Bett
+@since  03/05/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fButton( oView, cTbl, lFilSRA )
+
+	Local aArea		 := GetArea()
+	Local cAliasTRB	 := GetNextAlias()
+	Local cPesquisar := Space( 200 ) //Valor a ser pesquisado
+	Local lVisualiza := .F.
+	Local lOk		 := .F.
+	Local lInverte	 := .F.
+	Local lMontaMrk	 := .T.
+	Local aDBF		 := {}
+	Local aTRB		 := {}
+	Local aDescIdx	 := {}
+	Local aCampos	 := {}
+	Local aButtons	 := {}
+	Local cString1	 := ""
+	Local cString2	 := ""
+	Local cString3	 := ""
+	Local oDialog
+	Local oTempTRB
+	Local oMark
+
+	Private cMarca := GetMark()
+
+	//Define por padrão como não sendo montagem para o filtro da SRA
+	Default lFilSRA := .F.
+
+	//-------------------------------
+	// Caso não for filtragem da SRA
+	//-------------------------------
+	If !lFilSRA
+		lVisualiza := oView:GetOperation() == 1
+	EndIf
+
+	//-----------------------------------------------------------
+	// Caso for Mark dos funcionários e não for filtragem da SRA
+	//-----------------------------------------------------------
+	If cTbl == "TOU" .And. !lFilSRA
+		aButtons := { { "FILTRO", { || fFiltraSRA( cAliasTRB ), oMark:oBrowse:Refresh() }, STR0037, STR0037 } } //Filtrar
+	EndIf
+
+	//---------------------------
+	// Caso não for Visualização
+	//---------------------------
+	If !lVisualiza
+
+		//-----------------------------------------------------------
+		// Define as strings de acordo com a opção de relacionamento
+		//-----------------------------------------------------------
+		If cTbl == "TOQ" //Centro de Custo
+
+			cString1 := STR0023 //"Não existem centros de custo cadastrados na filial do ambiente"
+			cString2 := STR0024 //"Centros de Custo"
+			If lFilSRA //Caso for montagem do Mark para filtrar os funcionários
+				cString3 := STR0038 //"Selecione abaixo os centros de custo para filtragem dos funcionários."
+			Else
+				cString3 := STR0025 //"Selecione abaixo os centros de custo que deverão ter relacionamento com o ambiente."
+			EndIf
+
+		ElseIf cTbl == "TOR" //Departamento
+
+			cString1 := STR0039 //"Não existem departamentos cadastrados na filial do ambiente"
+			cString2 := STR0033 //"Departamentos"
+			If lFilSRA //Caso for montagem do Mark para filtrar os funcionários
+				cString3 := STR0040 //"Selecione abaixo os departamentos para filtragem dos funcionários."
+			Else
+				cString3 := STR0041 //"Selecione abaixo os departamentos que deverão ter relacionamento com o ambiente."
+			EndIf
+
+		ElseIf cTbl == "TOS" //Função
+
+			cString1 := STR0042 //"Não existem funções cadastradas na filial do ambiente"
+			cString2 := STR0034 //"Funções"
+			If lFilSRA //Caso for montagem do Mark para filtrar os funcionários
+				cString3 := STR0043 //"Selecione abaixo as funções para filtragem dos funcionários."
+			Else
+				cString3 := STR0044 //"Selecione abaixo as funções que deverão ter relacionamento com o ambiente."
+			EndIf
+
+		ElseIf cTbl == "TOT" //Tarefa
+
+			cString1 := STR0045 //"Não existem tarefas cadastradas na filial do ambiente"
+			cString2 := STR0035 //"Tarefas"
+			If lFilSRA //Caso for montagem do Mark para filtrar os funcionários
+				cString3 := STR0046 //"Selecione abaixo as tarefas para filtragem dos funcionários."
+			Else
+				cString3 := STR0047 //"Selecione abaixo as tarefas que deverão ter relacionamento com o ambiente."
+			EndIf
+
+		ElseIf cTbl == "TOU" //Funcionário
+
+			cString1 := STR0048 //"Não existem funcionários cadastrados na filial do ambiente"
+			cString2 := STR0036 //"Funcionários"
+			cString3 := STR0049 //"Selecione abaixo os funcionários que deverão ter relacionamento com o ambiente."
+
+		EndIf
+
+		//----------------------------------------------------------
+		// Define os campos de acordo com a opção de relacionamento
+		//----------------------------------------------------------
+		If cTbl == "TOQ" //Centro de Custo
+			aCampos := { "CC", "DESCC", "CTT_CUSTO", "CTT_DESC01", "TOQ_CC", "TOQ_DESCCC", STR0020, STR0021 } //Centro de Custo##Descrição
+		ElseIf cTbl == "TOR" //Departamento
+			aCampos := { "DEPTO", "DESDEP", "QB_DEPTO", "QB_DESCRIC", "TOR_DEPTO", "TOR_DESDEP", STR0050, STR0021 } //Departamento##Descrição
+		ElseIf cTbl == "TOS" //Função
+			aCampos := { "FUNCAO", "DESFUN", "RJ_FUNCAO", "RJ_DESC", "TOS_FUNCAO", "TOS_DESFUN", STR0051, STR0021 } //Função##Descrição
+		ElseIf cTbl == "TOT" //Tarefa
+			aCampos := { "TAREFA", "DESTAR", "TN5_CODTAR", "TN5_NOMTAR", "TOT_TAREFA", "TOT_DESTAR", STR0052, STR0021 } //Tarefa##Descrição
+		ElseIf cTbl == "TOU" //Funcionário
+			aCampos := { "MATRIC", "NOME", "RA_MAT", "RA_NOME", "TOU_MAT", "TOU_NOME", STR0053, STR0054 } //Matrícula##Nome
+		EndIf
+
+		//-------------------------------------
+		// Cria os campos da tabela temporária
+		//-------------------------------------
+		aAdd( aDBF, { "OK", "C", 02, 0 } ) //Adiciona botão de marcação
+		aAdd( aDBF, { aCampos[ 1 ], "C", TAMSX3( aCampos[ 5 ] )[1], 0 } )
+		aAdd( aDBF, { aCampos[ 2 ], "C", TAMSX3( aCampos[ 6 ] )[1], 0 } )
+
+		//------------------------------
+		// Cria os campos do markbrowse
+		//------------------------------
+		aAdd( aTRB, { "OK", NIL, " ", } ) //Adiciona botão de marcação
+		aAdd( aTRB, { aCampos[ 1 ], NIL, aCampos[ 7 ], } )
+		aAdd( aTRB, { aCampos[ 2 ], NIL, aCampos[ 8 ], } )
+
+		//----------------------------
+		// Define as opções de índice
+		//----------------------------
+		aAdd( aDescIdx, aCampos[ 7 ] )
+		aAdd( aDescIdx, aCampos[ 8 ] )
+		aAdd( aDescIdx, STR0022 ) //"Marcados"		
+
+		//----------------------------
+		// Define a tabela temporária
+		//----------------------------
+		oTempTRB := FWTemporaryTable():New( cAliasTRB, aDBF )
+		
+		//Adiciona os índices
+		oTempTRB:AddIndex( "1", { aCampos[ 1 ] } )
+		oTempTRB:AddIndex( "2", { aCampos[ 2 ] } )
+		oTempTRB:AddIndex( "3", { "OK" } )
+
+		//Cria a tabela temporária
+		oTempTRB:Create()
+
+		//Busca os registros a serem apresentados no MarkBrowse
+		Processa( { || fGetRegs( cAliasTRB, cTbl, aCampos, lFilSRA ) }, STR0055 + "..." )
+
+		//Verifica se existem registros a serem apresentados no Mark
+		If ( cAliasTRB )->( Reccount() ) <= 0
+			Help( ' ', 1, STR0014, , cString1, 2, 0 ) //"Atenção"
+			lMontaMrk := .F.
+		EndIf
+
+		If lMontaMrk //Caso existam registro
+			DEFINE MSDIALOG oDialog TITLE OemToAnsi( cString2 ) From 064, 160 To 550, 690 OF oMainWnd Pixel
+
+				oPnlTot := TPanel():New( , , , oDialog, , , , , , , , .F., .F. )
+					oPnlTot:Align := CONTROL_ALIGN_ALLCLIENT
+
+				oPanel := TPanel():New( 0, 0, , oPnlTot, , .T., .F., , , 0, 070, .T., .F. )
+					oPanel:Align := CONTROL_ALIGN_TOP
+
+					//Descrição
+					@ 005, 010 TO 020, 255 OF oPanel Pixel
+					TSay():New( 009, 014, { | | OemtoAnsi( cString3 ) }, oPanel, , , .F., .F., .F., .T., CLR_BLACK, CLR_WHITE, 279, 010 )
+
+					//Pesquisa/Ordenação
+					@ 025, 010 TO 065, 255 OF oPanel PIXEL
+					aCbxPesq := aClone( aDescIdx )
+					cCbxPesq := aCbxPesq[ 1 ]
+
+					oCbxPesq := TComboBox():New( 033, 016, { | u | If( PCount() > 0, cCbxPesq := u, cCbxPesq ) }, aCbxPesq, 235, 08, oPanel, , ;
+											{ | | }, , , , .T., , , , , , , , , "cCbxPesq" )
+
+					oCbxPesq:bChange := { | | fSetIndex( cAliasTRB, aCbxPesq, @cPesquisar, oMark ) }
+
+					oPesquisar := TGet():New( 048, 016, { | u | If( PCount() > 0, cPesquisar := u, cPesquisar ) }, oPanel, 180, 010, "", { | | .T. } , ;
+												CLR_BLACK, CLR_WHITE, , .F., , .T. /*lPixel*/, , .F., { | | .T. }/*bWhen*/, .F., .F., , .F. /*lReadOnly*/, ;
+												.F., "", "cPesquisar", , , , .F. /*lHasButton*/ )
+
+					oBtnPesq := TButton():New( 048 , 200 , STR0026 , oPanel , { | | fPesqTRB( cAliasTRB, oMark, cPesquisar ) } , 049 , 012 , , , .F. , .T. , .F. , ; //"Pesquisar"
+										, .F., , , .F. )
+
+					oMark := MsSelect():New( cAliasTRB, "OK", , aTRB, @lInverte, @cMarca, { 45, 5, 254, 281 }, , , oPnlTot )
+						oMark:oBrowse:lHasMark		:= .T.
+						oMark:oBrowse:lCanAllMark	:= .T.
+						oMark:oBrowse:bAllMark		:= { | | fInverte( cMarca, cAliasTRB, oMark ) } //Funcao inverte marcadores
+						oMark:oBrowse:Align			:= CONTROL_ALIGN_ALLCLIENT
+
+			ACTIVATE MSDIALOG oDialog ON INIT EnchoiceBar( oDialog, { || lOk := .T., oDialog:End() }, { || oDialog:End() }, , aButtons ) CENTERED
+
+			If lOk
+				If lFilSRA
+					fAddArrSRA( cAliasTRB, cTbl, aCampos ) //Carrega os itens selecionados para o array de filtro da SRA
+				Else
+					fGravaRegs( cAliasTRB, cTbl, aCampos ) //Carrega os registros selecionados ao cadastro do ambiente
+				EndIf
+			EndIf
+		EndIf
+		
+		//Fecha alias e deleta a tabela temporária
+		( cAliasTRB )->( dbCloseArea() )
+		oTempTRB:Delete()
+
+	Else
+		Help( ' ', 1, STR0014, , STR0027, 2, 0 ) //"Atenção"##"Opção não disponível na visualização"
+	EndIf
+
+	//Volta a área posicionada
+	RestArea( aArea )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSetIndex
+Seta o indice para pesquisa
+
+@param	cAliasTRB, Caracter, Alias do TRB ( Obrigatório )
+@param	aCbxPesq, Array, Indices de pesquisa do markbrowse ( Obrigatório )
+@param	cPesquisar, Caracter, Valor da Pesquisa ( Obrigatório )
+@param	oMark, Objeto, Objeto do MarkBrowse ( Obrigatório )
+
+@author	Luis Fellipy Bett
+@since	23/03/2020
+/*/
+//---------------------------------------------------------------------
+Static Function fSetIndex( cAliasTRB, aCbxPesq, cPesquisar, oMark )
+
+	Local nIndice := fRetInd( aCbxPesq ) //Retorna numero do indice selecionado
+
+	//Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoTop()
+
+	// Se o indice selecionado for o ultimo [Marcados]
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) //Limpa campo de pesquisa
+		oPesquisar:Disable()	 //Desabilita campo de pesquisa
+		oBtnPesq:Disable()		 //Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus() //Define foco no markbrowse
+	Else
+		oPesquisar:Enable()		 //Habilita campo de pesquisa
+		oBtnPesq:Enable()		 //Habilita botao de pesquisa
+		oBtnPesq:SetFocus()		 //Define foco no campo de pesquisa
+	EndIf
+
+	oMark:oBrowse:Refresh()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetInd
+Retorna o indice, em numero, do item selecionado no combobox
+
+@return	nIndice, Numérico, Retorna o valor do Indice
+
+@param	aIndMrk, Array, Indices de pesquisa do markbrowse ( Obrigatório )
+
+@author	Luis Fellipy Bett
+@since	23/03/2020
+/*/
+//---------------------------------------------------------------------
+Static Function fRetInd( aIndMrk )
+
+	Local nIndice := aScan( aIndMrk, { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0014, { STR0028 }, 1, { STR0029 }, 1 ) //"Atenção"##"Índice não encontrado"##"Contate o administrador do sistema"
+		nIndice := 1
+	Endif
+
+Return nIndice
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInverte
+Inverte as marcacoes ( bAllMark )
+
+@param	cMarca, Caracter, Valor da marca do TRB
+@param	cAliasTRB, Caracter, Alias do TRB ( Obrigatório )
+@param	oMark, Objeto, Objeto do MarkBrowse ( Obrigatório )
+
+@author	Luis Fellipy Bett
+@since	23/03/2020
+/*/
+//---------------------------------------------------------------------
+Static Function fInverte( cMarca, cAliasTRB, oMark )
+
+	Local aArea := GetArea()
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	While ( cAliasTRB )->( !Eof() )
+		( cAliasTRB )->OK := IIf( Empty( ( cAliasTRB )->OK ), cMarca, Space( Len( cMarca ) ) )
+		(cAliasTRB)->( dbskip() )
+	End
+
+	RestArea( aArea )
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPesqTRB
+Funcao de Pesquisar no Mark Browse.
+
+@return lRet, Lógico, .T. caso encontrar o registro
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse ( Obrigatório )
+@param	oMark, Objeto, Objeto do MarkBrowse ( Obrigatório )
+@param	cPesquisar, Caracter, Valor digitado no campo de pesquisa ( Obrigatório )
+
+@author	Luis Fellipy Bett
+@since	23/03/2020
+/*/
+//---------------------------------------------------------------------
+Static Function fPesqTRB( cAliasTRB, oMark, cPesquisar )
+
+	Local nRecNoAtu := 1 //Variavel para salvar o recno
+	Local lRet := .T.
+
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( Upper( cPesquisar ) ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		Help( ' ', 1, STR0014, , STR0030, 2, 0, , , , , , { STR0031 } ) //"Atenção"##"Valor não encontrado"##"Favor digitar outro valor para pesquisa"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf
+
+	//Atualiza o MarkBrowse
+	oMark:oBrowse:Refresh( .T. )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGravaRegs
+Carrega os centros de custo, departamentos, funções, tarefas ou funcionários selecionados ao cadastro do ambiente
+
+@return	Nil, Nulo
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+@param	cTbl, Caracter, Indica o relacionamento que está sendo considerado
+@param	aCampos, Array, Array com as informações dos campos
+
+@sample	fGravaRegs( "SG000013", "TOU", { { "MATRIC", "NOME", "RA_MAT", "RA_NOME", "TOU_MAT", "TOU_NOME", "Matrícula", "Nome" } } )
+
+@author	Luis Fellipy Bett
+@since	03/05/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fGravaRegs( cAliasTRB, cTbl, aCampos )
+
+	Local oModel	:= FWModelActive()
+	Local aRegMrkds	:= fGetRegMrks( cTbl, aCampos )
+	Local lFirstLin := .F.
+	Local oModelAux
+
+	If cTbl == "TOQ"
+		oModelAux := oModel:GetModel( "TOQDETAIL" )
+	ElseIf cTbl == "TOR"
+		oModelAux := oModel:GetModel( "TORDETAIL" )
+	ElseIf cTbl == "TOS"
+		oModelAux := oModel:GetModel( "TOSDETAIL" )
+	ElseIf cTbl == "TOT"
+		oModelAux := oModel:GetModel( "TOTDETAIL" )
+	ElseIf cTbl == "TOU"
+		oModelAux := oModel:GetModel( "TOUDETAIL" )
+	EndIf
+
+	//Define se a GetDados está vazia
+	oModelAux:GoLine( 1 )
+	If Empty( oModelAux:GetValue( aCampos[ 5 ] ) )
+		lFirstLin := .T.
+	EndIf
+
+	dbSelectArea( cAliasTRB )
+	( cAliasTRB )->( dbGoTop() )
+	While ( cAliasTRB )->( !Eof() )
+		If !Empty( ( cAliasTRB )->OK ) .And. aScan( aRegMrkds, { |x| x[ 1 ] == &( cAliasTRB + "->" + aCampos[ 1 ] ) } ) == 0
+			If !lFirstLin
+				oModelAux:AddLine()
+			EndIf
+			oModelAux:LoadValue( aCampos[ 5 ], SubStr( &( cAliasTRB + "->" + aCampos[ 1 ] ), 1, TAMSX3( aCampos[ 5 ] )[1] ) )
+			oModelAux:LoadValue( aCampos[ 6 ], SubStr( &( cAliasTRB + "->" + aCampos[ 2 ] ), 1, TAMSX3( aCampos[ 6 ] )[1] ) )
+			lFirstLin := .F.
+		ElseIf Empty( ( cAliasTRB )->OK ) .And. ( nPosReg := aScan( aRegMrkds, { |x| x[1] == &( cAliasTRB + "->" + aCampos[ 1 ] ) } ) ) > 0
+			oModelAux:GoLine( aRegMrkds[ nPosReg, 2 ] )
+			oModelAux:DeleteLine()
+		EndIf
+		( cAliasTRB )->( dbSkip() )
+	End
+
+	//Volta para o primeiro registro
+	oModelAux:GoLine( 1 )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetRegs
+Busca os centros de custos, departamentos, funções, tarefas ou funcionários ativos para a filial
+
+@return	Nil, Nulo
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+@param	cTbl, Caracter, Indica o relacionamento que está sendo considerado
+@param	aCampos, Array, Array com as informações dos campos
+@param	lFilSRA, Boolean, Indica se é filtragem de funcionário
+@param	cFilSRA, Caracter, Filtro a ser considerado na busca dos dados de funcionário (utilizado apenas na filtragem dos funcionários)
+
+@sample	fGetRegs( "SG000013", "TOU", { { "MATRIC", "NOME", "RA_MAT", "RA_NOME", "TOU_MAT", "TOU_NOME", "Matrícula", "Nome" } }, .F., "% AND SRA.RA_CC = '000000001' %" )
+
+@author	Luis Fellipy Bett
+@since	03/05/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fGetRegs( cAliasTRB, cTbl, aCampos, lFilSRA, cFilSRA )
+
+	Local cAliasReg	:= GetNextAlias()
+	Local aRegMrkds	:= IIf( lFilSRA, {}, fGetRegMrks( cTbl, aCampos ) )
+	Local lFiltro	:= IsInCallStack( "fMontFilSRA" )
+	Local aArrFun	:= {}
+
+	//Por padrão define o filtro como branco
+	Default cFilSRA := "%%"
+
+	//-------------------------------------------------------
+	// Busca os registros a serem apresentados no MarkBrowse
+	//-------------------------------------------------------
+	If cTbl == "TOQ" //Busca os Centros de Custo
+		
+		BeginSQL Alias cAliasReg
+			SELECT CTT_CUSTO, CTT_DESC01
+				FROM %Table:CTT% CTT
+				WHERE CTT_FILIAL = %xFilial:CTT%
+					AND CTT_CLASSE = '2'
+					AND CTT.%NotDel%
+		EndSQL
+
+	ElseIf cTbl == "TOR" //Busca os Departamentos
+		
+		BeginSQL Alias cAliasReg
+			SELECT QB_DEPTO, QB_DESCRIC
+				FROM %Table:SQB% SQB
+				WHERE QB_FILIAL = %xFilial:SQB%
+					AND SQB.%NotDel%
+		EndSQL
+
+	ElseIf cTbl == "TOS" //Busca as Funções
+
+		BeginSQL Alias cAliasReg
+			SELECT RJ_FUNCAO, RJ_DESC
+				FROM %Table:SRJ% SRJ
+				WHERE RJ_FILIAL = %xFilial:SRJ%
+					AND SRJ.%NotDel%
+		EndSQL
+
+	ElseIf cTbl == "TOT" //Busca as Tarefas
+
+		BeginSQL Alias cAliasReg
+			SELECT TN5_CODTAR, TN5_NOMTAR
+				FROM %Table:TN5% TN5
+				WHERE TN5_FILIAL = %xFilial:TN5%
+					AND TN5.%NotDel%
+		EndSQL
+
+	ElseIf cTbl == "TOU" //Busca os Funcionários
+
+		BeginSQL Alias cAliasReg
+			SELECT RA_MAT, RA_NOME
+				FROM %Table:SRA% SRA
+				WHERE RA_FILIAL = %xFilial:SRA%
+					AND SRA.RA_DEMISSA = %Exp:SToD( Space( 8 ) )%
+					AND SRA.RA_SITFOLH <> 'D'
+					%Exp:cFilSRA%
+					AND SRA.%NotDel%
+		EndSQL
+		
+	EndIf
+
+	//----------------------------------------
+	// Cadastra/atualiza os registros no Mark
+	//----------------------------------------
+	dbSelectArea( cAliasReg )
+	( cAliasReg )->( dbGoTop() )
+	While ( cAliasReg )->( !Eof() )
+		
+		If lFiltro //Caso seja filtro da SRA e exista um filtro a ser aplicado
+			aAdd( aArrFun, { ( cAliasReg )->RA_MAT } )
+		Else
+			RecLock( cAliasTRB, .T. )
+
+			//Verifica se o registro já está relacionado ao ambiente, se estiver deixa como marcado
+			If aScan( aRegMrkds, { |x| x[ 1 ] == &( cAliasReg + "->" + aCampos[ 3 ] ) } ) > 0 //Caso o CC, Depto, Função, Tarefa ou Funcionário já esteja relacionado, define como marcado
+				( cAliasTRB )->OK := cMarca
+			Else
+				( cAliasTRB )->OK := " "
+			EndIf
+
+			//Salva os campos
+			&( cAliasTRB + "->" + aCampos[ 1 ] ) := Upper( Substr( &( cAliasReg + "->" + aCampos[ 3 ] ), 1, TAMSX3( aCampos[ 5 ] )[1] ) )
+			&( cAliasTRB + "->" + aCampos[ 2 ] ) := Upper( SubStr( &( cAliasReg + "->" + aCampos[ 4 ] ), 1, TAMSX3( aCampos[ 6 ] )[1] ) )
+
+			( cAliasTRB )->( MsUnlock() )
+		EndIf
+		( cAliasReg )->( dbSkip() )
+	End
+
+	If lFiltro 
+		//Percorre os registros do Mark excluindo os que não foram filtrados
+		dbSelectArea( cAliasTRB )
+		( cAliasTRB )->( dbGoTop() )
+		While ( cAliasTRB )->( !Eof() )
+			
+			//Caso o funcionário não esteja no array filtrado
+			If aScan( aArrFun, { |x| x[ 1 ] == ( cAliasTRB )->MATRIC } ) == 0
+				RecLock( cAliasTRB, .F. )
+					( cAliasTRB )->( dbDelete() )
+				( cAliasTRB )->( MsUnlock() )
+			EndIf
+			( cAliasTRB )->( dbSkip() )
+		End
+	EndIf
+
+	//Fecha a tabela temporária
+	( cAliasReg )->( dbCloseArea() )
+
+	//Posiciona no primeiro registro para apresentar no Mark
+	dbSelectArea( cAliasTRB )
+	( cAliasTRB )->( dbGoTop() )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetRegMrks
+Busca os centros de custos, departamentos, funções, tarefas ou funcionários previamente cadastrados para que estejam marcados no Markbrowse
+
+@return	aRegMrkds, Array, Array contendo os centros de custo, departamentos, funções, tarefas ou funcionários a serem marcados
+
+@param	cTbl, Caracter, Indica o relacionamento que está sendo considerado
+@param	aCampos, Array, Array com as informações dos campos
+
+@sample	fGetRegMrks( "TOU", { { "MATRIC", "NOME", "RA_MAT", "RA_NOME", "TOU_MAT", "TOU_NOME", "Matrícula", "Nome" } } )
+
+@author	Luis Fellipy Bett
+@since	03/05/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fGetRegMrks( cTbl, aCampos )
+
+	Local oModel	:= FWModelActive()
+	Local aRegMrkds	:= {}
+	Local nCont		:= 0
+	Local oModelAux
+
+	If cTbl == "TOQ"
+		oModelAux := oModel:GetModel( "TOQDETAIL" )
+	ElseIf cTbl == "TOR"
+		oModelAux := oModel:GetModel( "TORDETAIL" )
+	ElseIf cTbl == "TOS"
+		oModelAux := oModel:GetModel( "TOSDETAIL" )
+	ElseIf cTbl == "TOT"
+		oModelAux := oModel:GetModel( "TOTDETAIL" )
+	ElseIf cTbl == "TOU"
+		oModelAux := oModel:GetModel( "TOUDETAIL" )
+	EndIf
+
+	//Posiciona na tabela e verifica quais os centro de custos já relacionados ao ambiente
+	For nCont := 1 To oModelAux:Length()
+		oModelAux:GoLine( nCont )
+		If !Empty( oModelAux:GetValue( aCampos[ 5 ] ) ) .And. !( oModelAux:IsDeleted() )
+			aAdd( aRegMrkds, { oModelAux:GetValue( aCampos[ 5 ] ), nCont } )
+		EndIf
+	Next nCont
+
+Return aRegMrkds
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fFiltraSRA
+Filtra os registros do Markbrowse de funcionários de acordo com os filtros selecionados
+
+@return Nil, Nulo
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+
+@sample	fFiltraSRA( "SG000013" )
+
+@author	Luis Fellipy Bett
+@since	01/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fFiltraSRA( cAliasTRB )
+
+	Local aArea := GetArea() //Salva a área
+
+	//Variáveis de criação da tela
+	Local oDlg
+	Local oPnlTop
+
+	//Variáveis para composição do filtro
+	Private aCCustos := {}
+	Private aDeptos	 := {}
+	Private aFuncoes := {}
+	Private aTarefas := {}
+
+	Private cCCusto := Space( TAMSX3( "CTT_CUSTO" )[1] )
+	Private cDepto  := Space( TAMSX3( "QB_DEPTO" )[1] )
+	Private cFuncao := Space( TAMSX3( "RJ_FUNCAO" )[1] )
+	Private cTarefa := Space( TAMSX3( "TN5_CODTAR" )[1] )
+
+	//--------------------------------------
+	// Adiciona funcionalidade ao botão F10
+	//--------------------------------------
+	bKeyF10 := SetKey( VK_F10 )
+	SetKey( VK_F10, { || fFilF10() } )
+
+	Define MSDIALOG oDlg TITLE OemToAnsi( STR0056 ) From 0, 0 To 15, 45 Of oMainWnd //"Filtrar funcionários"
+
+		oPnlTop := TPanel():New( 00, 00, , oDlg, , , , , , , , .F., .F. )
+			oPnlTop:Align := CONTROL_ALIGN_ALLCLIENT
+
+			//Define a caixa ao redor dos campos
+			@ 05, 05 To 79, 175 Of oPnlTop Pixel
+
+			//Centro de Custo
+			TSay():New( 15, 40, { || OemtoAnsi( STR0020 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"Centro de Custo"
+			TGet():New( 15, 90, { |u| IIf( PCount() > 0, cCCusto := u, cCCusto ) }, oPnlTop, 50, 08, "", { || fVldCpos( "CTT", cCCusto ) }, ;
+					CLR_BLACK, CLR_WHITE, , .F., , .T., , .F., { || .T. }, .F., .F., , .F., .F., "CTT", "cCCusto", , , , .T. )
+			
+			//Departamento
+			TSay():New( 30, 40, { || OemtoAnsi( STR0050 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"Departamento"
+			TGet():New( 30, 90, { | u | IIf( PCount() > 0, cDepto := u, cDepto ) }, oPnlTop, 50, 08, "", { || fVldCpos( "SQB", cDepto ) }, ;
+					CLR_BLACK, CLR_WHITE, , .F., , .T., , .F., , .F., .F., , .F., .F., "MDTSQB", "cDepto", , , , .T. )
+
+			//Função
+			TSay():New( 45, 40, { || OemtoAnsi( STR0051 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"Função"
+			TGet():New( 45, 90, { | u | IIf( PCount() > 0, cFuncao := u, cFuncao ) }, oPnlTop, 50, 08, "", { || fVldCpos( "SRJ", cFuncao ) }, ;
+					CLR_BLACK, CLR_WHITE, , .F., , .T., , .F., , .F., .F., , .F., .F., "SRJ", "cFuncao", , , , .T. )
+
+			//Tarefa
+			TSay():New( 60, 40, { || OemtoAnsi( STR0052 ) }, oPnlTop, , , .F., .F., .F., .T., , , 200, 010 ) //"Tarefa"
+			TGet():New( 60, 90, { | u | IIf( PCount() > 0, cTarefa := u, cTarefa ) }, oPnlTop, 50, 08, "", { || fVldCpos( "TN5", cTarefa ) }, ;
+					CLR_BLACK, CLR_WHITE, , .F., , .T., , .F., , .F., .F., , .F., .F., "TN5", "cTarefa", , , , .T. )
+
+	Activate MsDialog oDlg On Init EnchoiceBar( oDlg, { || IIf( fConfirm( cAliasTRB ), oDlg:End(), ) }, { || oDlg:End() } ) Centered
+
+	//------------------------------------
+	// Retira funcionalidade do botão F10
+	//------------------------------------
+	SetKey( VK_F10, bKeyF10 )
+
+	//Retorna a área
+	RestArea( aArea )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fConfirm
+Valida se algum campo do filtro foi preenchido
+
+@return lRet, Boolean, .T. se tiver algum campo do filtro preenchido
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+
+@sample	fConfirm( "SG000013" )
+
+@author	Luis Fellipy Bett
+@since	03/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fConfirm( cAliasTRB )
+
+	Local lRet := .T. //Variável de retorno
+
+	//Verifica se os campos de filtro foram preenchidos
+	If !Empty( cCCusto ) .Or. !Empty( cDepto ) .Or. !Empty( cFuncao ) .Or. !Empty( cTarefa )
+		fMontFilSRA( cAliasTRB ) //Chama função de filtro
+	Else
+		Help( ' ', 1, STR0014, , STR0032, 2, 0, , , , , , { STR0057 } ) //"Nenhum campo do filtro foi preenchido" ## "Favor preencher pelo menos um campo"
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldCpos
+Valida os campos da tela de filtro dos funcionários
+
+@return lRet, Boolean, .T. caso o conteúdo inputado no campo esteja ok
+
+@param	cTbl, Caracter, Indica o relacionamento que está sendo considerado
+@param	cValCpo, Caracter, Indica o valor inputado no campo
+
+@sample	fVldCpos( "CTT", "0000012" )
+
+@author	Luis Fellipy Bett
+@since	01/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fVldCpos( cTbl, cValCpo )
+
+	Local lRet := .T.
+
+	//Caso tenha sido inputado um valor ao campo e não selecionado pelo F10
+	If AllTrim( cValCpo ) <> "#"
+		lRet := IIf( !Empty( AllTrim( cValCpo ) ), ExistCpo( cTbl, AllTrim( cValCpo ) ), .T. ) //Verifica se o código existe na tabela
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAddArrSRA
+Carrega nos arrays os centros de custo, departamentos, funções ou tarefas selecionados no MarkBrowse
+
+@return Nil, Nulo
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+@param	cTbl, Caracter, Indica o relacionamento que está sendo considerado
+@param	aCampos, Array, Array com as informações dos campos
+
+@sample	fAddArrSRA( "SGC00012", "TOQ", { "CC" } )
+
+@author	Luis Fellipy Bett
+@since	01/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fAddArrSRA( cAliasTRB, cTbl, aCampos )
+
+	//Array auxiliar para salvar os registros selecionados
+	Local aArrAux := {}
+
+	//Percorre todo o Mark adicionando os registros selecionados
+	dbSelectArea( cAliasTRB )
+	( cAliasTRB )->( dbGoTop() )
+	While ( cAliasTRB )->( !Eof() )
+		If !Empty( ( cAliasTRB )->OK )
+			aAdd( aArrAux, { &( cAliasTRB + "->" + aCampos[ 1 ] ) } )			
+		EndIf
+		( cAliasTRB )->( dbSkip() )
+	End
+
+	//------------------------------------------------------
+	// Adiciona o array com os registros ao array do filtro
+	//------------------------------------------------------
+	If cTbl == "TOQ" //Centro de Custo
+		aCCustos := aClone( aArrAux )
+	ElseIf cTbl == "TOR" //Departamento
+		aDeptos := aClone( aArrAux )
+	ElseIf cTbl == "TOS" //Função
+		aFuncoes := aClone( aArrAux )
+	ElseIf cTbl == "TOT" //Tarefa
+		aTarefas := aClone( aArrAux )
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMontFilSRA
+Monta o filtro e filtra os registros do Mark dos funcionários de acordo com os centros de custo, departamentos, funções e tarefas selecionadas
+
+@return Nil, Nulo
+
+@param	cAliasTRB, Caracter, Alias do MarkBrowse
+
+@sample	fMontFilSRA( "SGC00012" )
+
+@author	Luis Fellipy Bett
+@since	01/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fMontFilSRA( cAliasTRB )
+
+	Local aCposAux := { "MATRIC", "NOME", "RA_MAT", "RA_NOME", "TOU_MAT", "TOU_NOME" }
+	Local cFiltro  := "%" //Inicia filtro
+	Local nCont	   := 0
+	Local cCondic  := " AND ( "
+	Local cVirgula := ","
+	Local aArrFun  := {}
+
+	//-------------------------------------
+	// Monta o filtro dos centros de custo
+	//-------------------------------------
+	If Len( aCCustos ) > 0 //Caso o campo de centro de custo foi preenchido com F10
+		
+		For nCont := 1 To Len( aCCustos )
+			cFiltro += cCondic + "SRA.RA_CC = '" + aCCustos[ nCont, 1 ] + "'"
+			cCondic := " OR "
+		Next nCont
+
+		//Fecha parênteses da condição e retorna variável para validação do próximo array
+		cFiltro += " ) "
+		cCondic := " AND ( "
+
+	ElseIf !Empty( cCCusto ) //Caso o campo foi preenchido com apenas um código
+		cFiltro += " AND ( SRA.RA_CC = '" + cCCusto + "' ) "
+	EndIf
+
+	//----------------------------------
+	// Monta o filtro dos departamentos
+	//----------------------------------
+	If Len( aDeptos ) > 0 //Caso o campo de departamento foi preenchido com F10
+		
+		For nCont := 1 To Len( aDeptos )
+			cFiltro += cCondic + "SRA.RA_DEPTO = '" + aDeptos[ nCont, 1 ] + "'"
+			cCondic := " OR "
+		Next nCont
+
+		//Fecha parênteses da condição e retorna variável para validação do próximo array
+		cFiltro += " ) "
+		cCondic := " AND ( "
+
+	ElseIf !Empty( cDepto ) //Caso o campo de departamento foi preenchido com apenas um código
+		cFiltro += " AND ( SRA.RA_DEPTO = '" + cDepto + "' ) "
+	EndIf
+
+	//----------------------------
+	// Monta o filtro das funções
+	//----------------------------
+	If Len( aFuncoes ) > 0 //Caso o campo de função foi preenchido com F10
+		
+		For nCont := 1 To Len( aFuncoes )
+			cFiltro += cCondic + "SRA.RA_CODFUNC = '" + aFuncoes[ nCont, 1 ] + "'"
+			cCondic := " OR "
+		Next nCont
+
+		//Fecha parênteses da condição e retorna variável para validação do próximo array
+		cFiltro += " ) "
+		cCondic := " AND ( "
+
+	ElseIf !Empty( cFuncao ) //Caso o campo de função foi preenchido com apenas um código
+		cFiltro += " AND ( SRA.RA_CODFUNC = '" + cFuncao + "' ) "
+	EndIf
+
+	//-------------------------------------
+	// Monta o filtro das tarefas
+	//-------------------------------------
+	If Len( aTarefas ) == 0 .And. !Empty( cTarefa ) //Caso o funcionário tenha inputado apenas uma tarefa no campo
+		aAdd( aTarefas, { cTarefa } )
+	EndIf
+	
+	If Len( aTarefas ) > 0 //Caso o campo de tarefa foi preenchido com F10 ou uma tarefa tenha sido inputada no campo
+		
+		aArrFun := fGetFunTar( aTarefas ) //Busca os funcionários relacionados a tarefa
+
+		If Len( aArrFun ) > 0 //Caso existam funcionários vinculados às tarefas
+			cFiltro += cCondic + " SRA.RA_MAT IN ( "
+			For nCont := 1 To Len( aArrFun )
+				If nCont == Len( aArrFun )
+					cVirgula := ""
+				EndIf
+				cFiltro += "'" + aArrFun[ nCont, 1 ] + "'" + cVirgula
+			Next nCont
+
+			//Fecha parênteses da condição
+			cFiltro += " ) ) "
+		Else
+			cFiltro += " AND ( SRA.RA_MAT = 'SEMTAREFA' ) "
+		EndIf
+
+	EndIf
+
+	//Encerra filtro
+	cFiltro += "%"
+
+	//Busca os registros a serem apresentados no MarkBrowse
+	Processa( { || fGetRegs( cAliasTRB, "TOU", aCposAux, .F., cFiltro ) }, STR0058 + "..." ) //"Filtrando funcionários"
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fFilF10
+Função executada ao pressionar F10 nos campos de filtro
+
+@return Nil, Nulo
+
+@sample	fFilF10()
+
+@author	Luis Fellipy Bett
+@since	01/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fFilF10()
+
+	Local cCpoF10 := ReadVar() //Salva o campo em que foi acionado o F10
+	Local lOk := .F.
+
+	//---------------------------------------------------
+	// Caso o botão tenha sido acionado em um dos campos
+	//---------------------------------------------------
+	If !Empty( cCpoF10 )
+
+		//------------------------------------------------------------
+		// Chama o Mark de acordo com o campo que teve o F10 acionado
+		//------------------------------------------------------------
+		If cCpoF10 == "CCCUSTO"
+			fButton( , "TOQ", .T. )
+		ElseIf cCpoF10 == "CDEPTO"
+			fButton( , "TOR", .T. )
+		ElseIf cCpoF10 == "CFUNCAO"
+			fButton( , "TOS", .T. )
+		ElseIf cCpoF10 == "CTAREFA"
+			fButton( , "TOT", .T. )
+		EndIf
+
+		//----------------------------------------------------
+		// Verifica se algum registro do Mark foi selecionado
+		//----------------------------------------------------
+		If cCpoF10 == "CCCUSTO"
+			lOk := Len( aCCustos ) > 0
+		ElseIf cCpoF10 == "CDEPTO"
+			lOk := Len( aDeptos ) > 0
+		ElseIf cCpoF10 == "CFUNCAO"
+			lOk := Len( aFuncoes ) > 0
+		ElseIf cCpoF10 == "CTAREFA"
+			lOk := Len( aTarefas ) > 0
+		EndIf
+
+		If lOk //Caso o Mark tenha sido confirmado
+			&( cCpoF10 ) := "#"
+		Else
+			&( cCpoF10 ) := ""
+		EndIf
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetFunTar
+Busca os funcionários relacionados às tarefas passadas por parâmetro
+
+@return aFuncs, Array, Array contendo os funcionários relacinados às tarefas
+
+@param	aTarefas, Array, Array contendo as tarefas a serem validadas
+
+@sample	fGetFunTar( { { "000001" } } )
+
+@author	Luis Fellipy Bett
+@since	03/09/2021
+/*/
+//---------------------------------------------------------------------
+Static Function fGetFunTar( aTarefas )
+
+	Local aFuncs := {}
+	Local nCont := 0
+
+	dbSelectArea( "TN6" )
+	dbSetOrder( 1 )
+	For nCont := 1 To Len( aTarefas )
+		If dbSeek( xFilial( "TN6" ) + aTarefas[ nCont, 1 ] )
+			While TN6->( !Eof() ) .And. TN6->TN6_FILIAL == xFilial( "TN6" ) .And. TN6->TN6_CODTAR == aTarefas[ nCont, 1 ]
+				If aScan( aFuncs, { |x| x[1] == TN6->TN6_MAT } ) == 0
+					aAdd( aFuncs, { TN6->TN6_MAT } )
+				EndIf
+				TN6->( dbSkip() )
+			End
+		EndIf
+	Next nCont
+
+Return aFuncs
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A165CHAVE
+Verifica se existe registro com a mesma chave
+(Deixada esta função do antigo fonte para não ocorrer falta de função
+se não for atualizado o dicionário)
+
+@return Lógico - Retorna falso caso valor já exista
+
+@param cCodAmb - Código do Ambiente Físico a ser validado
+
+@obs Utilizado na validação do campo TNE_CODAMB
+
+@sample A165CHAVE()
+
+@author Denis Hyroshi de Souza
+@since 30/08/2003
+/*/
+//---------------------------------------------------------------------
+Function A165CHAVE( cCodAmb )
+
+	Local lRet  := .T.
+	Local aArea := GetArea()
+
+	dbSelectArea( "TNE" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "TNE" ) + cCodAmb )
+		Help( " ", 1, "JAGRAVADO" )
+		lRet  := .T.
+	Endif
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT165NRINS
+
+Valida o conteúdo do campo TNE_NRINS caso TNE_TPINS seja igual a CNPJ
+
+@author  Luis Fellipy Bett
+@since   13/03/2020
+/*/
+//-------------------------------------------------------------------
+Function MDT165NRINS()
+
+	Local lRet := .T.
+
+	If M->TNE_TPINS == "1"
+		lRet := CGC( M->TNE_NRINS )
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT165SX7
+Funcão contida na condição dos gatilhos do campo TNE_TPINS para validar
+quando o gatilho será disparado
+
+@sample	MDT165SX7( 1 )
+
+@param nOpcGat, Numérico, Indica qual a opção de gatilho está sendo executado
+
+@author	Luis Fellipy Bett
+@since	08/07/2021
+
+@return lGatilha, Boolean, Indica se irá gatilhar o valor ao campo
+/*/
+//---------------------------------------------------------------------
+Function MDT165SX7( nOpcGat )
+
+	Local oModel := FWModelActive()
+	Local lGatilha := .F.
+
+	//Apenas gatilha caso o local do ambiente for o estabelecimento do empregador
+	If oModel:GetValue( "TNEMASTER", "TNE_LOCAMB" ) == "1"
+		If nOpcGat == 1 //Gatilho para inserir o CNPJ
+			lGatilha := oModel:GetValue( "TNEMASTER", "TNE_TPINS" ) == "1"
+		ElseIf nOpcGat == 2 //Gatilho para limpar o campo
+			lGatilha := oModel:GetValue( "TNEMASTER", "TNE_TPINS" ) <> "1"
+		EndIf
+	EndIf
+
+Return lGatilha
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT165SX3
+Função utilizada para conter o X3_VALID, X3_RELACAO e X3_INIBRW do cadastro de ambientes
+
+@return	xRet, Caracter/Boolean, Retorna caracter ou lógico de acordo com a regra
+
+@param	nRegra, Caracter, Opção do campo a ser validado/retornado (1- X3_VALID, 2- X3_RELACAO, 3- X3_INIBRW)
+@param	cCampo, Caracter, Campo a ser validado/retornado
+
+@sample	MDT165SX3( 1, "TOQ_CODAMB" )
+
+@author	Luis Fellipy Bett
+@since	30/08/2021
+/*/
+//-------------------------------------------------------------------
+Function MDT165SX3( nRegra, cCampo )
+
+	Local xRet //Variável de retorno
+
+	If nRegra == 1 //Caso for X3_VALID
+
+		Do Case
+			Case cCampo == "TOQ_CODAMB"
+				xRet := EXISTCPO( "TNE", M->TOQ_CODAMB )
+			Case cCampo == "TOR_CODAMB"
+				xRet := EXISTCPO( "TNE", M->TOR_CODAMB )
+			Case cCampo == "TOS_CODAMB"
+				xRet := EXISTCPO( "TNE", M->TOS_CODAMB )
+			Case cCampo == "TOT_CODAMB"
+				xRet := EXISTCPO( "TNE", M->TOT_CODAMB )
+			Case cCampo == "TOU_CODAMB"
+				xRet := EXISTCPO( "TNE", M->TOU_CODAMB )
+			Case cCampo == "TOQ_CC"
+				xRet := IIf( !Empty( M->TOQ_CC ), EXISTCPO( "CTT", M->TOQ_CC ), .T. )
+			Case cCampo == "TOR_DEPTO"
+				xRet := IIf( !Empty( M->TOR_DEPTO ), EXISTCPO( "SQB", M->TOR_DEPTO ), .T. )
+			Case cCampo == "TOS_FUNCAO"
+				xRet := IIf( !Empty( M->TOS_FUNCAO ), EXISTCPO( "SRJ", M->TOS_FUNCAO ), .T. )
+			Case cCampo == "TOT_TAREFA"
+				xRet := IIf( !Empty( M->TOT_TAREFA ), EXISTCPO( "TN5", M->TOT_TAREFA ), .T. )
+			Case cCampo == "TOU_MAT"
+				xRet := SitMdtFunc( M->TOU_MAT, .T., .T., .T. )
+		End Case
+	
+	ElseIf nRegra == 2 //Caso for X3_RELACAO
+
+		Do Case
+			Case cCampo == "TOQ_DESCCC"
+				xRet := IIf( INCLUI, "", Posicione( "CTT", 1, xFilial( "CTT" ) + TOQ->TOQ_CC, "CTT_DESC01" ) )
+			Case cCampo == "TOR_DESDEP"
+				xRet := IIf( INCLUI, "", Posicione( "SQB", 1, xFilial( "SQB" ) + TOR->TOR_DEPTO, "QB_DESCRIC" ) )
+			Case cCampo == "TOS_DESFUN"
+				xRet := IIf( INCLUI, "", Posicione( "SRJ", 1, xFilial( "SRJ" ) + TOS->TOS_FUNCAO, "RJ_DESC" ) )
+			Case cCampo == "TOT_DESTAR"
+				xRet := IIf( INCLUI, "", Posicione( "TN5", 1, xFilial( "TN5" ) + TOT->TOT_TAREFA, "TN5_NOMTAR" ) )
+			Case cCampo == "TOU_NOME"
+				xRet := IIf( INCLUI, "", Posicione( "SRA", 1, xFilial( "SRA" ) + TOU->TOU_MAT, "RA_NOME" ) )
+		End Case
+
+	EndIf
+
+Return xRet

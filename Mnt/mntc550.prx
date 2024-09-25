@@ -1,0 +1,421 @@
+#INCLUDE "mntc550.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC550
+Consulta Geral da Ordem de Servico Manutencao
+@author Inacio Luiz Kolling
+@since 02/07/97
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC550()
+
+	Local aNGBEGINPRM := {}
+	Local aAlias      :={}
+	Local i
+
+	If FindFunction( 'MNTAmIIn' ) .And. !MNTAmIIn( 19, 95, 35 )
+		Return .F.
+	EndIf
+
+	aNGBEGINPRM := NGBEGINPRM()
+
+	Private aRotina 	:= MenuDef()
+	Private lTLTTIPINS	:= .F.  // ESTA VARIAVEL NAO PODE SER DELETADA, POIS FAZ PARTE
+								// DO X3_INIBRW USADO NO MNTA400 E EM VARIOS PROGRAMAS
+								// CONSULTAS, A MESMA INDICA SE É USADO ARQUIVO DA BASE
+								// (STL OU STT )PARA MOSTRAR NO BROWSE OU ARQUIVO
+								// AUXILLIAR (TRBL OU TRBT )
+
+	cCadastro := OemToAnsi( STR0004 ) //"O.S. Manutencao"
+
+	mBrowse( 6, 1, 22, 75, "STI" )
+
+	Set Key VK_F12  To
+	//---------------------------------------------------------------------
+	//| Recupera a Ordem Original do arquivo principal               	  |
+	//---------------------------------------------------------------------
+	dbSelectArea("STI")
+	dbSetOrder(01)
+	aAlias:={ "STI", "STJ" }
+
+	For i := 1 To Len( aAlias )
+		dbSelectArea( aAlias[i] )
+		dbSetOrder(01)
+	Next i
+
+	dbSelectArea("STI")
+
+	//---------------------------------------------------------------------
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK)                      |
+	//---------------------------------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT550DOC
+Funcao que carrega o MsDocument na TRBB, posicionado na STJ
+
+@author  Lucas Meneghelli Pereira
+@since   12/06/2018
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function MNT550DOC()
+
+	Local aArea := GetArea()
+	Local aAreaSTJ := STJ->(GetArea())
+
+	dbSelectArea("STJ")
+	dbSetOrder(01)
+	dbSeek( xFilial( "STJ" ) + (cAliSTJTp)->TJ_ORDEM + (cAliSTJTp)->TJ_PLANO + (cAliSTJTp)->TJ_TIPOOS + (cAliSTJTp)->TJ_CODBEM + (cAliSTJTp)->TJ_SERVICO + (cAliSTJTp)->TJ_SEQRELA )
+	MsDocument("STJ", STJ->(Recno()), 4)
+
+	RestArea(aAreaSTJ)
+	RestArea(aArea)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} TPQRESPOS
+Monta um browse com as opcoes da etapa da manutencao
+@author Thiago Olis Machado
+@since 02/10/01
+@version undefined
+@obs Refeito em 11/09/2003 - In cio Luiz Kolling
+@type function
+/*/
+//---------------------------------------------------------------------
+Function TPQRESPOS()
+
+	Local cALISOD := Alias()
+	Local oList,oPnl7
+
+	Local oTempTable //Objeto Tabela Temporária
+
+	Private cTRBZJ := GetNextAlias()//Alias Tabela Temporária
+
+	//|----------------------------------------------------------|
+	//| Atribui os valores da tabela temporária para a memória.  |
+	//|----------------------------------------------------------|
+	If IsInCallStack("MNTC550B")
+		M->TQ_ORDEM  := (cAliasOS)->TQ_ORDEM
+		M->TQ_PLANO  := (cAliasOS)->TQ_PLANO
+		M->TQ_TAREFA := (cAliasOS)->TQ_TAREFA
+		M->TQ_ETAPA  := (cAliasOS)->TQ_ETAPA
+	ElseIf IsInCallStack("OSHISTETA")
+		//Verifica se TRB existe.
+		If Type( "_cTrb" ) <> "U"
+			If Select( _cTrb ) > 0
+			//Deverá posicionar a STQ para buscar as respostas corretas.
+				M->TQ_ORDEM  := (_cTrb)->TQ_ORDEM
+				M->TQ_PLANO  := (_cTrb)->TQ_PLANO
+				M->TQ_TAREFA := (_cTrb)->TQ_TAREFA
+				M->TQ_ETAPA  := (_cTrb)->TQ_ETAPA
+			EndIf
+		EndIf
+	Else
+		M->TQ_ORDEM  := STQ->TQ_ORDEM
+		M->TQ_PLANO  := STQ->TQ_PLANO
+		M->TQ_TAREFA := STQ->TQ_TAREFA
+		M->TQ_ETAPA  := STQ->TQ_ETAPA
+	EndIf
+
+	aCampos  := {}
+		aAdd( aCampos, { "OPCAO" , "C", 15, 0 })
+		aAdd( aCampos, { "TIPOO" , "C", 10, 0 })
+		aAdd( aCampos, { "FORMUL", "C", 80, 0 })
+		aAdd( aCampos, { "ETAPA" , "C", 06, 0 })
+		aAdd( aCampos, { "ORDEM" , "C", 06, 0 })
+		aAdd( aCampos, { "PLANO" , "C", 06, 0 })
+		aAdd( aCampos, { "TAREFA", "C", 06, 0 })
+		aAdd( aCampos, { "RESPO" , "C", 10, 0 })
+		aAdd( aCampos, { "PAREC" , "C", 10, 0 })
+
+	//Instancia classe FWTemporaryTable
+	oTempTable := FWTemporaryTable():New( cTRBZJ, aCampos )
+	//Cria indices
+	oTempTable:AddIndex( "Ind01" , {"ETAPA","OPCAO"} )
+	//Cria a tabela temporaria
+	oTempTable:Create()
+
+	dbSelectArea("TPC")
+	dbSetOrder(01)
+	dbSeek(xFilial("TPC")+M->TQ_ETAPA)
+	While !EoF() .And. TPC->TPC_FILIAL = Xfilial("TPC") .And.;
+	TPC->TPC_ETAPA == M->TQ_ETAPA
+		(cTRBZJ)->(DbAppend())
+		(cTRBZJ)->ORDEM  := M->TQ_ORDEM
+		(cTRBZJ)->PLANO  := M->TQ_PLANO
+		(cTRBZJ)->TAREFA := M->TQ_TAREFA
+		(cTRBZJ)->ETAPA  := TPC->TPC_ETAPA
+		(cTRBZJ)->OPCAO  := TPC->TPC_OPCAO
+		(cTRBZJ)->TIPOO  := IIf( TPC->TPC_TIPRES == '2', STR0027, STR0028 )
+		(cTRBZJ)->FORMUL := TPC->TPC_FORMUL
+
+		dbSkip()
+	EndDo
+
+	dbSelectArea(cTRBZJ)
+	dbGoTop()
+
+	dbSelectArea("TPQ")
+	dbSetOrder(01)
+	dbSeek(xFilial("TPQ")+M->TQ_ORDEM+M->TQ_PLANO+M->TQ_TAREFA+M->TQ_ETAPA)
+	While !EoF() .And. TPQ->TPQ_FILIAL = Xfilial("TPQ") .And.;
+	TPQ->TPQ_ORDEM == M->TQ_ORDEM .And. TPQ->TPQ_PLANO == M->TQ_PLANO .And.;
+	TPQ->TPQ_TAREFA == M->TQ_TAREFA .And. TPQ->TPQ_ETAPA == M->TQ_ETAPA
+
+		dbSelectArea(cTRBZJ)
+
+		IF dbSeek(TPQ->TPQ_ETAPA+TPQ->TPQ_OPCAO)
+			(cTRBZJ)->ORDEM  := TPQ->TPQ_ORDEM
+			(cTRBZJ)->PLANO  := TPQ->TPQ_PLANO
+			(cTRBZJ)->TAREFA := TPQ->TPQ_TAREFA
+			(cTRBZJ)->RESPO  := TPQ->TPQ_RESPOS
+			(cTRBZJ)->PAREC  := If(Empty((cTRBZJ)->RESPO),STR0029,STR0030)
+		EndIf
+
+		dbSelectArea("TPQ")
+		dbSkip()
+	EndDo
+
+	dbSelectArea(cTRBZJ)
+	dbGoTop()
+
+	If RecCount() = 0
+		MsgInfo(STR0031)
+
+		oTempTable:Delete()//Deleta Tabela Temporária
+
+		dbSelectArea(cALISOD)
+		Return
+	Endif
+
+	Define MsDialog odlg7 Title STR0032 + AllTrim( M->TQ_ETAPA ) + " - " +;
+	NGSEEK( "TPA", M->TQ_ETAPA, 1, "Alltrim( SUBSTR( TPA->TPA_DESCRI, 1, 30 ))" ) +;
+	STR0033 + M->TQ_ORDEM From 0,0 To 400,600 Pixel Of oMainWnd
+
+	oPnl7 := tPanel():New(01,01,,odlg7,,,,CLR_BLACK,CLR_WHITE,100,100)
+	oPnl7:Align := CONTROL_ALIGN_ALLCLIENT
+
+	@ 0,0 Listbox oList Fields OPCAO        ,;
+	TIPOO        ,;
+	FORMUL       ,;
+	PAREC        ,;
+	RESPO         ;
+	FieldSizes 30,25,50,35,50;
+	Size 100,100       ;
+	HEADERS STR0023   ,;
+	STR0034   ,;
+	STR0048 ,; //"Fórmula"
+	STR0036   ,;
+	STR0024   ,;
+	Of oPnl7
+	oList:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Activate MsDialog odlg7 On Init EnchoiceBar( odlg7, {|| nOpins := 1, odlg7:End() }, {|| odlg7:End() }) CENTERED
+
+	oTempTable:Delete()//Deleta Tabela Temporária
+
+	dbSelectArea(cALISOD)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilização de menu Funcional
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version undefined
+@return Array com opcoes da rotina.
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := { { STR0001, 'AxPesqui'  , 0, 1 },; // Pesquisar
+					   { STR0002, 'MNTC550C()', 0, 2 } } // Consulta
+
+    //------------------------------------------------------------
+	//|	Parametros do array a Rotina:                 	     	 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transação a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 		         |
+	//------------------------------------------------------------
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTC550IMPR
+Imprime a consulta da Ordem de Servico
+@author Thiago Olis Machado
+@since 07/02/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTC550IMPR()
+
+	Local cString := "STJ"
+	Local wnrel   := "MNTR650"
+	Local cDesc1  := STR0039 //"O objetivo deste relat¢rio ‚ exibir as Ordens de Servicos originadas  "
+	Local cDesc2  := STR0040 //"da Consulta de Ordens do Plano de Manutenção."
+	Local cDesc3  := ""
+
+	Private aReturn  := { STR0041, 1,STR0042, 2, 2, 1, "",1 }  //"Zebrado"###"Administracao"
+	Private nLastKey := 0
+	Private cPerg    := "MNT550"
+	Private titulo   := STR0043 //"Ordens de Servico Manutencao"
+	Private cabec1,cabec2
+	Private Tamanho  := "G"
+	Private ntipo    := 0
+	Private nomeprog := "MNTC550"
+
+	//---------------------------------------------------------------------
+	//| Envia controle para a funcao SETPRINT                        	  |
+	//---------------------------------------------------------------------
+	wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+	If nLastKey = 27
+		Set Filter To
+		Return
+	Endif
+	SetDefault(aReturn,cString)
+	RptStatus({|lEnd| R550Imp(@lEnd,wnRel,titulo,tamanho)},titulo)
+	dbSelectArea("STJ")
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R550Imp
+Chamada do Relatório
+@author NG Informatica Ltda
+@since 30/06/97
+@version undefined
+@param lEnd, logical
+@param wnRel
+@param titulo
+@param tamanho
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function R550Imp(lEnd,wnRel,titulo,tamanho)
+
+	Local aAreaTRB := (_cTrb)->(GetArea())
+	Local cRodaTxt  := ""
+	Local cBem
+	Local nCntImpr  := 0
+	Local nTotBem
+	Local nTotGer
+	//---------------------------------------------------------------------
+	//| Contadores de linha e pagina                                 	  |
+	//---------------------------------------------------------------------
+	Private li := 80 ,m_pag := 1
+
+	//---------------------------------------------------------------------
+	//| Verifica se deve comprimir ou nao                            	  |
+	//---------------------------------------------------------------------
+	nTipo  := IIF(aReturn[4]==1,15,18)
+
+	//---------------------------------------------------------------------
+	//| Monta os Cabecalhos                                          	  |
+	//---------------------------------------------------------------------
+	cabec1 := STR0044 //"O.S.    Plano      Tipo O.S.   Bem               Nome                                      Servico   Nome Servico                               Sequencia    Dt.Par.Pr.I.     Dt.Man.Pr.I.     Usuario"
+	cabec2 := ""
+
+	//          1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         20        210     220
+	//01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	// ____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	// O.S.    Plano      Tipo O.S.   Bem               Nome                                      Servico   Nome Servico                               Sequencia    Dt.Par.Pr.I.     Dt.Man.Pr.I.     Usuario
+	// ____________________________________________________________________________________________________________________________________________________________________________________________________________________________
+	//
+	// xxxxxx  xxxxxx     x           xxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxx    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   xxx          xx/xx/xxxx       xx/xx/xxxx       xxxxxxxxxxxxxxx
+	//
+	// Total de O.S. do Bem...: xxxxxx
+	// Total Geral de O.S.....: xxxxxx
+
+	dbSelectArea(_cTrb)
+	dbSetOrder(02)
+	dbGoTop()
+	SetRegua( LastRec() )
+
+	cBem    := (_cTrb)->TJ_CODBEM
+	nTotBem := 0.00
+	nTotGer := 0.00
+
+	While !EoF()
+
+		IncRegua()
+
+		While !EoF() .and. cBem == (_cTrb)->TJ_CODBEM
+
+			NGSOMALI(58)
+			@ Li,000 Psay (_cTrb)->TJ_ORDEM  Picture "@!"
+			@ Li,008 Psay (_cTrb)->TJ_PLANO  Picture "@!"
+			@ Li,019 Psay (_cTrb)->TJ_TIPOOS Picture "@!"
+			@ Li,031 Psay (_cTrb)->TJ_CODBEM Picture "@!"
+
+			If (_cTrb)->TJ_TIPOOS == "B"
+				@ Li,049 Psay NGSEEK("ST9",(_cTrb)->TJ_CODBEM,1,"AllTrim(SubStr(ST9->T9_NOME,1,40))") Picture "@!"
+			Else
+				@ Li,049 Psay NGSEEK("TAF","X2"+SubStr((_cTrb)->TJ_CODBEM,1,3),7,"AllTrim(SubStr(TAF->TAF_NOMNIV,1,40))") Picture "@!"
+			EndIf
+
+			@ Li,091 Psay (_cTrb)->TJ_SERVICO Picture "@!"
+			@ Li,101 Psay NGSEEK("ST4",(_cTrb)->TJ_SERVICO,1,"AllTrim(SubStr(ST4->T4_NOME,1,40))") Picture "@!"
+			@ Li,145 Psay (_cTrb)->TJ_SEQRELA Picture "@!"
+			@ Li,157 Psay (_cTrb)->TJ_DTPPINI Picture "99/99/99"
+			@ Li,174 Psay (_cTrb)->TJ_DTMPINI Picture "99/99/99"
+			@ Li,191 Psay (_cTrb)->TJ_USUARIO Picture "@!"
+			nTotBem++
+			nTotGer ++
+
+			dbSelectArea(_cTrb)
+			dbSkip()
+		EndDo
+
+		NGSOMALI(58)
+		NGSOMALI(58)
+
+		@ Li,000 PSay STR0045+AllTrim(Str(nTotBem)) //"Total de O.S. do Bem...: "
+
+		NGSOMALI(58)
+
+		nTotBem := 0
+		cBem := (_cTrb)->TJ_CODBEM
+
+	End
+
+	If nTotGer > 0
+		NGSOMALI(58)
+		NGSOMALI(58)
+		@ Li,000 PSay STR0046+AllTrim(Str(nTotGer)) //"Total Geral de O.S.....: "
+	EndIf
+
+	Roda(nCntImpr,cRodaTxt,tamanho)
+
+	Set Filter To
+
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	EndIf
+
+	MS_FLUSH()
+
+	RestArea(aAreaTRB)
+
+Return Nil

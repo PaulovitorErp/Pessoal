@@ -1,0 +1,297 @@
+#INCLUDE "PROTHEUS.CH"
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTV001
+Tempo entre O.S.s Corretivas TERMINADAS de um mesmo bem
+em relacao aos parametros
+
+@param De_Data      , Date     , Data início
+@param Ate_Data     , Date     , Ate data
+@param De_Bem       , Caracter , De bem início
+@param [Ate_Bem]    , Caracter , Ate bem fim
+@param De_Ccusto    , Caracter , De centro de custo
+@param [Ate_Ccusto] , Caracter , Ate centro de custo
+@param De_CenTra    , Caracter , De centro de trabalho
+@param [Ate_CenTra] , Caracter , Ate centro de trabalho
+@param Con_Calend   , Caracter , Considera calendario do bem
+@param Con_AntDps   , Caracter , Considera tempo antes/depois
+@param Con_Parada   , Caracter , Considera apenas OS com tempo de parada
+
+@author Inacio Luiz Kolling
+@since 10/11/2008
+@version P12
+@return nResult, Numérico, Quantidade de horas
+/*/
+//------------------------------------------------------------------------------
+Function MNTV001(De_Data,Ate_Data,De_Bem,Ate_Bem,De_Ccusto,Ate_Ccusto,;
+                 De_CenTra,Ate_CenTra,Con_Calend,Con_AntDps,Con_Parada)
+
+	Local aAreaOLD  := GetArea() // Salva área posicionada.
+	Local aVetBem   := {} // Vetor que receberá os bens.
+	Local aParams   := {} // Vetor de parâmetros.
+	Local aWhere    := { '%%', '%%' }
+	Local aFields   := { '%%', '%%' }
+	Local nF        := 0 // Variável de controle.
+	Local nResult   := 0 // Variável de resultado.
+	Local cCodIndic := "MNTV001" // Código da variável.
+	Local cAliasOS  := GetNextAlias() // Alias atual.
+	Local cBem      := "" // Salva o código do bem.
+	Local cCalend   := "" // Salva calendário utilizado.
+	Local cQueryTJ  := ''
+	Local cQueryTS  := ''
+	Local cFieldTJ  := ''
+	Local cFieldTS  := ''
+	Local lMV_HIST  := NGI6MVHIST() // Verifica se salvará histórico.
+	Local lIndica   := IsInCallStack("getMTBF") .Or. IsInCallStack( 'MNTR360' )  //Identifica se foi chamado pelo MTBF
+	Local lAdd      := .T. // Determina se será adicionado o registro.
+	Local lPrimeiro := .F. // Identifica que é o primeiro registro.
+
+	Default De_Bem     := ''
+	Default De_Ccusto  := ''
+	Default De_CenTra  := ''
+	Default Con_Calend := '2'
+	Default Con_AntDps := '2'
+	Default Con_Parada := '2'
+
+	// Realiza tratativas, quando valor não corresponde com o padrão.
+	Con_Calend := If(ValType(Con_Calend)=="N",cValToChar(Con_Calend),Con_Calend)
+	Con_AntDps := If(ValType(Con_AntDps)=="N",cValToChar(Con_AntDps),Con_AntDps)
+	Con_Parada := If(ValType(Con_Parada)=="N",cValToChar(Con_Parada),Con_Parada)
+
+	// Armazena os Parâmetros
+	If lMV_HIST
+		aParams := {}
+		aAdd(aParams, {"DE_DATA"   , De_Data})
+		aAdd(aParams, {"ATE_DATA"  , Ate_Data})
+		aAdd(aParams, {"DE_BEM"    , De_Bem})
+		aAdd(aParams, {"ATE_BEM"   , Ate_Bem})
+		aAdd(aParams, {"DE_CCUSTO" , De_Ccusto})
+		aAdd(aParams, {"ATE_CCUSTO", Ate_Ccusto})
+		aAdd(aParams, {"DE_CENTRA" , De_CenTra})
+		aAdd(aParams, {"ATE_CENTRA", Ate_CenTra})
+		aAdd(aParams, {"CON_CALEND", Con_Calend})
+		aAdd(aParams, {"CON_ANTDPS", Con_AntDps})
+		NGI6PREPPA(aParams, cCodIndic)
+	EndIf
+
+	// Caso os parâmetro de data não sejam informados.
+	If ValType(De_Data) != "D" .or. ValType(Ate_Data) != "D"
+		NGI6PREPVA(cCodIndic, nResult)
+		Return nResult
+	Endif
+
+	If FindFunction( 'KPIDateOS' )
+
+		// Define condição de data para consulta
+		aWhere  := KPIDateOS( { De_Data, Ate_Data }, Con_Parada )
+
+		// Define campos de data para consulta
+		aFields := KPIDtOSFld( { De_Data, Ate_Data }, Con_Parada )
+
+	Else
+
+		cFieldTJ += '%'
+		cFieldTJ += ' CASE '
+		cFieldTJ += 	" WHEN STJ.TJ_DTPRINI <> ' ' THEN STJ.TJ_DTPRINI "
+		cFieldTJ += 	' ELSE STJ.TJ_DTMRINI '
+    	cFieldTJ += ' END AS IS_DATAINI, '
+		cFieldTJ += ' CASE '
+		cFieldTJ += 	" WHEN ( STJ.TJ_HOPRINI <> ' ' AND LTRIM( RTRIM( STJ.TJ_HOPRINI ) ) <> ':' ) THEN STJ.TJ_HOPRINI "
+    	cFieldTJ += 	' ELSE STJ.TJ_HOMRINI '
+		cFieldTJ += ' END AS IS_HORAINI, '
+		cFieldTJ += ' CASE '
+		cFieldTJ += 	" WHEN STJ.TJ_DTPRFIM <> ' ' THEN STJ.TJ_DTPRFIM "
+		cFieldTJ += 	' ELSE STJ.TJ_DTMRFIM '
+		cFieldTJ += ' END AS IS_DATAFIM, '
+    	cFieldTJ += ' CASE '
+		cFieldTJ += 	" WHEN ( STJ.TJ_HOPRFIM <> ' ' AND LTRIM( RTRIM( STJ.TJ_HOPRFIM ) ) <> ':' ) THEN STJ.TJ_HOPRFIM "
+    	cFieldTJ += 	' ELSE STJ.TJ_HOMRFIM
+    	cFieldTJ += ' END AS IS_HORAFIM '
+		cFieldTJ += '%'
+
+		cFieldTS += '%'
+		cFieldTS += ' CASE '
+		cFieldTS += 	" WHEN STS.TS_DTPRINI <> ' ' THEN STS.TS_DTPRINI "
+		cFieldTS += 	' ELSE STS.TS_DTMRINI '
+    	cFieldTS += ' END AS IS_DATAINI, '
+		cFieldTS += ' CASE '
+		cFieldTS += 	" WHEN ( STS.TS_HOPRINI <> ' ' AND LTRIM( RTRIM( STS.TS_HOPRINI ) ) <> ':' ) THEN STS.TS_HOPRINI "
+    	cFieldTS += 	' ELSE STS.TS_HOMRINI '
+		cFieldTS += ' END AS IS_HORAINI, '
+		cFieldTS += ' CASE '
+		cFieldTS += 	" WHEN STS.TS_DTPRFIM <> ' ' THEN STS.TS_DTPRFIM "
+		cFieldTS += 	' ELSE STS.TS_DTMRFIM '
+		cFieldTS += ' END AS IS_DATAFIM, '
+    	cFieldTS += ' CASE '
+		cFieldTS += 	" WHEN ( STS.TS_HOPRFIM <> ' ' AND LTRIM( RTRIM( STS.TS_HOPRFIM ) ) <> ':' ) THEN STS.TS_HOPRFIM "
+    	cFieldTS += 	' ELSE STS.TS_HOMRFIM
+    	cFieldTS += ' END AS IS_HORAFIM '
+		cFieldTS += '%'
+
+		aFields := { cFieldTJ, cFieldTS }
+
+		cQueryTJ += '%'
+		cQueryTS += '%'
+
+		If Con_Parada == '1' // Considera somente com Parada de OS.
+
+			cQueryTJ += " AND STJ.TJ_DTPRINI <> ' ' AND STJ.TJ_HOPRINI <> ' ' "
+			cQueryTJ += " AND STJ.TJ_DTPRFIM <> ' ' AND STJ.TJ_HOPRFIM <> ' ' "
+
+			cQueryTS += " AND STS.TS_DTPRINI <> ' ' AND STS.TS_HOPRINI <> ' ' "
+			cQueryTS += " AND STS.TS_DTPRFIM <> ' ' AND STS.TS_HOPRFIM <> ' ' "
+
+		EndIf
+
+		cQueryTJ += ' AND ( STJ.TJ_DTPRINI >= ' + ValToSQL( De_Data ) + ' OR '
+		cQueryTJ +=	      ' STJ.TJ_DTMRINI >= ' + ValToSQL( De_Data ) + ' ) AND '
+		cQueryTJ +=	     '( STJ.TJ_DTPRFIM <= ' + ValToSQL( Ate_Data ) + ' OR '
+		cQueryTJ +=	      ' STJ.TJ_DTMRFIM <= ' + ValToSQL( Ate_Data ) + ' ) AND '
+
+		cQueryTS += ' AND ( STS.TS_DTPRINI >= ' + ValToSQL( De_Data ) + ' OR '
+		cQueryTS +=	      ' STS.TS_DTMRINI >= ' + ValToSQL( De_Data ) + ' ) AND '
+		cQueryTS +=	     '( STS.TS_DTPRFIM <= ' + ValToSQL( Ate_Data ) + ' OR '
+		cQueryTS +=	      ' STS.TS_DTMRFIM <= ' + ValToSQL( Ate_Data ) + ' ) AND '
+
+		cQueryTJ += '%'
+		cQueryTS += '%'
+
+		aWhere := { cQueryTJ, cQueryTS }
+
+	EndIf
+
+	BeginSQL Alias cAliasOS
+
+		SELECT
+			TJ_CODBEM ,
+			T9_CALENDA,
+			%exp:aFields[1]%
+		FROM
+			%table:STJ% STJ
+		INNER JOIN
+			%table:ST9% ST9 ON
+				STJ.TJ_CODBEM = ST9.T9_CODBEM AND
+				ST9.T9_FILIAL = %xFilial:ST9% AND
+				ST9.%NotDel%
+		WHERE
+			STJ.TJ_FILIAL  = %xFilial:STJ% AND
+			STJ.TJ_TIPOOS  = 'B'           AND
+			STJ.TJ_TERMINO = 'S'           AND
+			STJ.TJ_SITUACA = 'L'           AND
+			STJ.TJ_PLANO   = '000000'      AND
+			( STJ.TJ_CODBEM  BETWEEN %exp:De_Bem%     AND %exp:Ate_Bem%    ) AND
+			( STJ.TJ_CCUSTO  BETWEEN %exp:De_Ccusto%  AND %exp:Ate_Ccusto% ) AND
+			( STJ.TJ_CENTRAB BETWEEN %exp:De_CenTra%  AND %exp:Ate_CenTra% ) AND
+			STJ.%NotDel%
+			%exp:aWhere[1]%
+
+		UNION
+
+			SELECT
+				TS_CODBEM ,
+				T9_CALENDA,
+				%exp:aFields[2]%
+			FROM
+				%table:STS% STS
+			INNER JOIN
+				%table:ST9% ST9 ON
+					STS.TS_CODBEM = ST9.T9_CODBEM AND
+					ST9.T9_FILIAL = %xFilial:ST9% AND
+					ST9.%NotDel%
+			WHERE
+				STS.TS_FILIAL  = %xFilial:STS% AND
+				STS.TS_TIPOOS  = 'B'           AND
+				STS.TS_TERMINO = 'S'           AND
+				STS.TS_SITUACA = 'L'           AND
+				STS.TS_PLANO   = '000000'      AND
+				( STS.TS_CODBEM  BETWEEN %exp:De_Bem%     AND %exp:Ate_Bem%    ) AND
+				( STS.TS_CCUSTO  BETWEEN %exp:De_Ccusto%  AND %exp:Ate_Ccusto% ) AND
+				( STS.TS_CENTRAB BETWEEN %exp:De_CenTra%  AND %exp:Ate_CenTra% ) AND
+				STS.%NotDel%
+				%exp:aWhere[2]%
+
+		ORDER BY
+			TJ_CODBEM ,
+			IS_DATAINI,
+			IS_DATAFIM,
+			IS_HORAINI,
+			IS_HORAFIM
+
+	EndSQL
+
+	NGI6PREPDA(cAliasOS, cCodIndic)
+
+	dbSelectArea(cAliasOS)
+	dbGotop()
+	While (cAliasOS)->(!Eof())
+
+		nPos := Ascan(aVetBem,{|x| x[1] == (cAliasOS)->TJ_CODBEM})
+
+		Aadd(aVetBem,{(cAliasOS)->TJ_CODBEM,If(nPos == 0,1,aVetBem[nPos][2] + 1),;
+					Stod((cAliasOS)->IS_DATAINI),(cAliasOS)->IS_HORAINI,;
+					Stod((cAliasOS)->IS_DATAFIM),(cAliasOS)->IS_HORAFIM,(cAliasOS)->T9_CALENDA})
+		If nPos > 0
+			aVetBem[nPos][2] := aVetBem[nPos][2] + 1
+		EndIf
+	(cAliasOS)->(Dbskip())
+	End
+	(cAliasOS)->(dbCloseArea())
+
+	For nF := 1 To Len(aVetBem) // Percorret todos os registros
+		If cBem <> aVetBem[nF][1] // Verifica se é o mesmo bem
+			lPrimeiro := .T.
+			cBem := aVetBem[nF][1]
+		EndIf
+
+		// Verifica se desconsidera bens com apenas uma O.S.
+		lAdd := IIf(lIndica, aVetBem[nF][2] > 1, .T.)
+
+		If lAdd
+			// Adiciona as datas que serão tratadas.
+			dDtI := aVetBem[nF][3]
+			cHrI := aVetBem[nF][4]
+			dDtF := aVetBem[nF][5]
+			cHrF := aVetBem[nF][6]
+			cCalend := aVetBem[nF][7]
+
+			If lPrimeiro // Caso seja o primeiro registro.
+				dDIAS     := dDtI
+				cHrIni    := cHrI
+				lPrimeiro := .F.
+				If Con_AntDps == '1'  // Considera periodo anterior a primeira OS
+
+					nResult += IIf( Con_Calend == '1', TimeWork( De_Data, '00:00', dDIAS, cHrIni, cCalend ),;
+						( HToM( NGCALCHCAR( De_Data, '00:00', dDIAS, cHrIni ) ) / 60 ) )
+
+				EndIf
+
+			Else
+				//horas entre inicio e fim da manutencao
+				If DtoS(dDIAS)+cHrIni <= Dtos(dDtI)+cHrI
+
+					nResult += IIf( Con_Calend == '1', TimeWork( dDIAS, cHrIni, dDtI, cHrI, cCalend ),;
+						( HToM( NGCALCHCAR( dDIAS, cHrIni, dDtI, cHrI ) ) / 60 ) )
+
+				EndIf
+			EndIf
+			dDIAS  := dDtF // Salva a Data Final
+			cHrIni := cHrF // Salva a Hora Final
+
+			If ((nF+1) > Len(aVetBem)) .Or. ((nF+1) <= Len(aVetBem) .And. cBem <> aVetBem[nF+1][1])
+				If Con_AntDps == '1'  //considera periodo posterior à ultima OS
+
+					nResult += IIf( Con_Calend == '1', TimeWork( dDIAS, cHrIni, Ate_Data, '23:59', cCalend ),;
+						( HToM( NGCALCHCAR( dDIAS, cHrIni, Ate_Data + 1, '00:00' ) ) / 60 ) )
+
+				EndIf
+			EndIf
+
+		EndIf
+
+	Next nF
+
+	NGI6PREPVA(cCodIndic, nResult)
+
+	RestArea(aAreaOLD)
+
+Return nResult

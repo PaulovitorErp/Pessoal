@@ -1,0 +1,475 @@
+#INCLUDE 'MNTA250.ch'
+#INCLUDE 'TOTVS.CH'
+#INCLUDE 'FWMVCDEF.CH'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA250
+Programa de Custo por Fornecedor
+
+@type function
+@author cristiano.kair
+@since 12/05/2020
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA250()
+
+	Local oBrowse
+
+	//--------------------------------------------------------------
+	// Necessário para adiconar opção PNEU
+	//--------------------------------------------------------------
+	Private lGFrota := MNTA250FR()
+	Private aRotina := MenuDef( lGFrota )
+
+	//--------------------------------------------------------------
+	// Variáveis usadas em funções de validação e no MSDIALOG
+	//--------------------------------------------------------------
+	Private lCusto := .T.
+	Private cCadastro := OemtoAnsi( STR0006 ) // 'Custo por Fornecedor'
+	Private cFornec, cLoja, cServic, cEspeci
+	Private aCOLStra := {}
+
+    // Instancia a Classe FWMBrowse
+    oBrowse := FWMBrowse():New()
+    oBrowse:SetAlias( 'TPO' )
+    oBrowse:SetDescription( STR0006 ) // 'Custo por Fornecedor'
+	oBrowse:Activate()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC)
+
+@type function
+@author cristiano.kair
+@since 12/05/2020
+
+@return array, array com os itens do menu
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef( lGFrota )
+
+    Local aRotina := {}
+
+	Default lGFrota := If( Select( 'SX2' ) > 0, MNTA250FR(), .F.)
+
+	ADD OPTION aRotina TITLE STR0001 Action 'AxPesqui'        OPERATION 1 ACCESS 0 // 'Pesquisar'
+    ADD OPTION aRotina TITLE STR0002 ACTION 'VIEWDEF.MNTA250' OPERATION 2 ACCESS 0 // 'Visualizar'
+    ADD OPTION aRotina TITLE STR0003 ACTION 'VIEWDEF.MNTA250' OPERATION 3 ACCESS 0 // 'Incluir'
+    ADD OPTION aRotina TITLE STR0004 ACTION 'VIEWDEF.MNTA250' OPERATION 4 ACCESS 0 // 'Alterar'
+    ADD OPTION aRotina TITLE STR0005 ACTION 'VIEWDEF.MNTA250' OPERATION 5 ACCESS 0 // 'Excluir'
+
+	If lGFrota
+		ADD OPTION aRotina TITLE STR0007 ACTION 'MNT250PNEU()' OPERATION 6 ACCESS 0 // 'Pneu'
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Modelo de dados da rotina
+
+@type function
+@author cristiano.kair
+@since 12/05/2020
+
+@return objeto, objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+    Local oModel
+    Local oStruTPO := FWFormStruct( 1, 'TPO' )
+	Local bCommit := {|oModel| FWFormCommit( oModel, , , , {|oModel| PosCommit(oModel) } ) } // Gravação do formulario
+
+    oModel := MPFormModel():New( 'MNTA250', /*bPre*/, /*bPost*/, bCommit, /*bCancel*/)
+    oModel:SetDescription( STR0006 )// 'Custo por Fornecedor'
+    oModel:AddFields( 'MNTA250_TPO', /*cOwner*/, oStruTPO)
+    oModel:GetModel( 'MNTA250_TPO' ):SetDescription( STR0006 )// 'Custo por Fornecedor'
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Interface da rotina
+
+@type function
+@author cristiano.kair
+@since 12/05/2020
+
+@return objeto, objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+    Local oModel := FWLoadModel( 'MNTA250' )
+    Local oView
+    Local oStrTPO := FWFormStruct( 2, 'TPO' )
+
+    oView := FWFormView():New()
+    oView:SetModel( oModel )
+
+    oView:AddField( 'MNTA250_TPO', oStrTPO, /*cLinkID*/ )
+    oView:CreateHorizontalBox( 'BOX_MNTA250_TPO', 100)
+    oView:SetOwnerView( 'MNTA250_TPO', 'BOX_MNTA250_TPO' )
+
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} PosCommit
+Grava todas as informações
+
+@type function
+@version P12
+@author cristiano.kair
+@since 15/05/2020
+
+@param oModel, Objeto, objeto do Modelo de Dados
+@return lRet, lógico
+/*/
+//------------------------------------------------------------------------------
+Static Function PosCommit( oModel )
+
+	Local lRet       := .T.
+	Local cFornec    := oModel:GetValue('MNTA250_TPO','TPO_FORNEC')
+	Local cLoja      := oModel:GetValue('MNTA250_TPO','TPO_LOJA')
+	Local cServic    := oModel:GetValue('MNTA250_TPO','TPO_SERVIC')
+	Local cEspeci    := oModel:GetValue('MNTA250_TPO','TPO_ESPECI')
+	Local nOperation := oModel:GetOperation() // Operação de ação sobre o Modelo
+
+	// Exclusao do custo das medidas para o Fornecedor
+	If lGFrota .And. nOperation == MODEL_OPERATION_DELETE
+		dbSelectArea( 'TRA' )
+		dbSetOrder( 01 )
+		dbSeek( xFilial( 'TRA' ) + cFornec + cLoja + cServic + cEspeci )
+		While !Eof() .And. TRA->TRA_FILIAL == xFilial( 'TRA' ) .And. TRA->TRA_FORNEC == cFornec .And.;
+			TRA->TRA_LOJA == cLoja .And. TRA->TRA_SERVIC == cServic .And. TRA->TRA_ESPECI == cEspeci
+			RecLock( 'TRA', .F. )
+			TRA->( dbDelete() )
+			TRA->( MsunLock() )
+			TRA->( dbSkip() )
+   		End
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG250FORN
+Função que valida se o fornecedor informado é valido.
+
+@type function
+@author cristiano.kair
+@since 13/05/2020
+
+@param cFornec, Caracter, Codigo do fornecedor a ser validado.
+@param cLoja, Caractet, Codigo da loja a ser validado.
+
+@return lRet, Lógico, valor verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function NG250FORN( cFornec, cLoja )
+
+	Local lRet := .F.
+
+	Default cFornec := ''
+	Default cLoja := ''
+
+	If !Empty( cFornec ) .And. !Empty( cLoja )
+		lRet := EXISTCPO( 'SA2', Alltrim( cFornec+cLoja ))
+	ElseIf !Empty( cFornec ) .And. Empty( cLoja )
+		dbSelectArea( 'SA2' )
+		dbSetOrder(1)
+		If dbSeek( xFilial( 'SA2' ) + cFornec )
+			While Alltrim( SA2->A2_COD ) == Alltrim( cFornec ) .And. !lRet
+				If dbSeek( xFilial( 'SA2' )+cFornec+SA2->A2_LOJA ) .And. SA2->A2_MSBLQL <> '1'
+					lRet := EXISTCPO( 'SA2', Alltrim( cFornec+SA2->A2_LOJA ))
+				EndIf
+				dbSkip()
+			End
+		EndIf
+		IIF(!lRet,lRet := EXISTCPO( 'SA2', Alltrim( cFornec+SA2->A2_LOJA )),)
+	ElseIf Empty( cFornec ) .And. !Empty( cLoja )
+		lRet := .T.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA250FR
+Verifica se usa frotas.
+
+@type function
+@author cristiano.kair
+@since 13/05/2020
+
+@return Lógico, Define se o ambiente é frotas.
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA250FR()
+
+	Local lRel12133 := GetRpoRelease() >= '12.1.033'
+	// A partir do release 12.1.33, o parâmetro MV_NGMNTFR será descontinuado
+	// Haverá modulo específico para a gestão de Frotas(95) no padrão do produto
+	Local lRetS     := IIf( lRel12133, MNTFrotas(), GetNewPar( 'MV_NGMNTFR', 'N' ) == 'S' ) .And. GetNewPar( 'MV_NGPNEUS', 'N' ) == 'S'
+	Local vRetS     := {}
+
+	If !lRel12133 .And. lRetS
+
+		If lRetS
+			vRetS := NGCADICBASE( 'TRA_FILIAL', 'A', 'TRA' )
+			lRetS := If( !vRetS[1], .F., .T.)
+		Endif
+
+		If lRetS
+		lRetS := If( NGRETORDEM( 'TRA', 'TRA_FILIAL+TRA_FORNEC+TRA_LOJA+TRA_SERVIC+TRA_ESPECI+TRA_MEDIDA+TRA_BANDA', .T.) = 0, .F., .T. )
+		Endif
+
+		If lRetS
+			vRetS := NGCADICBASE( 'TQT_FILIAL', 'A', 'TQT' )
+			lRetS := If( !vRetS[1], .F., .T.)
+		Endif
+
+		If lRetS
+			lRetS := If( NGRETORDEM( 'TQT', 'TQT_FILIAL + TQT_MEDIDA', .T.) = 0, .F., .T.)
+		Endif
+
+	EndIf
+
+Return lRetS
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT250PNEU
+Custo das Medidas dos pneus.
+
+@type function
+@author cristiano.kair
+@since 13/05/2020
+
+@return lógico, sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MNT250PNEU()
+
+	Local aArea := GetArea()
+	Local nOpca := 0
+	Local aNoFields := {}
+	Local x, nX
+	Local oGet
+	Local nAlt := 0.15
+	Private aTELA[0][0],aGETS[0],aHeader[0],aCOLS[0]
+	Private aSize := MsAdvSize(, .F., 430), aObjects := {}
+
+	Aadd(aObjects,{040,040, .T., .T.})
+	Aadd(aObjects,{050,050, .T., .T.})
+	Aadd(aObjects,{090,090, .T., .T.})
+	Aadd(aObjects,{100,100, .T., .T.})
+	aInfo := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0}
+	aPosObj := MsObjSize( aInfo, aObjects, .F.)
+	aPos1 := {15,1,78,315}
+
+	cFornec  := TPO->TPO_FORNEC
+	cLoja    := TPO->TPO_LOJA
+	cNomeFor := NGSEEK( 'SA2', TPO->TPO_FORNEC+TPO->TPO_LOJA, 1, 'SUBSTR(A2_NOME,1,40)' )
+	cServic  := TPO->TPO_SERVIC
+	cNomeSer := NGSEEK( 'ST4', TPO->TPO_SERVIC, 1, 'SUBSTR(T4_NOME,1,40)' )
+	cEspeci  := TPO->TPO_ESPECI
+	cNomeEsp := NGSEEK( 'ST0', TPO->TPO_ESPECI, 1, 'SUBSTR(T0_NOME,1,40)' )
+
+	aAdd(aNoFields, 'TRA_FORNEC' )
+	aAdd(aNoFields, 'TRA_LOJA' )
+	aAdd(aNoFields, 'TRA_SERVIC' )
+	aAdd(aNoFields, 'TRA_ESPECI' )
+	cQuery := "SELECT * FROM "+RetSqlName("TRA")+" TRA WHERE TRA.TRA_FILIAL = '"+xFilial("TRA")+"' AND "
+	cQuery += "TRA.TRA_FORNEC = '"+TPO->TPO_FORNEC+"' AND "
+	cQuery += "TRA.TRA_LOJA = '"+TPO->TPO_LOJA+"' AND "
+	cQuery += "TRA.TRA_SERVIC = '"+TPO->TPO_SERVIC+"' AND "
+	cQuery += "TRA.TRA_ESPECI = '"+TPO->TPO_ESPECI+"' AND "
+	cQuery += "TRA.D_E_L_E_T_ = ' '"
+	FillGetDados( 4, 'TRA', 1, xFilial( 'TRA' )+TPO->TPO_FORNEC+TPO->TPO_LOJA+TPO->TPO_SERVIC+TPO->TPO_ESPECI,;
+				{|| 'TRA_FILIAL + TRA_FORNEC + TRA_LOJA + TRA_SERVIC + TRA_ESPECI'},;
+				{|| .T.},aNoFields,,,cQuery)
+
+	If Empty(aCols)
+	aCols := BlankGetd(aHeader)
+	EndIf
+
+	nMED := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == 'TRA_MEDIDA'})
+	nBAN := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == 'TRA_BANDA'})
+	nCTO := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == 'TRA_CUSTO'})
+	nDEM := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == 'TRA_DESMED'})
+
+	// Carrega o campo virtual da descricao da medida
+	For nX := 1 to Len(aCols)
+		aCols[nX][nDEM] := NGSEEK( 'TQT', aCols[nX][nMED], 1, 'TQT_DESMED' )
+	Next
+
+	nOpcx := 3
+	aCOLStra := aClone(aCOLS)
+
+	DEFINE MSDIALOG oDLG5 TITLE Ccadastro From aSize[7],0 TO aSize[6],aSize[5] OF oMainWnd PIXEL
+	@ 020,020 MSPANEL oPai 	 OF oDlg5
+	oPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	@ 020,020 MSPANEL oPanel OF oPai
+
+	@ 0.6 ,.8  Say OemtoAnsi( STR0017 ) OF oPai // 'Fornecedor'
+	@ 0.6 , 5  MsGet cFornec Size 30,10 When .F. OF oPai
+	@ 0.6 ,10  Say OemToAnsi( STR0018 ) OF oPai // 'Nome Fornec.'
+	@ 0.6 ,15  MsGet cNomeFor Size 140,10 When .F. OF oPai
+	@ 0.6 ,34  Say OemToAnsi( STR0019 ) OF oPai // 'Loja'
+	@ 0.6 ,36  MsGet cLoja Size 15,10 When .F. OF oPai
+
+	@ 1.6 ,.8  Say OemToAnsi( STR0020 ) OF oPai // 'Serviço'
+	@ 1.6 ,5   MsGet cServic Size 30,10 When .F. OF oPai
+	@ 1.6 ,10  Say OemToAnsi( STR0021 ) OF oPai // 'Nome Serviço'
+	@ 1.6 ,15  MsGet cNomeSer Size 140,10 When .F. OF oPai
+
+	@ 2.6 ,.8  Say OemToAnsi( STR0022 ) OF oPai // 'Espec.'
+	@ 2.6 ,5   MsGet cEspeci Size 30,10 When .F. OF oPai
+	@ 2.6 ,10  Say OemToAnsi( STR0023 ) OF oPai // 'Nome Espec.'
+	@ 2.6 ,15  MsGet cNomeEsp Size 140,10 When .F. OF oPai
+
+	oGet := MSGetDados():New(aSize[6]*nAlt, aPosObj[4,2], aPosObj[4,3], aPosObj[4,4], nOpcx, 'MNTA250LIN()', 'MNTA250ALL()',,.T.,,,,3000,,,,,oPai)
+	oGet:oBrowse:Align := CONTROL_ALIGN_BOTTOM
+
+	ACTIVATE MSDIALOG oDlg5 ON INIT EnchoiceBar(oDlg5,{||nOpca:=1,If(!MNTA250ALL(),nOpca := 0,oDlg5:End())},{||oDlg5:End()})
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA250LIN
+Consiste para nao permitir registros duplicados
+
+@type function
+@author cristiano.kair
+@since 13/05/2020
+
+@return lret, lógico, retorna falso se o registro já existe.
+/*/
+//---------------------------------------------------------------------
+Function MNTA250LIN()
+
+	Local lRet := .T.
+	Local nQtd := 0
+
+	cMedida := aCols[n][nMED]
+	cBanda  := aCols[n][nBAN]
+
+	aEVAL(aCols,{|x|If(x[nMED]+x[nBAN] == cMedida+cBanda,nQtd++,Nil)})
+
+	If nQtd > 1 .And. !Empty(cMedida)
+		Help( ' ',1,'JAEXISTINF' )
+		lRet := .F.
+	Endif
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA250ALL
+Grava dados na TRA.
+
+@type function
+@author cristiano.kair
+@since 13/05/2020
+
+@return lógico, valor sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MNTA250ALL()
+
+	Local nI := 0,nInd,  nQTD := 0
+	Local lRet := .T.
+
+	If !isincallstack( 'MNT250PNEU' )
+		If !Empty( M->TPO_FORNEC ) .And. Empty( M->TPO_LOJA )
+			lRet := .F.
+		ElseIf !Empty( M->TPO_LOJA ) .And. Empty( M->TPO_FORNEC )
+			lRet := .F.
+		EndIf
+	EndIf
+
+	If !lRet
+		ShowHelpDlg( STR0026, {STR0024}, 1, {STR0025}, 1)
+		Return lRet
+	EndIf
+
+	// Valida chave duplicada
+	For nI:=1 To Len(aCols)
+		If !aCOLS[nI][Len(aCOLS[nI])]
+
+		If Empty(aCOLS[nI][nMED]) .And. (!Empty(aCOLS[nI][nBAN]) .Or. !Empty(aCOLS[nI][nCTO]))
+			Help( ' ',1,'NGATENCAO',,STR0014+Chr(13)+Chr(10)+' '+ STR0015,3,1) // 'Campo obrigatório não informado.'#'Informe o Código da Medida.'
+			Return .F.
+		EndIf
+
+		nQTD := 0
+		cMedida := aCols[nI][nMED]
+		cBanda  := aCols[nI][nBAN]
+
+		aEVAL(aCOLS,{|x|If(x[nMED] == cMedida .And. x[nBAN] == cBanda,nQTD++,Nil)})
+		If nQTD > 1 .And. !Empty(cMedida)
+				Help( ' ',1,'JAGRAVADO',,STR0016+' '+Alltrim( Str(nI,3)),3,1) // 'Item'
+				Return .F.
+			EndIf
+		EndIf
+	Next
+
+	// Deleta registros que foram alterados
+	For nInd := 1 To Len( aCOLStra )
+		cCondTRA := aCOLStra[nInd,nMED]+aCOLStra[nInd,nBAN]
+		nPosNum  := aSCAN( aCols, {|x| x[nMED]+X[nBAN] == cCondTRA})
+		If nPosNum == 0
+			dbSelectArea( 'TRA' )
+			dbSetOrder(1)
+			If dbSeek( xFilial( 'TRA' )+cFornec+cLoja+cServic+cEspeci+cCondTRA)
+				RecLock( 'TRA', .F., .T.)
+				dbDelete()
+				MsunLock( 'TRA' )
+			Endif
+		Endif
+	Next nInd
+
+	If Len(aCols) > 0
+
+		For nI := 1 to Len(aCols)
+			If atail(aCols[nI])
+				dbSelectArea( 'TRA' )
+				dbsetOrder(01)
+				If dbSeek( xFilial( 'TRA' )+cFornec+cLoja+cServic+cEspeci+aCOLS[nI][nMED]+aCOLS[nI][nBAN])
+					RecLock( 'TRA', .F.)
+					DbDelete()
+					MsUnLock( 'TRA' )
+				Endif
+			Else
+				If !Empty(aCOLS[nI][nMED])
+					dbSelectArea( 'TRA' )
+					dbsetOrder(01)
+					If dbSeek( xFilial( 'TRA' )+cFornec+cLoja+cServic+cEspeci+aCOLS[nI][nMED]+aCOLS[nI][nBAN])
+						RecLock( 'TRA', .F.)
+					Else
+						RecLock( 'TRA', .T.)
+						TRA->TRA_FILIAL := xFilial( 'TRA' )
+						TRA->TRA_FORNEC := cFornec
+						TRA->TRA_LOJA   := cLoja
+						TRA->TRA_SERVIC := cServic
+						TRA->TRA_ESPECI := cEspeci
+						TRA->TRA_MEDIDA := aCOLS[nI][nMED]
+						TRA->TRA_BANDA  := aCOLS[nI][nBAN]
+					Endif
+
+					TRA->TRA_CUSTO  := aCOLS[nI][nCTO]
+					MsUnLock( 'TRA' )
+				Endif
+			Endif
+		Next
+
+	Endif
+
+Return .T.

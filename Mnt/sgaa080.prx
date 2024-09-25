@@ -1,0 +1,880 @@
+#Include "Sgaa080.ch"
+#Include "Protheus.ch"
+#Define _nVERSAO 2
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAA080
+Programa para avaliacao da Demanda.
+TA5 - Resultado da Avaliacao
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+
+@sample  SGAA080()
+@return  Nil, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function SGAA080()
+
+	// Salva area de trabalho.
+	Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( _nVERSAO )
+
+	// Define Variaveis Private
+	Private cCadastro := OemToAnsi( STR0001 ) // "Avaliacao da Legislacao"
+	Private aRotina   := MenuDef()
+
+	// Endereca a funcao de BROWSE
+	dbSelectArea( "TA5" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TA5" ) )
+
+	mBrowse( 6, 1, 22, 75, "TA5" )
+
+	dbSelectArea( "TA5" )
+	dbSetOrder( 1 )
+
+	// Restaura Area de trabalho.
+	RestArea( aOldArea )
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SG080PROC
+Programa para processamento da avaliacao da demanda
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+@sample  Sg080Proc( "TA2", 2, 3 )
+
+@param   cAlias, Caracter, Alias da tabela utilizada
+@param   nRecno, Numérico, Número da posição do registro
+@param   nOpcx , Numérico, Opção selecionada no menu
+
+@return  Nil, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function Sg080Proc( cAlias, nRecno, nOpcx )
+
+	Local oDlg
+	Local oMenu
+	Local oTempTRB
+	Local oTempTRB1
+	Local oTempTRB2
+	Local nOpc     := 0
+	Local cTitulo  := cCadastro
+	Local oFont    := TFont():New( "Tahoma", 10, 12, , .T., , .F., , .F., .F. )
+	Local aOldArea := GetArea()
+
+	Private oList
+	Private aHeader
+	Private nItens
+	Private oDtEmis
+	Private oTema
+	Private oTipo
+	Private oTotal
+	Private oMark
+	Private dDtAtual := dDataBase
+	Private n        := 1
+	Private nTotal   := 0
+	Private cTema    := Space( Len( TA0->TA0_EMENTA ) )
+	Private cTipo    := Space( 01 )
+	Private dDtEmis  := cTod( "  /  /  " )
+	Private aCols    := {}
+	Private aMark    := {}
+	Private lInverte := .F.
+	Private cMarca   := GetMark()
+	Private lQuery   := .T.
+	Private cAval    := ""
+	Private cDemanda := Space( Len( TA0->TA0_CODLEG ) )
+	Private aVETINR  := {}
+	Private cTRBX    := GetNextAlias()
+	Private cTRBA    := GetNextAlias()
+	Private cTRB     := GetNextAlias()
+	Private aSize    := MsAdvSize( , .F., 430 )
+	Private aObjects := {}
+
+	aAdd( aObjects, { 100, 100, .T., .T. } )
+	aInfo   := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	aPosObj := MsObjSize( aInfo, aObjects, .T. )
+
+	If nOpcx != 3
+		cDemanda := TA5->TA5_CODLEG
+		TA0->(dbSeek( xFilial( "TA0" ) + cDemanda ))
+		cTema    := TA0->TA0_EMENTA
+		dDtEmis  := TA0->TA0_DTEMIS
+		cTipo    := TA0->TA0_ORIGEM
+		If cTipo == "1"
+			cTipo := STR0019 //"FEDERAL"
+		ElseIf cTipo == "2"
+			cTipo := STR0020 //"ESTADUAL"
+		ElseIf cTipo == "3"
+			cTipo := STR0021 //"MUNICIPAL"
+		ElseIf cTipo == "4"
+			cTipo := STR0022 //"ACIONISTA"
+		ElseIf cTipo == "5"
+			cTipo := STR0023 //"COMUNIDADE"
+		ElseIf cTipo == "6"
+			cTipo := STR0024 //"OUTROS"
+		EndIf
+		nTotal   := Val( TA5->TA5_RESULT )
+		dDtAtual := TA5->TA5_DTRESU
+	EndIf
+
+	If !Sg080Get( nOpcx )
+		Return .F.
+	EndIf
+
+	aDbf := {}
+	aAdd( aDBF, { "TRB_CODAVA", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_CODIGO", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_PESO", "N", 03, 0 } )
+	aAdd( aDBF, { "TRB_RESULT", "N", 09, 2 } )
+
+	oTempTRB := FWTemporaryTable():New( cTRBA, aDBF )
+	oTempTRB:AddIndex( "1", { "TRB_CODAVA", "TRB_CODIGO" } )
+	oTempTRB:Create()
+
+	aDBF := {}
+	aAdd( aDBF, { "TRB_OK", "C", 02, 0 } )
+	aAdd( aDBF, { "TRB_CODAVA", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_CODIGO", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_DESCRI", "C", 40, 0 } )
+	aAdd( aDBF, { "TRB_PESO", "N", 03, 0 } )
+
+	oTempTRB1 := FWTemporaryTable():New( cTRB, aDBF )
+	oTempTRB1:AddIndex( "1", { "TRB_CODAVA", "TRB_CODIGO" } )
+	oTempTRB1:Create()
+
+	aDBF := {}
+	aAdd( aDbf, { "TRB_OK", "C", 02, 0 } )
+	aAdd( aDBF, { "TRB_CODAVA", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_CODIGO", "C", 03, 0 } )
+	aAdd( aDBF, { "TRB_DESCRI", "C", 40, 0 } )
+	aAdd( aDBF, { "TRB_PESO", "N", 03, 0 } )
+	aAdd( aDBF, { "TRB_RECNO", "N", 03, 0 } )
+
+	oTempTRB2 := FWTemporaryTable():New( cTRBX, aDBF )
+	oTempTRB2:AddIndex( "1", { "TRB_CODIGO", "TRB_CODAVA" } )
+	oTempTRB2:Create()
+
+	aAdd( aMark, { "TRB_OK", NIL, " ", } )
+	aAdd( aMark, { "TRB_CODIGO", NIL, STR0025, } ) //"Codigo"
+	aAdd( aMark, { "TRB_DESCRI", NIL, STR0026, } ) //"Respostas"
+	aAdd( aMark, { "TRB_PESO", NIL, STR0027, } ) //"Peso %"
+	aAdd( aMark, { "TRB_RECNO", NIL, "Recno", } ) //"Recno"
+
+	Define MsDialog oDlg Title cTitulo From aSize[7], 0 To aSize[6], aSize[5] Of oMainWnd PIXEL
+
+	oPnlPai := TPanel():New( 00, 00, , oDlg, , , , , , aSize[5], aSize[6], .F., .F. )
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlTop := TPanel():New( 00, 00, , oPnlPai, , , , , , aSize[5], 53, .F., .F. )
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+
+	@ 10, 008 Say OemToAnsi( STR0030 ) Size 37, 7 Of oPnlTop Pixel Color CLR_HBLUE   //"Requisito"
+	@ 08, 047 MsGet cDemanda Size 52, 08 Of oPnlTop Pixel Valid ExistCpo( "TA0", cDemanda ) .And. Sg080Dem( cDemanda );
+	When Inclui F3 "TA0" HASBUTTON
+
+	@ 22, 008 Say OemToAnsi( STR0008 ) Size 37, 7 Of oPnlTop Pixel //"Tema"
+	@ 20, 047 MsGet oTema Var cTema Size 260, 08 Of oPnlTop Pixel When .F.
+
+	@ 33, 008 Say OemToAnsi( STR0009 ) Size 37, 7 Of oPnlTop Pixel //"Dt. Emissao"
+	@ 31, 047 MsGet oDtEmis Var dDtEmis Size 45, 06 Of oPnlTop Pixel Picture "99/99/9999" When .F. HASBUTTON
+
+	@ 33, 100 Say OemToAnsi( STR0031 ) Size 37, 7 Of oPnlTop Pixel //"Tipo Requisito"
+	@ 31, 139 MsGet oTipo Var cTipo Size 45, 09 Of oPnlTop Pixel When .F.
+
+	@ 33, 192 Say OemToAnsi( STR0011 ) Size 37, 7 Of oPnlTop Pixel //"Data Avaliacao"
+	@ 31, 231 MsGet dDtAtual Size 45, 09 Of oPnlTop Pixel When .F. HASBUTTON
+
+	oPnlAva := TPanel():New( 00, 00, , oPnlPai, , , , , CLR_HGRAY, aSize[5], 17, .F., .F. )
+		oPnlAva:Align := CONTROL_ALIGN_TOP
+
+	@ 05, 008 Say OemToAnsi( STR0012 ) Size 63, 7 Of oPnlAva PIXEL FONT oFont COLOR RGB( 0, 57, 106 ) //"Avaliacoes"
+
+	oPnlLis := TPanel():New( 00, 00, , oPnlPai, , , , , , aSize[5], aSize[6]/6, .F., .F. )
+		oPnlLis:Align := CONTROL_ALIGN_TOP
+
+	@ 00, 008 ListBox oList Fields aCols[n][1], aCols[n][2], aCols[n][3], aCols[n][4], aCols[n][5] ;
+	Headers STR0013, STR0014, STR0015, STR0016, "Recno" Of oPnlLis Size 316, 63 Pixel; //"Avaliacao"###"Descricao"###"Peso"###"Resultado"
+	On Change ( Sg080GraTrb() .And. Sg080LinOk( n, nOpcx ) )
+
+	oList:bGotop    := { || n := 1 }
+	oList:bGoBottom := { || n := eval( oList:bLogicLen ) }
+	oList:bSkip     := { | nwant, nold | nold := n, n += nwant,;
+						 n := max( 1, min( n, eval( oList:bLogicLen ) ) ),;
+						 n - nOld }
+	oList:bLogicLen := { || Len( aCols ) }
+	oList:cAlias    := "Array"
+	oList:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlTot := TPanel():New( 00, 00, , oPnlPai, , , , , , aSize[5], 20, .F., .F. )
+		oPnlTot:Align := CONTROL_ALIGN_TOP
+	oPnlChi := TPanel():New( 00, 00, , oPnlTot, , , , , , 65, 20, .F., .F. )
+		oPnlChi:Align := CONTROL_ALIGN_RIGHT
+	@ 07,00 Say OemToAnsi( STR0017 ) Size 37, 7 Of oPnlChi Pixel //Color CLR_HRED //"Total"
+	@ 05,19 MsGet oTotal Var nTotal Size 45, 08 Of oPnlChi Pixel Picture "@E 999,999.99" When .F. HASBUTTON
+
+	oPnlOpc := TPanel():New( 00, 00, , oPnlPai, , , , , CLR_HGRAY, aSize[5], 17, .F., .F. )
+		oPnlOpc:Align := CONTROL_ALIGN_TOP
+	@ 05, 008 Say OemToAnsi( STR0018 ) Size 57, 7 Of oPnlOpc Pixel Font oFont Color RGB( 0, 57, 106 )//"Opcoes"
+
+	oPnlMar := TPanel():New( 00, 00, , oPnlPai, , , , , , aSize[5], 200, .F., .F. )
+		oPnlMar:Align := CONTROL_ALIGN_ALLCLIENT
+	oMark := MsSelect():New( cTRBX, "TRB_OK", , aMark, @lInverte, @cMarca, {0, 8, 223, 324}, , , oPnlMar )
+	oMark:oBrowse:lHasMark = .F.
+	oMark:oBrowse:lCanAllMark := .F.
+	oMark:bMark := { || Sg080ValMark( cMarca ) }
+	oMark:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	If Str( nOpcx, 1 ) $ "2/5"
+		oMark:oBrowse:lReadOnly := .T.
+	EndIf
+
+	If Str( nOpcx, 1 ) $ "2/4/5"
+		Sg080TRB()
+		Sg080Cols()
+		nTotal := Sg080Tot()
+	EndIf
+
+	NGPOPUP( aSMenu, @oMenu )
+	oPnlPai:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oPnlPai ) }
+
+	Activate MsDialog oDlg On Init EnchoiceBar( oDlg, { || IIf( !Sg080ChkGra( nOpcx ), nOpc := 0, ( oDlg:End(), nOpc := 1 ) ) }, { ||oDlg:End() } ) Centered
+
+	If nOpc == 1
+		Sg080Grava( nOpcx )
+	EndIf
+
+	RestArea( aOldArea )
+
+	oTempTRB:Delete()
+	oTempTRB1:Delete()
+	oTempTRB2:Delete()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGA080DEM
+Gatilho para trazer o tema e a data de emissao da demanda
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+@sample  Sg080Dem(TA5->TA5_CODLEG)
+
+@param   cDemanda, Caracter, Campo de código do legislação
+@return  Nil, Sempre nulo
+/*/
+//-------------------------------------------------------------------
+Function Sg080Dem( cDemanda )
+
+	dbSelectArea( "TA5" )
+	dbSetOrder( 2 )
+	If dbSeek( xFilial( "TA5" ) + cDemanda )
+		MsgStop( STR0032 + cDemanda, "Atenção" )
+		Return .F.
+	EndIf
+
+	TA0->(dbSeek( xFilial( "TA0" ) + cDemanda ))
+	cTema   := TA0->TA0_EMENTA
+	dDtEmis := TA0->TA0_DTEMIS
+	cTipo   := TA0->TA0_ORIGEM
+	If cTipo == "1"
+		cTipo := STR0019 //"FEDERAL"
+	ElseIf cTipo == "2"
+		cTipo := STR0020 //"ESTADUAL"
+	ElseIf cTipo == "3"
+		cTipo := STR0021 //"MUNICIPAL"
+	ElseIf cTipo == "4"
+		cTipo := STR0022 //"ACIONISTA"
+	ElseIf cTipo == "5"
+		cTipo := STR0023 //"COMUNIDADE"
+	ElseIf cTipo == "6"
+		cTipo := STR0024 //"OUTROS"
+	EndIf
+	oTema:Refresh()
+	oDtEmis:Refresh()
+	oTipo:Refresh()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080Get
+Monta array acols e aHeader para mostrar no GetDados.
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+@sample  Sg080Get(3)
+
+@param   nOpcx, Caracter, Opção de escolha do menu
+@return  lRet, Retorna falso caso não exista critério de avaliação
+/*/
+//-------------------------------------------------------------------
+Function Sg080Get( nOpcx )
+
+	Local nCnt     := 0
+	Local lRet     := .T.
+	Local nPeso    := 0
+	Local aOldArea := GetArea()
+
+	dbSelectArea( "TA1" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TA1" ) )
+	While TA1->(!Eof()) .And. xFilial( "TA1" ) == TA1->TA1_FILIAL
+
+		nCnt++
+		nPeso := 0
+		If nCnt == 1
+			cAval := TA1->TA1_CODAVA
+		EndIf
+		If nOpcx != 3
+			dbSelectArea( "TAC" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TAC" ) + cDemanda + TA1->TA1_CODAVA + DToS( dDtAtual ) )
+				nPeso := TAC->TAC_RESULT
+			EndIf
+		EndIf
+		aAdd( aCols, { TA1->TA1_CODAVA, TA1->TA1_DESCRI, TA1->TA1_PESO, nPeso, TA1->(RECNO()) } )
+
+		dbSelectArea( "TA1" )
+		dbSkip()
+	End
+
+	If Len( aCols ) == 0
+		ApMsgStop( STR0033 ) //"Nao sera possivel avaliar os Requisitos sem Criterios de Avaliacao"
+		lRet := .F.
+	EndIf
+	RestArea( aOldArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080Mark
+Monta um MarkBrowse com as respostas das avaliacoes.
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+@sample  Sg080Mark( "001", "001" )
+
+@param   cCodigo, Caracter, Código da opção
+@param   cCodAva, Caracter, Código da avaliação
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080Mark( cCodigo, cCodAva )
+
+	Local cCheck   := ""
+	Local aOldArea := GetArea()
+
+	dbSelectArea( cTRBX )
+	ZAP
+
+	dbSelectArea( "TA2" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TA2" ) + cAval )
+	While !Eof() .And. xFilial( "TA2" ) == TA2->TA2_FILIAL .And.;
+		TA2->TA2_CODAVA == cAval
+
+		dbSelectArea( cTRBX )
+		dbSetOrder( 1 )
+		If !dbSeek( TA2->TA2_CODOPC )
+			dbSelectArea( cTRB )
+			dbSetOrder( 1 )
+			If dbSeek( TA2->TA2_CODAVA + TA2->TA2_CODOPC )
+				cCheck := (cTRB)->TRB_OK
+			Else
+				cCheck := ""
+			EndIf
+			dbSelectArea( cTRBX )
+			RecLock( cTRBX, .T. )
+				(cTRBX)->TRB_OK      := cCheck
+				(cTRBX)->TRB_CODAVA  := TA2->TA2_CODAVA
+				(cTRBX)->TRB_CODIGO  := TA2->TA2_CODOPC
+				(cTRBX)->TRB_DESCRI  := TA2->TA2_OPCAO
+				(cTRBX)->TRB_PESO    := TA2->TA2_PESO
+				(cTRBX)->TRB_RECNO   := TA2->(RECNO())
+			MsUnLock( cTRBX )
+		EndIf
+
+		dbSelectArea( "TA2" )
+		dbSkip()
+	End
+
+	(cTRBX)->(dbGoTop())
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080LinOk
+Monta o MarkBrowse de acordo com a selecao do getdados.
+
+@type function
+@author  Thiago Olis Machado
+@since   15/10/2003
+@sample  Sg080LinOk( 1, 3 )
+
+@param   x, numérico, posição do array
+@param   nOpcx, numérico, Opção do menu
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080LinOk( x, nOpcx )
+
+	Local cCodigo := ""
+
+	cAval := aCols[x][1]
+	If nOpcx == 3
+		dbSelectArea( cTRBA )
+		dbSetOrder( 1 )
+		If dbSeek( cAval )
+			cCodigo := (cTRBA)->TRB_CODIGO
+		EndIf
+	Else
+		dbSelectArea( cTRBA )
+		dbSetOrder( 1 )
+		If dbSeek( cAval )
+			cCodigo := (cTRBA)->TRB_CODIGO
+		Else
+			dbSelectArea( "TAC" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TAC" ) + cDemanda + cAval )
+				cCodigo := TAC->TAC_CODOPC
+			EndIf
+		EndIf
+	EndIf
+
+	If nOpcx == 3
+		Sg080IncTrb()
+	EndIf
+	Sg080Mark( cCodigo, cAval )
+	dbSelectArea( cTRBX )
+	dbGoTop()
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080ValMark
+Atualiza o total do resultado de acordo com a opcao escolhida
+
+@type function
+@author  Thiago Olis Machado
+@since   14/10/2003
+@sample  Sg080ValMark( cMarca )
+
+@param   cMarca, Caracter, Verifica a marcação no markbrowse
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080ValMark( cMarca )
+
+	Local cCod := (cTRBX)->TRB_CODIGO
+	Local cAva := (cTRBX)->TRB_CODAVA
+
+	If !Empty( (cTRBX)->TRB_OK )
+		nTotal += (aCols[n][3] * (cTRBX)->TRB_PESO)/100
+		aArea := GetArea()
+		dbSelectArea( cTRBX )
+		dbSetOrder( 1 )
+		dbGoTop()
+		While !Eof()
+			If cCod != (cTRBX)->TRB_CODIGO .And. cAva == (cTRBX)->TRB_CODAVA .And. !Empty( (cTRBX)->TRB_OK )
+				nTotal -= (aCols[n][3] * (cTRBX)->TRB_PESO)/100
+				RecLock( cTRBX, .F. )
+					(cTRBX)->TRB_OK := " "
+				MsUnLock( cTRBX )
+			EndIf
+			dbSelectArea( cTRBX )
+			dbSkip()
+		End
+		RestArea( aArea )
+		aCols[n][4] := (aCols[n][3] * (cTRBX)->TRB_PESO)/100
+	Else
+		nTotal -= (aCols[n][3] * (cTRBX)->TRB_PESO)/100
+		aCols[n][4] := 0
+	EndIf
+
+	oTotal:Refresh()
+	oList:Refresh()
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080Grava
+Grava as informações.
+
+@type function
+@author  Thiago Olis Machado
+@since   15/10/2003
+@sample  Sg080Grava(3)
+
+@param   nOpcx, Numérico, Opção do menu
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080Grava( nOpcx )
+
+	Local aOldArea := GetArea()
+	Local cResult  := ""
+
+	If nOpcx == 2
+		Return .T.
+	EndIf
+
+	dbSelectArea( "TA5" )
+	dbSetOrder( 2 )
+	If !dbSeek( xFilial( "TA5" ) + cDemanda )
+		RecLock( "TA5", .T. )
+	Else
+		RecLock( "TA5", .F. )
+	EndIf
+	If nOpcx == 5
+		dbDelete()
+	Else
+		TA5->TA5_FILIAL := xFilial( "TA5" )
+		TA5->TA5_CODLEG := cDemanda
+		TA5->TA5_RESULT := AllTrim( Str( nTotal ) )
+		TA5->TA5_DTRESU := dDataBase
+	EndIf
+	MsUnLock( "TA5" )
+
+	dbSelectArea( cTRB )
+	dbGoTop()
+	While !Eof()
+		If !Empty( (cTRB)->TRB_OK )
+
+		    If ( nPos := aScan( aCols, { |x| x[1] == (cTRB)->TRB_CODAVA } ) ) > 0
+		    	cResult := aCols[nPos][4]
+		    EndIf
+
+			dbSelectArea( "TAC" )
+			dbSetOrder( 1 )
+			If !dbSeek( xFilial( "TAC" ) + cDemanda + (cTRB)->TRB_CODAVA )
+				RecLock( "TAC", .T. )
+			Else
+				RecLock( "TAC", .F. )
+			EndIf
+			If nOpcx != 5
+				TAC->TAC_FILIAL := xFilial( "TAC" )
+				TAC->TAC_CODLEG := cDemanda
+				TAC->TAC_CODAVA := (cTRB)->TRB_CODAVA
+				TAC->TAC_CODOPC := (cTRB)->TRB_CODIGO
+				TAC->TAC_DTRESU := dDataBase
+				TAC->TAC_PESO   := (cTRB)->TRB_PESO
+				TAC->TAC_RESULT := cResult
+			EndIf
+			MsUnLock( "TAC" )
+		EndIf
+		dbSelectArea( cTRB )
+		dbSkip()
+	End
+
+	If nOpcx == 5
+		dbSelectArea( "TAC" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TAC" ) + cDemanda )
+		While TAC->(!Eof()) .And. xFilial( "TAC" ) == TAC->TAC_FILIAL .And.;
+			TAC->TAC_CODLEG == cDemanda
+			RecLock( "TAC", .F. )
+				dbDelete()
+			MsUnLock( "TAC" )
+			dbSkip()
+		End
+	EndIf
+
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080ChkGra
+Checa se todas as avaliacoes estao respondidas antes de gravar
+
+@type function
+@author  Thiago Olis Machado
+@since   16/10/2003
+@sample  Sg080ChkGra(3)
+
+@param   nOpcx, Numérico, Opção do menu
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080ChkGra( nOpcx )
+
+	Local ix
+	Local aOldArea := GetArea()
+	Local lResp    := .F.
+
+	If Str( nOpcx, 1 ) $ "2/5"
+		Return .T.
+	EndIf
+	Sg080GraTrb()
+	If nOpcx == 3
+		Sg080IncTrb()
+	EndIf
+	For ix:= 1 To Len( aCols )
+		lResp := .F.
+		dbSelectArea( cTRB )
+		dbSetOrder( 1 )
+		If dbSeek( aCols[ix][1] )
+			While !Eof() .And. aCols[ix][1] == (cTRB)->TRB_CODAVA
+				If !Empty( (cTRB)->TRB_OK )
+					lResp := .T.
+				EndIf
+				dbSkip()
+			End
+		EndIf
+		If !lResp
+			ApMsgStop( STR0028 + aCols[ix][1] ) //"Nao foi respondido a avaliacao "
+			Return .F.
+		EndIf
+	Next ix
+
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080GraTrb
+Grava TRB com as informacoes do MarkBrowse.
+
+@type function
+@author  Thiago Olis Machado
+@since   20/10/2003
+@sample  Sg080GraTrb()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080GraTrb()
+
+	Local aOldArea := GetArea()
+
+	dbSelectArea( cTRBX )
+	dbGotop()
+	While !Eof()
+		dbSelectArea( cTRB )
+		dbSetOrder( 1 )
+		If dbSeek( (cTRBX)->TRB_CODAVA + (cTRBX)->TRB_CODIGO )
+			RecLock( cTRB, .F. )
+				(cTRB)->TRB_OK := IIf( !Empty( (cTRBX)->TRB_OK ), cMarca, "  " )
+			MsUnLock( cTRB )
+		EndIf
+		dbSelectArea( cTRBX )
+		dbSkip()
+	End
+
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080Cols
+Grava TRB com as informacoes do MarkBrowse.
+
+@type function
+@author  Thiago Olis Machado
+@since   24/01/2005
+@sample  Sg080Cols()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function Sg080Cols()
+
+	Local aOldArea := GetArea()
+
+	dbSelectArea( "TAC" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TAC" ) + TA5->TA5_CODLEG )
+	While !Eof() .And. xFilial( "TAC" ) == TAC->TAC_FILIAL .And.;
+		TAC->TAC_CODLEG == TA5->TA5_CODLEG
+
+		dbSelectArea( cTRBA )
+		dbSetOrder( 1 )
+		If !dbSeek( TAC->TAC_CODAVA + TAC->TAC_CODOPC )
+			RecLock( cTRBA, .T. )
+				(cTRBA)->TRB_CODAVA := TAC->TAC_CODAVA
+				(cTRBA)->TRB_CODIGO := TAC->TAC_CODOPC
+				(cTRBA)->TRB_PESO   := TAC->TAC_PESO
+				(cTRBA)->TRB_RESULT := TAC->TAC_RESULT
+			MsUnLock( cTRBA )
+		EndIf
+
+		dbselectArea( "TAC" )
+		dbSkip()
+	End
+
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   11/01/2007
+@sample  MenuDef()
+@Obs     Conteúdo do array a Rotina:
+			1. Nome a aparecer no cabecalho
+			2. Nome da Rotina associada
+			3. Reservado
+			4. Tipo de Transação a ser efetuada:
+				1 - Pesquisa e Posiciona em um Banco de Dados
+				2 - Simplesmente Mostra os Campos
+				3 - Inclui registros no Bancos de Dados
+				4 - Altera o registro corrente
+				5 - Remove o registro corrente do Banco de Dado
+			5. Nivel de acesso
+			6. Habilita Menu Funcional
+
+@return  aRotina, Array, Contem as opções da rotina
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+Local aRotina := {	 { STR0002, "AxPesqui", 0, 1 },;       //"Pesquisar"
+					 { STR0003, "SG080PROC", 0, 2 },;      //"Visualizar"
+					 { STR0004, "SG080PROC", 0, 3 },;      //"Incluir"
+					 { STR0005, "SG080PROC", 0, 4, 0 },;   //"Alterar"
+					 { STR0006, "SG080PROC", 0, 5, 3 } }   //"Excluir"
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080Tot
+Grava TRB com as informacoes do MarkBrowse.
+
+@type function
+@author  Rafael Diogo Richter
+@since   21/12/2007
+@sample  Sg080Tot()
+
+@return  Numérico, total dos resultados
+/*/
+//-------------------------------------------------------------------
+Function Sg080Tot()
+
+	Local aOldArea := GetArea()
+	Local nTot     := 0
+
+	dbSelectArea( cTRBA )
+	dbGotop()
+	While !Eof()
+		nTot += (cTRBA)->TRB_RESULT
+		dbSelectArea( cTRBA )
+		dbSkip()
+	End
+
+	RestArea( aOldArea )
+
+Return nTot
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080TRB
+Carrega (para controle) um TRB com as opcoes principais
+dos criterios de avaliacao
+
+@type function
+@author  Jackson Machado
+@since   09/11/2011
+@sample  Sg080TRB()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg080TRB()
+
+	Local cCheck   := ""
+	Local aOldArea := GetArea()
+
+	dbSelectArea( "TA1" )
+	dbSetOrder( 1 )
+	dbGoTop()
+	While !Eof()
+		dbSelectArea( "TA2" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TA2" ) + TA1->TA1_CODAVA )
+		While !Eof() .And. xFilial( "TA2" ) == TA2->TA2_FILIAL .And. TA2->TA2_CODAVA == TA1->TA1_CODAVA
+
+			dbSelectArea( "TAC" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TAC" ) + cDemanda + TA2->TA2_CODAVA )
+				cCheck := ""
+				While !Eof() .And. TAC->TAC_CODLEG + TAC->TAC_CODAVA == cDemanda + TA2->TA2_CODAVA
+					If TAC->TAC_CODOPC ==  TA2->TA2_CODOPC
+				   		cCheck := cMarca
+				 		Exit
+				 	EndIf
+					dbSkip()
+				End
+			Else
+				cCheck := ""
+			EndIf
+			dbSelectArea( cTRB )
+			dbSetOrder( 1 )
+			If !dbSeek( TA2->TA2_CODAVA + TA2->TA2_CODOPC )
+				RecLock( cTRB, .T. )
+					(cTRB)->TRB_OK      := cCheck
+					(cTRB)->TRB_CODAVA  := TA2->TA2_CODAVA
+					(cTRB)->TRB_CODIGO  := TA2->TA2_CODOPC
+					(cTRB)->TRB_DESCRI  := TA2->TA2_OPCAO
+					(cTRB)->TRB_PESO    := TA2->TA2_PESO
+				MsUnLock( cTRB )
+			EndIf
+
+			dbSelectArea( "TA2" )
+			dbSkip()
+		End
+		dbSelectArea( "TA1" )
+		dbSkip()
+	End
+	(cTRB)->(dbGoTop())
+	RestArea( aOldArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sg080IncTrb
+Altera TRB de controle quando for inclusão
+
+@type function
+@author  Jackson Machado
+@since   09/11/2011
+@sample  Sg080IncTrb()
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function Sg080IncTrb()
+
+	dbSelectArea( cTRB )
+	dbSetOrder( 1 )
+	If !dbSeek( (cTRBX)->TRB_CODAVA + (cTRBX)->TRB_CODIGO ) .And. !Empty( (cTRBX)->TRB_CODAVA ) .And.;
+		!Empty( (cTRBX)->TRB_CODIGO )
+		RecLock( cTRB, .T. )
+			(cTRB)->TRB_OK      := (cTRBX)->TRB_OK
+			(cTRB)->TRB_CODAVA  := (cTRBX)->TRB_CODAVA
+			(cTRB)->TRB_CODIGO  := (cTRBX)->TRB_CODIGO
+			(cTRB)->TRB_DESCRI  := (cTRBX)->TRB_DESCRI
+			(cTRB)->TRB_PESO    := (cTRBX)->TRB_PESO
+		(cTRB)->(MsUnLock())
+	EndIf
+
+Return .T.

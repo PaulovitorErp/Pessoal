@@ -1,0 +1,3452 @@
+#INCLUDE "SGAUTIL.ch"
+#Include "Protheus.ch"
+#Include "DbTree.ch"
+
+Function SGAUTILF9()
+	NGVersao( "SGAUTIL", )
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGESTMOD
+
+Funcao para trazer a estrutura relacionada ao modulo escolhido, retornando a escolha do usuário.
+
+@author  Thiago Olis Machado
+@since   29/04/2004
+
+@param nModule, Numérico, Módulo que a Estrutura vai mostrar: 3 - SIGASGA, 4 - SIGAMNT e 5 - SIGAMDT
+@param cValLBem, Caracter, Indica se deve validar bem ou localizacao:
+	Nil - Nao faz validacao,
+	L   - Valida se foi informado localizacao
+    B   - Valida se foi informado bem
+@param cTRB, Caracter, Indica se já há uma TRB pré definida (Padrão Nil)
+
+@return aRet, Array, Array retornando 2 elementos
+	1 - Composicao da chave primaria da tabela TAF
+	2 - ( .T. / .F. ) Se Escolheu algo ou nao
+/*/
+//-------------------------------------------------------------------
+Function SgEstMod( nModule, cValLBem, cTRB, cNivel )
+
+	Local cTitulo := STR0001  //Titulo da janela //"Consulta da Estrutura Organizacional"
+	Local lOk      := .F.
+	Local aTRB     := {}
+	Local lSubTree := .F.     // Verifica se o conteudo do parametro, para definir se é uma subtree
+	Local lPredio  := .T.
+	Local nTamTAF  := FWTamSX3( 'TAF_CODNIV' )[1]
+	Local cPaiTree := IIf( nTamTAF > 3, '000001', '001' )
+	Local nIdx
+	
+	Private aReturn    := {}
+	Private cProc      := Space( Len( TAF->TAF_CODNIV ) ) // Codigo do Nivel da Estrutura
+	Private lFirst     := .T. // Define a primeira vez que inclui um item na estrutura
+	Private lPai       := .T.
+	Private lNaoFilho  := .F.
+	Private _nModulo   := '1'
+	Private aDbInfo    := {}  // Armazena as informacoes para depois gravar
+	Private cResp      := Space( Len( TAF->TAF_MAT ) ) // Responsavel
+	Private cNome      := Space( Len( QAA->QAA_NOME ) ) // Nome do Responsavel
+	Private cLocal     := Space( Len( TAF->TAF_CODNIV ) ) //Codigo do Nivel da Estrurura para o Filho
+	Private cCodEst    := Space( 03 ) // Codigo da Estrutura toda
+	Private cFolderA   := "FOLDER10" // Folder Verde Fechado
+	Private cFolderB   := "FOLDER11" // Folder Verde Aberto
+	Private cDesc      := Space( Len( TAF->TAF_NOMNIV ) ) //Descricao do pai da estrutura
+	Private lRateio    := NGCADICBASE( 'TAF_RATEIO', 'D', 'TAF', .F. )
+	Private lRetS      := NGCADICBASE( 'TAF_ETAPA', 'A', 'TAF', .F. )
+	Private aItensCar  := {}, nNivel := 0, nMaxNivel := 0
+	Private aAlias     := GetArea()
+	Private cTRBSGA    := ""
+	Private lTRBSGA    := .F.
+	Private cVarPesq   := Space( 60 )
+	Private cCmbPesq   := STR0330 //"Bem"
+	Private aCmbPesq   := { STR0330, STR0331 }//"Bem"###"Local."
+	Private bLinePesq  := {|| }
+	Private aItensPesq := { { "", "", .F., "", "", 0, {}, "" } }
+	Private oTree 			 // Objeto para montar a arvore
+	Private oResp            // Codigo do responsavel
+	Private oNome            // Nome do Responsavel
+	Private oDlg 			 // Objeto para montar a janela
+	Private oMenu
+	Private oGetPesq
+	Private oNewPanel
+	Private oNewPanel2
+
+	If Type( "cNivel" ) != "U"
+		If !Empty( cNivel )
+			lSubTree := .T. // Verifica se o conteudo do parametro, para definir se é uma subtree
+			If cNivel != Replicate( '0', nTamTAF )
+				lPredio  := .F.
+				cPaiTree := cNivel
+			EndIf
+		Else
+			cNivel := Replicate( '0', nTamTAF )
+		EndIf
+	EndIf
+
+	Default cNivel := Replicate( '0', nTamTAF )
+
+	If (cTRB) == Nil
+		aTRB 	:= SGATRBEST( .T. )//Define estrutura do TRB
+		cTRBSGA := aTRB[3]
+		lTRBSGA := .T.
+
+		oTempEST := FWTemporaryTable():New( cTRBSGA, aTRB[1] )
+
+		For nIdx := 1 To Len( aTRB[2] )
+			oTempEST:AddIndex( RETASC( cValToChar( nIdx ), 1, .T. ), aTRB[2, nIdx] )
+		Next nIdx
+
+		oTempEST:Create()
+	EndIf
+
+	//Define as colunas ( Niveis ) da estrutura
+	If !Empty( cTRBSGA )
+		DbSelectArea( "TAF" )
+		DbSetOrder( 1 )
+		If DbSeek( xFilial( "TAF" ) + '001' + cNivel )
+		
+			cCodEst := TAF->TAF_CODEST
+			cProc   := TAF->TAF_CODNIV
+			cDesc   := TAF->TAF_NOMNIV
+			cResp   := IIf( FindFunction( "MDTHideCpo" ), MDTHideCpo( TAF->TAF_MAT, "TAF_MAT" ), TAF->TAF_MAT )
+			QAA->(dbSeek( xFilial( 'QAA' ) + TAF->TAF_MAT ))
+			cNome   := IIf( FindFunction( "MDTHideCpo" ), MDTHideCpo( QAA->QAA_NOME, "QAA_NOME" ), QAA->QAA_NOME )
+			lPai    := .F.
+
+		EndIf
+
+		cAliasQry := GetNextAlias()
+		cQuery := " SELECT 1 FROM "+RetSqlName( "TAF" )+" TAF "
+		cQuery += " WHERE TAF.TAF_FILIAL = '"+ xFilial( "TAF" ) + "'"
+		cQuery += " AND TAF.TAF_NIVSUP   = " + ValTOSQL( IIf( nTamTAF > 3, '000001', '001' ) )
+		If nModule == 4
+			cQuery += " AND TAF.TAF_MODMNT  <> ' ' "
+		ElseIf nModule == 5
+			cQuery += " AND TAF.TAF_MODMDT  <> ' ' "
+		Else
+			cQuery += " AND TAF.TAF_MODSGA  <> ' ' "
+		EndIf
+		cQuery += " AND TAF.D_E_L_E_T_  = ' ' "
+		cQuery := ChangeQuery( cQuery )
+		MPSysOpenQuery( cQuery, cAliasQry )
+		dbSelectArea( cAliasQry )
+		dbGoTop()
+		If Eof()
+			lNaoFilho := .T.
+		Endif
+
+		If lPai .Or. lNaoFilho
+			Help( " ", 1, STR0009, , STR0004, 3, 1 )   //"Nao existe Estrutura Organizacional para esse modulo" #"ATENÇÃO"
+			aAdd( aReturn, {.F. } )
+
+			//Deleta o arquivo temporario fisicamente
+			oTempEST:Delete()
+			Return aReturn
+		Endif
+	Else
+
+		DbSelectArea( cTRB )
+		DbSetOrder( 1 )
+		If DbSeek( '001' + cNivel )
+			cCodEst := (cTRB)->CODEST
+			cProc   := (cTRB)->CODPRO
+			cDesc   := (cTRB)->DESCRI
+			cResp   := IIf( FindFunction( "MDTHideCpo" ), MDTHideCpo( (cTRB)->RESPONS, "TAF_MAT" ), (cTRB)->RESPONS )
+			QAA->(dbSeek( xFilial( 'QAA' ) + (cTRB)->RESPONS ))
+			cNome   := IIf( FindFunction( "MDTHideCpo" ), MDTHideCpo( QAA->QAA_NOME, "QAA_NOME" ), QAA->QAA_NOME )
+			lPai    := .F.
+		EndIf
+
+	EndIf
+
+
+	//Define o codigo autonumerado da estrutura
+	cFirstNiv := cProc
+	cProc     := IIf( nTamTAF > 3, '000001', '001' )
+
+	Define MsDialog oDlg From 03.5, 6 To 570, 570 Title cTitulo Pixel
+
+	oTree := DbTree():New(055, 012, 250, 272, oDlg, , , .T.)
+	If !Empty( cTRBSGA )
+		oTree:bChange:= {|| SG100VChg( nModule, {} )}
+	EndIf
+
+	@ 09, 008 Say OemToAnsi( STR0002 ) Size 37, 7 Of oDlg Pixel   //"Identificacao"
+
+	@ 07, 047 MsGet cDesc Size 160, 08 Of oDlg Pixel When lPai
+
+	@ 24, 008 Say OemToAnsi( STR0003 ) Size 37, 7 Of oDlg Pixel  //"Responsavel"
+	@ 22, 047 MsGet oResp Var cResp Size 065, 08 Of oDlg Pixel Picture "@!" When .F.
+
+	@ 22, 125 MsGet oNome Var cNome Size 130, 08 Of oDlg Pixel When .F.
+
+	//Inclusão de Busca pela descrição ou código do Bem e/ou Localização
+	@ 39, 008 Say OemToAnsi( STR0332 ) Size 60, 09 Of oDlg Pixel  //"Localizar Por"
+	@ 38, 096 MsGet oGetPesq Var cVarPesq Size 87, 09 Of oDlg Pixel
+
+	@ 38, 047 ComboBox oCmbPesq Var cCmbPesq ITEMS aCmbPesq SIZE 45, 08 OF oDlg PIXEL
+
+	cCss := "QPushButton{ border-radius: 3px;border: 1px solid #000000; background-color: #F0F0F0;  }"
+
+	oBtnOk := TButton():New(38, 187, STR0333, oDlg, {|| SGABEMPESQ( , , cCmbPesq, nModule ) }, 20, 11, , , .F., .T., .F., , .F., , , .F. )//"OK"
+	oBtnOk:SetCss( cCSS )
+
+	If !Empty( cTRBSGA )
+		Processa( {|lEnd| Sg100Tree( .F., cProc, nModule, {} )}, STR0012, STR0013, .T. ) //"Aguarde..."#"Carregando Estrutura..."
+	Else
+		Processa( {|lEnd| LoadTreeTRB( cPaiTree, nModule, cProc, cTRB, lPredio )}, STR0012, STR0013, .T. ) //"Aguarde..."#"Carregando Estrutura..."
+	EndIf
+
+	If !Empty( cTRBSGA ) .And. (cTRBSGA)->(RecCount() == 1)
+		Help( " ", 1, STR0009, , STR0004, 3, 1 ) //"Nao existe Estrutura Organizacional para esse modulo" #"ATENÇÃO"
+		
+		aAdd( aReturn, { .F., '001' + SubStr( oTree:GetCargo(), 1, nTamTAF ) } )
+
+		//Deleta o arquivo temporario fisicamente
+
+		If !Empty( cTRBSGA )
+			oTempEST:Delete()
+		EndIf
+
+		Return aReturn
+
+	EndIf
+
+	Define sButton From 265, 215 Type 1 Enable Of oDlg Action IIf( NGVLOCBEM( cValLBem, cTRB, lSubTree, cFirstNiv ),;
+															 EVAL( { || lOk := .T., SgEstGrava( oDlg, lOk ) } ), lOk := .F. )
+	Define sButton From 265, 244 Type 2 Enable Of oDlg Action ( lOk := .F., SgEstGrava( oDlg, lOk ) )
+
+	Activate MsDialog oDlg Centered
+
+	//Deleta o arquivo temporario fisicamente
+	If !Empty( cTRBSGA )
+		oTempEST:Delete()
+	EndIf
+
+	RestArea( aAlias )
+
+Return aReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGESTGRAVA
+
+Grava a Array que vai retornar na funcao principal
+
+@author  Thiago Olis Machado
+@since   29/04/2004
+
+/*/
+//-------------------------------------------------------------------
+Static Function SgEstGrava( oDlg, lOk )
+
+	aAdd( aReturn, { lOk, '001' + SubStr( oTree:GetCargo(), 1,;
+		FWTamSX3( 'TAF_CODNIV' )[1] ) } )
+	
+	oDlg:End()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGSHOWCHILD
+
+Busca e armazena todos os filhos do pai escolhido
+
+@author  Thiago Olis Machado
+@since   12/07/2004
+@version version
+/*/
+//-------------------------------------------------------------------
+Function SgShowChild( cLocal, lFirst )
+
+	Local nRecno
+
+	DbSelectArea( "TAF" )
+	DbSetOrder( 1 )
+	DbSeek( xFilial( "TAF" ) + '001' + cLocal )
+
+	While TAF->(!Eof()) .And. TAF->TAF_NIVSUP == cLocal
+
+		nRecno := TAF->(Recno())
+		cFilho := TAF->TAF_CODNIV
+
+		If DbSeek( xFilial( "TAF" ) + '001' + TAF->TAF_CODNIV )
+			If TAF->TAF_NIVSUP == cFilho
+				SgShowChild( TAF->TAF_NIVSUP, .F. )
+			EndIf
+		EndIf
+
+		DbSelectArea( "TAF" )
+		DbGoto( nRecno )
+		aAdd( aFilhos, { TAF->TAF_CODNIV, TAF->TAF_NOMNIV, TAF->TAF_INDCON, TAF->TAF_CODCON } )
+
+		DbSelectArea( "TAF" )
+		DbSkip()
+
+	End
+
+Return aFilhos
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGALoad
+
+Funcao chamada na abertura do modulo SigaSGA
+
+@author  Thiago Olis Machado
+@since   12/07/2004
+/*/
+//-------------------------------------------------------------------
+Function SgaLoad()
+
+	Local nTAMQAA := IIf( ( TAMSX3( "QAA_MAT" )[1] ) < 1, 10, ( TAMSX3( "QAA_MAT" )[1] ) )
+
+	Private cUsuLogged
+	Private cPergKit
+
+	//-- P.E. para atualizações específicas de dicionário
+	If ExistBlock( "SGAUTILA" )
+		ExecBlock( "SGAUTILA", .F., .F. )
+	EndIf
+
+	SgaChkDem()
+	Sgaa160()
+
+	NGTQCTQD()//Implementa nas tabelas TQC e TQD todas as opcoes do clique da direita
+	NGREQTA0()//Alteração na base para exclusão de registros em branco dos responsáveis e planos de ação.
+
+	//Adequações das Unidades de Medida FMR
+	fAtuUnFMR()
+
+	//Carga de Indicadores
+	If FindFunction( "NGI6CARGA" )
+		NGI6CARGA()
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fAtuUnFMR
+Ajusta os registro de unidade de medida da FMR
+
+@sample  fAtuUnFMR()
+
+@author  Jackson Machado
+@since   19/02/2018
+/*/
+//-------------------------------------------------------------------
+Static Function fAtuUnFMR()
+
+	Local cCodRes
+	Local cCodOco
+	Local cUniCol
+	Local cUniRes
+	Local cQryFMR := GetNextAlias()
+	Local cQryHis := GetNextAlias()
+
+	If TDD->( ColumnPos( "TDD_UNIRES" ) ) > 0
+		BeginSQL Alias cQryFMR
+			SELECT TDD.R_E_C_N_O_
+				FROM %table:TDD% TDD
+				WHERE TDD.%notDel% AND ( TDD.TDD_UNIRES = '' OR TDD.TDD_UNICOL = '' )
+		EndSQL
+		While ( cQryFMR )->( !EoF() )
+			//Posiciona no registro errado da TDD
+			dbSelectArea( "TDD" )
+			dbGoTo( ( cQryFMR )->R_E_C_N_O_ )
+
+			//Busca unidade de medida do coletor
+			cUniCol := Posicione( "SB1", 1,  xFilial("SB1") + TDD->TDD_COLET, "B1_UM" )
+
+			//Busca unidade de medida do resíduo
+			cCodRes := Posicione( "TDC", 1,  xFilial("TDC") + TDD->TDD_CODFMR, "TDC_CODRES" )
+			cCodOco := Posicione( "TDC", 1,  xFilial("TDC") + TDD->TDD_CODFMR, "TDC_CODOCO" )
+			If !Empty( cCodOco )
+				cUniRes := Posicione( "TB0", 1,  xFilial("TB0") + cCodOco, "TB0_UNIMED" )
+			Else
+				cUniRes := Posicione( "SB1", 1,  xFilial("SB1") + cCodRes, "B1_UM" )
+			EndIf
+			RecLock( "TDD", .F. )
+				If Empty( TDD->TDD_UNICOL )
+					TDD->TDD_UNICOL := cUniCol
+				EndIf
+				If Empty( TDD->TDD_UNIRES )
+					TDD->TDD_UNIRES := cUniRes
+				EndIF
+			TDD->( MsUnLock() )
+			( cQryFMR )->( dbSkip() )
+		End
+	EndIf
+
+	If TDG->( ColumnPos( "TDG_UNIRES" ) ) > 0
+		BeginSQL Alias cQryHis
+			SELECT TDG.R_E_C_N_O_
+				FROM %table:TDG% TDG
+				WHERE TDG.%notDel% AND ( TDG.TDG_UNIRES = '' OR TDG.TDG_UNICOL = '' )
+		EndSQL
+		While ( cQryHis )->( !EoF() )
+			//Posiciona no registro errado da TDG
+			dbSelectArea( "TDG" )
+			dbGoTo( ( cQryHis )->R_E_C_N_O_ )
+
+			//Busca unidade de medida do coletor
+			cUniCol := Posicione( "SB1", 1,  xFilial("SB1") + TDG->TDG_COLET, "B1_UM" )
+
+			//Busca unidade de medida do resíduo
+			cCodRes := Posicione( "TDC", 1,  xFilial("TDC") + TDG->TDG_CODFMR, "TDC_CODRES" )
+			cCodOco := Posicione( "TDC", 1,  xFilial("TDC") + TDG->TDG_CODFMR, "TDC_CODOCO" )
+			If !Empty( cCodOco )
+				cUniRes := Posicione( "TB0", 1,  xFilial("TB0") + cCodOco, "TB0_UNIMED" )
+			Else
+				cUniRes := Posicione( "SB1", 1,  xFilial("SB1") + cCodRes, "B1_UM" )
+			EndIf
+			RecLock( "TDG", .F. )
+				If Empty( TDG->TDG_UNICOL )
+					TDG->TDG_UNICOL := cUniCol
+				EndIf
+				If Empty( TDG->TDG_UNIRES )
+					TDG->TDG_UNIRES := cUniRes
+				EndIF
+			TDG->( MsUnLock() )
+			( cQryHis )->( dbSkip() )
+		End
+	EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGACHKDEM
+
+Checa o vencimento daa demanda para gerar pendencia caso necessário.
+
+@author  Thiago Olis Machado
+@since   12/07/2004
+/*/
+//-------------------------------------------------------------------
+Function SgaChkDem()
+
+	Local nMvSGA	 := Getmv( "MV_SGADTLE" )
+	Local dDataAtual := dDatabase + nMvSGA
+
+	dbSelectArea( "SIX" )
+	dbSetOrder( 1 )
+	If dbSeek( "TAQ3" )
+		dbSelectArea( "TA0" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TA0" ) )
+		While TA0->(!Eof()) .And. xFilial( "TA0" ) == TA0->TA0_FILIAL
+			If !Empty( TA0->TA0_DTVENC )
+				If NGCADICBASE( 'TA0_DTVCTO', 'A', 'TA0', .F. )
+					IF TA0->TA0_DTVCTO > 0
+						dDataAtual := dDatabase+TA0->TA0_DTVCTO
+					EndIf
+				EndIf
+				dbSelectArea( "TAQ" )
+				dbSetOrder( 3 )
+				If dbSeek( xFilial( "TAQ" ) + "4" + TA0->TA0_CODLEG )
+					RecLock( "TAQ", .F. )
+						TAQ->TAQ_DATA   := TA0->TA0_DTVENC
+					MsUnLock( "TAQ" )
+				Else
+					If dDataAtual >= TA0->TA0_DTVENC
+						SgPostEve( "4", TA0->TA0_DTVENC, "*              ", TA0->TA0_CODLEG )
+					EndIf
+				EndIf
+			EndIf
+
+			TA0->(DbSkip())
+		End
+	EndIf
+
+	dbSelectArea( "TB2" )
+	dbSetOrder( 1 ) //TB2_FILIAL + TB2_CODDES
+	dbSeek( xFilial( "TB2" ) )
+	While TB2->( !Eof() ) .And. xFilial( "TB2" ) == TB2->TB2_FILIAL
+		If TB2->TB2_TIPO == '1' .And. Empty( TB2->TB2_CODALM )
+			dbSelectArea( "TAQ" )
+			dbSetOrder( 3 )
+			If dbSeek( xFilial( "TAQ" ) + "6" + TB2->TB2_CODDES )
+				RecLock( "TAQ", .F. )
+					TAQ->TAQ_DATA   := dDATABASE
+				MsUnLock( "TAQ" )
+			Else
+				SgPostEve( "6", dDATABASE, "*              ", TB2->TB2_CODDES )
+			Endif
+		Endif
+		TB2->(DbSkip())
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGASELECT
+
+Permite selecionar itens da Estrutura Organizacional pelos módulos SIGASGA, SIGAMNT ou SIGAMDT
+
+@author  Thiago Olis Machado
+@since   16/09/2004
+/*/
+//-------------------------------------------------------------------
+Function SgaSelect( nModulo, cDescri )
+
+	Local cTitulo := STR0001  // Titulo da janela //"Consulta da Estrutura Organizacional"
+	Local aTRB    := {}
+	Local sg      // Variavel incrementadora
+	Local oPanel
+	Local oTempSGA
+	Local nIdx
+
+
+	Private cProc      := Space( Len( TAF->TAF_CODNIV ) ) // Codigo do Nivel da Estrutura
+	Private lFirst     := .T. // Define a primeira vez que inclui um item na estrutura
+	Private aDbInfo    := {}  // Armazena as informacoes para depois gravar
+	Private cResp      := Space( Len( TAF->TAF_MAT ) ) // Responsavel
+	Private cNome      := Space( Len( QAA->QAA_NOME ) ) // Nome do Responsavel
+	Private cLocal     := Space( Len( TAF->TAF_CODNIV ) ) //Codigo do Nivel da Estrurura para o Filho
+	Private cCodEst    := Space( 03 ) // Codigo da Estrutura toda
+	Private cFolderA   := "FOLDER10" // Folder Verde Fechado
+	Private cFolderB   := "FOLDER11" // Folder Verde Aberto
+	Private cDesc      := Space( Len( TAF->TAF_NOMNIV ) ) //Descricao do pai da estrutura
+	Private aLocal     := {}
+	Private aVETINR    := {}
+	Private aItensCar  := {}
+	Private nNivel     := 0
+	Private nMaxNivel  := 0
+	Private lRetS      := NGCADICBASE( 'TAF_ETAPA', 'A', 'TAF', .F. )
+	Private lRateio    := NGCADICBASE( 'TAF_RATEIO', 'D', 'TAF', .F. )
+	Private lFstChoice := nModulo == 56 // Escolha do Modulo SIGASGA
+	Private lSndChoice := nModulo == 35 // Escolha do Modulo SIGAMDT
+	Private lTrdChoice := nModulo == 19 .Or. nModulo == 95 // Escolha do Modulo SIGAMNT/SIGAGFR
+	Private oTree 			 // Objeto para montar a arvore
+	Private lPai
+	Private oResp            // Codigo do responsavel
+	Private oNome            // Nome do Responsavel
+	Private oDlg 			 // Objeto para montar a janela
+	Private cARQTSgaSelect
+
+	Default cDescri := ""
+
+	If nModulo == 56
+		nMod_ := 3
+	ElseIf nModulo == 19 .Or. nModulo == 95
+		nMod_ := 4
+	ElseIf nModulo == 35
+		nMod_ := 5
+	Endif
+
+	aTRB := SGATRBEST( .T. ) //Define estrutura do TRB
+	cTRBSGA := aTRB[3]
+	oTempSGA := FWTemporaryTable():New( cTRBSGA, aTRB[1] )
+
+	For nIdx := 1 To Len( aTRB[2] )
+		oTempSGA:AddIndex( RETASC( cValToChar( nIdx ), 1, .T. ), aTRB[2, nIdx] )
+	Next nIdx
+
+	oTempSGA:Create()
+
+	//Define as colunas ( Niveis ) da estrutura
+	DbSelectArea( "TAF" )
+	DbSetOrder( 1 )
+	If DbSeek( xFilial( "TAF" ) + '001' + '000' )
+		cCodEst := TAF->TAF_CODEST
+		cProc   := TAF->TAF_CODNIV
+		cDesc   := TAF->TAF_NOMNIV
+		cResp   := TAF->TAF_MAT
+		QAA->( dbSeek( xFilial( 'QAA' ) + cResp ) )
+		cNome   := QAA->QAA_NOME
+		lPai    := .F.
+	EndIf
+
+	//Define o codigo autonumerado da estrutura
+	cProc := '001'
+
+	Define MsDialog oDlg From 0, 0 To 500, 580 Title cTitulo Pixel
+
+	@ 005, 010 Say OemToAnsi( cDescri ) Size 207, 27 Of oDlg Pixel Color CLR_BLACK
+
+	oPanel := TPanel():New( 0, 0, , oDlg, , , , CLR_BLACK, CLR_WHITE, 500, 580 )
+	oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oTree := DbTree():New( 1, 1, 210, 291, oPanel, , , .T. )
+	oTree:bChange:= { || SG100VChg( nMod_ ) }
+	oTree:blDblClick := { |o, x, y| SgTrocaCor() }
+
+	Sg100Tree( .F., cProc, nMod_ )
+
+	Define sButton From 235, 265 Type 1 Enable Of oPanel Action oDlg:End()
+
+	@ 210, 1 To 230, 291 Label '' Of oPanel Pixel
+	@ 217, 080 Say OemToAnsi( STR0005 ) Size 207, 27 Of oPanel;  //"Escolha a area clicando duas vezes sobre a pasta"
+			Pixel Color CLR_HRED
+
+	Activate MsDialog oDlg Centered
+
+	//Deleta o arquivo temporario fisicamente
+	oTempSGA:Delete()
+
+Return aLocal
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgTrocaCor
+
+Troca a cor do folder e carrega o array de retorno
+
+@author  Thiago Olis Machado
+@since   17/09/2004
+/*/
+//-------------------------------------------------------------------
+Function SgTrocaCor()
+
+	Local cFather
+
+	DbSelectArea( oTree:cArqTree )
+	oTree:TreeSeek( SubStr( oTree:GetCargo(), 1, 3 ) )
+	If (Len( oTree:GetCargo() ) == 7 .And. SubStr( oTree:GetCargo(), 7, 1 ) == '2') .Or. (Len( oTree:GetCargo() ) == 6 .And. (T_BMP001 == 3 .Or. T_BMP001 == 5))
+		If SubStr( oTree:GetCargo(), 4, 3 ) == 'LOC'
+			oTree:ChangeBmp( 'Folder10', 'Folder11' )
+		Else
+			oTree:ChangeBmp( 'Folder5', 'Folder6' )
+		EndIf
+
+		(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "1"
+		nPos := aScan( aLocal, {|x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+		If nPos > 0
+			aLocal[nPos][2] := .F.
+		Else
+			aAdd( aLocal, { SubStr( oTree:GetCargo(), 1, 3 ), .T. } )
+			nPos := aScan( aLocal, {|x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+		EndIf
+
+		cFather := aLocal[nPos][1]
+		If TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cFather ) )
+			cMensagem := STR0006 + CHR( 13 ) + CHR( 13 );  //"Essa identificação possui filhos "
+						+ STR0007                          //"Deseja desmarcá-los também ?"
+
+			If MsgYesNo( cMensagem, STR0009 ) //"ATENÇÃO"
+				SgTiraFilho( cFather )
+			EndIf
+		EndIf
+	Else
+		oTree:ChangeBmp( 'Folder7', 'Folder8' )
+		(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "2"
+		nPos := aScan( aLocal, { |x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+		If nPos > 0
+			aLocal[nPos][2] := .T.
+		Else
+			aAdd( aLocal, { SubStr( oTree:GetCargo(), 1, 3 ), .T. } )
+			nPos := aScan( aLocal, { |x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+		EndIf
+
+		cFather := aLocal[nPos][1]
+		If TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cFather ) )
+			cMensagem := STR0006 + CHR( 13 ) + CHR( 13 );  //"Essa identificação possui filhos "
+						+ STR0008                          //"Deseja selecioná-los também ?"
+
+			If MsgYesNo( cMensagem, STR0009 ) //"ATENÇÃO"
+				SgPegaFilho( cFather )
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgPegaFilho
+
+Troca a cor do folder dos filhos e carrega o array de retorno.
+
+@author  Thiago Olis Machado
+@since   17/09/2004
+/*/
+//-------------------------------------------------------------------
+Function SgPegaFilho( cPai )
+
+	Local nRec
+
+	DbSelectArea( "TAF" )
+	DbSetOrder( 1 )
+	TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cPai ) )
+	While !TAF->(Eof()) .And. TAF->TAF_FILIAL == xFilial( 'TAF' ) .And.;
+		TAF->TAF_NIVSUP == cPai
+		If !SGAFILTAF( nModulo )
+			Loop
+		EndIf
+		cCargo  := SubStr( oTree:GetCargo(), 4, 3 )
+		nRec    := Recno()
+		cComp   := TAF->TAF_CODNIV
+		cDescri := TAF->TAF_NOMNIV
+		cNivSup := TAF->TAF_NIVSUP
+		cMat    := TAF->TAF_MAT
+		cIndCon := TAF->TAF_INDCON
+		cCodCon := TAF->TAF_CODCON
+		cModSga := TAF->TAF_MODSGA
+		cModMnt := TAF->TAF_MODMNT
+		cModMdt := TAF->TAF_MODMDT
+		cCC     := TAF->TAF_CCUSTO
+		cCT     := TAF->TAF_CENTRA
+		cFilDoc := TAF->TAF_DOCFIL
+		cOrdem  := TAF->TAF_ORDEM
+
+		If DbSeek( xFilial( 'TAF' ) + cCodEst + cComp )
+				SgFilhoP( cComp, cDescri, cNivSup, cModSga, cModMnt, cModMdt, cMat, cCodCon, cIndCon, nModulo, cCargo, .F., cPai )
+		Else
+			//DbAddItem oTree Prompt cDescri Resource cFolderA Cargo cComp+cCargo
+			oTree:TreeSeek( cComp )
+			oTree:ChangeBmp( 'Folder7', 'Folder8' )
+			(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "2"
+			nPos := aScan( aLocal, { |x| x[1] == cComp } )
+			If nPos > 0
+				aLocal[nPos][2] := .T.
+			Else
+				aAdd( aLocal, { cComp, .T. } )
+			EndIf
+		EndIf
+
+		DbSelectArea( "TAF" )
+		DbGoto( nRec )
+		TAF->( DbSkip() )
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgTiraFilho
+
+Troca a cor do folder dos filhos e carrega o array de retorno
+
+@author  Thiago Olis Machado
+@since   20/09/2004
+/*/
+//-------------------------------------------------------------------
+Function SgTiraFilho( cPai )
+
+	Local nRec
+
+	DbSelectArea( "TAF" )
+	DbSetOrder( 1 )
+	TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cPai ) )
+	While !TAF->(Eof()) .And. TAF->TAF_FILIAL == xFilial( 'TAF' ) .And.;
+		TAF->TAF_NIVSUP == cPai
+		If !SGAFILTAF( nModulo )
+			Loop
+		EndIf
+		nRec    := Recno()
+		cComp   := TAF->TAF_CODNIV
+
+		If TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cComp ) )
+			SgFilhoT( cComp )
+		Else
+			oTree:TreeSeek( cComp )
+			If SubStr( oTree:GetCargo(), 4, 3 ) == 'LOC'
+				oTree:ChangeBmp( 'Folder10', 'Folder11' )
+			Else
+				oTree:ChangeBmp( 'Folder5', 'Folder6' )
+			EndIf
+			(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "1"
+			nPos := aScan( aLocal, { |x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+			If nPos > 0
+				aLocal[nPos][2] := .F.
+			EndIf
+		EndIf
+
+		DbSelectArea( "TAF" )
+		DbGoto( nRec )
+		TAF->( DbSkip() )
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgFilhoT
+
+Troca a cor do folder dos filhos e carrega o array de retorno
+
+@author  Thiago Olis Machado
+@since   20/09/2004
+/*/
+//-------------------------------------------------------------------
+Function SgFilhoT( cPai )
+
+	Local nRec
+
+	oTree:TreeSeek( cPai )
+	If SubStr( oTree:GetCargo(), 4, 3 ) == 'LOC'
+		oTree:ChangeBmp( 'Folder10', 'Folder11' )
+	Else
+		oTree:ChangeBmp( 'Folder5', 'Folder6' )
+	EndIf
+	(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "1"
+	nPos := aScan( aLocal, { |x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+	If nPos > 0
+		aLocal[nPos][2] := .F.
+	EndIf
+
+	DbSelectArea( "TAF" )
+	DbSetOrder( 1 )
+	TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cPai ) )
+	While !TAF->(Eof()) .And. TAF->TAF_FILIAL == xFilial( 'TAF' ) .And.;
+		TAF->TAF_NIVSUP == cPai
+		If !SGAFILTAF( nModulo )
+			Loop
+		EndIf
+
+		nRec    := Recno()
+		cComp   := TAF->TAF_CODNIV
+
+		If TAF->( DbSeek( xFilial( 'TAF' ) + '001' + cComp ) )
+			SgFilhoT( cComp )
+		Else
+			oTree:TreeSeek( cComp )
+			If SubStr( oTree:GetCargo(), 4, 3 ) == 'LOC'
+				oTree:ChangeBmp( 'Folder10', 'Folder11' )
+			Else
+				oTree:ChangeBmp( 'Folder5', 'Folder6' )
+			EndIf
+			(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "1"
+			nPos := aScan( aLocal, { |x| x[1] == SubStr( oTree:GetCargo(), 1, 3 ) } )
+			If nPos > 0
+				aLocal[nPos][2] := .F.
+			EndIf
+		EndIf
+
+		DbSelectArea( "TAF" )
+		DbGoto( nRec )
+		TAF->(DbSkip())
+	End
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGTAFSGA
+
+Consistencia de consulta especial (F3) estrutura organizacional
+
+@author  Thiago Olis Machado
+@since   18/04/2005
+/*/
+//-------------------------------------------------------------------
+Function NGTAFSGA()
+
+	Do Case
+		Case cModulo == "MNT"
+			aINTESOG := SGESTMOD( 4 )
+		Case cModulo == "MDT"
+			aINTESOG := SGESTMOD( 5 )
+		Otherwise
+			aINTESOG := SGESTMOD( 3 )
+	EndCase
+
+	If Len( aINTESOG ) = 0
+		Return .F.
+	EndIf
+
+	If !aINTESOG[1, 1]
+		Return .F.
+	EndIf
+
+	DbSelectArea( "TAF" )
+	DbSetOrder( 2 )
+	DbSeek( xFilial( "TAF" ) + '001' + SubStr( aIntEsOg[1, 2], 4, 6 ) )
+	Return aIntEsOg[1][1]
+
+	//Função de Retorno NGTAFRET
+	Function NGTAFRET()
+
+Return TAF->TAF_CODNIV
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgMovEstoque
+
+Gera Movimento de Requisicao e/ou Devolucao nos Arquivos de Movimentacao Interna (SD3).
+
+@author  Thiago Olis Machado
+@since   17/08/2005
+/*/
+//-------------------------------------------------------------------
+Function SgMovEstoque( cCod, cAlm, cProd, cSeq, cUM, nQuant, dData, cDocEst, cLoteCtl, cNumLote, dDatVal, lEstorno, lDocSeq, cCusto )
+
+	Local aOldAreaSTJ
+	Local aCabecalho := {}
+	Local aAutoItens := {}
+
+	Local cNumSeq := ''
+	Local cLocOco := cAlm
+	Local cAlmoxa := CriaVar( 'D3_LOCAL' )
+	Local cDev := SuperGetMv( 'MV_SGADEV', .F., '' )
+	Local cReq := SuperGetMv( 'MV_SGAREQ', .F., '' )
+	Local cLocaliz := CriaVar( 'D3_LOCALIZ' )
+	Local cNumSeri := CriaVar( 'D3_NUMSERI' )
+
+	Local nQtdOco    := 0
+
+	Private nOpc := 0
+
+	Default cCusto := ''
+
+	Default lDocSeq := .T.
+
+	lEstorno := IIf( lEstorno == Nil, .F., lEstorno )
+
+	cProduto := cProd
+
+	SB1->(DbSetOrder( 1 ) )
+	If SB1->( DbSeek( xFilial( 'SB1' ) + cProduto ) )
+		cB1Aprop := SB1->B1_APROPRI
+	EndIf
+
+	DbSelectArea( "SBF" )
+	DbSetOrder( 2 )
+	DbSeek( xFilial( "SBF" ) + cProduto + cLocOco + cLoteCtl + cNumLote )
+	cAlmoxa  := cLocOco
+	cLocaliz := IIf( Empty( 'BF_LOCALIZ' ), '', SBF->BF_LOCALIZ )
+	cNumSeri := IIf( Empty( 'BF_NUMSERI' ), '', SBF->BF_NUMSERI )
+
+	If ( Substr( cCod, 1, 1 ) = "D" ) .Or. ( Substr( cCod, 1, 1 ) = "R" .And. lEstorno )
+		nOpc := IIf( lEstorno, 3, 5 )
+	Else
+		nOpc := 3
+		If lDocSeq
+			dbSelectArea( "SD3" )
+			dbSetOrder( 8 )
+			If dbSeek( xFilial( "SD3" ) + cDocEst + cNumSeq )
+				cDocEst := NextNumero( "SD3", 2, "D3_DOC", .T. )
+			EndIf
+		EndIf
+	EndIf
+
+	aCabecalho := {;
+		{ 'D3_DOC', cDocEst, Nil },;
+		{ 'D3_TM', IIf( Substr( cCod, 1, 2 ) == 'RE', cReq, cDev ), Nil },;
+		{ 'D3_CC', cCusto, Nil },;
+		{ 'D3_EMISSAO', dData, Nil };
+	}
+
+	aAutoItens := {;
+		{ 'D3_COD', cProduto, Nil },;
+		{ 'D3_UM', cUM, Nil },;
+		{ 'D3_QUANT', nQuant, Nil },;
+		{ 'D3_CF', cCod, Nil },;
+		{ 'D3_CONTA', SB1->B1_CONTA, Nil },;
+		{ 'D3_LOCAL', IIf( Empty( cAlmoxa ), SB1->B1_LOCPAD, cAlmoxa ), Nil },;
+		{ 'D3_SEGUM', SB1->B1_SEGUM, Nil },;
+		{ 'D3_QTSEGUM', ConvUm( SB1->B1_COD, nQtdOco, 0, 2 ), Nil },;
+		{ 'D3_GRUPO', SB1->B1_GRUPO, Nil },;
+		{ 'D3_TIPO', SB1->B1_TIPO, Nil },;
+		{ 'D3_NUMSERI', cNumSeri, Nil },;
+		{ 'D3_CHAVE', SubStr( SD3->D3_CF, 2, 1 ) + IIf( SD3->D3_CF $ 'RE4|DE4', '9', '0' ), Nil },;
+		{ 'D3_USUARIO', IIf( Len( SD3->D3_USUARIO ) > 15, cUsername, Substr( cUsuario, 7, 15 ) ), Nil },;
+		{ 'D3_ESTORNO', IIf( nOpc == 5, 'S', Space( Len( SD3->D3_ESTORNO ) ) ), Nil };
+	}
+
+	If Rastro( cProduto )
+		aAdd( aAutoItens, { "D3_LOTECTL", cLoteCtl, Nil } )
+		If Rastro( cProduto, 'S' )
+			aAdd( aAutoItens, { "D3_NUMLOTE", cNumLote, Nil } )
+		EndIf
+		aAdd( aAutoItens, { "D3_DTVALID", dDatVal, Nil } )
+	EndIf
+
+	aAdd( aAutoItens, { "INDEX", 2, Nil } ) //A coluna INDEX deve SEMPRE ser adicionada por ultimo no array
+
+	lMsErroAuto := .F.
+
+	dbSelectArea( "SB2" )
+	dbSetOrder( 01 )
+	If !dbSeek( xFilial( "SB2" ) + cProduto + IIf( Empty( cAlmoxa ), SB1->B1_LOCPAD, cAlmoxa ) )
+		CriaSB2( cProduto, IIf( Empty( cAlmoxa ), SB1->B1_LOCPAD, cAlmoxa ) )
+	EndIf
+
+	lOldInclui := Inclui
+	Inclui := .T.
+	__lSx8 := .F.
+
+	aOldAreaSTJ := STJ->(GetArea())
+	MSExecAuto( { | x, y, z | Mata241( x, y, z ) }, aCabecalho, { aAutoItens }, nOpc )
+	RestArea( aOldAreaSTJ )
+
+	Inclui := lOldInclui
+
+	If lMsErroAuto
+		Mostraerro()
+	EndIf
+
+Return { SD3->D3_NUMSEQ, lMsErroAuto }
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgProcChk
+
+Inclui/Exclui um CheckList
+
+@author  Rafael Diogo Richter
+@since   22/09/2005
+/*/
+//-------------------------------------------------------------------
+Function SgProcChk( cALIAS, nREG, nOPCX )
+
+	Local cSeekST5 := ""
+	Local lTipQue  := NGCADICBASE( "TBQ_TIPQUE", "A", "TBQ", .F. )
+	Local aTipo    := { "1=" + NGRETSX3BOX( "TBQ_TIPQUE", '1' ), "2=" + NGRETSX3BOX( "TBQ_TIPQUE", '2' ) }
+	Local oDlg5
+
+	Private cCadastro := OemtoAnsi( STR0038 ) //"CheckList Executado"
+
+	nOPCA   := 0
+	aCOLS   := {}
+	lSEQETA := .F.
+
+	M->TBQ_TIPQUE := '1'
+	M->TBQ_CHKLIS := Space( 6 )
+	M->TBQ_DESCHK := Space( 30 )
+
+	DbSelectArea( "TBQ" )
+	DbSetOrder( 1 )
+	M->TBQ_SEQCHK := Space( 3 )
+
+	If nOPCX == 2
+		TBD->( DbSeek( xFilial( "TBD" ) + (cAliasCE)->TBQ_CHKLIS ) )
+		If lTipQue
+			M->TBQ_TIPQUE := (cAliasCE)->TBQ_TIPQUE
+			M->TBQ_DESTIP := NGRETSX3BOX( "TBQ_TIPQUE", (cAliasCE)->TBQ_TIPQUE )
+		EndIf
+		M->TBQ_CHKLIS	:= (cAliasCE)->TBQ_CHKLIS
+		M->TBQ_DESCHK	:= IIf( M->TBQ_TIPQUE == '1', TBD->TBD_DESCHK, NGSEEK( "TJ2", M->TBQ_CHKLIS, 1, "TJ2->TJ2_NOMQUE" ) )
+		M->TBQ_SEQCHK   := (cAliasCE)->TBQ_SEQCHK
+	EndIf
+
+	If nOPCx <> 1
+		If Empty( M->TBQ_CHKLIS )
+			Return
+		EndIf
+	EndIf
+
+	DEFINE MSDIALOG oDlg5 TITLE cCADASTRO + STR0039 + Alltrim( TBN->TBN_CODORD ) + ' - ' +;
+		 IIf( nOPCX = 1, STR0040, STR0041 ) From 0, 0 To 180, 500 OF oMainWnd Pixel //" - Ordem: "#' - '#"Incluir"#"Excluir"
+
+	oPnlPai := TPanel():New( 00, 00, , oDlg5, , , , , , 80, 23, .F., .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		//@ 0, 0 BITMAP oBmp RESNAME STR0043 oF oPnlPai SIZE 35,250 NOBORDER WHEN .F. PIXEL
+
+		@ 10, 10  Say "Tipo"  Of oPnlPai Pixel
+		@ 05, 40 Combobox M->TBQ_TIPQUE Items aTipo Size 60,60 OF oPnlPai Valid Pertence( '12' );
+		 On Change (M->TBQ_CHKLIS := Space( Len( M->TBQ_CHKLIS ) ), M->TBQ_DESCHK := "" ) When lTipQue Pixel
+
+		@ 25, 10 SAY OemToAnsi( STR0153 ) SIZE 37, 7 OF oPnlPai PIXEL //"Código"
+		@ 25, 40 MSGET M->TBQ_CHKLIS   SIZE 025, 7 OF oPnlPai PIXEL F3 "TBD" VALID IIf( !Empty( M->TBQ_CHKLIS ),;
+			 SgTBQChk( M->TBQ_CHKLIS, .T., M->TBQ_TIPQUE ), .T. ) WHEN ( nOPCX == 1 ) .And. SGATBQF3() HASBUTTON
+
+		@ 25, 80 SAY OemToAnsi( STR0045 ) SIZE 37, 7 OF oPnlPai PIXEL
+		@ 25, 110 MSGET M->TBQ_DESCHK SIZE 130, 7 OF oPnlPai PIXEL When .F.
+
+		@ 40, 10 SAY OemToAnsi( STR0046 ) SIZE 37, 7 OF oPnlPai PIXEL
+		@ 40, 40 MSGET M->TBQ_SEQCHK  SIZE 025, 7 OF oPnlPai PIXEL WHEN ( nOPCX == 1 )
+
+	ACTIVATE MSDIALOG oDlg5 ON INIT EnchoiceBar( oDlg5, { ||nOpca := 1, IIf( !Empty( M->TBQ_CHKLIS ), oDlg5:End(),;
+		 Help( 1, " ", "OBRIGAT2", , STR0153 + " (TBQ_CHKLIS)", 3, 0 ) ) }, { ||nOpca := 0, oDlg5:End() } ) CENTERED
+
+	If nOPCA == 1
+		If nOPCx == 1
+			DbSelectArea( "TBQ" )
+			RecLock( "TBQ", .T. )
+				TBQ->TBQ_FILIAL	:= xFilial( "TBQ" )
+				TBQ->TBQ_ORDEM		:= TBN->TBN_CODORD
+				TBQ->TBQ_PLANO		:= TBN->TBN_CODPLA
+				If lTipQue
+					TBQ->TBQ_TIPQUE := M->TBQ_TIPQUE
+				EndIf
+				TBQ->TBQ_CHKLIS	:= M->TBQ_CHKLIS
+				TBQ->TBQ_SEQCHK	:= M->TBQ_SEQCHK
+			MsUnlock( "TBQ" )
+
+			DbSelectArea( cAliasCE )
+			RecLock( ( cAliasCE ), .T. )
+				(cAliasCE)->TBQ_ORDEM	:= TBN->TBN_CODORD
+				(cAliasCE)->TBQ_PLANO	:= TBN->TBN_CODPLA
+				If lTipQue
+					(cAliasCE)->TBQ_TIPQUE := M->TBQ_TIPQUE
+					(cAliasCE)->TBQ_DESTIP := NGRETSX3BOX( "TBQ_TIPQUE", (cAliasCE)->TBQ_TIPQUE )
+				EndIf
+
+				(cAliasCE)->TBQ_CHKLIS	:= M->TBQ_CHKLIS
+				(cAliasCE)->TBQ_DESCHK	:= M->TBQ_DESCHK
+				(cAliasCE)->TBQ_SEQCHK := M->TBQ_SEQCHK
+			MsUnlock( cAliasCE )
+		Else
+			DbSelectArea( "TBQ" )
+			DbSetOrder( 1 )
+			If DbSeek( xFilial( "TBQ" ) + (cAliasCE)->TBQ_ORDEM + (cAliasCE)->TBQ_PLANO + IIf( lTipQue, (cAliasCE)->TBQ_TIPQUE, "" ) + (cAliasCE)->TBQ_CHKLIS )
+				RecLock( "TBQ", .F. )
+					DbDelete()
+				MsUnlock( "TBQ" )
+			EndIf
+			DbSelectArea( cAliasCE )
+			DbDelete()
+			Pack
+		Endif
+
+	Endif
+	DbSelectArea( cAliasCE )
+	DbGoTop()
+
+	If !(cAliasCE)->(Eof())
+		oMARK:oBrowse:Enable()
+	Else
+		oMARK:oBrowse:Disable()
+	Endif
+
+	oMARK:oBROWSE:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGATBQF3
+Troca o F3 do Campo TBQ_CHKLIS, conforme TBQ_TIPQUE
+
+@return .T.
+
+@author Vitor Emanuel Batista
+@since 19/09/2013
+/*/
+//---------------------------------------------------------------------
+Static Function SGATBQF3()
+
+	If M->TBQ_TIPQUE == "1"
+		NGTrocaF3( "TBQ_CHKLIS", "TBD" )
+	Else
+		NGTrocaF3( "TBQ_CHKLIS", "TJ2" )
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgTBQChk
+
+Consiste o campo CheckList
+
+@author  Rafael Diogo Richter
+@since   22/09/2005
+/*/
+//-------------------------------------------------------------------
+Static Function SgTBQChk( cCHKLIS, l210, cTipo )
+
+	Local aArea := GetArea()
+	Local lRet := .T.
+	Local lTipQue := NGCADICBASE( "TBQ_TIPQUE", "A", "TBQ", .F. )
+
+	Default cTipo := '1' //Checklist
+
+	If l210 == NIL
+		l210 := .F.
+	EndIf
+
+	If !lCORRET
+		DbSelectArea( "TBQ" )
+		dbSetOrder( 1 )
+		If DbSeek( xFilial( "TBQ" ) + TBN->TBN_CODORD + TBN->TBN_CODPLA + IIf( lTipQue, cTipo, "" ) + cCHKLIS )
+			Help( " ", 1, "JAGRAVADO" )
+			lRet := .F.
+		EndIf
+	EndIf
+	If lRET
+		If cTipo == '2'
+			DbSelectArea( "TJ2" )
+			dbSetOrder( 1 )
+			If !Empty( cChkLis ) .And. !DbSeek( xFilial( "TJ2" ) + cCHKLIS )
+				Help( " ", 1, "REGNOIS" )
+				lRet := .F.
+			Else
+				M->TBQ_DESCHK := TJ2->TJ2_NOMQUE
+			EndIf
+
+		Else
+			DbSelectArea( "TBD" )
+			dbSetOrder( 1 )
+			If !Empty( cChkLis ) .And. !DbSeek(xFilial( "TBD" ) + cCHKLIS )
+				Help( " ", 1, "REGNOIS" )
+				lRet := .F.
+			Else
+
+				M->TBQ_DESCHK := TBD->TBD_DESCHK
+
+				If !l210 //Não localizado onde esta logica é utilizada
+					If !lCORRET
+						aCols[n][3] := TBD->TBD_DESCHK
+					Else
+						aCols[n][2] := TBD->TBD_DESCHK
+					EndIf
+				EndIf
+			EndIf
+
+		EndIf
+	EndIf
+
+		//Não localizado onde é utilizado esta função com aCols
+		//Deverá ser implementado a validação por TBQ_TIPQUE == 2
+	If Len( aCOLS ) > 0 .And. lRET
+		If !lCORRET
+			If aSCAN( aCOLS, { |x| x[2] == M->TBQ_CHKLIS } ) > 0
+				Help( " ", 1, "JAGRAVADO" )
+				lRet := .F.
+			EndIf
+		Else
+			If aSCAN( aCOLS, { |x| x[1] == M->TBQ_CHKLIS } ) > 0
+				Help( " ", 1, "JAGRAVADO" )
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+	lRefresh := .T.
+
+Return lRET
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGVLOCBEM()
+Consiste de acordo com o parametro se o que foi selecionado e bem ou localizacao
+
+@param cValLBem - Indica qual tipo de validacao deve fazer
+					Nil - Nao faz validacao
+					L   - Valida se o que foi selecionando e local.
+					B   - Valida se o que foi selecionando e Bem
+@param cTRB - Tabela temporaria a ser posicionada
+@param 	lSubTree - Indica se usa parcialmente a arvore logica
+					.T. - Utiliza parcialmente
+					.F. - Utiliza toda a arvore
+@param cCodNiv - Indica qual o codigo do primeiro nivel da sub - arvore
+@author Elisangela Costa
+@since 05/06/2007
+@version MP11
+@return .T.
+
+/*/
+//---------------------------------------------------------------------
+Function NGVLOCBEM( cValLBem, cTRB, lSubTree, cCodNiv )
+
+	Local nTamTAF := FWTamSX3( 'TAF_CODNIV' )[1]
+	Default lSubTree := .F.	// Considera toda tree por padrao
+	Default cCodNiv	 := ""	// Codigo do primeiro nivel
+
+	If cValLBem != Nil
+
+		dbSelectArea( cTRB )
+		dbSetOrder( 2 )
+		dbSeek( '001' + SubStr( oTree:GetCargo(), 1, nTamTAF ) )
+		// Verifica se usa uma sub-arvore e se o primeiro nivel dela foi selecionado
+		If lSubTree .And. cCodNiv == SubStr( oTree:GetCargo(), 1, nTamTAF )
+			MsgStop( STR0238, STR0009 ) //"Não pode ser atribuido representação gráfica ao nível principal." ## "ATENÇÃO"
+			Return .F.
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGRETRES
+
+Funcao para fazer o retorno de residuos.
+
+@author  Thiago Olis Machado
+@since   01/07/2005
+
+@param	cResiduo, Caracter, Codigo do Residuo Gerado
+@param	dData, Data, Data de Geracao do Residuo
+@param	cHora, Caracter, Hora de Geracao do Residuo
+@param	nQuanResiduo, Numérico, Quantidade de Geracao
+@param	nOrigem, Numérico, Origem da Geracao
+	1 = Gestao Ambiental
+	2 = Manutencao de Ativos
+	3 = PCP
+@param	aDestino, Array, Array contendo os Destino Interno de Armazenamento do Residuo
+	[1] = Codigo do Destino
+	[1] = Quantidade Enviada
+@param	cNivel, Caracter, Codigo do Nivel da Estrutura Organizacional que gerou o residuo
+@param	aRespostaCri, Array, Array contendo as respostas dos Criterios
+	[1] = Codigo do Criterio
+	[2] = Quantidade
+	[3] = Plano de Acao
+@param	cResponsavel, Caracter, Responsavel pela geracao do residuo
+
+@return	Array contendo a resposta do processamento
+	Array[1] - .T. ou .F.
+		.T. = Processou Corretamente
+		.F. = Erro
+	Array[2] - Descricao do Erro se houver
+/*/
+//-------------------------------------------------------------------
+Function SgRetRes( cResiduo, dData, cHora, nQuanResiduo, nOrigem, aDestino, cNivel, aRespostaCri, cResponsavel, cOrdem, cPlano, Sequenc, ;
+						_cFilOrdem, _cNumSeq )
+
+	Local aErro     := {}
+	Local aArea     := GetArea()
+	Local cUnidade  := ""
+	Local n         := 0
+	Local lTB0Ordem := NGCADICBASE( "TB0_ORDEM", "A", "TB0", .F. )
+	Local i
+	Local j
+	Local k
+	Local l
+	Local lTemSC2
+
+	If Empty( cResiduo )
+		aAdd( aErro, { .F., STR0073 } ) //"Informe o Codigo do Residuo"
+		Return aErro
+	EndIf
+
+	If Empty( nQuanResiduo )
+		aAdd( aErro, { .F., STR0074 } ) //"Informe a Quantidade de Residuo Gerada"
+		Return aErro
+	EndIf
+
+	If Empty( nOrigem )
+		aAdd( aErro, { .F., STR0075 } ) //"Informe a Origem da Geracao do Residuo"
+		Return aErro
+	EndIf
+
+	DbSelectArea( "SB1" )
+	DbSetOrder( 1 )
+	If !DbSeek( xFilial( "SB1" ) + cResiduo )
+		aAdd( aErro, { .F., STR0076 } ) //"Esse residuo nao esta cadastrado como produto"
+		Return aErro
+	Else
+		cUnidade := SB1->B1_UM
+	EndIf
+
+	If AllTrim( Str( nOrigem ) ) $ "1,2,3"
+	Else
+		aAdd( aErro, { .F., STR0077 } ) //"Nao existe a origem informada"
+		Return aErro
+	EndIf
+
+	If Empty( dData )
+		dData := dDataBase
+	EndIf
+
+	If Empty( cHora )
+		cHora := Time()
+	EndIf
+
+	lDestino := (Type( "aDestino" ) == "A" )
+	If !lDestino
+		cDestino := AllTrim( GetNewPar( "MV_SGADES", " " ) )
+		aDestino := {}
+		aAdd( aDestino, { cDestino, nQuanResiduo } )
+		If Empty( aDestino[1][1] )
+			aAdd( aErro, { .F., STR0078 } ) //"Nao foi informado o destino e nao existe destino padrao para esse reporte"
+			Return aErro
+		Else
+			dbSelectArea( "TB2" )
+			dbSetOrder( 1 )
+			If !dbSeek( xFilial( "TB2" ) + AllTrim( cDestino ) )
+				aAdd( aErro, { .F., STR0034 } )	//"O destino padrão informado no parâmetro MV_SGADES, não foi informado no cadastro de Destino."
+				Return aErro
+			EndIf
+		EndIf
+	EndIf
+
+	If Empty( cResponsavel )
+		DbSelectArea( "QAA" )
+		DbSetOrder( 6 )
+		If DbSeek( IIf( Len( QAA->QAA_LOGIN ) > 15, Upper( cUsername ), Upper( Substr( cUsuario, 7, 15 ) ) ) ) //xFilial("QAA")+AllTrim( Upper( SubStr( cUsuario, 7, 15 ) ) ) )
+			cResponsavel := QAA->QAA_LOGIN
+		Else
+			cResponsavel := ""
+		EndIf
+	EndIf
+
+	For l:= 1 To Len( aDestino )
+		If TB2->( DbSeek( xFilial( "TB2" ) + aDestino[l][1] ) )
+			nTolera := TB2->TB2_QUANTI * (TB2->TB2_TOLERA / 100)
+			nTotal  := TB2->TB2_QUANTI - nTolera
+			SB2->(dbSetOrder( 1 ))
+			If !SB2->( DbSeek( xFilial( "SB2" ) + cResiduo + TB2->TB2_CODALM ) )
+				CriaSB2( cResiduo, TB2->TB2_CODALM )
+				MsUnlock( "SB2" )
+			EndIf
+			If SB2->( Dbseek( xFilial( "SB2" ) + cResiduo + TB2->TB2_CODALM ) )
+				nEstoque := SB2->B2_QATU + aDestino[l][2]
+				If nEstoque > nTotal .And. nEstoque <= TB2->TB2_QUANTI
+					aAdd( aErro, { .F., STR0079 + AllTrim( TB2->TB2_CODALM ) + STR0080 + AllTrim( TB2->TB2_CODDES ) + STR0081 } ) //"O Almoxarifado "#"do destino "#" esta no limite de tolerancia"
+					Return aErro
+				ElseIf nEstoque > nTotal .And. nEstoque > TB2->TB2_QUANTI
+					aAdd( aErro, { .F., STR0079 + AllTrim( TB2->TB2_CODALM ) + STR0080 + AllTrim( TB2->TB2_CODDES ) + STR0082 } ) //"O Almoxarifado "#"do destino "#" ultrapassou o limite maximo de armazenamento"
+					Return aErro
+				EndIf
+			EndIf
+		EndIf
+
+		n += aDestino[l][2]
+	Next i
+
+	If n <> nQuanResiduo
+		aAdd( aErro, { .F., STR0083 } )
+		Return aErro
+	EndIf
+
+	//Manipula a tabela TB0
+
+	lAltera := .F.
+	DbSelectArea( "TB0" )
+	DbSetOrder( 2 )
+	DbSeek( xFilial( 'TB0' ) + cResiduo )
+	//Busca o residuo, verifica se a data e a hora são as mesmas da base para não gerar duas ou mais vezes o mesmo resíduo.
+	While TB0->(!Eof()) .And. TB0->TB0_FILIAL == xFilial( 'TB0' ) .And. TB0->TB0_CODRES == cResiduo
+		If (TB0->TB0_DATA == dDATA .And. TB0->TB0_HORA == cHORA)
+			lAltera := .T.
+			Exit
+		EndIf
+
+		TB0->( dbSkip() )
+	End
+
+	RecLock( "TB0", !lAltera )
+		TB0->TB0_FILIAL := xFilial( "TB0" )
+		TB0->TB0_CODOCO := GetSxeNum( "TB0", "TB0_CODOCO" )
+		TB0->TB0_CODRES := cResiduo
+		TB0->TB0_DATA   := dData
+		TB0->TB0_HORA   := cHora
+		TB0->TB0_QTDE   := nQuanResiduo
+		TB0->TB0_UNIMED := cUnidade
+		TB0->TB0_RESPON := cResponsavel
+		TB0->TB0_ORIGEM := Str( nOrigem, 1 )
+		If lTB0Ordem
+			TB0->TB0_FILORD := _cFilOrdem
+			TB0->TB0_ORDEM  := cOrdem
+			TB0->TB0_NUMSEQ := _cNumSeq
+		EndIf
+	MsUnLock( "TB0" )
+	dbSelectArea( "TB0" )
+	ConfirmSX8()
+
+	If !lAltera
+
+		//Manipula a tabela TB4
+
+		For i := 1 To Len( aDestino )
+			DbSelectArea( "TB4" )
+			DbSetOrder( 1 )
+			RecLock( "TB4", .T. )
+				TB4->TB4_FILIAL := xFilial( "TB4" )
+				TB4->TB4_CODOCO := TB0->TB0_CODOCO
+				TB4->TB4_CODRES := cResiduo
+				TB4->TB4_CODDES := aDestino[i][1]
+				TB4->TB4_QUANTI := aDestino[i][2]
+				TB4->TB4_UNIMED := cUnidade
+			MsUnLock( "TB4" )
+		Next
+
+		//Manipula a tabela TBJ
+
+		If !Empty( cNivel )
+			DbSelectArea( "TBJ" )
+			DbSetOrder( 1 )
+			RecLock( "TBJ", .T. )
+				TBJ->TBJ_FILIAL := xFilial( "TBJ" )
+				TBJ->TBJ_CODOCO := TB0->TB0_CODOCO
+				TBJ->TBJ_CODEST := "001"
+				TBJ->TBJ_CODNIV := cNivel
+				TBJ->TBJ_NIVSUP := SgRetResNiv( cNivel )
+			MsUnLock( "TBJ" )
+		EndIf
+
+		lResposta := (Type( "aRespostaCri" ) == "A" )
+		If lResposta
+
+			For k := 1 To Len( aRespostaCri )
+				DbSelectArea( "TB1" )
+				DbSetOrder( 1 )
+				RecLock( "TB1", .T. )
+					TB1->TB1_FILIAL := xFilial( "TB1" )
+					TB1->TB1_CODOCO := TB0->TB0_CODOCO
+					TB1->TB1_CODCRI := aRespostaCri[k][1]
+					TB1->TB1_QTDE   := aRespostaCri[k][2]
+					TB1->TB1_UNIMED := cUnidade
+					TB1->TB1_CODPLA := aRespostaCri[k][3]
+				MsUnLock( "TB1" )
+			Next k
+		EndIf
+
+		//Incluindo entrada do produto no estoque
+
+		If GETMV( "MV_NGSGAES" ) != "N"
+			For j:= 1 To Len( aDestino )
+				If TB2->( DbSeek( xFilial( "TB2" ) + aDestino[j][1] ) )
+					cLocal := TB2->TB2_CODALM
+					If !SB2->( Dbseek( xFilial( "SB2" ) + TB0->TB0_CODRES + cLocal ) )
+						RecLock( "SB2", .T. )
+							SB2->B2_FILIAL := xFilial( "SB2" )
+							SB2->B2_COD    := TB0->TB0_CODRES
+							SB2->B2_LOCAL  := cLocal
+							SB2->B2_QATU   := aDestino[j][2]
+						MsUnLock( "SB2" )
+					EndIf
+
+					// Manipulação, pois, somente a devolução referente a uma requisição
+					// Inicio
+					dbSelectArea( "SB1" )
+					dbSetOrder( 1 )
+					dbSeek( xFilial( "SB1" ) + TB0->TB0_CODRES )
+					nOpc := 3
+					l241 := .F.
+					l261 := .F.
+					DbSelectArea( "SD3" )
+					cnumSeqD  := ProxNum()
+					cDocumSD3 := NextNumero( "SD3", 2, "D3_DOC", .T. )
+					lTemSC2   := NGIFDBSEEK( "SC2", cOrdem + "OS001", 1, .F. )
+
+					aRetEstoq := {}
+					aRetEstoq := SgMovEstoque( "DE0", cLocal, TB0->TB0_CODRES, cnumSeqD, SB1->B1_UM, aDestino[j][2], TB0->TB0_DATA,;
+											 cDocumSD3, Space( Len( SD3->D3_LOTECTL ) ), Space( Len( SD3->D3_NUMLOTE ) ), "", .T. )
+					cNumSD3s := aRetEstoq[1]
+
+					If NGIFDBSEEK( "SD3", cNumSD3s, 4 )
+						RecLock( "SD3", .F. )
+							If lTemSC2
+								SD3->D3_OP := cOrdem+"OS001"
+								SD3->D3_ORDEM := cOrdem
+							EndIf
+							SD3->D3_ESTORNO := Space( Len( SD3->D3_ESTORNO ) )
+						SD3->(MsUnLock())
+					EndIf
+					// Fim
+				EndIf
+			Next j
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return aErro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGRETRESNIV
+
+Funcao para trazer o nivel superior do nivel informado
+
+@author  Thiago Olis Machado
+@since   01/07/2005
+
+@return TAF->TAF_NIVSUP, Caracter, Nivel superior do nivel informado
+/*/
+//-------------------------------------------------------------------
+Function SgRetResNiv(cNivel)
+
+	DbSelectArea( 'TAF' )
+	DbSetOrder( 02 )
+	DbSeek( xFilial('TAF')+cNivel )
+
+Return TAF->TAF_NIVSUP
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAIntPCP
+
+Funcao de integracao com o SIGAPCP, gerando ocorrencia de resÍduos na perda do processo
+
+@author  Vitor Emanuel Batista
+@since   24/08/2009
+
+@param lGrava, Lógico, Indica se a perda esta sendo incluida ou excluida
+@param cNumOP, Caracter, Numero da OP
+/*/
+//-------------------------------------------------------------------
+Function SGAIntPCP( lGrava, cNumOP )
+
+	Local cIntPCP  := AllTrim( GetNewPar( "MV_NGSGAPC", "N" ) )
+	Local cSGADES  := AllTrim( GetNewPar( "MV_SGADES", "" ) )
+	Local aLocal   := {}
+	Local lFirst   := .T.
+	Local lTodos   := .T.
+	Local nBCQuant := 0
+	Local nX
+	Local nY
+	Local nQuant
+	Local cCodPro
+	Local cAliasQry
+
+	//Se SGA nao estiver integrado ao PCP
+	If cIntPCP = 'N'
+		Return
+	EndIf
+
+	If lGrava
+
+		nBCQuant := 0
+		aEval( aCols, { || IIf( GdFieldGet( "BC_MOTIVO", nY ) = "RP", nBCQuant++, Nil ) } )
+		SBC->( dbSkip( - ( Len( aCols ) ) + 1 ) )
+
+		For nY := 1 To Len( aCols )
+				If SBC->BC_MOTIVO = "RP" //REJEITO DO PROCESSO
+					cCodPro := IIf( Empty( SBC->BC_CODDEST ), SBC->BC_PRODUTO, SBC->BC_CODDEST )
+					nQuant  := IIf( Empty( SBC->BC_CODDEST ), SBC->BC_QUANT, SBC->BC_QTDDEST )
+
+					//Verifica se produto eh residuo
+					If NGSEEK( "SB1", cCodPro, 1, "SB1->B1_TIPO" ) = "RE"
+
+						If lFirst .And. nBCQuant > 1
+							If Aviso( STR0009, STR0020 + CHR( 13 ) +;        //"É necessário informar a localização onde o resíduo foi gerado."
+										STR0021, { STR0022, STR0023 } ) == 2 //"Deseja informar a localização para todos os produtos, ou individualmente?" ##"Todos"##"Individual"
+								lTodos := .F.
+							EndIf
+						EndIf
+
+						RecLock( "TB0", .T. )
+							TB0->TB0_FILIAL := xFilial( "TB0" )
+							TB0->TB0_CODOCO := GetSxeNum( 'TB0', 'TB0_CODOCO' )
+							TB0->TB0_DATA   := SBC->BC_DATA
+							TB0->TB0_HORA   := Substr( Time(), 1, 5 )
+							TB0->TB0_CODRES := cCodPro
+							TB0->TB0_QTDE   := nQuant
+							TB0->TB0_UNIMED := NGSEEK( 'SB1', SBC->BC_PRODUTO, 1, 'SB1->B1_UM' )
+							TB0->TB0_NUMSEQ := SBC->BC_NUMSEQ
+							TB0->TB0_ORIGEM := "3"
+						MsUnLock( "TB0" )
+
+						//Confirmando a Numeracao Automatica
+						ConfirmSX8()
+
+						If !Empty( cSGADES )
+							RecLock( "TB4", .T. )
+								TB4_FILIAL := xFilial( "TB4" )
+								TB4_CODOCO := TB0->TB0_CODOCO
+								TB4_CODRES := TB0->TB0_CODRES
+								TB4_CODDES := cSGADES
+								TB4_QUANTI := TB0->TB0_QTDE
+								TB4_UNIMED := TB0->TB0_UNIMED
+							MsUnLock()
+						EndIf
+
+						If lFirst .Or. !lTodos
+							If !lTodos
+								aLocal := SgaSelect( 56, "Produto: "+ cCodPro + " - " + NGSEEK( 'SB1', cCodPro, 1, "SB1->B1_DESC" ) )
+							Else
+								aLocal := SgaSelect( 56 )
+							EndIf
+
+						EndIf
+
+						//Grava a Localizacao do Residuo
+						If Len( aLocal ) > 0
+							For nX  := 1 To Len( aLocal )
+								If aLocal[nX][2]
+									dbSelectArea( "TBJ" )
+									dbSetOrder( 1 )
+									If !dbSeek( xFilial( "TBJ" ) + TB0->TB0_CODOCO + '001' + aLocal[nX][1] )
+										RecLock( 'TBJ', .T. )
+											TBJ->TBJ_FILIAL := xFilial( 'TBJ' )
+											TBJ->TBJ_CODOCO := TB0->TB0_CODOCO
+											TBJ->TBJ_CODEST := '001'
+											TBJ->TBJ_CODNIV := aLocal[nX][1]
+											TBJ->TBJ_NIVSUP := NGSEEK( 'TAF', "001" + aLocal[nX][1], 1, "TAF->TAF_NIVSUP" )
+										MsUnLock( 'TBJ' )
+									EndIf
+								EndIf
+							Next
+						EndIf
+
+						lFirst := .F.
+					EndIf
+				EndIf
+
+				dbSelectArea( "SBC" )
+				dbSkip()
+		Next nY
+	Else
+		For nY := 1 To Len( aCols )
+			nBCRecno := GdFieldGet( "BC_REC_WT", nY )
+			If aCols[nY][1] = 'S' .And. !Empty( nBCRecno )
+				cAliasQry := GetNextAlias()
+				cQuery := " SELECT TB0.R_E_C_N_O_ FROM " + RetSqlName( "TB0" ) + " TB0"
+				cQuery += " JOIN " + RetSqlName( "SBC" ) + " SBC ON SBC.BC_NUMSEQ = TB0.TB0_NUMSEQ "
+				cQuery += " WHERE SBC.R_E_C_N_O_ = " + cValToChar( nBCRecno ) + " AND TB0.D_E_L_E_T_ = ''"
+				cQuery := ChangeQuery( cQuery )
+				MPSysOpenQuery( cQuery, cAliasQry )
+
+				dbSelectArea( cAliasQry )
+				dbGoTop()
+				While (cAliasQry)->(!Eof())
+					TB0->( dbGoTo( ( cAliasQry )->( R_E_C_N_O_) ) )
+					dbSelectArea( "TB4" )
+					dbSetOrder( 1 )
+					If dbSeek( xFilial( "TB4" ) + TB0->TB0_CODOCO )
+						RecLock( "TB4", .F. )
+							dbDelete()
+						MsUnLock()
+					EndIf
+
+					dbSelectArea( "TBJ" )
+					dbSetOrder( 1 )
+					dbSeek( xFilial( "TBJ" ) + TB0->TB0_CODOCO )
+					While !Eof() .And. xFilial( "TBJ" ) == TBJ->TBJ_FILIAL .And. TB0->TB0_CODOCO == TBJ->TBJ_CODOCO
+						RecLock( "TBJ", .F. )
+							dbDelete()
+						MsUnLock()
+						dbSkip()
+					EndDo
+
+					RecLock( "TB0", .F. )
+						dbDelete()
+					MsUnLock()
+					(cAliasQry)->(dbSkip())
+				EndDo
+				(cAliasQry)->(dbCloseArea())
+			EndIf
+		Next nY
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGSaveBmp
+
+Salvar o grafico em BMP
+
+@author  Marcos Wagner Junior
+@since   24/11/2009
+
+@param oGrafic, Objeto, Objeto grafico
+/*/
+//-------------------------------------------------------------------
+Function NGSaveBmp( oGraphic )
+
+	Local cBmpName
+	Local cTmp
+	Local nPos
+	Local cRaizServer // Onde sera criado o arquivo da imagem
+	Local cWhereToSave := "\" // Somente gravar abaixo do rootpath do servidor
+
+	cBmpName := cGetFile( STR0029, STR0030, 0, "", .F., GETF_LOCALHARD ) //"Arquivos BMP (*.BMP) |*.bmp|"###"Selecione arquivo .BMP"
+
+	If Empty( cBmpName )
+		Return
+	EndIf
+
+	If Rat( "\", cBmpName ) > 0
+		cWhereToSave := Subs( cBmpName, 1, Rat( "\", cBmpName ) )
+		cBmpName	 := Subs( cBmpName, Rat( "\", cBmpName ) + 1 )
+	Endif
+
+	If ( nPos := At( ".", AllTrim( cBmpName ) ) ) == 0
+		cBmpName := AllTrim( cBmpName ) + ".BMP"
+	Else
+		cBmpName := AllTrim( Substr( cBmpName, 1, nPos ) ) + "BMP"
+	EndIf
+
+	If At( ":", cWhereToSave ) > 0
+		cTmp := CriaTrab( , .F. ) + ".BMP"
+		cRaizServer := IIf( issrvunix(), "/", "\" )
+		If oGraphic:SaveToBMP( cTmp, cRaizServer )
+			__CopyFile( cRaizServer + cTmp, cWhereToSave + cBmpName )
+			Ferase( cRaizServer + cTmp )
+			MsgInfo( STR0031 + cBmpName + STR0032 ) //"Arquivo: "###" gerado com sucesso"
+		Else
+			ApMsgAlert( STR0033 ) //"Nao foi possivel gerar o arquivo bitmap do grafico"
+		EndIf
+	Else
+		If oGraphic:SaveToBMP( cBmpName, cWhereToSave )
+			MsgInfo( STR0031 + cBmpName + STR0032 ) //"Arquivo: "###" gerado com sucesso"
+		Else
+			ApMsgAlert( STR0033 ) //"Nao foi possivel gerar o arquivo bitmap do grafico"
+		EndIf
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgFilhoP
+
+Monta a estrutura dos filhos apartir do arquivo TAF
+
+@author  Marcos Wagner Junior
+@since   19/09/2003
+/*/
+//-------------------------------------------------------------------
+Function SgFilhoP( cPai, cDesc, cNivSup, cModSga, cModMnt, cModMdt, cMat, cCodTipo, cTipo, nModulo, cCargo, lNivel2, cNivAnt )
+
+	Local nRec
+
+	If !oTree:TreeSeek( cPai )
+		cCargo  := SubStr( oTree:GetCargo(), 4, 3 )
+		oTree:TreeSeek( cNivAnt )
+		oTree:AddItem( cDesc, cPai + cCargo + ' ', 'Folder7', 'Folder8', , , 2 )
+		oTree:TreeSeek( cPai )
+	Endif
+
+	oTree:ChangeBmp( 'Folder7', 'Folder8' )
+	(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "2"
+
+	nPos := aScan( aLocal, { |x| x[1] == cPai } )
+	If nPos > 0
+		aLocal[nPos][2] := .T.
+	Else
+		aAdd( aLocal, { cPai, .T. } )
+	EndIf
+
+	DbSelectArea( "TAF" )
+	While !TAF->(Eof()) .And. TAF->TAF_FILIAL == xFilial( 'TAF' ) .And.;
+		TAF->TAF_NIVSUP == cPai
+
+		If !SGAFILTAF( nModulo )
+			Loop
+		Endif
+
+		nRec    := Recno()
+		cComp   := TAF->TAF_CODNIV
+		cDescri := TAF->TAF_NOMNIV
+		cNivSup := TAF->TAF_NIVSUP
+		cMat    := TAF->TAF_MAT
+		cIndCon := TAF->TAF_INDCON
+		cCodCon := TAF->TAF_CODCON
+		cCC     := TAF->TAF_CCUSTO
+		cCT     := TAF->TAF_CENTRA
+		cFilDoc := TAF->TAF_DOCFIL
+		cModSga := TAF->TAF_MODSGA
+		cModMnt := TAF->TAF_MODMNT
+		cModMdt := TAF->TAF_MODMDT
+		cOrdem  := TAF->TAF_ORDEM
+		If TAF->TAF_INDCON == '1'
+			cCarFil   := 'BEM'
+		ElseIf TAF->TAF_INDCON == '2'
+			cCarFil := 'LOC'
+		Endif
+
+		DbSelectArea( "TAF" )
+
+		If DbSeek( xFilial( 'TAF' ) + cCodEst + cComp )
+			SgFilhoP( cComp, cDescri, cNivSup, cModSga, cModMnt, cModMdt, cMat, cCodCon, cIndCon, , cCarFil, .T., cNivSup )
+		Else
+			If !oTree:TreeSeek( cComp )
+				oTree:TreeSeek( cNivSup )
+				oTree:AddItem( cDescri, cComp + cCarFil + ' ', 'Folder7', 'Folder8', , , 2 )
+				(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "2"
+				If lNivel2 .And. cNivSup != cNivAnt
+					oTree:TreeSeek( cNivAnt )
+					oTree:EndTree()
+				Endif
+			Else
+				oTree:ChangeBmp( 'Folder7', 'Folder8' )
+				(oTree:cArqTree)->T_CARGO := SubStr( oTree:GetCargo(), 1, 6 ) + "2"
+			Endif
+			nPos := aScan( aLocal, { |x| x[1] == cComp } )
+			If nPos > 0
+				aLocal[nPos][2] := .T.
+			Else
+				aAdd( aLocal, { cComp, .T. } )
+			EndIf
+		EndIf
+
+		DbSelectArea( "TAF" )
+		DbGoto( nRec )
+		TAF->(DbSkip())
+	End
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAFILTAF
+
+Filtra a TAF de acordo com o modulo
+
+@author  Marcos Wagner Junior
+@since   04/12/2009
+
+@param	_nModulo, Numérico, Número do modulo a ser filtrado
+/*/
+//-------------------------------------------------------------------
+Function SGAFILTAF( _nModulo )
+
+	Local lRet := .T.
+
+	If (_nModulo == 56 .Or. _nModulo == 10)
+		_nModulo := 3
+	ElseIf ( _nModulo == 19 .Or. _nModulo == 95 )
+		_nModulo := 4
+	ElseIf _nModulo == 35
+		_nModulo := 5
+	Endif
+
+	If _nModulo == 3 .And. Empty( TAF->TAF_MODSGA )
+		TAF->(DbSkip())
+		lRet := .F.
+	EndIf
+	If _nModulo == 4 .And. Empty( TAF->TAF_MODMNT )
+		TAF->(DbSkip())
+		lRet := .F.
+	EndIf
+	If _nModulo == 5 .And. Empty( TAF->TAF_MODMDT )
+		TAF->(DbSkip())
+		lRet := .F.
+	EndIf
+
+	If TAF->TAF_INDCON != '1' .And. TAF->TAF_INDCON != '2'
+		TAF->(DbSkip())
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgaMntEst
+
+Faz a requisição e/ou a baixa do estoque (SB2/SD3)
+
+@author  Marcos Wagner Junior
+@since   18/03/2010
+
+@param	_nOpcx, Numérico, 3, 4 ou 5 (Inc/Alt/Exc)
+@param	_cTLCODIGO, Caracter, Codigo do produto
+@param	_cTLNUMSEQ, Caracter, Numero sequencial
+@param	_cTLORDEM, Caracter, Ordem de Servico
+@param	_cTLSEQREL, Caracter, Sequencia
+@param	_cTLTIPORE, Caracter, Tipo de Produto
+@param	_nTLQUANTI, Numérico, Quantidade a ser estornada
+
+@return .T., Lógico
+/*/
+//-------------------------------------------------------------------
+Function SgaMntEst( _nOpcx, _cTLCODIGO, _cTLNUMSEQ, _cTLORDEM, _cTLSEQREL, _cTLTIPORE, _nTLQUANTI, _nTLFILIAL )
+
+	Local aCamposSGA := {}
+	Local cChaveTB0  := ''
+
+	If _nOpcx == 3
+		If Alltrim( STL->TL_SEQRELA ) != "0"  .And. STL->TL_TIPOREG == "P"
+			IF SuperGetMv( "MV_SGAMNT", .F., "N" ) == "S" .And. GetMv( "MV_NGSGAES" ) != "N"
+				If FindFunction( "SGINTMNT" )
+					aAdd( aCamposSGA, { STL->TL_CODIGO, STL->TL_DTINICI, STL->TL_HOINICI,;
+						 STL->TL_QUANTID, STL->TL_ORDEM, STL->TL_PLANO,;
+						 STL->TL_SEQRELA, STL->TL_FILIAL, STL->TL_NUMSEQ } )
+					SGINTMNT( aCamposSGA, 2 )
+				Endif
+			Endif
+		Endif
+	ElseIf _nOpcx == 4 .Or. _nOpcx == 5
+		If Alltrim( _cTLSEQREL ) != "0"  .And. _cTLTIPORE == "P"
+			dbSelectArea( "TC8" )
+			dbSetOrder( 01 )
+			If dbSeek( xFilial( "TC8" ) + _cTLCODIGO )
+				While !Eof() .And. TC8->TC8_FILIAL == xFilial( "TC8" ) .And. TC8->TC8_CODPRO == _cTLCODIGO
+					cAliasQry := GetNextAlias()
+					cQuery := " SELECT D3_LOCAL, D3_NUMSEQ, D3_UM, D3_QUANT, D3_EMISSAO, D3_DOC, D3_LOTECTL, D3_NUMLOTE, D3_DTVALID "
+					cQuery += " FROM " + RetSqlName( "SD3" )
+					cQuery += " WHERE D3_COD = '"+TC8->TC8_CODRES+"'"
+					cQuery += " AND   D3_OP  = '"+_cTLORDEM+'OS001'+"'"
+					cQuery += " AND   D_E_L_E_T_ <> '*' "
+					cQuery += " AND   R_E_C_N_O_ = "
+					cQuery += "(SELECT MAX(R_E_C_N_O_) FROM " + RetSqlName( "SD3" ) + " WHERE "
+					cQuery += " D3_COD = '"+TC8->TC8_CODRES+"'"
+					cQuery += " AND   D3_OP  = '"+_cTLORDEM+'OS001'+"'"
+					cQuery += " AND   D_E_L_E_T_ <> '*')"
+					cQuery += " ORDER BY R_E_C_N_O_ "
+					cQuery := ChangeQuery( cQuery )
+					MPSysOpenQuery( cQuery, cAliasQry )
+					If !Eof()
+						SgMovEstoque( 'RE0', (cAliasQry)->D3_LOCAL, TC8->TC8_CODRES, (cAliasQry)->D3_NUMSEQ, (cAliasQry)->D3_UM,;
+									 (cAliasQry)->D3_QUANT, STOD( (cAliasQry)->D3_EMISSAO ), (cAliasQry)->D3_DOC,;
+									 (cAliasQry)->D3_LOTECTL, (cAliasQry)->D3_NUMLOTE, STOD( (cAliasQry)->D3_DTVALID ), .T. )
+					Endif
+					(cAliasQry)->(dbCloseArea())
+					dbSelectArea( "TC8" )
+					dbSkip()
+				End
+		EndIf
+
+			cAliasQry := GetNextAlias()
+			cQuery := " SELECT TB0_FILIAL, TB0_CODOCO, R_E_C_N_O_ "
+			cQuery += " FROM " + RetSqlName( "TB0" )
+			cQuery += " WHERE TB0_FILORD = '"+_nTLFILIAL+"'"
+			cQuery += " AND   TB0_ORDEM  = '"+_cTLORDEM+"'"
+			cQuery += " AND   TB0_NUMSEQ = '"+_cTLNUMSEQ+"'"
+			cQuery += " AND   D_E_L_E_T_ = ' ' "
+			cQuery += " ORDER BY TB0_CODOCO "
+			cQuery := ChangeQuery( cQuery )
+			MPSysOpenQuery( cQuery, cAliasQry )
+			dbGoTop()
+			While !Eof()
+
+				cChaveTB0 := (cAliasQry)->TB0_FILIAL+(cAliasQry)->TB0_CODOCO
+
+				dbSelectArea( "TB0" )
+				dbGoTo( (cAliasQry)->R_E_C_N_O_ )
+				RecLock( "TB0", .F. )
+					dbDelete()
+				MsUnlock( "TB0" )
+
+				dbSelectArea( "TB4" )
+				dbSetOrder( 01 )
+				If dbSeek( cChaveTB0 )
+					While !Eof() .And. TB4->TB4_FILIAL+TB4->TB4_CODOCO == cChaveTB0
+						RecLock( "TB4", .F. )
+							dbDelete()
+						MsUnlock( "TB4" )
+						dbSkip()
+					End
+				EndIf
+
+				dbSelectArea( "TBJ" )
+				dbSetOrder( 01 )
+				If dbSeek( cChaveTB0 )
+					While !Eof() .And. TBJ->TBJ_FILIAL+TBJ->TBJ_CODOCO == cChaveTB0
+						RecLock( "TBJ", .F. )
+							dbDelete()
+						MsUnlock( "TBJ" )
+						dbSkip()
+					End
+				EndIf
+
+				dbSelectArea( "TB1" )
+				dbSetOrder( 01 )
+				If dbSeek( cChaveTB0 )
+					While !Eof() .And. TB1->TB1_FILIAL+TB1->TB1_CODOCO == cChaveTB0
+						RecLock( "TB1", .F. )
+							dbDelete()
+						MsUnlock( "TB1" )
+						dbSkip()
+					End
+				EndIf
+
+				dbSelectArea( cAliasQry )
+				dbSkip()
+			End
+			(cAliasQry)->(dbCloseArea())
+
+			If _nOpcx == 4
+				If FindFunction( "SGINTMNT" )
+					aAdd( aCamposSGA, { STL->TL_CODIGO, STL->TL_DTINICI, STL->TL_HOINICI,;
+						 STL->TL_QUANTID, STL->TL_ORDEM, STL->TL_PLANO,;
+						 STL->TL_SEQRELA, STL->TL_FILIAL, STL->TL_NUMSEQ } )
+					SGINTMNT( aCamposSGA, 2 )
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LoadTreeTRB
+
+Monta a estrutura apartir do arquivo TRB
+
+@author  Wagner S. de Lacerda
+@since   15/04/2010
+/*/
+//-------------------------------------------------------------------
+Static Function LoadTreeTRB( cPai, nMod, cProg, cTRB, lPredio )
+
+	Local cDescri
+	Private nNivel	  := 1
+	Private nMaxNivel := 1
+	Private cCargo    := 'LOC'
+	Private cPrograma := cProg
+
+	Default lPredio   := .T. //Define o uso do Predio no primeiro nivel da arvore
+
+	cFolderA := "PREDIO" //Folder Verde Fechado
+	cFolderB := "PREDIO" //Folder Verde Aberto
+	If Empty( cDesc ) .And. lTRBSGA .And. !Empty(cTRBSGA)
+		Return oTree
+	EndIf
+
+	If lPredio
+		DbAddTree oTree Prompt cDesc  Resource cFolderA, cFolderB Cargo cPai+cCargo
+	EndIf
+
+	DbSelectArea( cTRB )
+	DbSetOrder( 1 )
+	DbSeek( cCodEst + cPai )
+	ProcRegua( RecCount() )
+	While !Eof() .And. (cTRB)->NIVSUP == cPai
+
+		IncProc() // Incrementa regua de processamento
+
+		If !Empty( (cTRB)->DELETADO ) .Or. (cTRB)->TIPO == "0" .Or. ( Empty( (cTRB)->MODMNT ) .And. nMod == 4 );
+				.Or. ( Empty( (cTRB)->MODMDT ) .And. nMod == 5 )
+
+			(cTRB)->(DbSkip())
+			Loop
+		EndIf
+
+		If nMod == 5 .And.(cTRB)->TIPO != "2"
+			(cTRB)->(DbSkip())
+			Loop
+		EndIf
+
+		nRec    := Recno()
+		cComp   := (cTRB)->CODPRO
+		cDescri := (cTRB)->DESCRI
+		cNivSup := (cTRB)->NIVSUP
+		cMat    := (cTRB)->RESPONS
+		cIndCon := (cTRB)->TIPO
+		cCodCon := (cTRB)->CODTIPO
+		cModSga := (cTRB)->MODSGA
+		cModMnt := (cTRB)->MODMNT
+		cModMdt := (cTRB)->MODMDT
+		cCargo  := 'LOC'
+
+		If (cTRB)->TIPO == '1' .And. nMod == 4
+				cCargo   :=  'BEM'
+				cFolderA := "ENGRENAGEM"
+				cFolderB := "ENGRENAGEM"
+		ElseIf (cTRB)->TIPO == '2'
+			cCargo := 'LOC'
+			If (cTRB)->PLANTA == "1"
+				cFolderA := 'ico_planta_fecha'
+				cFolderB := 'ico_planta_abre'
+			Else
+				cFolderA := 'ico_planta_local'
+				cFolderB := 'ico_planta_local'
+			EndIf
+		EndIf
+
+		DbSelectArea( cTRB )
+		If DbSeek( cCodEst + cComp )
+			LoadSonTRB( cComp, cCodEst, cDescri, cCargo, cFolderA, cFolderB, nRec, cTRB, nMod )
+		Else
+			DbAddItem oTree Prompt cDescri Resource cFolderA Cargo cComp + cCargo
+		EndIf
+
+			nNivel++
+
+			DbSelectArea(cTRB)
+			DbGoto(nRec)
+			DbSkip()
+	End
+	oTree:TreeSeek( cPai + cCargo )
+
+	nMaxNivel := nNivel
+
+	dbSelectArea( cTRB )
+	dbSetOrder( 5 )
+	If (cTRB)->(RecCount()) > 0
+		While nMaxNivel >= 1
+			dbSeek( "001" + Str( nMaxNivel, 2, 0 ) )
+			While (cTRB)->NIVEL == nMaxNivel
+				If (cTRB)->TIPO == '1'
+					cCargo	:= 'BEM'
+				ElseIf (cTRB)->TIPO == '2'
+					cCargo	:= 'LOC'
+				EndIf
+
+				oTree:TreeSeek( (cTRB)->CODPRO + cCargo )
+
+				oTree:PtCollapse()
+				(cTRB)->(dbSkip())
+			End
+			nMaxNivel--
+		End
+	EndIf
+
+	oTree:PtCollapse()
+	DbEndTree oTree
+
+Return oTree
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LoadSonTRB
+
+Monta a estrutura dos filhos apartir do arquivo TRB
+
+@author  Wagner S. de Lacerda
+@since   15/04/2010
+@version version
+/*/
+//-------------------------------------------------------------------
+Static Function LoadSonTRB( cPai, cCodEst, cDescri, cCargo, cFolderA, cFolderB, nRec, cTRB, nMod )
+
+	DbAddTree oTree Prompt cDescri Resource cFolderA, cFolderB Cargo cPai+cCargo
+
+	dbSelectArea( cTRB )
+	While !Eof() .And. (cTRB)->NIVSUP == cPai
+
+		IncProc() // Incrementa regua de processamento
+
+		If !Empty( (cTRB)->DELETADO ) .Or. (cTRB)->TIPO == "0" .Or. ( Empty( (cTRB)->MODMNT ) .And. nMod == 4 );
+				.Or. ( Empty( (cTRB)->MODMDT ) .And. nMod == 5 )
+			(cTRB)->(DbSkip())
+			Loop
+		EndIf
+
+		If nMod == 5 .And.(cTRB)->TIPO != "2"
+			(cTRB)->(DbSkip())
+			Loop
+		EndIf
+
+		nRec    := Recno()
+		cComp   := (cTRB)->CODPRO
+		cDescri := (cTRB)->DESCRI
+		cCargo := 'LOC'
+
+		If (cTRB)->TIPO == '1'
+			cCargo   := 'BEM'
+			cFolderA := "ENGRENAGEM"
+			cFolderB := "ENGRENAGEM"
+		ElseIf (cTRB)->TIPO == '2'
+			cCargo := 'LOC'
+			If (cTRB)->PLANTA == "1"
+				cFolderA := 'ico_planta_fecha'
+				cFolderB := 'ico_planta_abre'
+			Else
+				cFolderA := 'ico_planta_local'
+				cFolderB := 'ico_planta_local'
+			EndIf
+		EndIf
+
+		dbSelectArea( cTRB )
+		DbSetOrder( 1 )
+		If DbSeek( cCodEst + cComp )
+			LoadSonTRB( cComp, cCodEst, cDescri, cCargo, cFolderA, cFolderB, nRec, cTRB, nMod )
+		Else
+			DbAddItem oTree Prompt cDescri Resource cFolderA Cargo cComp+cCargo
+		EndIf
+		dbSelectArea( cTRB )
+		oTree:TreeSeek( cComp + cCargo )
+		nNivel++
+		DbGoto( nRec )
+		dbSkip()
+	End
+	DbEndTree oTree
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGATRBEST
+
+Retorna Array definindo os campos e indices a serem criados nos arquivos temporario da Estrutura Organizacional
+
+@author  Roger Rodrigues
+@since   12/08/2010
+/*/
+//-------------------------------------------------------------------
+Function SGATRBEST( lFwTemp )
+
+	Local aEstrutura := { {}, {}, GetNextAlias() }
+	Local aCampos    := {}
+
+	Default lFwTemp := .F.
+
+	//Define variaveis private padrao
+	_SetOwnerPrvt( "oTree", Nil )
+	_SetOwnerPrvt( "aItensCar", {} )
+	_SetOwnerPrvt( "nNivel", 0 )
+	_SetOwnerPrvt( "nMaxNivel", 0 )
+	_SetOwnerPrvt( "cCodEst", "001" )
+	_SetOwnerPrvt( "cDesc", NGSEEK( "TAF", "001000", 1, "TAF->TAF_NOMNIV" ) )
+
+	// Variaveis de controle para existencia de campos
+	_SetOwnerPrvt( "lRateio", NGCADICBASE( "TAF_RATEIO", "D", "TAF", .F. ) )
+	_SetOwnerPrvt( "lRetS", NGCADICBASE( "TAF_ETAPA", "A", "TAF", .F. ) )
+	_SetOwnerPrvt( "lFamilia", NGCADICBASE( "TAF_CODFAM", "D", "TAF", .F. ) )
+	_SetOwnerPrvt( "lSitNiv", NGCADICBASE( "TAF_SITNIV", "A", "TAF", .F. ) ) // Verifica se o update em questao, situacao do nivel, foi aplicado [UPDSGA25/10]
+
+	// Campo da tabela temporaria
+	aAdd( aCampos, { "CODEST"  , "C", 03, 0 } )
+	aAdd( aCampos, { "CODPRO"  , "C", FWTamSX3( 'TAF_CODNIV' )[1], 0 } )
+	aAdd( aCampos, { "DESCRI"  , "C", 56, 0 } )
+	aAdd( aCampos, { "NIVSUP"  , "C", FWTamSX3( 'TAF_NIVSUP' )[1], 0 } )
+	aAdd( aCampos, { "RESPONS" , "C", IIf( TAMSX3( "TAF_MAT" )[1] > 0, TAMSX3( "TAF_MAT" )[1], 10 ), 0 } )
+	aAdd( aCampos, { "TIPO"    , "C", 01, 0 } )
+	aAdd( aCampos, { "CODTIPO" , "C", 16, 0 } )
+	aAdd( aCampos, { "CC"      , "C", IIf( TAMSX3( "TAF_CCUSTO" )[1] > 0, TAMSX3( "TAF_CCUSTO" )[1], 9 ), 0 } )
+	aAdd( aCampos, { "CENTRAB" , "C", IIf( TAMSX3( "TAF_CENTRA" )[1] > 0, TAMSX3( "TAF_CENTRA" )[1], 6 ), 0 } )
+	aAdd( aCampos, { "DOCFIL"  , "C", 02, 0 } )
+	aAdd( aCampos, { "MODSGA"  , "C", 01, 0 } )
+	aAdd( aCampos, { "MODMNT"  , "C", 01, 0 } )
+	aAdd( aCampos, { "MODMDT"  , "C", 01, 0 } )
+	aAdd( aCampos, { "ORDEM"   , "C", FWTamSX3( 'TAF_ORDEM' )[1], 0 } )
+	aAdd( aCampos, { "DELETADO", "C", 01, 0 } )
+	aAdd( aCampos, { "NIVEL"   , "N", 03, 0 } )
+	aAdd( aCampos, { "OPERAC"  , "C", 01, 0 } )
+
+	If lRateio
+		aAdd( aCampos, { "RATEIO", "C", 01, 0 } )
+	Endif
+
+	If lRetS
+		aAdd( aCampos, { "ETAPA", "C", 01, 0 } )
+	EndIf
+
+	If lFamilia
+		aAdd( aCampos, { "CODFAM", "C", 06, 0 } )
+	Endif
+
+	If lSitNiv
+		aAdd( aCampos, { "SITNIV", "C", 01, 0 } )
+		aAdd( aCampos, { "ATFIL", "C", 01, 0 } )
+	Endif
+	If NGCADICBASE( "TAF_DEPTO", "A", "TAF", .F. )
+		aAdd (aCampos, { "DEPTO", "C", IIf( TAMSX3( "TAF_DEPTO" )[1] > 0, TAMSX3( "TAF_DEPTO" )[1], 9 ), 0 } )
+	EndIf
+
+	aAdd( aCampos, { "AMBIE", "C", TAMSX3( "TAF_CODAMB" )[1], 0 } )
+
+	aEstrutura[1] := aClone( aCampos )
+	If lFwTemp
+		//-------------------------------------------------------------------------------------
+		//Ao adicionar algum indice por está condição, favor colocar somente os campos.
+		//Pois o objeto criado pelo FWTemporaryTable() não suporta campos dentro de funções, por exemplo, "DESCEND(MODSGA)"
+		//deverá ficar somente "MODSGA".
+		//-------------------------------------------------------------------------------------
+		aEstrutura[2] := {   { "CODEST", "NIVSUP" },;
+							 { "CODEST", "CODPRO" },;
+							 { "TIPO", "CODTIPO" },;
+							 { "CODEST", "NIVSUP", "ORDEM" },;
+							 { "CODEST", "NIVEL", "ORDEM" },;
+							 { "CODEST", "MODSGA", "ORDEM" } }
+
+	Else
+		aEstrutura[2] := { "CODEST+NIVSUP", "CODEST+CODPRO", "TIPO+CODTIPO", "CODEST+NIVSUP+ORDEM", "CODEST+STRzero(NIVEL,3)+ORDEM", "CODEST+DESCEND(MODSGA)+DESCEND(ORDEM)" }
+	EndIf
+
+Return aEstrutura
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGAGEEPCP
+
+Faz integracao da producao gerada pelo modulo PCP com Gestao de Gases de Efeito Estufa do SGA
+
+@author  Roger Rodrigues
+@since   25/08/2010
+/*/
+//-------------------------------------------------------------------
+Function SGAGEEPCP( cChave, cModulo )
+
+	Local aProdutos := {}
+	Local aArea     := GetArea()
+	Local nTamSTJ   := IIf( ( TAMSX3( "TJ_ORDEM" )[1] ) > 0, TAMSX3( "TJ_ORDEM" )[1], 6 )
+
+	//Verifica se o update foi aplicado
+	If !NGCADICBASE( "TD9_FILIAL", "A", "TD9", .F. )
+		RestArea( aArea )
+		Return .F.
+	EndIf
+
+	//Verifica se esta integrado ao PCP
+	If cModulo == "3"
+		If AllTrim( GetNewPar( "MV_NGSGAPC", "N" ) ) == "N"
+			Return .F.
+		Endif
+		//Se for uma OP gerada pelo MNT desconsidera
+		If Substr( cChave, nTamSTJ+1, 5 ) == "OS001"
+			Return .F.
+		Endif
+		//Verifica se existem ocorrencias para OP
+		dbSelectArea( "TD9" )
+		dbSetOrder( 4 )
+		If dbSeek( xFilial( "TD9" ) + cChave )
+			//Se existir deleta todas ocorrencias e gera novas
+			SGESTORGEE( cChave, cModulo )
+		Endif
+
+		//Carrega produtos da OP em array
+		dbSelectArea( "SD3" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SD3" ) + cChave )
+		While !Eof() .And. xFilial( "SD3" ) + cChave == SD3->D3_FILIAL + SD3->D3_OP
+			//Considera somente os nao estornados e que nao sao P.A. da O.P.
+			If Empty( SD3->D3_ESTORNO ) .And. Substr( SD3->D3_CF, 1, 2 ) == "RE"
+				aAdd( aProdutos, {SD3->D3_COD, SD3->D3_QUANT, SD3->D3_OP, "" } )
+			Endif
+			dbSelectArea( "SD3" )
+			dbSkip()
+		End
+	ElseIf cModulo == "2"
+		If AllTrim( GetNewPar( "MV_SGAMNT", "N" ) ) == "N"
+			Return .F.
+		Endif
+
+		//Verifica se existem ocorrencias para OP
+		dbSelectArea( "TD9" )
+		dbSetOrder( 5 )
+		If dbSeek( xFilial( "TD9" ) + cChave )
+			//Se existir deleta todas ocorrencias e gera novas
+			SGESTORGEE( cChave, cModulo )
+		EndIf
+
+		//Carrega produtos da O.S. em array
+		dbSelectArea( "STL" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "STL" ) + cChave )
+		While !Eof() .And. xFilial( "STL" ) + cChave == STL->TL_FILIAL + STL->TL_ORDEM
+			//Somente os de tipo Produto
+			If STL->TL_TIPOREG == "P" .And. STL->TL_SEQRELA > "0"
+				aAdd( aProdutos, { STL->TL_CODIGO, STL->TL_QUANTID, "", STL->TL_ORDEM } )
+			Endif
+			dbSelectArea( "STL" )
+			dbSkip()
+		End
+	Endif
+
+	If Len( aProdutos ) > 0//Gera ocorrencias
+		Processa( { || SGGEEOCOR( aProdutos, cModulo ) }, STR0035, STR0036 ) //"Aguarde..."##"Gerando Ocorrências do GEE..."
+	Endif
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGGEEOCOR
+
+Gera ocorrencias do GEE baseado nos produtos informados num array
+
+@author  Roger Rodrigues
+@since   25/08/2010
+/*/
+//-------------------------------------------------------------------
+Function SGGEEOCOR( aProd, cModulo )
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aArea       := GetArea()
+	Local nQtdLoc     := 0
+	Local nQtdFon     := 0
+	Local aColsGG     := {}
+	Local aHeadGG     := aClone( CABECGETD( "TDA", { "TDA_CODOCO" } ) )
+	Local i
+
+	//Verifica se o update foi aplicado
+	If !NGCADICBASE( "TD9_FILIAL", "A", "TD9", .F. )
+		RestArea( aArea )
+		NGRETURNPRM( aNGBEGINPRM )
+		Return .F.
+	EndIf
+
+	Inclui := .T.
+	Altera := .F.
+	//Percorre todos produtos
+	ProcRegua( Len( aProd ) )
+
+	For i:=1 To Len( aProd )
+		IncProc()
+		//Verifica se existe definicao para o produto
+		dbSelectArea( "TD2" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TD2" ) + aProd[i][1] )
+			dbSelectArea( "TD3" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "TD3" ) + TD2->TD2_CODPRO )
+			While !Eof() .And. xFilial( "TD3" ) + TD2->TD2_CODPRO == TD3->( TD3_FILIAL + TD3_CODPRO )
+				nQtdLoc := ( aProd[i][2]*TD3->TD3_PORCEN )/100
+				dbSelectArea( "TD5" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TD5" ) + TD3->TD3_CODPRO + TD3->TD3_ESTRUT + TD3->TD3_CODNIV )
+				While !Eof() .And. xFilial( "TD5" ) + TD3->TD3_CODPRO + TD3->TD3_ESTRUT + TD3->TD3_CODNIV == ;
+									TD5->(TD5_FILIAL + TD5->TD5_CODPRO + TD5->TD5_ESTRUT + TD5->TD5_CODNIV)
+
+					nQtdFon := (nQtdLoc*TD5->TD5_PORCEN)/100
+					RegToMemory( "TD9", .T. ) //Cria registro na memoria para inclusao
+					M->TD9_CODPRO := TD2->TD2_CODPRO
+					M->TD9_QUANTI := nQtdFon
+					M->TD9_ORIGEM := cModulo //1=SGA;2=MNT;3=PCP
+					M->TD9_ESTRUT := TD3->TD3_ESTRUT
+					M->TD9_CODNIV := TD3->TD3_CODNIV
+					M->TD9_CODFON := TD5->TD5_CODFON
+					If !Empty( aProd[i][3] )
+						M->TD9_OP := aProd[i][3] //Numero da O.P.
+					EndIf
+					If !Empty( aProd[i][4] )
+						M->TD9_ORDEM := aProd[i][4]
+					EndIf
+					//Cria aCols para inclusao
+					aColsGG := aClone( SG480CARG( M->TD9_CODPRO, M->TD9_QUANTI, aHeadGG ) )
+					//Inclui registros na base
+					SG480GRAVA( 3, aColsGG, aHeadGG )
+					dbSelectArea( "TD5" )
+					dbSkip()
+				End
+				dbSelectArea( "TD3" )
+				dbSkip()
+			End
+		Endif
+	Next i
+
+	RestArea( aArea )
+	NGRETURNPRM( aNGBEGINPRM )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGESTORGEE
+
+Realiza Estorno(Exclusao) das ocorrencias do GEE de certa Ordem de Producao
+
+@author  Roger Rodrigues
+@since   27/08/2010
+/*/
+//-------------------------------------------------------------------
+Function SGESTORGEE( cChave, cModulo )
+
+	Local aArea  := GetArea()
+	Local cWhile := "TD9->(TD9_FILIAL+TD9_OP)"
+
+	//Verifica se o update foi aplicado
+	If !NGCADICBASE( "TD9_FILIAL", "A", "TD9", .F. )
+		RestArea( aArea )
+		Return .F.
+	EndIf
+	If cModulo == "2"
+		If AllTrim( GetNewPar( "MV_SGAMNT", "N" ) ) == "N"
+			Return .F.
+		EndIf
+		cWhile:= "TD9->(TD9_FILIAL+TD9_ORDEM)"
+	Else
+		//Verifica integracao
+		If AllTrim( GetNewPar( "MV_NGSGAPC", "N" ) ) == "N"
+			Return .F.
+		EndIf
+	EndIf
+
+	//Deleta todas ocorrencias da chave
+	dbSelectArea( "TD9" )
+	dbSetOrder( IIf( cModulo == "2", 5, 4 ) )
+	dbSeek( xFilial( "TD9" ) + cChave )
+	While !Eof() .And. xFilial( "TD9" ) + cChave == &(cWhile)
+		//Deleta gases gerados da Ocorrencia
+		dbSelectArea( "TDA" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TDA" ) + TD9->TD9_CODIGO )
+		While !Eof() .And. xFilial( "TDA" ) + TD9->TD9_CODIGO == TDA->(TDA_FILIAL + TDA_CODOCO)
+			RecLock( "TDA", .F. )
+				dbDelete()
+			MsUnlock( "TDA" )
+			dbSelectArea( "TDA" )
+			dbSkip()
+		End
+		RecLock( "TD9", .F. )
+			dbDelete()
+		MsUnlock( "TD9" )
+		dbSelectArea( "TD9" )
+		dbSkip()
+	End
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGREQTA0
+
+Realiza a Exclusao dos campos vazios de responsável e plano de ação dos requisitos legais
+
+@author  Jackson Machado
+@since   11/07/2011
+/*/
+//-------------------------------------------------------------------
+Function NGREQTA0()
+
+	Local cQueryTCL := ""
+	Local cQueryTCM := ""
+	Local lTCL      := .F.
+	Local lTCM      := .F.
+
+	cAliasTCL := GetNextAlias()
+	cQueryTCL := "SELECT COUNT(*) AS TOTTCL FROM " + RetSqlName( "TCL" ) + " WHERE D_E_L_E_T_ <> '*' AND TCL_CODPLA = ''"
+	cQueryTCL := ChangeQuery( cQueryTCL )
+	MPSysOpenQuery( cQueryTCL, cAliasTCL )
+
+	If (cAliasTCL)->TOTTCL > 0
+		lTCL := .T.
+	EndIf
+
+	cAliasTCM := GetNextAlias()
+	cQueryTCM := "SELECT COUNT(*) AS TOTTCM FROM " + RetSqlName( "TCM" ) + " WHERE D_E_L_E_T_ <> '*' AND TCM_RESPON = ''"
+	cQueryTCM := ChangeQuery( cQueryTCM )
+	MPSysOpenQuery( cQueryTCM, cAliasTCM )
+	If (cAliasTCM)->TOTTCM > 0
+		lTCM := .T.
+	EndIf
+
+	If lTCL
+		dbSelectArea( "TCL" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TCL" ) )
+			While !Eof()
+				If Empty( TCL->TCL_CODPLA )
+					RecLock( "TCL" )
+						dbDelete()
+					MsUnLock( "TCL" )
+				EndIf
+				dbSkip()
+			End
+		EndIf
+	EndIf
+
+	If lTCM
+		dbSelectArea( "TCM" )
+		dbSetOrder( 1 )
+		If dbSeek( xFilial( "TCM" ) )
+			While !Eof()
+				If Empty( TCM->TCM_RESPON )
+					RecLock( "TCM" )
+						dbDelete()
+					MsUnLock( "TCM" )
+				Endif
+				dbSkip()
+			End
+		Endif
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAF3QAASRA
+
+Realiza TrocaF3 dos campos de Tipo 1=Usuário e 2=Funcionário
+
+@author Vitor Emanuel Batista
+@since 28/02/2013
+@version MP11
+
+@param cCampoF3, Caracter
+@param cCampoTipo, Caracter
+/*/
+//---------------------------------------------------------------------
+Function SGAF3QAASRA( cCampoF3, cCampoTipo, cCampoVal, cCondic, cTabVal )
+
+	Local nPosTipo
+	Local cTipo
+	Local lRet := .T.
+
+	Default cCampoVal	:= ""
+	Default cCondic		:= ""
+	Default cTabVal		:= "SRA"
+
+	If Type( "M->" + cCampoTipo ) == "C"
+		cTipo := &("M->"+cCampoTipo)
+	ElseIf Type( "aHeader" ) == "A"
+		nPosTipo := aScan( aHeader, { |x| x[2] == cCampoTipo } )
+		If nPosTipo == 0
+			Return .T.
+		Else
+			cTipo := aCols[n][nPosTipo]
+		EndIf
+	Else
+		cTipo := '1' //Por padrão recebe '1' indicando que a busca deve ser na QAA
+	EndIf
+
+	If cCampoTipo == 'TC9_TIPRES' .And. Empty( cTipo )
+		lRet := .F.
+	EndIf
+
+	If lRet
+		//Modifica o F3 do campo
+		If cTipo == '1' //Usuário
+			NGTrocaF3( cCampoF3, "QAA" )
+		Else //Funcionário
+			NGTrocaF3( cCampoF3, cTabVal )
+		EndIf
+
+		If !Empty( cCampoVal )
+			lRet := .F.
+			If "/" $ cCondic
+				If M->&( cCampoVal ) $ cCondic
+					lRet := .T.
+				EndIf
+			Else
+				If M->&( cCampoVal ) == cCondic
+					lRet := .T.
+				EndIf
+			EndIf
+		Else
+			If cCampoTipo == "TC5_TIPENV" .And. cTipo == "2"
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAVALQAASRA
+Valida código do usuário/funcionário, de acordo com o
+Tipo 1=Usuário;2=Funcionário
+
+@param cValor
+@param cCampoTipo
+@author Vitor Emanuel Batista
+@since 28/02/2013
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function SGAVALQAASRA( cValor, cCampoTipo, cTabVal )
+
+	Local nPosTipo
+	Local cTipo
+
+	Default cTabVal := "SRA"
+
+	If Type( "M->" + cCampoTipo ) == "C"
+		cTipo := &( "M->" + cCampoTipo )
+	Else
+		nPosTipo := aScan( aHeader, { |x| x[2] == cCampoTipo } )
+		If nPosTipo == 0
+			Return .T.
+		Else
+			cTipo := aCols[n][nPosTipo]
+		EndIf
+	EndIf
+
+	//Valida código conforme Tipo
+	If cTipo == '1' //Usuário
+		Return ExistCPO( "QAA", cValor, 1 )
+	Else //Funcionário
+		Return ExistCPO( cTabVal, SubStr( cValor, 1, TAMSX3( "RA_MAT" )[1] ), 1 )
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGARETQAASRA
+
+Retorna nome do Usuário ou do Funcionário
+
+@param cValor Código do Usuário ou Function
+@param cTipo 1=Usuário ou 2=Funcionário
+@author Vitor Emanuel Batista
+@since 28/02/2013
+@version MP11
+/*/
+//---------------------------------------------------------------------
+Function SGARETQAASRA( cValor, cTipo, cTabVal, cCampoRet, cFilRes )
+
+	Local cRetorno := ""
+
+	Default cTabVal		:= "SRA"
+	Default cCampoRet 	:= "SRA->RA_NOME"
+
+	If Empty( cFilRes )
+		cFilRes := xFilial( cTabVal )
+	EndIf
+
+	If cTipo == "1" //Usuário
+		cRetorno := NGSEEK( "QAA", cValor, 1, "QAA->QAA_NOME", cFilRes )
+	Else //Funcionário
+		cRetorno := NGSEEK( cTabVal, IIf( cTabVal == "SRA", SubStr( cValor, 1, TAMSX3( "RA_MAT" )[1] ), cValor ), 1, cCampoRet, cFilRes )
+	EndIf
+
+Return cRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SGVALFORN
+
+Valida as perguntas "De Fornecedor", "De Loja", "Ate Fornecedor" e "Ate Loja"
+
+@author  Roger Rodrigues
+@since   09/02/2006
+
+@param	nP1 - Campo a validar
+	1 = "De Fornecedor"
+	2 = "Ate Fornecedor"
+	3 = "De Loja"
+	4 = "Ate Loja"
+@param	cP2 - Valor atual da pergunta "De Fornecedor"
+@param	cP3 - Nome da variavel que contem o valor atual da pergunta "De Loja"
+@param	cP4 - Valor atual da pergunta "Ate Fornecedor"
+@param	cP5 - Nome da variavel que contem o valor atual da pergunta "Ate Loja"
+@param	cTp - Tipo de receptor (1 para fornecedor e 2 para cliente)
+@param	lP6 - Indica se e necessario verificar o status do fornecedor
+@param	cP7 - Codigo da licenca ambiental
+/*/
+//-------------------------------------------------------------------
+Function SGVALFOR( nP1, cP2, cP3, cP4, cP5, cTp, lP6, cP7 )
+
+	Do Case
+		Case nP1 == 1		//Valida "De Fornecedor"
+			If !Empty( cP2 )
+				//Veririfica se o fornecedor existe
+				Return ExistCPO( "TB5", cTp + cP2 )
+			EndIf
+		Case nP1 == 2		   //Valida "Ate Fornecedor"
+			If NaoVazio( cP4 ) //Verifica se não está vazio
+				//Verifica se não é vazio
+				If Replicate( "Z", Len( cP4 ) ) != cP4
+					Return ExistCPO( "TB5", cTp + cP4 ) .And. AteCodigo( "TB5", cTp + cP2, cTp + cP4, Len( cP4 ) ) //Verifica se existe e AteCodigo
+				EndIf
+			Else
+				Return .F.
+			EndIf
+		Case nP1 == 3 		//Valida "De Loja"
+			If !Empty( cTp + cP2 + &(cP3) )
+				DbSelectArea( "TB5" )
+				DbSetOrder( 02 )
+				If ExistCPO( "TB5", cTp + cP2 + &(cP3) ) //Verifica se existe
+					If lP6 .And. TB5->( FieldPos( 'TB5_STATUS' ) ) > 0 //Se existir campo Status, verifica se está ativa
+						dbSelectArea( "TB5" )
+						dbSetOrder( 1 )
+						dbSeek( xFilial( "TB5" ) + cTp + cP2 + &(cP3) + cP7 )
+						If TB5->TB5_STATUS <> "1"
+							ShowHelpDlg( "INATIVO", { "O Receptor se encontra inativo ", "no sistema." }, 2, { "Informe um receptor ativo." } )
+							Return .F.
+						Endif
+					Endif
+				Else
+					Return .F.
+				Endif
+			EndIf
+		Case nP1 == 4		//Valida "Ate Loja"
+			If NaoVazio( &(cP5) )//Verifica se não está vazio
+				If Replicate( "Z", Len( &(cP5) ) ) != &(cP5)//Verifica se é ZZZ
+					If ExistCPO( "TB5", cTp + cP4 + &(cP5) )//Verifica se existe
+						If lP6 .And. TB5->( FieldPos( 'TB5_STATUS' ) ) > 0//Se existir campo Status, verifica se está ativa
+							dbSelectArea( "TB5" )
+							dbSetOrder( 1 )
+							dbSeek( xFilial( "TB5" ) + cTp + cP4 + &(cP5) + cP7 )
+							If TB5->TB5_STATUS != "1"
+								ShowHelpDlg( STR0394, { STR0391, STR0392 }, 2, { STR0393 } ) // "INATIVO"//"O Receptor se encontra inativo "//"no sistema."//"Informe um receptor ativo."
+								Return .F.
+							EndIf
+						EndIf
+					Else
+						Return .F.
+					EndIf
+				EndIf
+			Else
+				Return .F.
+			EndIf
+	EndCase
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGABEMPESQ
+Função para filtrar os Bens/Localizações na Key F11 do Cadastro de
+Solicitação de Serviço.
+
+@param cValor   - Caracter, Indica o código do bem para pesquisar.
+@param nTipo    - Numérico, Indica o nível do 'Pai' na estrutura.
+@param cCmbPesq - Caracter, Indica se a pesquisa é por Bem ou Localização.
+@param nModule  - Numérico, Módulo que a Estrutura vai mostrar: 3 - SIGASGA, 4 - SIGAMNT e 5 - SIGAMDT
+
+@return .T.
+
+@author Diego de Oliveira
+@since 29/08/2016
+/*/
+//---------------------------------------------------------------------
+Static Function SGABEMPESQ( cValor, nTipo, cCmbPesq, nModule )
+
+	Local i
+	Local cMsgHelp := ""
+	Local cFBtn    := ""
+	Local aTemp    := {}
+	Local cOpcPesq := cCmbPesq
+
+	Private oNewDlg
+
+	Default cValor   := cVarPesq
+	Default nTipo    := oCmbPesq:nAt
+	Default nModule  := 0
+
+	cValor := Trim( cValor )
+	If Empty( cValor )
+		Return .T.
+	EndIf
+
+	Processa( { || aTemp := ( fBemLoc( cValor, nTipo ) ) } ) //Carrega localizacoes
+
+	If Len( aTemp ) == 0
+		If cOpcPesq == STR0330 //"Bem"
+			cMsgHelp := STR0334 //"Não foi encontrado nenhum Bem com Código ou Decrição parecido com o digitado."
+		Else
+			cMsgHelp := STR0335 //"Não foi encontrado nenhuma Localização com a Decrição parecida com a digitada."
+		EndIf
+		ShowHelpDlg( STR0009, { cMsgHelp } ) //"ATENÇÃO"
+		Return .T.
+	Else
+		//Inclusão da opção de pesquisa para Key F11 através da Solicitação de Serviço
+		//Abre uma janela com os dados encontrados
+		Define MsDialog oNewDlg From 03.5, 6 To 470, 470 Title STR0336 Pixel
+
+		oNewDlg1  := TPanel():New( 01, 01, , oNewDlg, , , , , RGB( 67, 70, 87 ), 10, 10, .F., .F. )
+					oNewDlg1:Align := CONTROL_ALIGN_TOP
+					oNewDlg1:nHeight := 15
+					oNewDlg:Hide()
+
+		oListPesq := TWBrowse():New( 01, 01, 240, 240, , { STR0336 }, { 200 }, oNewDlg, , , , , {||}, , , , , , , .F., , .T., , .F., , .T., .F. ) //"Resultados Encontrados"
+
+		bLinePesq := { || { aItensPesq[oListPesq:nAt, 5] } }
+
+		//Passa o resultado da busca para um array da nova janela
+		aItensPesq := aClone( aTemp )
+		oListPesq:SetArray( aItensPesq )
+		oListPesq:bLine:= bLinePesq
+
+		oListPesq:Refresh()
+		oListPesq:Align := CONTROL_ALIGN_ALLCLIENT
+
+		//Posiciona no bem encontrado através de duplo clique
+		oListPesq:blDblClick := { || SGABEMSEEK( aItensPesq[oListPesq:nAt, 1],;
+												 aItensPesq[oListPesq:nAt, 2], nModule ) }
+
+		oListPesq:GoTop()
+		oListPesq:Refresh()
+		oListPesq:Owner():CommitControls()
+		oListPesq:cToolTip := OemToAnsi( STR0337 )//"Duplo clique posiciona no Bem/Localização"
+
+		oListPesq:Show()
+		oNewDlg:Hide()
+
+		Activate MsDialog oNewDlg Centered
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fBemLoc
+Função para filtrar a busca dos Bens/Localizações.
+
+@param cValor - Indica o código do bem para pesquisar.
+@param nTipo  - Indica o nível do 'Pai' na estrutura.
+
+@return .T.
+
+@author Diego de Oliveira
+@since 29/08/2016
+/*/
+//---------------------------------------------------------------------
+Static Function fBemLoc(cValor, nTipo)
+
+	Local i
+	Local nX
+	Local nTipVer    := nTipo
+	Local aLocais    := {}
+	Local aBens      := {}
+	Local cModoTAF   := NGSX2MODO( "TAF" )
+	Local cFilST9    := ""
+	Local cCondST9   := ""
+	Local cQuery     := ""
+	Local cAliasLFor := ""
+	Local lModMnt
+
+	Private nMod902 := nModulo
+	Private aFilial
+	
+	lModMnt := nMod902 == 19 .Or. nMod902 == 95
+
+	cValor := Upper( cValor )
+
+	If lModMnt
+		nTipVer := nTipo
+	Else
+		nTipVer := 2
+	EndIf
+
+	cAliasLFor := GetNextAlias()
+
+	cFilST9 := IIf( cModoTAF == "C", xFilial( "TAF" ), xFilial( "ST9" ) )
+	cCondST9:= IIf( cModoTAF == "C", ".T.", "ST9->T9_FILIAL == '" + cFilST9 + "'" )
+
+	//Pesquisa por Bem
+	If nTipVer == 1
+		#IFNDEF TOP
+			//Verifica por codigo e nome na ST9
+			ProcRegua( ST9->(RecCount()) )
+			dbSelectArea( "ST9" )
+			dbSetOrder( 1 )
+			dbSeek( cFilST9 )
+			While !Eof() .And. &(cCondST9)
+				IncProc()
+				If cValor $ ST9->T9_CODBEM
+					aAdd( aBens, ST9->T9_CODBEM )
+				ElseIf cValor $ ST9->T9_NOME
+					aAdd( aBens, ST9->T9_CODBEM )
+				EndIf
+				dbSelectArea( "ST9" )
+				dbSkip()
+			End
+		#ELSE
+			cQuery := " SELECT T9_CODBEM "
+			cQuery += " FROM " + RetSqlName( "ST9" ) + " WHERE "
+			cQuery += " T9_CODBEM LIKE '%" + cValor + "%'
+			cQuery += " OR T9_NOME LIKE '%" + cValor + "%' "
+			cQuery += " AND D_E_L_E_T_ <> '*'  AND T9_FILIAL = '" + xFilial( "ST9" ) + "' "
+			cQuery := ChangeQuery( cQuery )
+			MPSysOpenQuery( cQuery, cAliasLFor )
+
+			While (cAliasLFor)->( !Eof() )
+				aAdd( aBens, (cAliasLFor)->T9_CODBEM )
+				(cAliasLFor)->(dbSkip())
+			End
+		#ENDIF
+
+		//Verifica bens na estrutura organizacional
+		ProcRegua( Len( aBens ) )
+
+		For i := 1 To Len( aBens )
+			IncProc()
+			dbSelectArea( "TAF" )
+			dbSetOrder( 6 )
+			If dbSeek( xFilial( "TAF" ) + "X" + "1" + aBens[i] )
+				dbSelectArea( cTRBSGA )
+				dbSetOrder( 3 )
+				If !dbSeek( "1" + aBens[i] ) .Or. Empty( (cTRBSGA)->DELETADO )
+					If aScan( aLocais, { |x| x[1] == TAF->TAF_CODNIV + "BEM" } ) == 0
+						aAdd( aLocais, { TAF->TAF_CODNIV + "BEM", TAF->TAF_NIVSUP, .F., aBens[i], Upper( AllTrim( NGLocComp( aBens[i], "1" ) ) ), 1 } )
+					EndIf
+				EndIf
+			Else
+				dbSelectArea( cTRBSGA )
+				dbSetOrder( 3 )
+				If dbSeek( "1" + aBens[i] ) .And. Empty( (cTRBSGA)->DELETADO )
+					If aScan( aLocais, { |x| x[1] == (cTRBSGA)->CODPRO + "BEM" } ) == 0
+						aAdd( aLocais, { (cTRBSGA)->CODPRO + "BEM", (cTRBSGA)->NIVSUP, .T., aBens[i], Upper( AllTrim( fCompRet( (cTRBSGA)->CODPRO, "1" ) ) ), 1 } )
+					EndIf
+				EndIf
+			EndIf
+		Next i
+
+	ElseIf nTipVer ==2 //Pesquisa por Localizacao
+		//Verifica na TRB todas localizacoes do MNT
+		ProcRegua( (cTRBSGA)->(RecCount()) )
+		dbSelectArea( cTRBSGA )
+		dbSetOrder( 1 )
+		dbGoTop()
+		While !Eof()
+			IncProc()
+			If (cTRBSGA)->TIPO == "2" .And. ( lModMnt .And. !Empty( (cTRBSGA)->MODMNT ) ) .And. ;
+				Empty( (cTRBSGA)->DELETADO )
+				If aScan( aLocais, { |x| x[1] == (cTRBSGA)->CODPRO + "LOC" } ) == 0 .And. cValor $ Upper( (cTRBSGA)->DESCRI )
+					aAdd( aLocais, { (cTRBSGA)->CODPRO + "LOC", (cTRBSGA)->NIVSUP, .T., (cTRBSGA)->CODPRO, Upper( AllTrim( fCompRet( (cTRBSGA)->CODPRO, "2" ) ) ), 2 } )
+				EndIf
+			EndIf
+
+			dbSelectArea( cTRBSGA )
+			dbSkip()
+		End
+
+		//Verifica na tabela todas localizacoes do MNT
+		ProcRegua( TAF->(RecCount()) )
+		dbSelectArea( "TAF" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TAF" ) )
+		If Len( aLocais ) == 0  //Caso não tenha encontrado na TRB
+			While !Eof() .And. xFilial( "TAF" ) == TAF->TAF_FILIAL
+				IncProc()
+				If TAF->TAF_INDCON == "2" .And. !Empty( TAF->TAF_MODMNT ) .And. Empty( (cTRBSGA)->DELETADO )
+					If cValor $ Upper( TAF->TAF_NOMNIV ) .And. aScan( aLocais, { |x| x[1] == TAF->TAF_CODNIV + "LOC" } ) == 0
+						aAdd( aLocais, { TAF->TAF_CODNIV + "LOC", TAF->TAF_NIVSUP, .F., TAF->TAF_CODNIV,;
+							 Upper( AllTrim( NGLocComp( TAF->TAF_CODNIV, "2", "SGA" ) ) ), 2 } )
+					EndIf
+				EndIf
+
+				dbSelectArea( "TAF" )
+				dbSkip()
+			End
+		EndIf
+	EndIf
+
+Return aLocais
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGABEMVChg
+Posiciona no item encontrado na busca.
+
+@return .T.
+
+@author Diego de Oliveira
+@since 30/08/2016
+/*/
+//---------------------------------------------------------------------
+Static Function SGABEMVChg()
+
+	Local nPos   := 0
+	Local cChave := SubStr( oTree:GetCargo(), 1, 7 )
+
+	// Trava Árvore para realizar processamento ( para prevenir possíveis erros de processamento )
+	oTree:Disable()
+
+	nPos := aScan( aItensCar, { |x| x == cChave } )
+	If nPos == 0
+		Aadd( aItensCar, cChave )
+	EndIf
+
+	// Habilita novamente a Árvore para interação com usuário.
+	oTree:Enable()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} SGABEMSEEK
+Posiciona no item dentro da estrutura.
+
+@param cCodigo - Caracter, Indica o código do bem para pesquisar.
+@param cSupNiv - Caracter, Indica o nível do 'Pai' na estrutura.
+@param nModule - Numérico, Módulo que a Estrutura vai mostrar: 3 - SIGASGA, 4 - SIGAMNT e 5 - SIGAMDT
+
+@author Diego de Oliveira
+@since 30/08/2016
+/*/
+//---------------------------------------------------------------------
+Function SGABEMSEEK( cCodigo, cSupNiv, nModule )
+
+	Local i
+	Local aLocPais := {}
+	Local cTipSeek
+	Local aAreaTRB
+
+	Default nModule := 0
+
+	//Carrega itens pais
+	If !Empty( cCodigo )
+		aAdd( aLocPais, cCodigo )
+		dbSelectArea( "TAF" )
+		dbSetOrder( 2 )
+		dbSeek( xFilial( "TAF" ) + cCodEst + SubStr( cCodigo, 1, 3 ) )
+		While !eof() .And. Found() .And. cSupNiv != "000"
+			dbSelectArea( "TAF" )
+			dbSetOrder( 2 )
+			If dbSeek( xFilial( "TAF" ) + cCodEst + cSupNiv )
+				Do Case
+					Case TAF->TAF_INDCON == "1"
+						cTipSeek := "BEM"
+					Case TAF->TAF_INDCON == "2"
+						cTipSeek := "LOC"
+				End Case
+				aAdd( aLocPais, TAF->TAF_CODNIV + cTipSeek )
+				cSupNiv := TAF->TAF_NIVSUP
+			EndIf
+		End
+	Else
+		Return .F.
+	EndIf
+
+	//Encontra item na arvore
+	For i := Len( aLocPais ) To 1 Step -1
+		oTree:TreeSeek( aLocPais[i] )
+		SGABEMVChg()
+		//Adiciona as estrutura filhas na tree para posicionar corretamente a localização
+		SG100VChg(nModule)
+	Next i
+
+	oTree:SetFocus()
+	oNewDlg:End()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} fCompRet
+Retorna caminho completo da localizacao na estrutura do Bem/Localização.
+
+@param cCod    - Indica o código do bem na pesquisa.
+@param cIndCon - Indica o estrutura entre Bem ou Localização.
+
+@author Diego de Oliveira
+@since 30/08/2016
+/*/
+//---------------------------------------------------------------------
+Static Function fCompRet( cCod, cIndCon )
+
+	Local cNomNiv := ""
+	Local cRet    := ""
+	Local aArea   := GetArea()
+
+	//Encontra descricao e chama recursivamente nivel superior
+	dbSelectArea( cTRBSGA )
+	dbSetOrder( 2 )
+	If dbSeek( cCodEst + cCod )
+		cNomNiv := (cTRBSGA)->DESCRI
+		If (cTRBSGA)->NIVSUP != "000"
+			cRet := fCompRet( (cTRBSGA)->NIVSUP, "2" ) + " > "
+		EndIf
+		cRet += AllTrim( IIf( cIndCon == "1", NGSEEK( "ST9", cCod, 1, "T9_NOME" ), cNomNiv ) )
+	EndIf
+
+	RestArea( aArea )
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} NGSGAIND
+Funcao que carregas o array com todos os indicadores do SGA
+
+@author Jackson Machado
+@since 31/03/2011
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function NGSGAIND()
+
+	Local aIndTZ1 := {}
+	Local aIndTZ2 := {}
+	Local aIndTZ3 := {}
+	Local aIndTZ4 := {}
+	Local aIndTZ5 := {}
+	Local aIndTZ6 := {}
+	Local aIndTZ7 := {}
+	Local aIndSAH := {}
+
+	//-- Carrega as tabelas.
+	If AliasInDic( "TZ5" )
+		aAdd( aIndSAH, { "RT", "R$ / Ton", "", "", "", "", "", "", "" } )
+		aAdd( aIndSAH, { "RK", "R$ / Kg", "", "", "", "", "", "", "" } )
+
+		//TZ1
+		aAdd( aIndTZ1, { "56", "001", STR0344 } ) // "Resíduos"
+
+		//TZ2
+		aAdd( aIndTZ2, { "56", "SGAV001", "1", "SGAV001", STR0345, STR0350 } ) // "Quantidade de Resíduos Gerados"###"Somatória das quantidades de resíduo geradas no período. EX: Foram produzidas nesta semana 2 toneladas de cavaco, sendo assim a Somatória das quantidades de resíduo geradas no período será 2."
+		aAdd( aIndTZ2, { "56", "SGAV002", "1", "SGAV002", STR0346, STR0351 } ) // "Receita (com a Venda) de Resíduos"###"Somatória dos valores obtidos com os resíduos  no período. EX: Foram produzidas nesta semana 2 toneladas de cavaco, esse resíduo foi tranferido para uma empresa de reciclagem que pagou R$ 500,00 pelo material.  A  Somatória dos valores obtidos com os resíduos no período é R$ 500,00."
+		aAdd( aIndTZ2, { "56", "SGAV003", "1", "SGAV003", STR0347, STR0352 } ) // "Percentual de Destinação de Resíduos"###"Somatória das quantidades de residuo destinado  no período. EX: Foram produzidas nesta semana 2 toneladas de cavaco, esse resíduo foi tranferido para uma empresa de reciclagem  , sendo assim a  Somatória das quantidades de residuo destinado  no período  será 2."
+		aAdd( aIndTZ2, { "56", "SGAV005", "1", "SGAV005", STR0348, STR0353 } ) // "Quantidade Produzida de Produto"###"Somatória das quantidades de produto geradas no período. EX: Foi produzida nesta semana 5 tonelada de moldes, sendo assim a Somatória das quantidades de produtos geradas no período será 5."
+		aAdd( aIndTZ2, { "56", "SGAV009", "1", "SGAV009", STR0349, STR0354 } ) // "Despesas com Destinação de Resíduos"###"Somatória dos gastos com destinação de resíduos  no período. EX: Foram produzidas nesta semana 2 toneladas de cavaco, esse resíduo foi tranferido para uma empresa de reciclagem.  Nota fiscal de transporte apontava R$ 100,00 como custo da viagem, sendo assim a  Somatória dos gastos com destinação de resíduos no período será R$ 100,00."
+
+		//TZ3
+		aAdd( aIndTZ3, { "56", "SGAV001", "001", "DATA_INI"    } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "002", "DATA_FIM"    } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "003", "GRUPO_INI"   } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "004", "GRUPO_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "005", "GER_INI"     } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "006", "GER_FIM"     } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "007", "RESIDUO_INI" } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "008", "RESIDUO_FIM" } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "009", "LOCAL_DE"    } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "010", "LOCAL_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV001", "011", "TIPO_GERA"   } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "001", "DATA_INI"    } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "002", "DATA_FIM"    } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "003", "GRUPO_INI"   } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "004", "GRUPO_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "005", "GER_INI"     } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "006", "GER_FIM"     } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "007", "RESIDUO_INI" } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "008", "RESIDUO_FIM" } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "009", "LOCAL_DE"    } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "010", "LOCAL_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV002", "011", "TIPO_GERA"   } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "001", "DATA_INI"    } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "002", "DATA_FIM"    } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "003", "GRUPO_INI"   } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "004", "GRUPO_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "005", "LOCAL_DE"    } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "006", "LOCAL_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "007", "GER_INI"     } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "008", "GER_FIM"     } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "009", "RESIDUO_INI" } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "010", "RESIDUO_FIM" } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "011", "CLIENTE_DE"  } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "012", "CLIENTE_ATE" } )
+		aAdd( aIndTZ3, { "56", "SGAV003", "013", "TIPO_GERA"   } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "001", "DATA_INI"    } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "002", "DATA_FIM"    } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "003", "RESIDUO_INI" } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "004", "RESIDUO_FIM" } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "005", "TIPOP_DE"    } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "006", "TIPOP_ATE"   } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "007", "GRUPO_INI"   } )
+		aAdd( aIndTZ3, { "56", "SGAV005", "008", "GRUPO_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "001", "DATA_INI"    } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "002", "DATA_FIM"    } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "003", "RESIDUO_INI" } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "004", "RESIDUO_FIM" } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "005", "GRUPO_INI"   } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "006", "GRUPO_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "007", "LOCAL_DE"    } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "008", "LOCAL_FIM"   } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "009", "GER_INI"     } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "010", "GER_FIM"     } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "011", "FORNEC_DE"   } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "012", "FORNEC_ATE"  } )
+		aAdd( aIndTZ3, { "56", "SGAV009", "013", "TIPO_GERA"   } )
+
+		//TZ4
+		aAdd( aIndTZ4, { "56", "DATA_INI", STR0355, "4", 8, 0, "99/99/9999", "", "", "", "", "", "If(Empty(M->DATA_INI),.F.,.T.)"  } ) // "De Data"
+		aAdd( aIndTZ4, { "56", "DATA_FIM", STR0356, "4", 8, 0, "99/99/9999", "", "", "", "", "", "NGI6VDTIND(M->DATA_INI,M->DATA_FIM)" } ) // "Até Data"
+		aAdd( aIndTZ4, { "56", "GRUPO_FIM", STR0357, "5", 0, 0, "", "SB1", "B1_GRUPO", "SBM", "", "", "IF(NGI6CODATE('SB1',GRUPO_INI,GRUPO_FIM),.T.,.F.)" } ) // "Até Grupo"
+		aAdd( aIndTZ4, { "56", "GRUPO_INI", STR0358, "5", 0, 0, "", "SB1", "B1_GRUPO", "SBM", "", "", "IF(!EMPTY(M->GRUPO_INI),EXISTCPO('SB1',M->GRUPO_INI),.T.)"} ) // "De Grupo"
+		aAdd( aIndTZ4, { "56", "GER_INI", STR0359, "5", 0, 0, "", "TAX", "TAX_CODFON", "ST9", "", "", "IF(!EMPTY(M->GER_INI),EXISTCPO('TAX',M->GER_INI),.T.)" } ) // "De Fonte Geradora"
+		aAdd( aIndTZ4, { "56", "GER_FIM", STR0360, "5", 0, 0, "", "TAX", "TAX_CODFON", "ST9", "", "", "IF(NGI6CODATE('TAX',GER_INI,GER_FIM),.T.,.F.)"} ) // "Até Fonte Geradora"
+		aAdd( aIndTZ4, { "56", "RESIDUO_INI", STR0361, "5", 0, 0, "", "TB0", "TB0_CODRES", "SB1", "", "", "IF(!EMPTY(M->RESIDUO_INI),EXISTCPO('TBO',M->RESIDUO_INI),.T.)" } ) // "De Resíduo"
+		aAdd( aIndTZ4, { "56", "RESIDUO_FIM", STR0362, "5", 0, 0, "", "TB0", "TB0_CODRES", "SB1", "", "", "IF(NGI6CODATE('TBO',RESIDUO_INI,RESIDUO_FIM),.T.,.F.)" } ) // "Até Resíduo"
+		aAdd( aIndTZ4, { "56", "LOCAL_DE", STR0363, "5", 0, 0, "", "TBJ", "TBJ_CODNIV", "SGATAF", "", "", "IF(!EMPTY(M->LOCAL_DE),EXISTCPO('TBJ',M->LOCAL_DE),.T.)" } ) // "De Localização"
+		aAdd( aIndTZ4, { "56", "LOCAL_FIM", STR0364, "5", 0, 0, "", "TBJ", "TBJ_CODNIV", "SGATAF", "", "", "IF(NGI6CODATE('TBJ',LOCAL_DE,LOCAL_FIM),.T.,.F.)"} ) // "Até Localização"
+		aAdd( aIndTZ4, { "56", "TIPO_GERA", STR0365, "6", 1, 0, "", "", "", "", STR0374, "", ""} ) // "Tipo de Geração Resíduo"###"1=Reciclável;2=Não Reciclável"
+		aAdd( aIndTZ4, { "56", "CLIENTE_DE", STR0366, "5", 0, 0, "", "SA1", "A1_COD", "CLI", "", "", "IF(!EMPTY(M->CLIENTE_DE),EXISTCPO('SA1',M->CLIENTE_DE),.T.)"} ) // "De Cliente"
+		aAdd( aIndTZ4, { "56", "CLIENTE_ATE", STR0367, "5", 0, 0, "", "SA1", "A1_COD", "CLI", "", "", "IF(NGI6CODATE('SA1',CLIENTE_DE,CLIENTE_ATE),.T.,.F.)" } ) // "Até Cliente"
+		aAdd( aIndTZ4, { "56", "TIPOP_DE", STR0368, "5", 0, 0, "", "SB1", "B1_TIPO", "02", "", "", "IF(!EMPTY(M->TIPOP_DE),EXISTCPO('SB1',M->TIPOP_DE),.T.)" } ) // "De Tipo Produto"
+		aAdd( aIndTZ4, { "56", "TIPOP_ATE", STR0369, "5", 0, 0, "", "SB1", "B1_TIPO", "02", "", "", "IF(NGI6CODATE('SB1',TIPOP_DE,TIPOP_ATE),.T.,.F.)"} ) // "Até Tipo Produto"
+		aAdd( aIndTZ4, { "56", "FORNEC_DE", STR0370, "5", 0, 0, "", "SA2", "A2_COD", "SA2", "", "", "IF(!EMPTY(M->FORNEC_DE),EXISTCPO('SA2',M->FORNEC_DE),.T.)"} ) // "De Fornecedor"
+		aAdd( aIndTZ4, { "56", "FORNEC_ATE", STR0371, "5", 0, 0, "", "SA2", "A2_COD", "SA2", "", "", "IF(NGI6CODATE('SA2',FORNEC_DE,FORNEC_ATE),.T.,.F.)" } ) // "Até Fornecedor"
+		aAdd( aIndTZ4, { "56", "MOTIVO_DE", STR0372, "5", 0, 0, "", "TL5", "TL5_MOTIVO", "TMS", "", "", "IF(!EMPTY(M->MOTIVO_DE),EXISTCPO('TL5',M->MOTIVO_DE),.T.)"} ) // "De Motivo"
+		aAdd( aIndTZ4, { "56", "MOTIVO_ATE", STR0373, "5", 0, 0, "", "TL5", "TL5_MOTIVO", "TMS", "", "", "IF(NGI6CODATE('TL5',MOTIVO_DE,MOTIVO_ATE),.T.,.F.)" } ) // "Até Motivo"
+
+		//TZ5
+		aAdd( aIndTZ5, { "56", "GER_RESIDUO", STR0375, "@SGAV001@", "001", STR0383, "", 0, 0, "", "", "", "", "", "1" } ) //"Geração Resíduos"###"Quantidade de resíduo gerada no período. (Em toneladas conforme o Inventário Nacinonal de Resíduos). Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado a GERAÇÃO DE RESÍDUO desta semana será 2 (Tonelada)."
+		aAdd( aIndTZ5, { "56", "REC_RESIDUO", STR0376, "@SGAV002@", "001", STR0384, "", 0, 0, "", "", "", "", "", "1" } ) //"Receita com Resíduos"###"Somatória dos valores obtidos com os resíduos  no período. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado a A RECEITA COM RESÍDUOS desta semana será: 500 (Reais)."
+		aAdd( aIndTZ5, { "56", "PERC_DESTIN", STR0377, "( @SGAV003@ / @SGAV001@ ) * #100#", "001", STR0385, "", 0, 0, "", "", "", "", "", "1" } ) //"Percentual de Destinação de Resíduos Gerados"###"Retorna o percentual de resíduos destinado em meio ao total gerado. Somatória das quantidades de resíduos destinados no período dividido pela somatória das quantidades produzidas de resíduo no período, multiplicado por 100. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado o PERCENTUAL DE DESTINAÇÃO DE RESÍDUOS no período será: (2 /2 ) *100 = 100 (%)."
+		aAdd( aIndTZ5, { "56", "EVOL_RESIDUO", STR0378, "@SGAV002@ / @SGAV003@", "001",STR0386, "", 0, 0, "", "", "", "", "", "1" } ) //"Lucratividade Média de Destinação"###"Valor médio obtido por unidade do produto. Somatória dos valores abtidos com o resíduos no período dividida pela somatória das quantidades de residuo destinado no período.(Em toneladas conforme o Inventário Nacinonal de Resíduos). Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado a LUCRATIVIDADE MÉDIA DE DESTINAÇÃO  da semana será: 500/2 = 250 (Reais por tonelada)."
+		aAdd( aIndTZ5, { "56", "IND_GER_NAOR", STR0379, "@SGAV005@ / @SGAV001@", "001", STR0387, "", 0, 0, "", "", "", "", "", "1" } ) //"Quantidade Média de Resíduo por Produto"###"Quantidade de produto gerado para gerar 1 unidade de resíduo. Somatória das quantidades de produto geradas no período dividida pela somatória das quantidades de resíduos gerados no periodo. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado a QUANTIDADE MÉDIA DE RESÍDUO POR PRODUTO dessa semana será: 5/2= 2,5 (Unidades de produto para cada unidade de resíduo)."
+		aAdd( aIndTZ5, { "56", "CUSTO_RESID", STR0380, "@SGAV009@ / @SGAV005@", "001", STR0388, "", 0, 0, "", "", "", "", "", "1" } ) //"Custo Médio de Destinação por Produção"###"Retorna o gasto com destinação de residuo em detrimento à quantidade de produto manufaturada. Somatória de custo com destinação de resísduo no período dividido pela Somatória das quantidades de produto produzido. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado o CUSTO MÉDIO DE DESTINAÇÃO POR PRODUÇÃO para esta semana será: 100/ 5= 20 (20 reais por tonelada de produto)."
+		aAdd( aIndTZ5, { "56", "CUSTO_DESTI", STR0381, "@SGAV009@", "001", STR0389, "", 0, 0, "", "", "", "", "", "1" } ) //"Custo com Destinação de Resíduo"###"Somatória dos gastos com destinação de resíduos no período. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado o CUSTO COM DESTINAÇÃO DE RESÍDUO desta semana será: 100 (Reais)."
+		aAdd( aIndTZ5, { "56", "LUCRO_RES", STR0382, "@SGAV002@ - @SGAV009@", "001", STR0390, "", 0, 0, "", "", "", "", "", "1" } ) //"Lucro"###"Diferença entre valor arrecadado e valor gasto com os resíduos.  Somatória dos valores obtidos com os resíduos no período subtraido da Somatória dos gastos com destinação de resíduos  no período. Conforme fórmula do indicador e as variáveis definidas abaixo, para o exemplo citado o LUCRO desta semana será: 500-100 = 400 (Reais)."
+
+		//TZ6
+		aAdd( aIndTZ6, { "56", "GER_RESIDUO", "SGAV001" } )
+		aAdd( aIndTZ6, { "56", "REC_RESIDUO", "SGAV002" } )
+		aAdd( aIndTZ6, { "56", "PERC_DESTIN", "SGAV003" } )
+		aAdd( aIndTZ6, { "56", "PERC_DESTIN", "SGAV001" } )
+		aAdd( aIndTZ6, { "56", "EVOL_RESIDUO", "SGAV002" } )
+		aAdd( aIndTZ6, { "56", "EVOL_RESIDUO", "SGAV003" } )
+		aAdd( aIndTZ6, { "56", "IND_GER_NAOR", "SGAV001" } )
+		aAdd( aIndTZ6, { "56", "IND_GER_NAOR", "SGAV005" } )
+		aAdd( aIndTZ6, { "56", "CUSTO_RESID", "SGAV009" } )
+		aAdd( aIndTZ6, { "56", "CUSTO_RESID", "SGAV005" } )
+		aAdd( aIndTZ6, { "56", "CUSTO_DESTI", "SGAV009" } )
+		aAdd( aIndTZ6, { "56", "LUCRO_RES", "SGAV002" } )
+		aAdd( aIndTZ6, { "56", "LUCRO_RES", "SGAV009" } )
+
+		//TZ7
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "GER_RESIDUO", "2", "TIPO_GERA", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "REC_RESIDUO", "2", "TIPO_GERA", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "CLIENTE_ATE", "" } )
+		aAdd( aIndTZ7, { "56", "PERC_DESTIN", "2", "TIPO_GERA", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "EVOL_RESIDUO", "2", "TIPO_GERA", "" } )
+		aAdd( aIndTZ7, { "56", "IND_GER_NAOR", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "IND_GER_NAOR", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "IND_GER_NAOR", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "IND_GER_NAOR", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_RESID", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_RESID", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_RESID", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_RESID", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "FORNEC_ATE", "" } )
+		aAdd( aIndTZ7, { "56", "CUSTO_DESTI", "2", "TIPO_GERA", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "DATA_INI", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "DATA_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "RESIDUO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "GRUPO_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "LOCAL_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "GER_FIM", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "FORNEC_ATE", "" } )
+		aAdd( aIndTZ7, { "56", "LUCRO_RES", "2", "TIPO_GERA", "" } )
+
+		NGINDCARGA( aIndTZ1, aIndTZ2, aIndTZ3, aIndTZ4, aIndTZ5, aIndTZ6, aIndTZ7, aIndSAH )
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgaIntSx6
+Função utilizada para conter o X6_VALID dos parâmetros de integração
+do módulo SGA.
+
+@author Gabriel Sokacheski
+@since 14/04/2022
+ 
+@param cParametro, Caractere, Nome do parâmetro.
+ 
+@return lRet, Lógico, Retorna o valor lógico de acordo com a validação.
+/*/
+//-------------------------------------------------------------------
+Function SgaIntSx6( cParametro )
+
+	Local cConteudo := AllTrim( M->X6_CONTEUDO )
+
+	Local lRet := .T.
+
+	Do Case
+
+		Case cParametro == 'MV_SGADEV'
+
+			If !Empty( cConteudo ) .And. ExistCPO( 'SF5', cConteudo )
+
+				cConteudo := Val( cConteudo )
+
+				If !( cConteudo >= 0 .And. cConteudo <= 500 .And. cConteudo != 499 )
+
+					MsgStop( STR0395, 'MV_SGADEV' )
+
+					lRet := .F.
+
+				EndIf
+
+			Else
+
+				lRet := .F.
+
+			EndIf
+
+		Case cParametro == 'MV_SGAREQ'
+
+			If !Empty( cConteudo ) .And. ExistCPO( 'SF5', cConteudo )
+
+				cConteudo := Val( cConteudo )
+
+				If !( cConteudo >= 501 .And. cConteudo <= 998 )
+
+					MsgStop( STR0396, 'MV_SGAREQ' )
+
+					lRet := .F.
+
+				EndIf
+
+			Else
+
+				lRet := .F.
+
+			EndIf
+
+	End Case
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SgaCodMov
+Verifica o preenchimento dos parâmetros MV_SGADEV e MV_SGAREQ.
+
+@author Gabriel Sokacheski
+@since 18/04/2022
+
+@return lRet, Lógico, Retorna verdadeiro caso tenham sido preenchido
+corretamente.
+/*/
+//-------------------------------------------------------------------
+Function SgaCodMov()
+
+	Local cDev := SuperGetMv( 'MV_SGADEV', .F., '' )
+	Local cReq := SuperGetMv( 'MV_SGAREQ', .F., '' )
+
+	Local lRet := .T.
+
+	If Empty( cDev ) .Or. cDev == '499'
+
+		Help( Nil, Nil, 'MV_SGADEV', Nil, STR0397, 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0398 } )
+		lRet := .F.
+
+	EndIf
+
+	If Empty( cReq ) .Or. cReq == '999'
+
+		Help( Nil, Nil, 'MV_SGAREQ', Nil, STR0397, 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0399 } )
+		lRet := .F.
+
+	EndIf
+
+Return lRet

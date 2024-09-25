@@ -1,0 +1,2886 @@
+#INCLUDE "SGAR210.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "MSOLE.CH"
+#INCLUDE "topconn.ch"
+#DEFINE _nVERSAO 02 //Versao do fonte
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR210
+Relatório do Laudo de Plano de Gerenciamento de Resídos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function SGAR210()
+
+Local aNGBEGINPRM := NGBEGINPRM(_nVERSAO)
+Local aPerg := {}
+Local cConPad := ""
+Local cTamCpo := 6
+
+Private nTipoDoc := 0
+Private cPathEst := Alltrim(GetMv("MV_DIREST")) // PATH DO ARQUIVO A SER ARMAZENADO NA ESTACAO DE TRABALHO
+Private cFiltroF := Alltrim(SuperGetMv("MV_NGCATFU",.F.," "))
+Private cCodEmpresa := FWGrpCompany()
+Private cPerg := ""
+Private dDtFimLdo := CtoD("  /  /  ")
+
+If (MsgYesNo(STR0063) == .T.) // ###"Realizar consulta padrão por Funcionário(Sim) ou Usuário(Não) ?"
+	cConPad := "SRA"
+	cPerg   := "SGAR210B"
+	cTamCpo := TamSx3("RA_MAT")[1]
+Else
+	cConPad := "QAA"
+	cPerg   := "SGAR210A"
+	cTamCpo := TamSx3("QAA_MAT")[1]
+EndIf
+
+SGAREL210()
+
+NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAREL210
+Função de Impressão do Plano Emergencial
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function SGAREL210()
+
+Local oRadOp,oDlg,i
+
+Private cPathBmp 		 := Alltrim(GetMv("MV_DIRACA"))			// Path do arquivo logo .bmp do cliente
+PRIVATE lSigaMdtPS    := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+Private nModeloImp    := 1
+Private lMdtUnix 	 	 := If( GetRemoteType() == 2 .or. isSRVunix() , .T. , .F. ) //Verifica se servidor ou estacao é Linux
+PRIVATE cTitulo       := " "
+Private nQbrAux := 0
+Private nTotLnPg := 2800
+Private nFimLinh := 2300
+Private nIniLinh := 150
+
+cPathEst := Alltrim(GetMv("MV_DIREST")) 			// PATH DO ARQUIVO A SER ARMAZENADO NA ESTACAO DE TRABALHOZ
+
+lRet  := .f.
+
+DEFINE MSDIALOG oDlg FROM  0,0 TO 150,320 TITLE STR0003 PIXEL //"Selecione o Modelo do Relatório"
+
+@ 10,10 TO 55,150 LABEL STR0005 of oDlg Pixel //"Modelo do Relatório"
+@ 20,14 RADIO oRadOp VAR nModeloImp ITEMS "Word",STR0004 SIZE 70,15 PIXEL OF oDlg //"Gráfico"
+
+DEFINE SBUTTON FROM 59,90  TYPE 1 ENABLE OF oDlg ACTION EVAL({|| lRET := .T.,oDlg:END()})
+DEFINE SBUTTON FROM 59,120 TYPE 2 ENABLE OF oDlg ACTION oDlg:END()
+
+ACTIVATE MSDIALOG oDlg CENTERED
+
+If lRet
+
+	If nModeloImp == 1 //Word
+
+   		RptStatus({|lEnd| RelatWord(@lEnd)}) //RelatWord()
+
+	Else //Grafico
+
+   		RptStatus({|lEnd| RelatGraf(@lEnd)}) // RelatGraf()
+
+	Endif
+
+Endif
+
+Return Nil
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} RelatWord
+Função de Impressão em Word do Plano de Gerenciamento de Resídos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function RelatWord()
+
+Local cTitulo := " "
+Local cBarraRem := "\"
+Local cBarraSrv := "\"
+Local cSMCOD := FWGrpCompany()
+Local cSMFIL := FWCodFil()
+
+Private cArqDot  := ""
+Private cArqBmp  := "LGRL"+cSMCOD+cSMFIL+".BMP"  	// Nome do arquivo logo do cliente
+Private cArqBmp2 := "LGRL"+cSMCOD+".BMP"         	// Nome do arquivo logo do cliente
+Private cPathDot := Alltrim(GetMv("MV_DIRACA"))	 	// Path do arquivo modelo do Word
+Private cRootPath
+Private cFileLogo
+Private cPathBmp := AllTrim(GetSrvProfString("StartPath","\"))
+Private cPathBm2 := cPathBmp
+Private cVar     := "cVAR",nVar := 1
+Private cVar1    := "cTIT",nVar1 := 1
+Private oWord
+
+If GetRemoteType() == 2  //estacao com sistema operacional unix
+	cBarraRem := "/"
+Endif
+If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+	cBarraSrv := "/"
+Endif
+
+If !Pergunte(cPerg)
+	Return
+Else
+	Dbselectarea("TO0")
+	TO0->(Dbsetorder(1))  // TO0_FILIAL+TO0_LAUDO
+	TO0->(Dbseek(xFilial("TO0")+Mv_par01))
+
+	If !Empty(TO0->TO0_DTVALI)
+  		dDtFimLdo := TO0->TO0_DTVALI
+	Else
+		dDtFimLdo := Mv_par07
+	EndIf
+
+	If Empty(dDtFimLdo)
+	   ShowHelpDlg(STR0061,{STR0066},2,{STR0067},2)  //"Atenção"###""O Laudo não possui Data Final do Laudo e não foi informado o parâmetro Data Final"###"Informe a Data Final do Laudo ou o parâmetro Data Final para impressão dos cronogramas"
+		Return
+	EndIf
+Endif
+
+SetRegua(0)
+
+nTipoDoc := IIF(TO0->TO0_TIPREL == "8",1,2)  //Indica se o doc é o PGR ou PGRSS
+
+cArqDot  := "pae.dot"								// Nome do arquivo modelo do Word (Tem que ser .dot)
+
+cTitulo := STR0001 									//"Plano de Atendimento Emergencial"
+
+cPathDot += If(Substr(cPathDot,len(cPathDot),1) != cBarraSrv,cBarraSrv,"") + cArqDot
+cPathEst += If(Substr(cPathEst,len(cPathEst),1) != cBarraRem,cBarraRem,"")
+
+cPathBmp += If(Substr(cPathBmp,len(cPathBmp),1) != cBarraSrv,cBarraSrv,"") + cArqBmp
+cPathBm2 += If(Substr(cPathBm2,len(cPathBm2),1) != cBarraSrv,cBarraSrv,"") + cArqBmp2
+
+//Cria diretorio se nao existir
+MontaDir(cPathEst)
+
+//Se existir .dot na estacao, apaga!
+If File( cPathEst + cArqDot )
+	Ferase( cPathEst + cArqDot )
+EndIf
+
+If !File(cPathDot)
+	MsgStop(STR0059+"."+chr(10)+STR0060,STR0061) //"O arquivo pae.dot não foi encontrado no servidor."###"Verificar o parâmetro 'MV_DIRACA'"###"Atenção"
+	Return
+EndIf
+
+CpyS2T(cPathDot,cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+// para que o wordview e o proprio word possam preparar o arquivo para impressao e
+// ou visualizacao .... copia o DOT que esta no ROOTPATH Protheus para o PATH da
+// estacao , por exemplo C:\WORDTMP
+//__copyfile(cPathDot,cPathEst+cArqDot)
+
+//Logo
+//Se existir .bmp na estacao, apaga!
+If File(cPathBmp)
+	If File( cPathEst + cArqBmp )
+		Ferase( cPathEst + cArqBmp )
+	EndIf
+	__copyfile(cPathBmp,cPathEst+cArqBmp)
+ElseIf File(cPathBm2)
+	If File( cPathEst + cArqBmp2 )
+		Ferase( cPathEst + cArqBmp2 )
+	EndIf
+	__copyfile(cPathBm2,cPathEst+cArqBmp2)
+	cArqBmp := cArqBmp2
+EndIf	// para que o wordview e o proprio word possam preparar o arquivo para impressao e
+// ou visualizacao .... copia o DOT que esta no ROOTPATH Protheus para o PATH da
+// estacao , por exemplo C:\WORDTMP
+
+Dbselectarea("TO0")
+TO0->(Dbsetorder(1))  // TO0_FILIAL+TO0_LAUDO
+If TO0->(Dbseek(xFilial("TO0")+Mv_par01))
+
+	//			lImpress	:= If(MV_PAR04 == 1,.t.,.f.)	//Verifica se a saida sera em Tela ou Impressora
+	cArqSaida	:= "Documento1"	// Nome do arquivo de saida
+
+	oWord := OLE_CreateLink('TMsOleWord97')//Cria link como Word
+
+	OLE_SetProperty(oWord,oleWdVisible,  .F.)
+	OLE_SetProperty(oWord,oleWdPrintBack,.F.)
+
+	OLE_NewFile(oWord,cPathEst + cArqDot) //Abrindo o arquivo modelo automaticamente
+
+	cMatriz   := " "
+
+	//Imprime Logo
+	cFileLogo := cPathEst + cArqBmp
+	If ExistBlock("SGAR2103")
+		cFileLogo := ExecBlock('SGAR2103',.F.,.F.) //Permitir informar em branco, caso o cliente não queira imprimir logotipo
+	Endif
+	If !lMdtUnix //Se for windows
+		If File( cFileLogo )
+			OLE_SetDocumentVar(oWord,"Cria_Var",cFileLogo)
+			OLE_ExecuteMacro(oWord,"Insere_logo")
+		Endif
+	Endif
+
+	If ExistBlock("SGAR2102")
+		ExecBlock('SGAR2102',.F.,.F.)
+	Endif
+
+	OLE_SetDocumentVar(oWord,"tituloPri","PAE")
+	OLE_SetDocumentVar(oWord,"titulo1",cTitulo)
+
+	ReportPrint(,oWord)
+
+	cRootPath := GetPvProfString( GetEnvServer(), "RootPath", "ERROR", GetADV97() )
+	cRootPath := IF( RIGHT(cRootPath,1) == cBarraSRV,SubStr(cRootPath,1,Len(cRootPath)-1), cRootPath)
+
+	OLE_SetProperty(oWord,oleWdVisible,.t.)
+	OLE_ExecuteMacro(oWord,"Maximiza_Tela")
+	If !lMdtUnix //Se for windows
+		If fDIRR200(cRootPath+cBarraSRV+"SPOOL"+cBarraSRV)
+			OLE_SaveAsFile(oWord,cRootPath+cBarraSRV+"SPOOL"+cBarraSRV+cArqSaida,,,.f.,oleWdFormatDocument)
+		ElseIf fDIRR200(cPathEst)
+			OLE_SaveAsFile(oWord,cPathEst+cArqSaida,,,.f.,oleWdFormatDocument)
+		Else
+			OLE_SaveAsFile(oWord,cPathEst+cArqSaida,,,.f.,oleWdFormatDocument)
+		Endif
+	Endif
+
+	OLE_ExecuteMacro(oWord,"Final_texto")
+	OLE_ExecuteMacro(oWord,"Atualiza")
+
+	MsgInfo(STR0062) //"Alterne para o programa do Ms-Word para visualizar o documento ou clique no botao para fechar."
+
+	OLE_CloseFile(oWord) //Fecha o documento
+	OLE_CloseLink(oWord) //Fecha o documento
+
+EndIf
+
+Return .t.
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fDIRR200
+Verifica se o diretorio existe.
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fDIRR200(cCaminho)
+Local lDir := .F.
+Local cBARRAS   := If(isSRVunix(),"/","\")
+Local cBARRAD := If(isSRVunix(),"//","\\")
+
+If !empty(cCaminho) .and. !(cBARRAD$cCaminho)
+	cCaminho := alltrim(cCaminho)
+	if Right(cCaminho,1) == cBarras
+		cCaminho := SubStr(cCaminho,1,len(cCaminho)-1)
+	Endif
+	lDir :=(Ascan( Directory(cCaminho,"D"),{|_Vet | "D" $ _Vet[5] } ) > 0)
+EndIf
+
+Return lDir
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} RelatGraf
+Função de Impressão do Plano de Gerenciamento de Resídos e Plano de Gerenciamento
+de Resíduos de Saúde.
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function RelatGraf()
+
+Private oPrtLaudo
+Private nBoxLinBk := 0
+Private aBoxLinBk := {}
+
+If !Pergunte(cPerg)
+	Return
+Else
+	Dbselectarea("TO0")
+	TO0->(Dbsetorder(1))  // TO0_FILIAL+TO0_LAUDO
+	TO0->(Dbseek(xFilial("TO0")+Mv_par01))
+
+	If !Empty(TO0->TO0_DTVALI)
+  		dDtFimLdo := TO0->TO0_DTVALI
+	Else
+		dDtFimLdo := Mv_par07
+	EndIf
+
+	If Empty(dDtFimLdo)
+	   ShowHelpDlg(STR0061,{STR0066},2,{STR0067},2)  //"Atenção"###""O Laudo não possui Data Final do Laudo e não foi informado o parâmetro Data Final"###"Informe a Data Final do Laudo ou o parâmetro Data Final para impressão dos cronogramas"
+		Return
+	EndIf
+Endif
+
+SetRegua(0)
+
+nTipoDoc := IIF(TO0->TO0_TIPREL == "A",1,2)  //Indica se o doc é o PGR ou PGRSS
+
+cTitulo := STR0001 //"Plano de Atendimento Emergencial"
+
+oPrtLaudo:= TReport():New(cPerg,cTitulo,cPerg,{|oPrtLaudo| ReportPrint(oPrtLaudo)},STR0002 ) //"O Relatório apresentará o Plano de Atendimento Emergencial de acordo com os parâmetros informados."
+
+oPrtLaudo:SetPortrait()
+oPrtLaudo:ParamReadOnly(.T.)
+oPrtLaudo:HideHeader()
+oPrtLaudo:HideFooter()
+
+oPrtLaudo:PrintDialog()
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Imprime o Relatório Gráfico ou Word.
+
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oPrtLaudo,oWord)
+
+Local cSMCOD  := FWGrpCompany()
+Local cSMFIL  := FWCodFil()
+Local cLaudo  := MV_PAR01
+Local cCoord  := MV_PAR02
+Local cGeren  := MV_PAR03
+Local dDtElab := MV_PAR04
+Local dDtAprv := MV_PAR05
+Local nI 	  := 1
+Local cAprova := ""
+Local nMrg    := 900
+
+Private oFont08	:= TFont():New("Verdana",08,08,,.F.,,,,.F.,.F.)
+Private oFont08b	:= TFont():New("Verdana",08,08,,.T.,,,,.F.,.F.)
+Private oFont10b	:= TFont():New("Verdana",10,10,,.T.,,,,.F.,.F.)
+Private oFont10	:= TFont():New("Verdana",10,10,,.F.,,,,.F.,.F.)
+Private oFont12b	:= TFont():New("Verdana",12,12,,.T.,,,,.F.,.F.)
+Private oFont12 	:= TFont():New("Verdana",12,12,,.F.,,,,.F.,.F.)
+Private oFont12bs	:= TFont():New("Verdana",12,12,,.T.,,,,.T.,.T.)
+Private oFont12s	:= TFont():New("Verdana",12,12,,.F.,,,,.T.,.T.)
+Private oFont28b	:= TFont():New("Verdana",28,28,,.T.,,,,.F.,.F.)
+Private oFont50b	:= TFont():New("Verdana",50,50,,.T.,,,,.F.,.F.)
+
+//Caminho do logoppp.bmp
+Private cStartDir := AllTrim(GetSrvProfString("StartPath","\"))
+Private cStartLogo := " "
+
+Private nLin :=0
+
+Private nDescPAE := MV_PAR06
+
+If File(cStartDir+"LGRL"+cSMCOD+cSMFIL+".BMP")
+	cStartLogo := cStartDir+"LGRL"+cSMCOD+cSMFIL+".BMP"
+ElseIf File(cStartDir+"LGRL"+cSMCOD+".BMP")
+	cStartLogo := cStartDir+"LGRL"+cSMCOD+".BMP"
+Endif
+
+If nModeloImp == 2 //Grafico
+
+	fStartLogo(cStartLogo)
+
+	//PÁGINA DE CAPA
+
+	oPrtLaudo:IncRow(200)
+
+	oPrtLaudo:Say(1300,1000,"PAE",oFont50b)
+	oPrtLaudo:Say(1600,400,cTitulo,oFont28b)
+
+	fSomaLin(,,.T.)
+
+EndIf
+
+//PÁGINA DE IDENTIFICAÇÃO DO EMPREENDIMENTO
+
+//POSICIONA NOS REGISTROS
+DbSelectArea("TO0")
+TO0->(DbSetOrder(1)) // TO0_FILIAL+TO0_LAUDO
+If !TO0->(DbSeek(xFilial("TO0")+cLaudo))
+	Return
+EndIf
+
+DbSelectArea("SRA")
+SRA->(DbSetOrder(1)) // RA_FILIAL+RA_MAT
+If SRA->(DbSeek(xFilial("SRA")+TO0->TO0_APROVA))
+	cAprova := ALLTRIM(SRA->RA_NOME)
+Else
+	cAprova := ""
+EndIf
+
+If TO0->TO0_TIPELA == "2"
+	DbSelectArea("QAA")
+	QAA->(DbSetOrder(1)) // TMK_FILIAL+TMK_CODUSU
+	If QAA->(DbSeek(xFilial("QAA")+TO0->TO0_CODUSU))
+		cRespon := ALLTRIM(QAA->QAA_NOME)
+	Else
+		cRespon := ""
+	EndIf
+Else
+	DbSelectArea("TMK")
+	TMK->(DbSetOrder(1)) // TMK_FILIAL+TMK_CODUSU
+	If TMK->(DbSeek(xFilial("TMK")+TO0->TO0_CODUSU))
+		cRespon := ALLTRIM(TMK->TMK_NOMUSU)
+	Else
+		cRespon := ""
+	EndIf
+EndIf
+
+If cPerg == "SGAR210A" // QAA
+
+	DbSelectArea("QAA")
+	QAA->(DbSetOrder(1)) //QAA_FILIAL+QAA_MAT
+	If QAA->(DbSeek(xFilial("QAA")+cCoord))
+		cCoord 		:= QAA->QAA_NOME
+		cEmailCoo 	:= QAA->QAA_EMAIL
+		cTelCoo		:= QAA->QAA_FONE
+	EndIf
+
+	If QAA->(DbSeek(xFilial("QAA")+cGeren))
+		cGeren 		:= QAA->QAA_NOME
+		cEmailGer 	:= QAA->QAA_EMAIL
+		cTelGer		:= QAA->QAA_FONE
+	EndIf
+
+Else // "SGAR210B" // SRA
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL+RA_MAT
+	If SRA->(DbSeek(xFilial("SRA")+cCoord))
+		cCoord 		:= SRA->RA_NOME
+		cEmailCoo 	:= SRA->RA_EMAIL
+		cTelCoo		:= SRA->RA_TELEFON
+	EndIf
+
+	If SRA->(DbSeek(xFilial("SRA")+cGeren))
+		cGeren 		:= SRA->RA_NOME
+		cEmailGer 	:= SRA->RA_EMAIL
+		cTelGer		:= SRA->RA_TELEFON
+	EndIf
+
+EndIf
+
+cEndere := Alltrim(SM0->M0_ENDCOB)
+cEndere += IIF(Empty(SM0->M0_BAIRCOB),", "+SM0->M0_BAIRCOB,"")
+cEndere += IIF(Empty(SM0->M0_CIDCOB),", "+SM0->M0_CIDCOB,"")
+cEndere += IIF(Empty(SM0->M0_ESTCOB),", "+SM0->M0_ESTCOB,"")
+
+If nModeloImp == 1 //Word
+
+	OLE_SetDocumentVar(oWord,"cRazao",Alltrim(SM0->M0_NOMECOM))
+	OLE_SetDocumentVar(oWord,"cEndEmp",Alltrim(SM0->M0_ENDCOB))
+	OLE_SetDocumentVar(oWord,"cTelEmp",Alltrim(SM0->M0_TEL))
+	OLE_SetDocumentVar(oWord,"cFaxEmp",Alltrim(SM0->M0_FAX))
+	OLE_SetDocumentVar(oWord,"cGerente",Alltrim(cGeren))
+	OLE_SetDocumentVar(oWord,"cEmailGer",Alltrim(cEmailGer))
+	OLE_SetDocumentVar(oWord,"cTelGer",Alltrim(cTelGer))
+	OLE_SetDocumentVar(oWord,"cCoord",Alltrim(cCoord))
+	OLE_SetDocumentVar(oWord,"cEmailCoo",Alltrim(cEmailCoo))
+	OLE_SetDocumentVar(oWord,"cTelCoo",Alltrim(cTelCoo))
+	OLE_ExecuteMacro(oWord,"Somalinha")
+
+Else //Grafico
+
+	oPrtLaudo:Say(nlin,nIniLinh,Upper(STR0020),oFont12b) //"Identificação da Empresa"
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0021+":",oFont10b) //"Razão Social"
+	oPrtLaudo:Say(nlin,nMrg,Alltrim(SM0->M0_NOMECOM),oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0022+":",oFont10b) //"Endereço"
+	oPrtLaudo:Say(nlin,nMrg,cEndere,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0023+":",oFont10b) //"Telefone"
+	oPrtLaudo:Say(nlin,nMrg,SM0->M0_TEL,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0024+":",oFont10b) //"Fax"
+	oPrtLaudo:Say(nlin,nMrg,SM0->M0_FAX,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0025+":",oFont10b) //"Gerente da Unidade"
+	oPrtLaudo:Say(nlin,nMrg,cGeren,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0026+":",oFont10b) //"E-mail"
+	oPrtLaudo:Say(nlin,nMrg,cEmailGer,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0023+":",oFont10b) //"Telefone"
+	oPrtLaudo:Say(nlin,nMrg,cTelGer,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0027+":",oFont10b) //"Coordenador do Plano de Emergência"
+	oPrtLaudo:Say(nlin,nMrg,cCoord,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0026+":",oFont10b) //"E-mail"
+	oPrtLaudo:Say(nlin,nMrg,cEmailCoo,oFont10)
+
+	fSomaLin()
+	oPrtLaudo:Say(nlin,nIniLinh,STR0023+":",oFont10b) //"Telefone"
+	oPrtLaudo:Say(nlin,nMrg,cTelCoo,oFont10)
+
+EndIf
+
+// LEITURA DOS ITENS DO RELATORIO
+cMemo := Alltrim(TO0->TO0_DESCRI)
+If NGCADICBASE("TO0_MMSYP2","A","TO0",.F.)
+	If !Empty(TO0->TO0_MMSYP2)
+		cMMSYP2 := MSMM(TO0->TO0_MMSYP2,80)
+		If !Empty(cMMSYP2)
+			If !Empty(cMemo)
+				cMemo += Chr(13)+Chr(10)
+			Endif
+			cMemo += cMMSYP2
+		Endif
+	Endif
+ElseIf NGCADICBASE("TO0_DESC2","A","TO0",.F.)
+	If !Empty(TO0->TO0_DESC2)
+		If !Empty(cMemo)
+			cMemo += Chr(13)+Chr(10)
+		Endif
+		cMemo += Alltrim(TO0->TO0_DESC2)
+	Endif
+Endif
+
+If !Empty(cMemo)  //Memo vazio
+
+	aAux := StrTokArr(cMemo,Chr(13)+Chr(10))
+
+Else
+
+	Return
+
+EndIf
+
+fSomaLin(,,.T.)
+
+For nI := 1 to Len(aAux)
+
+	IncRegua()
+
+	cTexto := Alltrim(aAux[nI])
+
+	If Substr(cTexto,1,1) == "#" 			// TITULO
+		cConteudo := Alltrim(Substr(cTexto,2,Len(cTexto)-2))
+		fTitl210(cConteudo)
+	ElseIf Substr(cTexto,1,2) == "@!" 	// IMAGEM
+		//fSomaLin(,,.T.)
+		cConteudo := Alltrim(Substr(cTexto,3,Len(cTexto)-4))
+		fImag210(cConteudo)
+	ElseIf Substr(cTexto,1,2) == "@%" 	// ARQUIVO
+		//fSomaLin(,,.T.)
+		cConteudo := Alltrim(Substr(cTexto,3,Len(cTexto)-4))
+		fFile210(cConteudo)
+	ElseIf cTexto == "@PAGINA@" 			// QUEBRA
+		fSomaLin(,,.T.)
+	ElseIf Substr(cTexto,1,1) == "@" 	// ATALHO
+		//fSomaLin(,,.T.)
+		cConteudo := Substr(cTexto,2,Len(cTexto)-2)
+		fAtlh210(cConteudo)
+	Else                   			  		// TEXTO
+		nTipo     := 1
+		fText210(cTexto)
+	EndIf
+
+Next nI
+
+nLenMemo := Len(cMemo)
+nPerMemo := 0
+
+If nModeloImp == 1
+
+	OLE_ExecuteMacro(oWord,"Somalinha")
+
+	OLE_SetDocumentVar(oWord,"Aprovado",Alltrim(cAprova))
+	OLE_SetDocumentVar(oWord,"Elaborado",Alltrim(cRespon))
+
+	If !Empty(dDtElab)
+		OLE_SetDocumentVar(oWord,"DtElabo",DtoC(dDtElab))
+	Else
+		OLE_SetDocumentVar(oWord,"DtElabo",Replicate("_",10))
+	EndIf
+
+	If !Empty(dDtAprv)
+		OLE_SetDocumentVar(oWord,"DtAprova",DtoC(dDtAprv))
+	Else
+		OLE_SetDocumentVar(oWord,"DtAprova",Replicate("_",10))
+	EndIf
+ElseIf nModeloImp == 2 // Grafico
+
+	If nLin < 2500
+		fSomaLin(2790 - nLin)//Realiza a impressao ao final da pagina
+	Else
+		fSomaLin( ,, .T. )
+		fSomaLin(2790 - nLin)//Realiza a impressao ao final da pagina
+	EndIf
+	oPrtLaudo:Say(nlin,nIniLinh,STR0028+":",oFont10b) 	//"Elaborado/revisado por"
+	oPrtLaudo:Say(nlin,1200,STR0029+":",oFont10b) 		//"Aprovado para uso"
+
+	fSomaLin(150)
+	oPrtLaudo:Say(nlin,nIniLinh,Replicate("_",40),oFont10)
+	oPrtLaudo:Say(nlin,0950,Replicate("_",10),oFont10)
+	oPrtLaudo:Say(nlin,1200,Replicate("_",40),oFont10)
+	oPrtLaudo:Say(nlin,2000,Replicate("_",10),oFont10)
+
+	If !Empty(dDtElab)
+		oPrtLaudo:Say(nlin,0970,DtoC(dDtElab),oFont10)
+	EndIf
+
+	If !Empty(dDtAprv)
+		oPrtLaudo:Say(nlin,2020,DtoC(dDtAprv),oFont10)
+	EndIf
+
+	fSomaLin(40)
+	nPosApr := Int(Len(Alltrim(cAprova))/2)+250
+	nPosRes := Int(Len(Alltrim(cRespon))/2)+250
+
+	oPrtLaudo:Say(nlin,nIniLinh+nPosApr,cRespon,oFont10)
+	oPrtLaudo:Say(nlin,1000,STR0030,oFont10) // Data
+	oPrtLaudo:Say(nlin,1200+nPosRes,cAprova,oFont10)
+	oPrtLaudo:Say(nlin,2050,STR0030,oFont10) // Data
+
+	oPrtLaudo:Finish()
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBoxLayout
+Imprime o box para desenhar as tabelas
+
+@param  nLinAux - Linha anterior para começar a desenhar o box
+aColuna - Array de colunas para desenhar o box
+@author Alessandro Smaha
+@since 18/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fBoxLayout(nLinAux,aColuna,nLinAnt)
+
+Local nI := 0
+Local nTamArr := Len(aColuna)-1
+
+Default nLinAnt := nLin
+
+If nLin < nLinAux
+	 nLinAux := 300
+EndIf
+
+For nI := 1 to nTamArr
+	oPrtLaudo:Box(nLinAux,aColuna[nI]-10,nLinAnt,aColuna[nI+1]-10)
+Next nI
+
+Return
+
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fStartLogo
+Imprime o logo do cliente nas páginas
+
+@param  cStartLogo - caminho e nome do logo do cliente
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fStartLogo(cStartLogo)
+
+If !Empty(cStartLogo) .and. File(cStartLogo)
+	oPrtLaudo:SayBitMap(100,150,cStartLogo,300,150)
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTitl210
+Imprime o Título selecionado no laudo
+
+@param  cConteudo - Conteudo que será impresso
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fTitl210(cConteudo)
+
+Local cTitAux   := ""
+
+nPos := At("}",cConteudo)
+cCNS := Substr(cConteudo,1,nPos)
+cTitAux := Substr(cConteudo,nPos+1)
+
+nColImp := nIniLinh
+
+If nModeloImp == 1 		// Formato Word
+
+	cVar1 := "cTXT"+Strzero(nVar1,6)
+	OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+	nVar1++
+
+	OLE_ExecuteMacro(oWord,"Cria_Titulo")
+
+	If ("N" $ Upper(cCNS)) // N=Negrito
+		OLE_ExecuteMacro(oWord,"Com_Negrito")
+	Else
+		OLE_ExecuteMacro(oWord,"Sem_Negrito")
+	Endif
+
+	If ("C" $ Upper(cCNS)) // C=Centralizar
+		OLE_ExecuteMacro(oWord,"Centralizar")
+	Else
+		OLE_ExecuteMacro(oWord,"Justificar")
+	Endif
+
+	If ("S" $ Upper(cCNS)) // S=Sublinhar
+		OLE_ExecuteMacro(oWord,"Com_Sublinhar")
+	Else
+		OLE_ExecuteMacro(oWord,"Sem_Sublinhar")
+	Endif
+
+	OLE_SetDocumentVar(oWord,cVar1,cTitAux)
+
+	OLE_ExecuteMacro(oWord,"Somalinha")
+	OLE_ExecuteMacro(oWord,"Somalinha")
+
+ElseIf nModeloImp == 2	// Formato Gráfico
+
+	If ("C" $ Upper(cCNS)) //C=Centralizar
+		nDiff := Round( (90 - Len(cTitAux)) / 2 , 0 )
+		If nDiff > 0
+			nColImp := 150 + (nDiff*23.3)
+		Endif
+	Endif
+	If ("N" $ Upper(cCNS)) //N=Negrito
+		If ("S" $ Upper(cCNS)) //S=Sublinhar
+			oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12bs)
+		Else
+			oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12b)
+		Endif
+	Else
+		If ("S" $ Upper(cCNS)) //S=Sublinhar
+			oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12s)
+		Else
+			oPrtLaudo:Say(nLin,nColImp,cTitAux,oFont12)
+		Endif
+	Endif
+
+	fSomaLin()
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fImag210
+Imprime a imagem selecionada para montar o laudo
+
+@param  cConteudo - Caminho da imagem que será impressa
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fImag210(cConteudo)
+
+Local nBmpHeight := 0
+Local oBmp
+Local cFileArq := "", nPos
+Local cBarraSrv := "\"
+Local nAltura, nLargura
+
+If File(cConteudo)
+
+	If nModeloImp == 1 		// Formato Word
+
+		If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+			cBarraSrv := "/"
+		Endif
+
+		nPos := Rat(cBarraSrv,cConteudo)
+
+		If nPos > 0
+			cFileArq := AllTrim(Substr(cConteudo,nPos+1))
+		Endif
+
+		CpyS2T(Alltrim(cConteudo),cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+
+		If File( cPathEst+cFileArq )
+			OLE_SetDocumentVar(oWord,"Cria_Var",cPathEst+cFileArq)
+			OLE_ExecuteMacro(oWord,"Insere_img")
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+		Endif
+
+	ElseIf nModeloImp == 2	// Formato Gráfico
+
+		oBmp := TBitmap():New(0,0,0,0,,,.T.,,,,,.F.,,,,,.T.)
+		oBmp:Hide()
+
+		If oBmp:Load(,cConteudo)
+
+			oBmp:nClrPane   	:= CLR_WHITE
+			oBmp:lAutoSize    := .T.
+			oBmp:lTransparent := .T.
+			oBmp:Refresh()
+			nAltura := oBmp:nClientHeight
+			nLargura := oBmp:nClientWidth
+
+
+			nBmpHeight := oBmp:nClientHeight*3
+
+			//Exporta para BMP pela limitação da impressão do TMsPrinter
+			If !(Upper(cConteudo) $ ".BMP")
+				oBmp:Free()
+
+				oBmp := TBitmap():New(0,0,0,0,,,.T.,,,,,.F.,,,,,.T.)
+				oBmp:Hide()
+				oBmp:Load(,cConteudo)
+				oBmp:nClrPane   	:= CLR_WHITE
+				oBmp:lTransparent := .T.
+				oBmp:lAutoSize := .F.
+				oBmp:lStretch:= .T.
+				oBmp:Refresh()
+				oBmp:nHeight := nAltura
+				oBmp:nWidth  := nLargura
+				oBmp:nClientHeight := nAltura
+				oBmp:nClientWidth  := nLargura
+
+				cImagem := GetTempPath()+If(isSRVunix(),"/","\")+StrTran(Time(),":","")+".bmp"
+				oBmp:SaveAsBmp(cImagem)
+				cConteudo := cImagem
+			EndIf
+			oBmp:Free()
+
+			//Caso a imagem seja maior que o espaço disponível na página corrente
+			If nlin+nBmpHeight > nTotLnPg
+				fSomaLin(,,.T.)
+			EndIf
+
+			oPrtLaudo:SayBitmap(nlin,nIniLinh,cConteudo,nLargura*3,nAltura*3)
+
+			fSomaLin(nBmpHeight)
+
+		EndIf
+
+	EndIf
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSomaLin
+Rotina para somar linhas
+
+@param  nQuant - Quantidade de linhas para saltar
+lInicio - Zera a contagem de linhas
+lNewPag - Zera as linha e finaliza a página
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fSomaLin(nQuant,lInicio,lNewPag)
+
+Default nQuant  := 80
+Default lInicio := .F.
+Default lNewPag := .F.
+
+If nModeloImp == 1 //Word
+
+	OLE_ExecuteMacro(oWord,"Quebra_Pag")
+
+ElseIf nModeloImp == 2 //Grafico
+
+	nLin += nQuant
+
+	If lNewPag
+		oPrtLaudo:EndPage()
+		oPrtLaudo:SayBitMap(100,nIniLinh,cStartLogo,300,150)
+		nLin := 300
+	ElseIf lInicio
+		nLin := 300
+		oPrtLaudo:SayBitMap(100,nIniLinh,cStartLogo,300,150)
+	Else
+		If nLin >= 3100
+			If nBoxLinBk > 0
+				fBoxLayout(nBoxLinBk,aBoxLinBk)
+				nBoxLinBk := 0
+			EndIf
+			oPrtLaudo:EndPage()
+			oPrtLaudo:SayBitMap(100,nIniLinh,cStartLogo,300,150)
+			nLin := 300
+		EndIf
+	EndIf
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAtlh210
+Rotina para imprimir o atalho informado na montagem do laudo
+
+@param  cConteudo - nome do atalho informado na montagem do laudo
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fAtlh210(cConteudo)
+
+Local lMetas   := .T.
+Local nLinMemo := 0
+Local nLinPos  := 0
+Local nLinAux  := 0
+Local nLinMax := 0
+Local lOkInfo  := .F.
+Local nMrg     := 650
+Local nMrg2	   := 400
+Local aColun   := {}
+Local cLaudo   := TO0->TO0_LAUDO
+Local aApoio   := {}
+Local lVazio   := .F.
+Local nI	      := 0
+Local nJ			:= 0
+Local nK 		:= 0
+Local nX		:= 0
+Local aMesPos	:= {}
+Local aEstrut  := {}
+Local aInd     := {}
+Local aAuxEst  := {}
+
+Private nMesContr := 0
+Private nNivAnte  := 0
+
+If   Upper(Alltrim(cConteudo)) == "BRIGADAS EMERGENCIAIS"
+
+	// BRIGADA DE EMERGENCIA
+	aBoxBri := {nIniLinh,500}
+	aBoxNiv := {500,950,1400,1850,nFimLinh}
+	aIndNiv := {"","","",""}
+	aQbrFim := {0,0,0,0}
+	aQbrNiv := {0,0,0,0}
+	aNivImp := {.F.,.F.,.F.,.F.}
+	aNivIni := {0,0,0,0}
+	aBoxAll := {}
+
+	DbSelectArea("TKM")
+	TKM->(DbSetOrder(2)) // TKM_FILIAL+TKM_BRIGAD+TKM_NIVSUP+TKM_ORDEM
+	TKM->(dbSeek( xFilial( "TKM" ) ))
+
+	aAuxEstr := {}
+
+	While TKM->(!Eof()) .And. TKM->TKM_FILIAL == xFilial( "TKM" )
+
+		dbSelectArea( "TKL" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TKL" )  + TKM->TKM_BRIGAD )
+
+		If ( Empty( TKM->TKM_DTSAID ) .Or. TKM->TKM_DTSAID >= TO0->TO0_DTINIC ) .And. TKL->TKL_DTVIFI >= TO0->TO0_DTINIC
+			aAdd(aAuxEstr,{TKM->TKM_BRIGAD,TKM->TKM_CODNIV,TKM->TKM_NIVSUP})
+		EndIf
+
+		dbSelectArea( "TKM" )
+		TKM->(DbSkip())
+
+	EndDo
+
+	DbSelectArea("TKM")
+	TKM->(DbSetOrder(1)) // TKM_FILIAL+TKM_BRIGAD+TKM_CODNIV
+
+	For nI := 1 to len(aAuxEstr)
+
+		lFound := .T.
+
+		cBrigada := aAuxEstr[nI][1]
+		cNivBrig := aAuxEstr[nI][2]
+		cNivSup  := aAuxEstr[nI][3]
+		nNiv     := 0
+
+		aStru := {}
+
+		fAtuEstru(cBrigada,cNivBrig,cNivSup,@aStru,@aEstrut,@nNiv)
+
+	Next nI
+
+	DbSelectArea("TKL")
+	TKL->(DbSetOrder(1)) // TKL_FILIAL+TKL_BRIGAD
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) // RA_FILIAL+RA_MAT
+
+	If !Empty(aEstrut) 	// Laço para ordenar o array
+
+		cOrdem1 := " x[1] < y[1] "
+		cOrdem2 := " x[2] < y[2] "
+		cOrdem3 := " x[3] < y[3] "
+		cOrdem4 := " x[4] < y[4] "
+		cOrdem5 := " x[5] < y[5] "
+
+		cBloco1 := cOrdem1
+		cBloco2 := " IIF (x[1] == y[1], "+cOrdem2+", "+cBloco1+" ) "
+		cBloco3 := " IIF (x[1] == y[1] .AND. x[2] == y[2], "+cOrdem3+" , "+cBloco2+" ) "
+		cBloco4 := " IIF (x[1] == y[1] .AND. x[2] == y[2] .AND. x[3] == y[3], "+cOrdem4+" , "+cBloco3+" ) "
+		cBloco5 := " IIF (x[1] == y[1] .AND. x[2] == y[2] .AND. x[3] == y[3] .AND. x[4] == y[4], "+cOrdem5+" , "+cBloco4+" ) "
+
+		//ordenando brigadas + niv1 + niv2 + niv3 + niv4
+		aEstrut := aSort(aEstrut,,,&("{ |x,y| "+cBloco1+"}"))
+		aEstrut := aSort(aEstrut,,,&("{ |x,y| "+cBloco2+"}"))
+		aEstrut := aSort(aEstrut,,,&("{ |x,y| "+cBloco3+"}"))
+		aEstrut := aSort(aEstrut,,,&("{ |x,y| "+cBloco4+"}"))
+		aEstrut := aSort(aEstrut,,,&("{ |x,y| "+cBloco5+"}"))
+
+	EndIf
+
+	cBrigada := ""
+	nLinBri := nLin
+
+	If nModeloImp == 1	// Formato Word
+
+		cMemoAux := ""
+		nQuantLn := 0
+
+		For nI := 1 to Len(aEstrut)
+
+			If cBrigada <> aEstrut[nI][1]
+
+				cBrigada := aEstrut[nI][1]
+				cDescBri := ""
+				If TKL->(DbSeek(xFilial("TKL")+cBrigada))
+					cDescBri := Alltrim(TKL->TKL_DESC)
+				EndIf
+
+				cMemoAux += cDescBri+"#*"
+
+			Else
+
+				cMemoAux += "#*"
+
+			EndIf
+
+			cNiv := ""
+
+			For nJ := 2 to Len(aEstrut[nI]) // Começa a contar do ind 2, pois o primeiro é o codigo da brigada
+
+				nPos := nJ-1
+				cDescNiv := "#*"
+
+				If !Empty(aEstrut[nI][nJ])
+					If TKM->(DbSeek(xFilial("TKM")+cBrigada+aEstrut[nI][nJ])) // TKM_FILIAL+TKM_BRIGAD+TKM_CODNIV
+						If SRA->(DbSeek(xFilial("SRA")+TKM->TKM_MATFUN))
+							cDescNiv := AllTrim(NGSEEK("TKU",TKM->TKM_FUNCAO,1," TKU_DESC" ) )+ ": " +Alltrim(SRA->RA_NOME)+"#*"
+						EndIf
+					EndIf
+				EndIf
+
+				cMemoAux += cDescNiv
+
+			Next nJ
+
+			nQuantLn++
+
+		Next nI
+
+		If !Empty(cMemoAux)
+
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+			OLE_ExecuteMacro(oWord,"Table_Estrutura")
+
+			cMemoAux := ""
+			nQuantLn := 1
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+		EndIf
+
+	ElseIf nModeloImp == 2	// Formato Grafico
+
+		For nI := 1 to Len(aEstrut)
+
+			nQbrAux := 0
+
+			If cBrigada <> aEstrut[nI][1]
+
+				If nI > 1
+
+					fBoxLayout(nLinBri,aBoxBri)
+
+					// Controla a impressão dos boxes dos niveis
+					For nJ := 1 to Len(aBoxAll)
+						fBoxLayout(aBoxAll[nJ][1],{aBoxAll[nJ][2],aBoxAll[nJ][3]},aBoxAll[nJ][4])
+					Next nJ
+
+					aBoxAll := {}
+
+				EndIf
+
+				lBrigada := .T.
+				cBrigada := aEstrut[nI][1]
+				cDescBri := ""
+				If TKL->(DbSeek(xFilial("TKL")+cBrigada))
+					cDescBri := Alltrim(TKL->TKL_DESC)
+					fQbrLinha(cDescBri,14)
+				EndIf
+				fPrintLine(cDescBri,aBoxBri[1],oFont10,14,,.T.)
+
+				nLinNiv := nLin
+				aQbrFim := {nLin,nLin,nLin,nLin}
+
+				aIndNiv := {"","","",""}
+				aNivImp := {.F.,.F.,.F.,.F.}
+				aNivIni := {0,0,0,0}
+			Else
+				lBrigada := .F.
+			EndIf
+
+			cNiv := ""
+			nLinAux := nLin
+
+			For nJ := 2 to Len(aEstrut[nI]) // Começa a contar do ind 2, pois o primeiro é o codigo da brigada
+
+				nPos := nJ-1
+				nTotLin := 40
+
+				If aIndNiv[nPos] <> aEstrut[nI][nJ]
+
+					cDescNiv := ""
+					If TKM->(DbSeek(xFilial("TKM")+cBrigada+aEstrut[nI][nJ])) // TKM_FILIAL+TKM_BRIGAD+TKM_CODNIV
+						dbSelectArea( "TKU" )
+						dbSetOrder( 1 )
+						dbSeek( xFilial( "TKU" ) + TKM->TKM_FUNCAO )
+
+						dbSelectArea( "SRA" )
+						dbSetOrder( 1 )
+						If SRA->(DbSeek(xFilial("SRA")+TKM->TKM_MATFUN))
+							cDescNiv := AllTrim( TKU->TKU_DESC ) + ": " + Alltrim(SRA->RA_NOME)
+							nTotLin := fVerLinha(cDescNiv,18)
+						EndIf
+					EndIf
+
+					aQbrFim[nPos] := nLin+nTotLin
+				EndIf
+
+				If !Empty(aEstrut[nI][nJ])
+
+					nValor := MLCOUNT(cDescNiv,18)
+					// Controla o array para impressão dos niveis
+					If aIndNiv[nPos] <> aEstrut[nI][nJ]
+						For nX := 1 To nPos - 1
+							If aNivIni[nX] > 0 .And. aBoxAll[ aNivIni[nX] , 1 ] < nLin+ ( nValor * 40 )
+								aBoxAll[ aNivIni[nX] , 1 ] := nLin+ ( nValor * 40 )
+							EndIf
+						Next nX
+						aNivImp[nPos] := .T.
+						fPrintLine(cDescNiv,aBoxNiv[nPos],oFont10,18,,.T.)
+						nPosAll := nLin + ( If( nValor > nQbrAux , nValor , nQbrAux ) * 40 )
+						aAdd(aBoxAll,{nPosAll,aBoxNiv[nPos],aBoxNiv[nPos+1],nLin})
+						aNivIni[nPos] := Len( aBoxAll )
+						aIndNiv[nPos] := aEstrut[nI][nJ]
+
+						// Quando alterar o nivel, limpa os niveis pra frente do array
+						For nK := nPos+1 to Len(aIndNiv)
+							aIndNiv[nK] := ""
+							aNivIni[nK] := 0
+						Next nK
+					EndIf
+				EndIf
+
+			Next nJ
+
+			For nJ := 1 to nQbrAux
+
+				fSomaLin(40)
+
+			Next nJ
+
+			//fBoxLayout(nLinAux,aBoxNiv)
+
+			If nI == Len(aEstrut)
+
+				fBoxLayout(nLinBri,aBoxBri)
+				fBoxLayout(nLinBri,aBoxBri)
+
+				// Imprime o box dos niveis
+				For nJ := 1 to Len(aBoxAll)
+					fBoxLayout(aBoxAll[nJ][1],{aBoxAll[nJ][2],aBoxAll[nJ][3]},aBoxAll[nJ][4])
+				Next nJ
+
+				nMax := 0
+				// Imprime o box dos ultimos niveis
+				For nJ := Len(aQbrFim) to 1 Step -1
+					If aQbrFim[nJ] > 0 .And. aNivImp[nJ]
+						If nMax < aQbrFim[nJ]
+							nMax := aQbrFim[nJ]
+						EndIf
+						//fBoxLayout(nMax,{aBoxNiv[nJ],aBoxNiv[nJ+1]},nLinNiv)
+					EndIf
+				Next nJ
+
+			EndIf
+
+		Next nI
+
+	EndIf
+
+	fSomaLin()
+
+ElseIf Upper(Alltrim(cConteudo)) == "RESPONSABILIDADES DAS BRIGADAS"
+
+	// RESPONSABILIDADES DAS BRIGADAS
+	DbSelectArea("TKU") 	// Residuos Gerados
+	TKU->(DbSetOrder(1)) // TAV_FILIAL+TAV_CODRES+TAV_CODEST+TAV_CODNIV
+	TKU->(dbSeek( xFilial( "TKU" ) ))
+
+	aColun := {nIniLinh,850,nFimLinh}
+	nLinAux := nLin
+
+	If TKU->(Eof()) .Or. TKU->TKU_FILIAL <> xFilial( "TKU" )
+
+		If nModeloImp == 1	// Formato Word
+
+		ElseIf nModeloImp == 2	// Formato Grafico
+
+			oPrtLaudo:Say(nLin,nIniLinh,STR0033,oFont10) // "Não possui itens para este atalho"
+			fSomaLin()
+
+		EndIf
+
+	Else
+
+		If nModeloImp == 1	// Formato Word
+
+			cMemoAux := ""
+			nQuantLn := 0
+
+			While TKU->(!Eof()) .And. TKU->TKU_FILIAL == xFilial( "TKU" )
+				cMemoAux += Alltrim(TKU->TKU_DESC)+"#*"
+				cMemoAux += Alltrim(MSMM(TKU->TKU_ATVSYP))+"#*"
+				nQuantLn++
+				TKU->(DbSkip())
+			EndDo
+
+			cVar1 := "cTXT"+Strzero(nVar1,6)
+			OLE_ExecuteMacro(oWord,"Nao_Identar")
+			OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+			nVar1++
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+			OLE_ExecuteMacro(oWord,"Table_RespBrig")
+
+			cMemoAux := ""
+			nQuantLn := 1
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+			// Limpa tabela auxiliar
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+		ElseIf nModeloImp == 2	// Formato Grafico
+			fSomaLin()
+			nLinAux := nLin
+			oPrtLaudo:Say(nLin,aColun[1],STR0031,oFont10b)	// "Atribuição"
+			oPrtLaudo:Say(nLin,aColun[2],STR0032,oFont10b) 	// "Atividades"
+			fSomaLin(40)
+			fBoxLayout(nLinAux,{nIniLinh,850,nFimLinh})
+
+			aBoxLinBk := aColun // Variável utilizada para desenhar o box caso quebre a página
+
+			While TKU->(!Eof()) .And. TKU->TKU_FILIAL == xFilial( "TKU" )
+
+				cAtribu := TKU->TKU_DESC
+				cAtivid := MSMM(TKU->TKU_ATVSYP)
+				nLinAux := nLin
+				nBoxLinBk := nLin // Variável utilizada para desenhar o box caso quebre a página
+
+				nQbrAux := 0
+
+				fPrintLine(cAtribu,aColun[1],oFont10,25)
+				fPrintLine(cAtivid,aColun[2],oFont10,70,.T.)
+
+				// Desenha o box para os campos
+				fBoxLayout(nLinAux,aColun)
+
+				If nLin >= nTotLnPg
+					fSomaLin(,,.T.)
+				EndIf
+
+				TKU->(DbSkip())
+			EndDo
+			nBoxLinBk := 0
+
+			fSomaLin()
+
+		Endif
+
+	EndIf
+
+ElseIf Upper(Alltrim(cConteudo)) == "ENTIDADES DE APOIO"
+
+	aColun := {nIniLinh,1500,nFimLinh}
+	nLinAux := nLin
+
+	DbSelectArea("TBU")  // Contatos Externos
+	TBU->(DbSetOrder(1)) // TBU_FILIAL+TBU_CODPLA+TBU_CODCON
+
+	DbSelectArea("TJG") 	// Laudo X Plano Emergencial
+	TJG->(DbSetOrder(1)) // TJG_FILIAL+TJG_LAUDO+TJG_CODPLA
+
+	If TJG->(DbSeek(xFilial("TJG")+cLaudo))
+
+		While TJG->(!Eof()) .AND. xFilial("TJG") == TJG->TJG_FILIAL .AND. cLaudo == TJG->TJG_LAUDO
+
+			cCodPla := TJG->TJG_CODPLA
+
+			If TBU->(DbSeek(xFilial("TBU")+cCodPla))
+
+				While TBU->(!Eof()) .AND. xFilial("TBU") == TBU->TBU_FILIAL .AND. cCodPla == TBU->TBU_CODPLA
+
+					nPosOrgao := aScan(aApoio, {|x| Alltrim(x[1]) == Alltrim(TBU->TBU_DESCON) .AND. Alltrim(x[2]) == Alltrim(TBU->TBU_FONE) })
+
+					If nPosOrgao == 0
+						aAdd(aApoio,{TBU->TBU_DESCON,TBU->TBU_FONE,TBU->TBU_ENDERE})
+					EndIf
+
+					TBU->(DbSkip())
+				EndDo
+
+			EndIf
+
+			TJG->(DbSkip())
+
+		EndDo
+
+		If !Empty(aApoio)
+
+			aApoio := aSort(aApoio,,,{|x,y| x[1]<y[1]})
+
+			// COMUNICAÇÃO DE EMERGENCIA
+			If nModeloImp == 1	// Formato Word
+
+				cMemoAux := STR0036+"#*"+"#*"  // Comunicação de Emergência
+				nQuantLn := 0
+
+				For nI := 1 to Len(aApoio)
+
+					cMemoAux += Alltrim(aApoio[nI][1])+"#*"
+					cMemoAux += Alltrim(aApoio[nI][2])+"#*"
+					nQuantLn++
+
+				Next nI
+
+				If !Empty(cMemoAux)
+
+					cVar1 := "cTXT"+Strzero(nVar1,6)
+					OLE_ExecuteMacro(oWord,"Nao_Identar")
+					OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+					nVar1++
+					OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+					OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+					OLE_ExecuteMacro(oWord,"Table_ComEmerg")
+
+					cMemoAux := ""
+					nQuantLn := 1
+
+					OLE_ExecuteMacro(oWord,"Somalinha")
+					OLE_ExecuteMacro(oWord,"Somalinha")
+
+					// Limpa tabela auxiliar
+					OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+					OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+				EndIf
+
+			ElseIf nModeloImp == 2	// Formato Grafico
+
+				fSomaLin()
+				nLinAux := nLin
+				oPrtLaudo:Say(nLin,1050,STR0036,oFont10b)	// "Apoio a Emergência"
+				fSomaLin(40)
+				fBoxLayout(nLinAux,{nIniLinh,nFimLinh})
+				nLinAux := nLin
+				oPrtLaudo:Say(nLin,aColun[1],STR0041,oFont10b)	// "Nome"
+				oPrtLaudo:Say(nLin,aColun[2],STR0023,oFont10b) 	// "Telefone"
+				fSomaLin(40)
+				fBoxLayout(nLinAux,{nIniLinh,1500,nFimLinh})
+
+				For nI := 1 to Len(aApoio)
+
+					nQbrAux := 0
+
+					fPrintLine(aApoio[nI][1],aColun[1],oFont10,70)
+					fPrintLine(aApoio[nI][2],aColun[2],oFont10,50,.T.)
+
+					// Desenha o box para os campos
+					fBoxLayout(nLinAux,aColun)
+
+					If nLin >= nTotLnPg
+						fSomaLin(,,.T.)
+						nLinAux := nLin
+						fBoxLayout(nLinAux,aColun)
+					EndIf
+
+				Next nI
+
+			EndIf
+
+		Else
+
+			lVazio := .T.
+
+		EndIf
+
+	Else
+
+		lVazio := .T.
+
+	EndIf
+
+	If nModeloImp == 2	// Formato Grafico
+
+		If lVazio
+
+			oPrtLaudo:Say(nLin,nIniLinh,STR0033,oFont10) // "Não possui itens para este atalho"
+			fSomaLin()
+
+		EndIf
+
+		fSomaLin()
+
+		aColun := {nIniLinh,nFimLinh}
+		nLinAux := nLin
+
+		oPrtLaudo:Say(nLin,1050,STR0039,oFont10b)	// "Apoio a Emergência"
+
+		fSomaLin(40)
+
+		fBoxLayout(nLinAux,aColun)
+
+		aColun := {nIniLinh,1200,nFimLinh}
+		nLinAux := nLin
+
+		oPrtLaudo:Say(nLin,aColun[1],STR0041,oFont10b)	// "Nome"
+		oPrtLaudo:Say(nLin,aColun[2],STR0042,oFont10b) 	// "Endereço"
+
+		fSomaLin(40)
+
+		fBoxLayout(nLinAux,aColun)
+
+	EndIf
+
+	If !lVazio
+
+		// APOIO A EMERGENCIA
+		If nModeloImp == 1	// Formato Word
+
+			cMemoAux := STR0039+"#*"+"#*" // "Apoio a Emergência"
+			nQuantLn := 0
+
+			For nI := 1 to Len(aApoio)
+
+				cMemoAux += Alltrim(aApoio[nI][1])+"#*"
+				cMemoAux += Alltrim(aApoio[nI][3])+"#*"
+				nQuantLn++
+
+			Next nI
+
+			If !Empty(cMemoAux)
+
+				cVar1 := "cTXT"+Strzero(nVar1,6)
+				OLE_ExecuteMacro(oWord,"Nao_Identar")
+				OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+				nVar1++
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+				OLE_ExecuteMacro(oWord,"Table_ApoEmerg")
+
+				cMemoAux := ""
+				nQuantLn := 1
+
+				OLE_ExecuteMacro(oWord,"Somalinha")
+				OLE_ExecuteMacro(oWord,"Somalinha")
+
+				// Limpa tabela auxiliar
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+			EndIf
+
+		ElseIf nModeloImp == 2	// Formato Grafico
+
+			For nI := 1 to Len(aApoio)
+
+				nQbrAux := 0
+
+				fPrintLine(aApoio[nI][1],aColun[1],oFont10,70)
+				fPrintLine(aApoio[nI][3],aColun[2],oFont10,50,.T.)
+
+				// Desenha o box para os campos
+				fBoxLayout(nLinAux,aColun)
+
+				If nLin >= nTotLnPg
+					fSomaLin(,,.T.)
+					nLinAux := nLin
+					fBoxLayout(nLinAux,aColun)
+				EndIf
+
+			Next nI
+
+			fSomaLin()
+
+		EndIf
+
+	EndIf
+
+// PLANOS EMERGENCIAIS
+ElseIf Upper(Alltrim(cConteudo)) == "PLANOS EMERGENCIAIS"
+
+	aColun := {nIniLinh,nFimLinh}
+
+	DbSelectArea("QAA")  // Usuários
+	QAA->(DbSetOrder(1)) // QAA_FILIAL+QAA_MAT
+
+	DbSelectArea("TBB") 	// Plano Emergencial
+	TBB->(DbSetOrder(1)) // TBB_FILIAL+TBB_CODPLA
+
+	DbSelectArea("TBO") 	// Ações do Plano Emergencial
+	TBO->(DbSetOrder(1)) // TBO_FILIAL+TBO_CODPLA+TBO_CODACA
+
+	DbSelectArea("SB1") 	// Ações do Plano Emergencial
+	SB1->(DbSetOrder(1)) // B1_FILIAL+B1_COD
+
+	DbSelectArea("TDQ") 	// PAE X EQUIPAMENTOS
+	TDQ->(DbSetOrder(1)) // TDQ_FILIAL+TDQ_CODPLA+TDQ_CODEQP
+
+	DbSelectArea("TJG") 	// Laudo X Plano Emergencial
+	TJG->(DbSetOrder(1)) // TJG_FILIAL+TJG_LAUDO+TJG_CODPLA
+
+	DbSelectArea("SRA") 	// Funcionários
+	SRA->(DbSetOrder(1)) // RA_FILIAL+RA_MAT
+
+	If TJG->(DbSeek(xFilial("TJG")+cLaudo))
+
+		While TJG->(!Eof()) .AND. xFilial("TJG") == TJG->TJG_FILIAL .AND. cLaudo == TJG->TJG_LAUDO
+
+			cCodPla := TJG->TJG_CODPLA
+			nQbrAux := 0
+			nLinAux := nLin
+
+			If TBB->(DbSeek(xFilial("TBB")+cCodPla))
+				//Responsavel
+				If TBB->TBB_TIPRES == "1" // Usuário
+					cRespon := If( QAA->(DbSeek(xFilial("QAA")+TBB->TBB_RESPON)),	Alltrim(QAA->QAA_NOME)	, "" )
+				Else
+					cRespon := If( SRA->(DbSeek(xFilial("SRA")+TBB->TBB_RESPON)),	Alltrim(SRA->RA_NOME)		, "" )
+				EndIf
+				//Elaborador
+				If TBB->TBB_TIPELA == "1" //Usuário
+					cElabor := If( QAA->( DbSeek(xFilial("QAA")+TBB->TBB_ELABOR)),	Alltrim(QAA->QAA_NOME)	, "" )
+				Else
+					cElabor := If( SRA->( DbSeek(xFilial("SRA")+TBB->TBB_ELABOR)),	Alltrim(SRA->RA_NOME)	, "" )
+				EndIf
+
+				If nModeloImp == 1	// Formato Word
+
+					// CENARIO
+					cMemoAux := ""
+					cTextAux := ""
+					nQuantLn := 3
+
+					cMemoAux += Upper(STR0044)+Chr(13)+Chr(10)+Chr(13)+Chr(10)			// Cenário
+					cMemoAux += Alltrim(TBB->TBB_DESPLA)+Chr(13)+Chr(10)
+					cMemoSim := cMemoAux
+					cMemoAux += Chr(13)+Chr(10)
+					cMemoAux += STR0049+":"+Chr(09)+Alltrim(cRespon)+Chr(13)+Chr(10)	// "Responsável"
+					cMemoAux += STR0050+":"+Chr(09)+Alltrim(cElabor)+Chr(13)+Chr(10)	// "Elaborador"
+					cMemoAux += STR0051+":"+Chr(09)+Alltrim(TBB->TBB_OBSPLA)+Chr(13)+Chr(10)+"#*"		// "Observações"
+
+
+
+					// PROCEDIMENTO DE RESPOSTA
+					If TBO->(DbSeek(xFilial("TBO")+cCodPla))
+						cMemoAux += Upper(STR0052)+Chr(13)+Chr(10)+Chr(13)+Chr(10) // "Procedimento de Resposta"
+						While xFilial("TBO") == TBO->TBO_FILIAL .AND. cCodPla == TBO->TBO_CODPLA
+							cTextAux += IIF(Empty(cTextAux),Alltrim(TBO->TBO_DESACA),Chr(13)+Chr(10)+Alltrim(TBO->TBO_DESACA))
+							TBO->(DbSkip())
+						EndDo
+					EndIf
+
+					cMemoAux += Alltrim(cTextAux)+"#*"
+					cTextAux := ""
+
+					If MV_PAR08 == 1
+						// EQUIPAMENTOS E MATERIAIS DE RESPOSTA
+						If TDQ->(DbSeek(xFilial("TDQ")+cCodPla))
+							cMemoAux += Upper(STR0053)+Chr(13)+Chr(10)+Chr(13)+Chr(10) // "Equipamentos e Materiais de Resposta"
+							While xFilial("TDQ") == TDQ->TDQ_FILIAL .AND. cCodPla == TDQ->TDQ_CODPLA
+								If SB1->(DbSeek(xFilial("SB1")+TDQ->TDQ_CODEQP))
+									cTextAux += IIF(Empty(cTextAux),Alltrim(SB1->B1_DESC),Chr(13)+Chr(10)+Alltrim(SB1->B1_DESC))
+								EndIf
+								TDQ->(DbSkip())
+							EndDo
+						EndIf
+
+						cMemoAux += Alltrim(cTextAux)+"#*"
+						cTextAux := ""
+					EndIf
+
+					cVar1 := "cTXT"+Strzero(nVar1,6)
+					OLE_ExecuteMacro(oWord,"Nao_Identar")
+					OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+					nVar1++
+
+					If nDescPAE == 1
+
+						cMemoAux := cMemoSim+"#*"
+						nQuantLn := 1
+
+					EndIf
+
+					OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+
+					OLE_SetDocumentVar(oWord,"Linhas",If( MV_PAR08 == 1 .And. nDescPAE <> 1 , nQuantLn , nQuantLn - 1 ) )
+					OLE_ExecuteMacro(oWord,"Table_Resposta")
+
+					cMemoAux := ""
+					nQuantLn := 1
+
+					OLE_ExecuteMacro(oWord,"Somalinha")
+					OLE_ExecuteMacro(oWord,"Somalinha")
+
+					// Limpa tabela auxiliar
+					OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+					OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+				ElseIf nModeloImp == 2	// Formato Grafico
+
+					nBoxLinBk := nLin
+					nLinAux := nLin
+					aBoxLinBk := aColun // Variável utilizada para desenhar o box caso quebre a página
+					fSomaLin()
+					// CENARIO
+					oPrtLaudo:Say(nLin,aColun[1],Upper(STR0044),oFont10b)	// Cenário
+					fSomaLin()
+//					nBoxLinBk := nLin
+
+					fPrintLine(Alltrim(TBB->TBB_DESPLA),aColun[1],oFont10b,100)
+					fSomaLin(40)
+//					nBoxLinBk := nLin
+					If nDescPAE <> 1
+						fPrintLine(STR0049+":",aColun[1],oFont10) // "Responsável"
+						fPrintLine(cRespon,nMrg2,oFont10,100)
+						fSomaLin(40)
+//						nBoxLinBk := nLin
+						fPrintLine(STR0050+":",aColun[1],oFont10) // "Elaborador"
+						fPrintLine(cElabor,nMrg2,oFont10,100)
+						fSomaLin(40)
+//						nBoxLinBk := nLin
+						fPrintLine(STR0051+":",aColun[1],oFont10) // "Observações"
+						fPrintObs(Alltrim(TBB->TBB_OBSPLA),nMrg2,oFont10,100,.T.,@nLinAux,aColun)
+						fSomaLin()
+//						nBoxLinBk := nLin
+					EndIf
+
+					fBoxLayout(nLinAux,aColun)
+
+					// PROCEDIMENTO DE RESPOSTA
+					nLinAux := nLin
+
+					oPrtLaudo:Say(nLin,aColun[1],Upper(STR0052),oFont10b)	// "Procedimento de Resposta"
+					fSomaLin()
+
+					If TBO->(DbSeek(xFilial("TBO")+cCodPla))
+
+						nBoxLinBk := nLinAux
+						aBoxLinBk := aColun
+						While xFilial("TBO") == TBO->TBO_FILIAL .AND. cCodPla == TBO->TBO_CODPLA
+
+							fPrintLine(Alltrim(TBO->TBO_DESACA),aColun[1],oFont10,100)
+							fSomaLin(40)
+//							nBoxLinBk := nLin
+							TBO->(DbSkip())
+						EndDo
+
+					Else
+						oPrtLaudo:Say(nLin,nIniLinh,STR0054,oFont10) // "Não possui"
+						fSomaLin()
+//						nBoxLinBk := nLin
+					EndIf
+					//nBoxLinBk := 0
+					If nBoxLinBk <> 0
+						fBoxLayout(nLinAux,aColun)
+					EndIf
+					//fSomaLin()
+
+					If MV_PAR08 == 1
+						// EQUIPAMENTOS E MATERIAIS DE RESPOSTA
+						nLinAux := nLin
+						aBoxLinBk := aColun // Variável utilizada para desenhar o box caso quebre a página
+						nBoxLinBk := nLin
+
+						oPrtLaudo:Say(nLin,aColun[1],Upper(STR0053),oFont10b)	// "Equipamentos e Materiais de Resposta"
+						fSomaLin()
+//						nBoxLinBk := nLin
+
+						If TDQ->(DbSeek(xFilial("TDQ")+cCodPla))
+
+							While xFilial("TDQ") == TDQ->TDQ_FILIAL .AND. cCodPla == TDQ->TDQ_CODPLA
+								If SB1->(DbSeek(xFilial("SB1")+TDQ->TDQ_CODEQP))
+									fPrintLine(Alltrim(SB1->B1_DESC),aColun[1],oFont10,100)
+									fSomaLin(40)
+//									nBoxLinBk := nLin
+								EndIf
+								TDQ->(DbSkip())
+							EndDo
+
+						Else
+							oPrtLaudo:Say(nLin,nIniLinh,STR0054,oFont10) // "Não Possui"
+							fSomaLin()
+//							nBoxLinBk := nLin
+						EndIf
+
+						fSomaLin()
+//						nBoxLinBk := nLin
+
+						If nBoxLinBk <> 0
+							fBoxLayout(nLinAux,aColun)
+							nBoxLinBk := 0
+						EndIf
+					EndIf
+
+					fSomaLin()
+
+				Endif
+
+			EndIf
+
+			TJG->(DbSkip())
+
+		EndDo
+
+	Else
+
+		lVazio := .T.
+
+	EndIf
+
+ElseIf Upper(Alltrim(cConteudo)) == "CRONOGRAMA DE SIMULAÇÕES"
+
+	nTotMes := DateDiffMonth(dDtFimLdo,TO0->TO0_DTINIC)
+	nTotMes := IIF(Empty(nTotMes),1,nTotMes+1)
+	nMesIni := Month(TO0->TO0_DTINIC)
+	nMesFim := Month(dDtFimLdo)
+	aAnos   := {}
+	nAnoFim := Year(dDtFimLdo)-Year(TO0->TO0_DTINIC)
+	nAnosCn := 0
+	nAnoIni := Year(TO0->TO0_DTINIC)
+
+	While nAnosCn <= nAnoFim
+		aAdd(aAnos,nAnoIni)
+		nAnosCn++
+		nAnoIni++
+	End
+
+	aBoxMes := {0,0,0,0,0,0,0,0,0,0,0,0,nFimLinh} 	// Onde está 0 será substituido pelo for abaixo
+
+	For nI := 1 to 12 // Conta os 12 meses para gerar os box dos meses
+		aBoxMes[nI] := nFimLinh-((13-nI)*100)
+	Next nI
+
+	nAnoLIni := nFimLinh-(12*100)
+	nAnoLFim := IIF(nMesIni == 12,nAnoLIni,nFimLinh-((nMesIni-1)*100))
+	nLinMax := If( nAnoLIni+(nTotMes*100) > 2300 , 2300, nAnoLIni+(nTotMes*100))
+	aBoxCen := {nIniLinh, nLinMax}
+	aBoxAno := {nAnoLIni,nFimLinh-(nMesIni*100)+100,nLinMax} // Ini, Col1, Col2, Fim
+
+	DbSelectArea("TBM")
+	TBM->(DbSetOrder(1)) // TBM_FILIAL+TBM_CODPLA
+
+	DbSelectArea("TBN")
+	TBN->(DbSetOrder(2)) // TBN_FILIAL+TBN_CODPLA
+
+	For nI := 1 to Len(aAnos)
+
+		lPrimeiro := .T.
+
+		TBN->(dbSeek( xFilial( "TBN" ) ))
+
+		// CENÁRIO
+		nLinAux := nLin
+		nLinCen := nLin
+		nQbrAux := 0
+		cMemoCab := ""
+		aBoxTit	:= aClone( aBoxMes )
+
+		//Retira os meses a mais P.O.G.
+		For nX := Len( aBoxTit ) To nTotMes + 2 Step -1
+			aDel( aBoxTit , nX )
+			aSize( aBoxTit , Len( aBoxTit ) - 1 )
+
+			aDel( aBoxMes , nX )
+			aSize( aBoxMes , Len( aBoxMes ) - 1 )
+		Next nX
+
+        aMesPos := fMesesCen(aBoxTit,nMesIni,nLinAux,nTotMes,.F.)
+
+		If nModeloImp == 1	// Formato Word
+
+			aMesPos := fMesesCen(aBoxTit,nMesIni,nLinAux,nTotMes)
+
+			// Seta o ano para atualizar na tabela
+			OLE_SetDocumentVar(oWord,"Cria_Var",Alltrim(Str(aAnos[nI])))
+
+			If !Empty(aMesPos)
+
+				cMemoAux := ""
+				nQuantLn := 2
+
+				cMemoAux += STR0044+"#*" // "Cenário"
+
+				For nJ := 1 to 12
+
+					If nJ <= Len(aMesPos)
+						cMemoAux += SUBSTR(MesExtenso(aMesPos[nJ]),1,3)
+					EndIf
+
+					cMemoAux += "#*"
+
+				Next nJ
+
+				cMemoCab := cMemoAux
+				cMemoAux := ""
+
+			EndIf
+
+			cMemoAux := ""
+			nQuantLn := 2
+			lMarcado := .F.
+			cTempAux := ""
+
+			While TBN->(!Eof()) .And. TBN->TBN_FILIAL == xFilial( "TBN" )
+
+				cCodPla := TBN->TBN_CODPLA
+				lMarcado := .F.
+				aMesMarc := {"#*","#*","#*","#*","#*","#*","#*","#*","#*","#*","#*","#*"}
+
+				While TBN->(!Eof()) .AND. cCodPla == TBN->TBN_CODPLA .And. TBN->TBN_FILIAL == xFilial( "TBN" )
+
+					If TBN->TBN_DATINP >= TO0->TO0_DTINIC .AND. TBN->TBN_DATINP <= dDtFimLdo .AND. Year(TBN->TBN_DATINP) == aAnos[nI]
+
+						lMarcado := .T.
+						cDescri := ""
+						If TBM->(DbSeek(xFilial("TBM")+TBN->TBN_CODPLA))
+							cDescri := Alltrim(TBM->TBM_DESPLA)
+						EndIf
+
+						nMesProc := Month(TBN->TBN_DATINP)
+						nPosMes  := aScan(aMesPos, {|x| x == nMesProc })
+
+						If nPosMes > 0
+							aMesMarc[nPosMes] := "X"+"#*"  // Marca o X na tabela
+						EndIf
+
+					EndIf
+
+					TBN->(DbSkip())
+
+				EndDo
+
+				If lMarcado
+					nQuantLn++
+					cMemoAux += cDescri+"#*"
+					For nJ := 1 to Len(aMesMarc)
+						cMemoAux += aMesMarc[nJ]
+					Next nJ
+				EndIf
+
+			EndDo
+
+			If !Empty(cMemoAux)
+				cMemoAux := cMemoCab+cMemoAux
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+				OLE_ExecuteMacro(oWord,"Table_CroSim")
+			EndIf
+
+			cMemoAux := ""
+			nQuantLn := 1
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+			// Limpa tabela auxiliar
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+		ElseIf nModeloImp == 2	// Formato Grafico
+
+			If nLin >= nTotLnPg
+				fSomaLin(,,.T.)
+				nLinAux := nLin
+				nLinCen := nLin
+			EndIf
+
+			While TBN->(!Eof()) .And. TBN->TBN_FILIAL == xFilial( "TBN" )
+
+				cCodPla := TBN->TBN_CODPLA
+
+				lMarcado := .F.
+
+				aPrimeiros := {}
+
+				While TBN->(!Eof()) .AND. cCodPla == TBN->TBN_CODPLA .And. TBN->TBN_FILIAL == xFilial( "TBN" )
+
+					If TBN->TBN_DATINP >= TO0->TO0_DTINIC .AND. TBN->TBN_DATINP <= dDtFimLdo .AND. ;
+						If( nMesIni == 1 , Year(TBN->TBN_DATINP) == aAnos[nI] , If( Month( TBN->TBN_DATINP ) < nMesIni , Year(TBN->TBN_DATINP) == aAnos[nI] + 1 , Year(TBN->TBN_DATINP) == aAnos[nI] ) )
+
+						lMarcado := .T.
+						cDescri := ""
+						If TBM->(DbSeek(xFilial("TBM")+TBN->TBN_CODPLA))
+							cDescri := Alltrim(TBM->TBM_DESPLA)
+						EndIf
+
+						nMesProc := Month(TBN->TBN_DATINP)
+						nPosMes  := aScan(aMesPos, {|x| x == nMesProc })
+
+						If nPosMes > 0
+							If !lPrimeiro
+								fPrintLine("X",aBoxMes[nPosMes]+20,oFont10) // Marca o X na tabela
+							Else
+								aAdd( aPrimeiros , aBoxMes[nPosMes]+20 )
+							EndIf
+						EndIf
+
+					EndIf
+
+					TBN->(DbSkip())
+
+				EndDo
+
+				If lMarcado
+					If lPrimeiro
+						lQuebra := .F.
+
+						fPrintLine(STR0044,aBoxCen[1],oFont10,50) // "Cenário"
+
+						dVldLaudo := If( Empty( TO0->TO0_DTVALI ) , mv_par07 , TO0->TO0_DTVALI )
+
+						If nMesIni == 1
+							fPrintLine(aAnos[nI],aBoxAno[1],oFont10,,.T.)   // Ano Inicial e Final
+						Else
+							fPrintLine(aAnos[nI]  ,aBoxAno[1],oFont10)      // Ano Inicial
+							If aAnos[nI]+1 <= aAnos[ Len( aAnos ) ]
+								lQuebra := .F.
+								fPrintLine(aAnos[nI]+1,aBoxAno[2],oFont10,,.T.) // Ano Final
+							Else
+								lQuebra := .T.
+								If aAnos[nI]+1 <= Year( dVldLaudo )
+									fPrintLine( aAnos[nI]+1 , aBoxAno[2],oFont10,,.T.) // Ano Final
+								Else
+									fPrintLine( "", aBoxAno[2],oFont10,,.T.) // Ano Final
+								EndIf
+							EndIf
+						EndIf
+
+						If lQuebra
+							If Month( dVldLaudo ) >= nMesIni
+								nValPos := ( 12 - ( Month( dVldLaudo ) - nMesIni ) )
+								nValImp := nValPos
+								nValImp2:= nValPos
+								nValPos := 12 - nValPos
+							Else
+								nValPos := ( 12 - nMesIni ) + Month( dVldLaudo )
+								nValImp := 12 - nValPos
+								nValImp2:= nMesIni
+							EndIf
+							aBoxLay := { nAnoLIni , nAnoLIni + ( nValPos * 100 ) + 100 , nAnoLIni + ( nValPos * 100 ) + 100 }
+						Else
+							aBoxLay := aBoxAno
+						EndIf
+
+						fBoxLayout(nLinAux,aBoxLay) // Desenha o box para os anos
+
+						nLinAux := nLin
+
+						If lQuebra
+							aBoxCen[ 2 ] := aBoxMes[ Len( aBoxMes ) ]
+						EndIf
+
+						aMesPos := fMesesCen(aBoxTit,nMesIni,nLinAux,nTotMes)
+
+						fBoxLayout(nLinCen,aBoxCen) // Desenha o box para o cenário
+						lPrimeiro := .F.
+
+						For nX := 1 To Len( aPrimeiros )
+							fPrintLine("X",aPrimeiros[nX],oFont10) // Marca o X na tabela
+						Next nX
+					EndIf
+					nLinPla := nLin
+					fPrintLine(cDescri,aBoxCen[1],oFont10,26,.T.)
+					fBoxLayout(nLinPla,aBoxMes) // Desenha o box para os meses
+					fBoxLayout(nLinPla,aBoxCen) // Desenha o box para o cenário
+				EndIf
+
+			EndDo
+
+			fSomaLin()
+
+		EndIf
+
+	Next nI
+
+ElseIf Upper(Alltrim(cConteudo)) == "CRONOGRAMA DE TREINAMENTOS"
+	nTotMes := DateDiffMonth(dDtFimLdo,TO0->TO0_DTINIC)
+	nTotMes := IIF(Empty(nTotMes),1,nTotMes+1)
+	nMesIni := Month(TO0->TO0_DTINIC)
+	nMesFim := Month(dDtFimLdo)
+	aAnos   := {}
+	nAnoFim := Year(dDtFimLdo)-Year(TO0->TO0_DTINIC)
+	nAnosCn := 0
+	nAnoIni := Year(TO0->TO0_DTINIC)
+
+	While nAnosCn <= nAnoFim
+		aAdd(aAnos,nAnoIni)
+		nAnosCn++
+		nAnoIni++
+	End
+
+	aBoxMes := {0,0,0,0,0,0,0,0,0,0,0,0,nFimLinh} 	// Onde está 0 será substituido pelo for abaixo
+
+	For nI := 1 to 12 // Conta os 12 meses para gerar os box dos meses
+		aBoxMes[nI] := nFimLinh-((13-nI)*100)
+	Next nI
+
+	nAnoLIni := nFimLinh-(12*100)
+	nAnoLFim := IIF(nMesIni == 12,nAnoLIni,nFimLinh-((nMesIni-1)*100))
+	nLinMax := If( nAnoLIni+(nTotMes*100) > 2300 , 2300, nAnoLIni+(nTotMes*100))
+	aBoxEvt := {nIniLinh, nLinMax}
+	aBoxAno := {nAnoLIni,nFimLinh-(nMesIni*100)+100,nLinMax} // Ini, Col1, Col2, Fim
+
+	DbSelectArea("TKO")
+	TKO->(DbSetOrder(1)) // TKO_FILIAL+TKO_BRIGAD+TKO_CODTRE+TKO_CURSO
+
+	DbSelectArea("TKL")
+	TKL->(DbSetOrder(1)) // TKL_FILIAL+TKL_BRIGAD
+
+	DbSelectArea("RA2")
+	RA2->(DbSetOrder(1)) // RA2_FILIAL+RA2_CALEND+RA2_CURSO+RA2_TURMA
+
+	For nI := 1 to Len(aAnos)
+		lPrimeiro := .T.
+
+		TKL->(dbSeek( xFilial( "TKL" ) ))
+
+		// EVENTOS
+		nLinAux := nLin
+		nLinCen := nLin
+		nQbrAux := 0
+		aBoxTit := aClone( aBoxMes )
+		//Retira os meses a mais P.O.G.
+		For nX := Len( aBoxTit ) To nTotMes + 2 Step -1
+			aDel( aBoxTit , nX )
+			aSize( aBoxTit , Len( aBoxTit ) - 1 )
+
+			aDel( aBoxMes , nX )
+			aSize( aBoxMes , Len( aBoxMes ) - 1 )
+		Next nX
+
+		aMesPos := fMesesCen(aBoxTit,nMesIni,nLinAux,nTotMes,.F.)
+
+		If nModeloImp == 1	// Formato Word
+
+			aMesPos := fMesesCen( aBoxTit,nMesIni,nLinAux,nTotMes )
+
+			// Seta o ano para atualizar na tabela
+			OLE_SetDocumentVar(oWord,"Cria_Var",Alltrim(Str(aAnos[nI])))
+
+			If !Empty(aMesPos)
+
+				cMemoAux := ""
+				nQuantLn := 2
+
+				cMemoAux += STR0057+"#*" // "Evento"
+
+				For nJ := 1 to 12
+
+					If nJ <= Len(aMesPos)
+						cMemoAux += SUBSTR(MesExtenso(aMesPos[nJ]),1,3)
+					EndIf
+
+					cMemoAux += "#*"
+
+				Next nJ
+
+				cMemoCab := cMemoAux
+				cMemoAux := ""
+
+			EndIf
+
+			cMemoAux := ""
+			nQuantLn := 2
+			lMarcado := .F.
+			cTempAux := ""
+
+			While TKL->(!Eof()) .And. TKL->TKL_FILIAL == xFilial( "TKL" )
+
+				cCodBrig := TKL->TKL_BRIGAD
+
+				lMarcado := .F.
+				cDescri  := ""
+				aMesMarc := {"#*","#*","#*","#*","#*","#*","#*","#*","#*","#*","#*","#*"}
+
+				While TKL->(!Eof()) .AND. cCodBrig == TKL->TKL_BRIGAD .And. TKL->TKL_FILIAL == xFilial( "TKL" )
+
+					If TKO->(DbSeek(xFilial("TKO")+cCodBrig)) // TKO_FILIAL+TKO_BRIGAD+TKO_CODTRE+TKO_CURSO
+
+						If RA2->(DbSeek(xFilial("RA2")+TKO->TKO_CODTRE)) // RA2_FILIAL+RA2_CALEND+RA2_CURSO+RA2_TURMA
+
+							If	RA2->RA2_DATAIN >= TO0->TO0_DTINIC .AND. RA2->RA2_DATAIN <= dDtFimLdo
+
+								cDescri := RA2->RA2_DESC
+								nAnoPos := aAnos[nI]
+
+								For nK := 1 to Len(aMesPos)
+
+									If STRZERO(nAnoPos,4)+STRZERO(aMesPos[nK],2) >= STRZERO(Year(RA2->RA2_DATAIN),4)+STRZERO(Month(RA2->RA2_DATAIN),2) .AND.;
+										STRZERO(nAnoPos,4)+STRZERO(aMesPos[nK],2) <= STRZERO(Year(RA2->RA2_DATAFI),4)+STRZERO(Month(RA2->RA2_DATAFI),2)
+
+										lMarcado := .T.
+
+										nMesProc := aMesPos[nK]
+										nPosMes  := aScan(aMesPos, {|x| x == nMesProc })
+
+										If nPosMes > 0
+											aMesMarc[nPosMes] := "X"+"#*"  // Marca o X na tabela
+										EndIf
+
+									EndIf
+
+									If aMesPos[nK] == 12
+										nAnoPos++
+									EndIf
+
+								Next nK
+
+							EndIf
+
+						EndIf
+
+					EndIf
+
+					TKL->(DbSkip())
+
+				EndDo
+
+				If lMarcado
+					nQuantLn++
+					cMemoAux += cDescri+"#*"
+					For nJ := 1 to Len(aMesMarc)
+						cMemoAux += aMesMarc[nJ]
+					Next nJ
+				EndIf
+
+			EndDo
+
+			If !Empty(cMemoAux)
+				cMemoAux := cMemoCab+cMemoAux
+				OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+				OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+				OLE_ExecuteMacro(oWord,"Table_CroSim")
+			EndIf
+
+			cMemoAux := ""
+			nQuantLn := 1
+
+			OLE_ExecuteMacro(oWord,"Somalinha")
+			OLE_ExecuteMacro(oWord,"Somalinha")
+
+			// Limpa tabela auxiliar
+			OLE_SetDocumentVar(oWord,"Tabela",cMemoAux)
+			OLE_SetDocumentVar(oWord,"Linhas",nQuantLn)
+
+		ElseIf nModeloImp == 2	// Formato Grafico
+
+			While TKL->(!Eof()) .And. TKL->TKL_FILIAL == xFilial( "TKL" )
+
+				cCodBrig := TKL->TKL_BRIGAD
+
+				lMarcado := .F.
+				cDescri  := ""
+				aPrimeiros := {}
+
+				While TKL->(!Eof()) .AND. cCodBrig == TKL->TKL_BRIGAD .And. TKL->TKL_FILIAL == xFilial( "TKL" )
+
+					If TKO->(DbSeek(xFilial("TKO")+cCodBrig)) // TKO_FILIAL+TKO_BRIGAD+TKO_CODTRE+TKO_CURSO
+
+						If RA2->(DbSeek(xFilial("RA2")+TKO->TKO_CODTRE)) // RA2_FILIAL+RA2_CALEND+RA2_CURSO+RA2_TURMA
+
+							If	RA2->RA2_DATAIN >= TO0->TO0_DTINIC .AND. RA2->RA2_DATAIN <= dDtFimLdo
+
+								cDescri := RA2->RA2_DESC
+								nAnoPos := aAnos[nI]
+
+								For nK := 1 to Len(aMesPos)
+
+									If STRZERO(nAnoPos,4)+STRZERO(aMesPos[nK],2) >= STRZERO(Year(RA2->RA2_DATAIN),4)+STRZERO(Month(RA2->RA2_DATAIN),2) .AND.;
+										STRZERO(nAnoPos,4)+STRZERO(aMesPos[nK],2) <= STRZERO(Year(RA2->RA2_DATAFI),4)+STRZERO(Month(RA2->RA2_DATAFI),2)
+
+										lMarcado := .T.
+
+										nMesProc := aMesPos[nK]
+										nPosMes  := aScan(aMesPos, {|x| x == nMesProc })
+
+										If nPosMes > 0
+											If !lPrimeiro
+												fPrintLine("X",aBoxMes[nPosMes]+20,oFont10) // Marca o X na tabela
+											Else
+												aAdd( aPrimeiros , aBoxMes[nPosMes]+20 )
+											EndIf
+										EndIf
+
+									EndIf
+
+									If aMesPos[nK] == 12
+										nAnoPos++
+									EndIf
+
+								Next nK
+
+							EndIf
+
+						EndIf
+
+					EndIf
+
+					TKL->(DbSkip())
+
+				EndDo
+
+				If lMarcado
+					If lPrimeiro
+						lQuebra := .F.
+
+						fPrintLine(STR0057,aBoxEvt[1],oFont10,50) // "Evento"
+
+						dVldLaudo := If( Empty( TO0->TO0_DTVALI ) , mv_par07 , TO0->TO0_DTVALI )
+
+						If nMesIni == 1
+							fPrintLine(aAnos[nI],aBoxAno[1],oFont10,,.T.)   // Ano Inicial e Final
+						Else
+							fPrintLine(aAnos[nI]  ,aBoxAno[1],oFont10)      // Ano Inicial
+							If aAnos[nI]+1 <= aAnos[ Len( aAnos ) ]
+								lQuebra := .F.
+								fPrintLine(aAnos[nI]+1,aBoxAno[2],oFont10,,.T.) // Ano Final
+							Else
+								lQuebra := .T.
+								If aAnos[nI]+1 <= Year( dVldLaudo )
+									fPrintLine( aAnos[nI]+1 , aBoxAno[2],oFont10,,.T.) // Ano Final
+								Else
+									fPrintLine( "", aBoxAno[2],oFont10,,.T.) // Ano Final
+								EndIf
+							EndIf
+						EndIf
+
+						If lQuebra
+							If Month( dVldLaudo ) >= nMesIni
+								nValPos := ( 12 - ( Month( dVldLaudo ) - nMesIni ) )
+								nValImp := nValPos
+								nValImp2:= nValPos
+								nValPos := 12 - nValPos
+							Else
+								nValPos := ( 12 - nMesIni ) + Month( dVldLaudo )
+								nValImp := 12 - nValPos
+								nValImp2:= nMesIni
+							EndIf
+							aBoxLay := { nAnoLIni , nAnoLIni + ( nValPos * 100 ) + 100 , nAnoLIni + ( nValPos * 100 ) + 100 }
+						Else
+							aBoxLay := aBoxAno
+						EndIf
+
+						fBoxLayout(nLinAux,aBoxLay) // Desenha o box para os anos
+
+						nLinAux := nLin
+
+						If lQuebra
+							aBoxEvt[ 2 ] := aBoxMes[ Len( aBoxMes ) ]
+						EndIf
+
+						aMesPos := fMesesCen(aBoxTit,nMesIni,nLinAux,nTotMes)
+
+						fBoxLayout(nLinCen,aBoxEvt) // Desenha o box para o cenário
+						lPrimeiro := .F.
+						For nX := 1 To Len( aPrimeiros )
+							fPrintLine("X",aPrimeiros[nX],oFont10) // Marca o X na tabela
+						Next nX
+					EndIf
+					nLinPla := nLin
+					fPrintLine(cDescri,aBoxEvt[1],oFont10,26,.T.)
+					fBoxLayout(nLinPla,aBoxMes) // Desenha o box para os meses
+					fBoxLayout(nLinPla,aBoxEvt) // Desenha o box para o cenário
+				EndIf
+
+			EndDo
+
+			fSomaLin()
+
+		EndIf
+
+	Next nI
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fAtuEstru
+Atualiza o array de estrutura para as brigadas
+
+@param  cBrigada - Código da brigada
+cNivBrig - Nivel
+cNivSup  - Nivel Superior
+aStru    - Array para controlar os níveis
+aEstrut  - Array das estruturas que será atualizado
+nNiv     - Posição do Nivel
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fAtuEstru(cBrigada,cNivBrig,cNivSup,aStru,aEstrut,nNiv)
+
+Local nPos := 0
+Local nK   := 0
+Local cBloco := ""
+
+DbSelectArea("TKM")
+
+If TKM->(DbSeek(xFilial("TKM")+cBrigada+cNivSup)) // TKM_FILIAL+TKM_BRIGAD+TKM_CODNIV
+	dbSelectArea( "TKL" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TKL" )  + TKM->TKM_BRIGAD )
+
+	If ( Empty( TKM->TKM_DTSAID ) .Or. TKM->TKM_DTSAID >= TO0->TO0_DTINIC ) .And. TKL->TKL_DTVIFI >= TO0->TO0_DTINIC
+		nNiv++
+		If Empty(aStru)
+			aAdd(aStru,cNivBrig)
+		EndIf
+		aAdd(aStru,TKM->TKM_CODNIV)
+		fAtuEstru(TKM->TKM_BRIGAD,TKM->TKM_CODNIV,TKM->TKM_NIVSUP,@aStru,@aEstrut,@nNiv)
+	EndIf
+Else
+
+	nPos := 0
+
+	If nNiv == 0 // CRIA O PRIMEIRO NIVEL DA ESTRUTURA
+
+		aAdd(aEstrut,{cBrigada,cNivBrig,"","",""})
+
+	ElseIf nNiv == 1
+
+		nPos := aScan(aEstrut,{|x|	Alltrim(x[1]) == Alltrim(cBrigada) .AND.;
+		Alltrim(x[2]) == aStru[2] })
+
+		If nPos > 0
+			If Empty(aEstrut[nPos][3])
+				aEstrut[nPos][3] := aStru[1]
+			Else
+				aAdd(aEstrut,{aEstrut[nPos][1],aEstrut[nPos][2],aStru[1],"",""})
+			EndIf
+		EndIf
+
+		nNiv--
+
+	ElseIf nNiv == 2
+
+		nPos := aScan(aEstrut,{|x|	Alltrim(x[1]) == Alltrim(cBrigada) .AND.;
+		Alltrim(x[2]) == aStru[3] .AND.;
+		Alltrim(x[3]) == aStru[2]	})
+
+		If nPos > 0
+			If Empty(aEstrut[nPos][4])
+				aEstrut[nPos][4] := aStru[1]
+			Else
+				aAdd(aEstrut,{aEstrut[nPos][1],aEstrut[nPos][2],aEstrut[nPos][3],aStru[1],""})
+			EndIf
+		EndIf
+
+		nNiv--
+
+	ElseIf nNiv == 3
+
+		nPos := aScan(aEstrut,{|x|	Alltrim(x[1]) == Alltrim(cBrigada) .AND.;
+		Alltrim(x[2]) == aStru[4] .AND.;
+		Alltrim(x[3]) == aStru[3] .AND.;
+		Alltrim(x[4]) == aStru[2] 	})
+
+		If nPos > 0
+			If Empty(aEstrut[nPos][5])
+				aEstrut[nPos][5] := aStru[1]
+			Else
+				aAdd(aEstrut,{aEstrut[nPos][1],aEstrut[nPos][2],aEstrut[nPos][3],aEstrut[nPos][4],aStru[1]})
+			EndIf
+		EndIf
+
+		nNiv--
+
+	EndIf
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerLinha
+Verifica o total de linhas necessárias para imprimir o texto informado no parametro
+
+@param  cTexto  - Texto para verificação
+nTamCpo - Tamanho da coluna para quebrar o texto
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fVerLinha(cTexto,nTamCpo)
+
+Local cTextTemp := ""
+Local nLinMemo := 0
+Local nLinPos  := 0
+Local nQuebra  := 0
+
+nLinMemo := MLCOUNT(cTexto,nTamCpo)
+
+For nLinPos := 1 to nLinMemo
+	cTextTemp := Alltrim(MemoLine(cTexto,nTamCpo,nLinPos))
+	If !Empty(cTextTemp)
+		nQuebra++
+	EndIf
+Next nLinPos
+
+nTotal := 40*nQuebra
+
+Return nTotal
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fQbrLinha
+Atualiza a variável privada nQbrAux para controlar a quebra e impressão de box para as linhas
+
+@param  cTexto  - Texto para verificação
+nTamCpo - Tamanho da coluna para quebrar o texto
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fQbrLinha(cTexto,nTamCpo)
+
+Local cTextTemp := ""
+Local nLinMemo := 0
+Local nLinPos  := 0
+Local nQuebra  := 0
+
+nLinMemo := MLCOUNT(cTexto,nTamCpo)
+
+For nLinPos := 1 to nLinMemo
+	cTextTemp := Alltrim(MemoLine(cTexto,nTamCpo,nLinPos))
+	If !Empty(cTextTemp)
+		nQuebra++
+	EndIf
+Next nLinPos
+
+If nQuebra > nQbrAux
+	nQbrAux := nQuebra
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMesesCen
+Rotina para retornar o array com os meses para impressão do cabeçalho dos cronogramas
+
+@param  aBoxMes - Array com os meses na ordem do periodo do laudo
+nMesIni - Primeiro mes
+nLinAux - Linha anterior para impressão do box
+nTotMes - Total de meses para verificar se imprime mais de um periodo
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fMesesCen(aBoxMes,nMesIni,nLinAux,nTotMes,lImp)
+
+Local nJ := 1
+Local cNomeMes := ""
+Local nMesContr := 1
+Local aMesPos := {}
+Default lImp := .T.
+
+While nMesContr <= nTotMes .AND. nJ <= Len(aBoxMes)-1	// Pega só as coordenadas para impressão dos meses
+
+	If nMesIni > 12
+		nMesIni := 1
+	EndIf
+
+	If lImp
+		cNomeMes := Upper(SUBSTR(MesExtenso(nMesIni),1,3))
+
+		If nModeloImp == 2	// Formato Grafico
+			If nJ == Len(aBoxMes)-1 .OR. nMesContr == nTotMes
+				fPrintLine(cNomeMes,aBoxMes[nJ],oFont10,,.T.)
+			Else
+				fPrintLine(cNomeMes,aBoxMes[nJ],oFont10)
+			EndIf
+		EndIf
+	EndIf
+
+	aAdd(aMesPos,nMesIni)
+	nMesIni++
+
+	nJ++
+
+	nMesContr++
+
+EndDo
+
+If nModeloImp == 2 .And. lImp  					// Formato Grafico
+	fBoxLayout(nLinAux,aBoxMes) 	// Desenha o box para os meses
+EndIf
+
+Return aMesPos
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintLine
+Rotina para imprimir o texto informado e em qual coluna será impresso
+
+@param  cTexto - Texto para impressao
+nColuna - Posicao para impressao do texto
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPrintLine(cTexto,nColuna,oFonte,nTamCpo,lUltimo,lCenter)
+
+Local cTextTemp := ""
+Local nLinMemo := 0
+Local nLinPos  := 0
+Local nQuebra  := 0
+Local nJ 		:= 0
+Local nLinAnt := nLin
+Default nTamCpo  := 16
+Default lUltimo  := .F.
+Default lCenter  := .F.
+
+If Valtype(cTexto) == "N"
+	cTexto := Alltrim(Str(cTexto))
+EndIf
+
+nLinMemo := MLCOUNT(cTexto,nTamCpo)
+
+For nLinPos := 1 to nLinMemo
+	cTextTemp := Alltrim(MemoLine(cTexto,nTamCpo,nLinPos))
+	If !Empty(cTextTemp)
+		oPrtLaudo:Say(nLin,nColuna,cTextTemp,oFonte,If( lCenter , nTamCpo , Nil ))
+		fSomaLin(40)
+		nQuebra++
+	EndIf
+Next nLinPos
+
+If nQuebra > nQbrAux
+	nQbrAux := nQuebra
+EndIf
+
+If nLinAnt <= nLin
+	If lUltimo
+		nLin := nLinAnt
+		For nJ := 1 to nQbrAux
+			fSomaLin(40)
+		Next nJ
+	Else
+		nLin := nLinAnt
+	EndIf
+EndIf
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fPrintObs
+Rotina para imprimir o texto informado e em qual coluna será impresso
+
+@param  cTexto - Texto para impressao
+nColuna - Posicao para impressao do texto
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fPrintObs(cTexto,nColuna,oFonte,nTamCpo,lUltimo, nLinAux,aColun)
+
+Local cTextTemp := ""
+Local nLinMemo := 0
+Local nLinPos  := 0
+Default nTamCpo  := 16
+Default lUltimo  := .F.
+
+If Valtype(cTexto) == "N"
+	cTexto := Alltrim(Str(cTexto))
+EndIf
+
+nLinMemo := MLCOUNT(cTexto,nTamCpo)
+
+For nLinPos := 1 to nLinMemo
+	cTextTemp := Alltrim(MemoLine(cTexto,nTamCpo,nLinPos))
+	If !Empty(cTextTemp)
+		oPrtLaudo:Say(nLin,nColuna,cTextTemp,oFonte)
+		If nLin + 40 >= 3000
+			nLin := nLin + 40
+			fBoxLayout(nLinAux,aColun)
+			nLinAux := 300
+		EndIf
+		fSomaLin(40)
+	EndIf
+Next nLinPos
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fText210
+Imprime o texto informado
+
+@param  cConteudo - Texto para impressao
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fText210(cConteudo)
+
+Local nMrg := nIniLinh
+
+If nModeloImp == 1 		// Formato Word
+
+	cVar1 := "cTXT"+Strzero(nVar1,6)
+	OLE_SetDocumentVar(oWord,"Cria_Var",cVar1)
+	nVar1++
+
+	OLE_ExecuteMacro(oWord,"Cria_Texto")
+
+	OLE_ExecuteMacro(oWord,"Sem_Negrito")
+	OLE_ExecuteMacro(oWord,"Justificar")
+	OLE_ExecuteMacro(oWord,"Sem_Sublinhar")
+
+	OLE_SetDocumentVar(oWord,cVar1,cConteudo)
+
+	OLE_ExecuteMacro(oWord,"Somalinha")
+	OLE_ExecuteMacro(oWord,"Somalinha")
+
+ElseIf nModeloImp == 2	// Formato Gráfico
+
+	oPrtLaudo:Say(nlin,nMrg,cConteudo,oFont10)
+	fSomaLin()
+
+EndIf
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fFile210
+Imprime o arquivo informado
+
+@param  cConteudo - Caminho do arquivo
+@author Alessandro Smaha
+@since 06/03/2013
+@version P10
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fFile210(cConteudo)
+
+Local cFileArq := "", nPos
+Local cBarraSrv := "\"
+
+If nModeloImp != 1 //Se nao for em formato WORD, nao imprime o doc
+	Return
+Endif
+
+If isSRVunix()  //servidor eh da familia Unix (linux, solaris, free-bsd, hp-ux, etc.)
+	cBarraSrv := "/"
+Endif
+
+nPos := Rat(cBarraSrv,cConteudo)
+If nPos > 0
+	cFileArq := AllTrim(Substr(cConteudo,nPos+1))
+Endif
+
+CpyS2T(Alltrim(cConteudo),cPathEst,.T.) 	// Copia do Server para o Remote, eh necessario
+
+If File( cPathEst+cFileArq )
+	cTeste := cPathEst+cFileArq
+	OLE_SetDocumentVar(oWord,"Cria_Var",cPathEst+cFileArq)
+	OLE_ExecuteMacro(oWord,"Insere_doc")
+	OLE_ExecuteMacro(oWord,"Somalinha")
+	OLE_ExecuteMacro(oWord,"Somalinha")
+Endif
+
+fSomaLin()
+
+Return
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} SGAR210PER
+Valida os campos de pergunta para o relatório
+
+@param nParam  - Número do parâmetro (MV)
+
+@author Alessandro Smaha
+@since 19/03/2013
+@version P10
+@return lRet - Lógico, .T. se valido, .F. caso contrário
+/*/
+//---------------------------------------------------------------------
+Function SGAR210PER(nParam)
+
+Local lRet := .F.
+
+If nParam == 1
+
+	DbSelectArea("TO0")
+	TO0->(DbSetOrder(1)) // TO0_FILIAL+TO0_LAUDO
+	If TO0->(DbSeek(xFilial("TO0")+MV_PAR01))
+
+		If TO0->TO0_TIPREL $ "A"
+			lRet := .T.
+		Else
+			lRet := .F.
+		EndIf
+
+	Else
+		lRet := .F.
+	EndIf
+
+ElseIf nParam == 2
+
+	If cPerg == "SGAR210A" // QAA
+
+		If ExistCpo("QAA",MV_PAR02)
+			lRet := .T.
+		Else
+			lRet := .F.
+		EndIf
+
+	Else // cPerg == "SGAR210B" // SRA Funcionários
+
+		If ExistCpo("SRA",MV_PAR02)
+			lRet := .T.
+		Else
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+ElseIf nParam == 3
+
+	If cPerg == "SGAR210A" // QAA Usuários
+
+		If ExistCpo("QAA",MV_PAR03)
+			lRet := .T.
+		Else
+			lRet := .F.
+		EndIf
+
+	Else // cPerg == "SGAR210B" // SRA Funcionários
+
+		If ExistCpo("SRA",MV_PAR03)
+			lRet := .T.
+		Else
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+ElseIf nParam == 4
+
+	dDtFimLdo := CtoD("")
+
+	// Se Data final do laudo for vazio, deve ser informado o parametro Data Fim
+	DbSelectArea("TO0")
+	TO0->(DbSetOrder(1)) // TO0_FILIAL+TO0_LAUDO
+	If TO0->(DbSeek(xFilial("TO0")+MV_PAR01))
+		If Empty(TO0->TO0_DTVALI)
+			If Empty(MV_PAR07)
+				lRet := .F.
+			Else
+				If MV_PAR07 < TO0->TO0_DTINIC
+			  		lRet := .F.
+				Else
+	  				lRet := .T.
+	  			EndIf
+	  		EndIf
+		Else
+			lRet := .T.
+		EndIf
+	EndIf
+
+EndIf
+
+If !lRet
+	Help( " ",1, 'SGAR21001')
+EndIf
+
+Return lRet

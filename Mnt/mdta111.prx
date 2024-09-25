@@ -1,0 +1,1882 @@
+#INCLUDE "mdta111.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA111
+
+Programa para Controle de Eventos.
+
+@author  Denis Hyroshi de Souza
+@since   11/09/2006
+
+@sample  MDTA111(.T., .T.)
+
+@param   lLoadMdt, Lógico, Define se a chamada da função foi feita pelo menu
+@param   lVisualizar, Lógico, Define se irá permitir a visualização dos próximos eventos
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function MDTA111(lLoadMdt, lVisualizar)
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local oBold
+	Local oBtn1
+	Local oBtn2
+	Local oBtn3
+	Local oBtn4
+	Local oCheck
+	Local cUser     := cUserName
+	Local cUserCIPA := " "
+	Local cFilOld   := cFilAnt
+	Local aHeaderl1 := {}
+	Local lCipatr 	:= SuperGetMv( "MV_NG2NR31", .F., "2" ) == "1"
+
+	Private lCpoSetor    := .F.
+	Private nDiasAntes   := SuperGetMv( "MV_CIPADIA", .T., "10" )
+	Private l2LoadMdt    := lLoadMdt
+	Private l2Visualizar := lVisualizar
+	Private aRotina      := MenuDef()
+
+	Private lSigaMdtPS := SuperGetMv( "MV_MDTPS", .F., "N" ) == "S"
+
+	Private aEventos
+	Private lUmaVez    := .F.
+	Private oDlgEve
+	Private oList
+	Private cCadastro  := ''
+	Private cPendencia
+	Private bList111
+	Private aAvaliacao := {}
+	Private oMenu
+	Private cControle  := ""
+	Private lUpdMdt48  := NGCADICBASE( "TNN_CODORI", "A", "TNN", .F. )
+	Private nAt        := 1 //Variavel de controle utilizada na impressão tReport
+
+	If TNN->( FieldPos( "TNN_CC" ) ) > 0
+		dbSelectArea( "TNN" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TNN" ) )
+
+		While !Eof() .And. TNN->TNN_FILIAL == xFilial( "TNN" )
+
+			If !Empty( TNN->TNN_CC )
+				lCpoSetor := .T.
+			EndIf
+
+			dbSkip()
+		End
+
+	EndIf
+
+	aEventos  := MDTCarTNW( lLoadMdt, lVisualizar, .F. )
+
+	cUserCIPA := GetMv( "MV_CIPAUSR" )
+	aUsers    := UserCIPA( cUserCIPA )
+
+	If aScan( aUsers, {|x| SubStr( Upper( AllTrim( x ) ), 1, 25 ) == Upper( Alltrim( cUser ) ) } ) == 0
+
+		If Valtype( l2LoadMdt ) == "U"
+			MsgStop( IIf( lCipatr, STR0053, STR0001 ) + " " + ; // "Este usuário não está configurado para acessar os eventos da CIPATR." //"Este usuário não está configurado para acessar os eventos da CIPA."
+					STR0002 ) // "O administrador do sistema deverá configurar o parâmetro MV_CIPAUSR para liberar este acesso."
+		EndIf
+
+		NGRETURNPRM( aNGBEGINPRM )
+		Return
+	EndIf
+
+	If Len( aEventos ) == 0 //Se nao tem evento para o momento
+
+		If Valtype( lLoadMdt ) == "U" // Se for chamada pelo menu
+
+			If !lVisualizar .Or. lVisualizar == nil // Não apresentar a msg se deseja visualizar
+
+				If MsgYesNo( STR0003 ) //"Não existe nenhum evento da CIPA pendente no momento. Deseja visualizar os próximos eventos? "
+					MDTA111( lLoadMdt, .T. )
+				EndIf
+
+			Else
+				MsgStop( IIf( lCipatr, STR0058, STR0004 ) ) // "Não existe nenhum evento da CIPA pendente."
+			EndIf
+
+		EndIf
+
+		NGRETURNPRM( aNGBEGINPRM )
+		Return .T.
+
+	EndIf
+
+	If lSigaMdtps
+		Define MsDialog oDlgEve From 000, 000 To 400, 1020 Title STR0005 Pixel COLOR CLR_BLACK, CLR_WHITE of oMainwnd //"Eventos"
+	Else
+		Define MsDialog oDlgEve From 000, 000 To 315, 705 Title STR0005 Pixel COLOR CLR_BLACK, CLR_WHITE of oMainwnd //"Eventos"
+	EndIf
+
+	Define FONT oBold NAME "Courier New" Size 0, -13 BOLD
+
+	NgPopUp( asMenu, @oMenu )
+	oDlgEve:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oDlgEve ) }
+
+	@ 02, 005 Say OemToAnsi( STR0006 ) Size 187, 7 Of oDlgEve Pixel Font oBold //"Usuário"
+	@ 02, 050 Say OemToAnsi( cUser ) Color CLR_BLUE Pixel Font oBold
+
+	If lSigaMdtps
+
+		If !lVisualizar .Or. lVisualizar == Nil
+			@ 002, 445 Button STR0039 OF oDlgEve SIZE 60, 11 PIXEL ACTION MdtRest111() //"Restaurar Eventos"
+			Define sButton oBtn1 From 186, 170 Type 11 Enable Of oDlgEve Action MDT111_Rea( .T. )   //Editar
+			Define sButton oBtn3 From 186, 205 Type 03 Enable Of oDlgEve Action MDT111_Rea( .F. )   //Excluir
+			Define sButton oBtn4 From 186, 240 Type 02 Enable Of oDlgEve Action MDTA111Grv( cUser ) //Cancelar
+		Else
+			Define sButton oBtn4 From 186, 205 Type 02 Enable Of oDlgEve Action MDTA111Grv( cUser )
+		EndIf
+
+	Else
+
+		If !lVisualizar .Or. lVisualizar == Nil
+			@ 002, 256 Button STR0039 OF oDlgEve SIZE 60, 11 PIXEL ACTION MdtRest111() //"Restaurar Eventos"
+
+			Define sButton oBtn1 From 015, 322 Type 11 Enable Of oDlgEve Action MDT111_Rea( .T. )   //Editar
+			Define sButton oBtn2 From 035, 322 Type 03 Enable Of oDlgEve Action MDT111_Rea( .F. )   //Excluir
+			Define sButton oBtn3 From 055, 322 Type 06 Enable Of oDlgEve Action MDTA111Imp()        //Imprimir
+			Define sButton oBtn4 From 075, 322 Type 02 Enable Of oDlgEve Action MDTA111Grv( cUser ) //Cancelar
+		Else
+			Define sButton oBtn3 From 015, 322 Type 06 Enable Of oDlgEve Action MDTA111Imp()       //Imprimir
+			Define sButton oBtn4 From 035, 322 Type 02 Enable Of oDlgEve Action MDTA111Grv( cUser )
+		EndIf
+
+	EndIf
+
+	If lCpoSetor
+
+		If lSigaMdtPS
+			cControle := "{aEventos[oList:nAt,8], aEventos[oList:nAt,9], aEventos[oList:nAt,10],aEventos[oList:nAt,3], aEventos[oList:nAt,5], "
+			cControle += "aEventos[oList:nAt,2], aEventos[oList:nAt,1],aEventos[oList:nAt,7]"
+
+			If lUpdMdt48
+				cControle+= ", aEventos[oList:nAt,11]"
+			EndIf
+
+			cControle+= "}"
+			aHeaderl1 := { STR0034, STR0035, STR0036, STR0007, STR0010, STR0009, STR0008, STR0037 }
+
+			If lUpdMdt48
+				aADD( aHeaderl1, STR0046 ) //"Mandato Extraordinário"
+			EndIf
+
+			oList := TWBrowse():New( 015, 006, 500, 170, , aHeaderl1, { 30, 30, 110, 45, 45, 110, 45, 65 }, oDlgEve, , , , , {||}, , , , , , , .F., , .T., , .F., , , )
+
+			bList111 := {|| IIf( oList:nAt > Len( aEventos ) .Or. oList:nAt = 0, { " ", " ", " ", " ", " ", " " }, &cControle ) }
+		Else
+			cControle := "{aEventos[oList:nAt,3], aEventos[oList:nAt,5], aEventos[oList:nAt,2], aEventos[oList:nAt,1],aEventos[oList:nAt,7]"
+
+			If lUpdMdt48
+				cControle+= ", aEventos[oList:nAt,8]"
+			EndIf
+
+			cControle+= "}"
+
+			aHeaderl1 := { STR0007, STR0010, STR0009, STR0008, STR0037 }
+
+			If lUpdMdt48
+				aADD( aHeaderl1, STR0046 ) //"Mandato Extraordinário"
+			EndIf
+
+			oList := TWBrowse():New( 015, 006, 310, 130, , aHeaderl1, { 45, 45, 110, 45, 45 }, oDlgEve, , , , , {||}, , , , , , , .F., , .T., , .F., , , )
+
+			bList111 := {|| Iif( oList:nAt > Len( aEventos ) .Or. oList:nAt = 0, { " ", " ", " ", " ", " ", " " }, &cControle ) }
+		EndIf
+
+	Else
+
+		If lSigaMdtPS
+			cControle := "{aEventos[oList:nAt,7], aEventos[oList:nAt,8], aEventos[oList:nAt,9],aEventos[oList:nAt,3], aEventos[oList:nAt,5], aEventos[oList:nAt,2],aEventos[oList:nAt,1]"
+
+			If lUpdMdt48
+				cControle+= ", aEventos[oList:nAt,10]"
+			EndIf
+
+			cControle+= "}"
+			aHeaderl1 := { STR0034, STR0035, STR0036, STR0007, STR0010, STR0009, STR0008 }
+
+			If lUpdMdt48
+				aADD( aHeaderl1, STR0046 )
+			EndIf
+
+			oList := TWBrowse():New( 015, 006, 500, 170, , aHeaderl1, { 30, 30, 110, 45, 45, 110, 45 }, oDlgEve, , , , , {||}, , , , , , , .F., , .T., , .F., , , )
+
+			bList111 := {|| IIf( oList:nAt > Len( aEventos ) .Or. oList:nAt = 0, { " ", " ", " ", " ", " ", " " }, &cControle)}
+		Else
+			cControle := "{aEventos[oList:nAt,3], aEventos[oList:nAt,5], aEventos[oList:nAt,2], aEventos[oList:nAt,1]"
+
+			If lUpdMdt48
+				cControle+= ", aEventos[oList:nAt,7]"
+			EndIf
+
+			cControle+= "}"
+			aHeaderl1 := { STR0007, STR0010, STR0009, STR0008 } //Mandato / Data do Evento / Descrição / Pendência
+
+			If lUpdMdt48
+				aADD( aHeaderl1, STR0046 ) //"Mandato Extraordinário"
+			EndIf
+
+			oList := TWBrowse():New( 015, 006, 310, 130, , aHeaderl1, { 45, 45, 155, 45 }, oDlgEve, , , , , {||}, , , , , , , .F., , .T., , .F., , , )
+
+			bList111 := {|| IIf( oList:nAt > Len( aEventos ) .Or. oList:nAt = 0, { " ", " ", " ", " ", " ", " " }, &cControle)}
+		EndIf
+
+	EndIf
+
+	oList:SetArray( aEventos )
+	oList:bLine := bList111
+	oList:bRClicked := { |o, x, y| oMenu:Activate( x, y, oList )}
+	oList:GoTop()
+
+	If !lVisualizar .Or. lVisualizar == Nil // Não mostra na visualizacao
+		If lSigaMdtps
+			@185, 006 CheckBox oCheck Var lUmaVez Prompt OemToAnsi( STR0011 ) Size 130, 7 Of ODlgEve Pixel //"Nao mostrar essa mensagem na tela inicial"
+
+		Else
+			@145, 006 CheckBox oCheck Var lUmaVez Prompt OemToAnsi( STR0011 ) Size 130, 7 Of ODlgEve Pixel //"Nao mostrar essa mensagem na tela inicial"
+
+		EndIf
+	EndIf
+	Activate MsDialog oDlgEve Centered
+
+	cFilAnt := cFilOld
+	NGRETURNPRM( aNGBEGINPRM )
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTCarTNW
+
+Carrega em um array todas as pendencias CIPA do usuario
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+
+@sample  MDTCarTNW(.T., .T., .F.)
+
+@param   lLoadMdt, Lógico, Define se a chamada da função foi feita pelo menu
+@param   lVisualizar, Lógico, Define se irá permitir a visualização dos próximos eventos
+@param   lFimEvento, Lógico, Se for fim de evento zera o vetor de setores
+
+@return  Array, Pendencias CIPA do usuário
+/*/
+//-------------------------------------------------------------------
+Function MDTCarTNW(lLoadMdt, lVisualizar, lFimEvento)
+
+	Local aEvento    := {}, nCont
+	Local lTemNovo   := .F.
+	Local lCipaSetor := .F.
+	Local lCipaGeral := .F.
+	Local aSetores   := {}
+	Local nSizeSI3   := IIf( ( TAMSX3( "I3_CUSTO" )[1]) < 1, 9, ( TAMSX3( "I3_CUSTO" )[1]))
+	Local lCipatr    := SuperGetMv( "MV_NG2NR31", .F., "2" ) == "1"
+
+	Private lUpdMdt48 := NGCADICBASE( "TNN_CODORI", "A", "TNN", .F. )
+
+	If lSigaMdtps
+
+		dbSelectArea( "SA1" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SA1" ) )
+
+		While !Eof()
+
+			lTemNovo   := .F.
+			lCipaSetor := .F.
+			lCipaGeral := .F.
+			aSetores   := {}
+
+			If TNN->( FieldPos( "TNN_CC" )) > 0
+				dbSelectArea( "TNN" )
+				dbSetOrder( 1 )
+
+				If dbSeek( xFilial( "TNN" )+SA1->( A1_COD+A1_LOJA ) )
+
+					While !Eof() .And. TNN->( TNN_FILIAL+TNN_CLIENT+TNN_LOJAC ) == xFilial( "TNN" )+SA1->( A1_COD+A1_LOJA )
+
+						If !Empty( TNN->TNN_CC )
+							lCipaSetor := .T.
+
+							If aScan( aSetores, {|x| x == TNN->TNN_CC } ) == 0
+								aADD( aSetores, TNN->TNN_CC )
+							EndIf
+
+						Else
+							lCipaGeral := .T.
+						EndIf
+
+						dbSkip()
+					End
+
+				Else
+					lCipaGeral := .T.
+				EndIf
+
+			Else
+				lCipaGeral := .T.
+			EndIf
+
+			If lCipaGeral
+				aADD( aSetores, Space( nSizeSI3 ) )
+			EndIf
+
+			If lFimEvento
+				aSetores := {}
+			EndIf
+
+			For nCont := 1 to Len( aSetores )
+
+				dbSelectArea( "TNW" )
+				dbSetOrder( 7 )  //TNW_FILIAL+TNW_CLIENT+TNW_LOJA+TNW_TIPO+TNW_CODIGO
+				dbSeek( xFilial( "TNW" )+SA1->( A1_COD+A1_LOJA )+"1" )
+
+				While !Eof() .And. xFilial( "TNW" )+SA1->( A1_COD+A1_LOJA )+"1" == TNW->( TNW_FILIAL+TNW_CLIENT+TNW_LOJA+TNW_TIPO ) .And. !lTemNovo
+
+					If lCipaSetor
+
+						IF Empty( TNW->TNW_USUFIM ) .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA" .And. ;
+							NGSeek( 'TNN', SA1->( A1_COD+A1_LOJA )+TNW->TNW_CODIGO, 1, 'TNN->TNN_CC' ) == aSetores[nCont]
+							lTemNovo := .T.
+						EndIf
+
+					ElseIf Empty( TNW->TNW_USUFIM ) .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA"
+						lTemNovo := .T.
+					EndIf
+
+					dbSelectArea( "TNW" )
+					dbSetOrder( 7 )
+					dbSkip()
+				End
+
+				If !lTemNovo
+					cMandato_ := Space( 6 )
+					dDtMand__ := dDataBase
+					dbSelectArea( "TNN" )
+					dbSetOrder( 1 ) //TNN_FILIAL+TNN_CLIENT+TNN_LOJAC+TNN_MANDAT
+					dbSeek( xFilial( "TNN" )+SA1->( A1_COD+A1_LOJA ) )
+
+					While !Eof() .And. xFilial( "TNN" )+SA1->( A1_COD+A1_LOJA ) == TNN->( TNN_FILIAL+TNN_CLIENT+TNN_LOJAC )
+
+						If lCipaSetor
+
+							If TNN->TNN_CC == aSetores[nCont]
+
+								If TNN->TNN_DTTERM > dDtMand__
+									cMandato_ := TNN->TNN_MANDAT
+									dDtMand__ := TNN->TNN_DTTERM
+								EndIf
+
+							EndIf
+
+						Else
+
+							If TNN->TNN_DTTERM > dDtMand__
+								cMandato_ := TNN->TNN_MANDAT
+								dDtMand__ := TNN->TNN_DTTERM
+							EndIf
+
+						EndIf
+
+						dbSkip()
+					End
+
+					If !Empty( cMandato_ ) .And. !Empty( dDtMand__ )
+						fGRAVA_TNW( {"CIPA", "   ", dDtMand__-90, "00:00", dDtMand__, "23:59", nDiasAntes,; //Usuario / Cod. Sesmt // DtInicio / HrInicio / DtFim / HrFim  // Dias Antes
+						 IIf( lCipatr, STR0054, STR0012 ),;// Mensagem / Mostra / Codigo //"INCLUIR PROXIMO MANDATO CIPATR"//"INCLUIR PROXIMO MANDATO CIPA"
+						 "1", cMandato_, "1", IIf( lCipatr, STR0054, STR0012 ), " "} )// Tipo / Des Tipo / User Fim   "INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+					Else
+						fGRAVA_TNW( {"CIPA", "   ", dDataBase, "00:00", dDataBase+30, "23:59",; //Usuario / Cod. Sesmt // DtInicio / HrInicio / DtFim / HrFim
+						 nDiasAntes, IIf( lCipatr, STR0054, STR0012 ),;// Dias Antes / Mensagem / Mostra / Codigo //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+						 "1", Space( 6 ), "1", IIf( lCipatr, STR0054, STR0012 ), " " } )// Tipo / Des Tipo / User Fim   //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+					EndIf
+
+				EndIf
+
+			Next nCont
+
+			dbSelectArea( "TNW" )
+			dbSetOrder( 8 )  //TNW_FILIAL+TNW_CLIENT+TNW_LOJA+TNW_SEQUEN+TNW_CODUSU
+			dbSeek( xFilial( "TNW" )+SA1->( A1_COD+A1_LOJA ) )
+
+			While !Eof() .And. xFilial( "TNW" )+SA1->(A1_COD+A1_LOJA) == TNW->(TNW_FILIAL+TNW_CLIENT+TNW_LOJA)
+
+				lIncTNW := .F.
+
+				If lFimEvento
+
+					If !Empty( TNW->TNW_USUFIM )
+						lIncTNW := .T.
+					EndIf
+
+				ElseIf !lVisualizar .Or. lVisualizar == Nil
+
+					If dDataBase >= TNW->TNW_DTINIC-TNW->TNW_ANTES .And.;
+						Empty( TNW->TNW_USUFIM ) .And. ( TNW->TNW_MOSTRA <> "2" .Or. Valtype( lLoadMdt ) == "U" )
+						lIncTNW := .T.
+					EndIf
+
+				ElseIf Empty( TNW->TNW_USUFIM )
+					lIncTNW := .T.
+				EndIf
+
+				// Adiciona o Evento
+				If lIncTNW .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA" .And. TNW->TNW_TIPO >= "1" .And. TNW->TNW_TIPO <= "E"
+
+					If lCpoSetor
+						aAdd( aEvento, {TNW->TNW_SEQUEN, TNW->TNW_DESTIP, TNW->TNW_CODIGO, TNW->TNW_MOSTRA, TNW->TNW_DTINIC, TNW->TNW_TIPO,;
+							 NGSeek( 'TNN', SA1->(A1_COD+A1_LOJA)+TNW->TNW_CODIGO, 1, 'TNN->TNN_CC' ), SA1->A1_COD, SA1->A1_LOJA, SA1->A1_NOME,;
+							 IIf( lUpdMdt48, IIf( !Empty( NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN->TNN_CODORI' ) ), STR0063, STR0064 ), "" ) } ) //"Sim"//"Não"
+					Else
+						aAdd( aEvento, {TNW->TNW_SEQUEN, TNW->TNW_DESTIP, TNW->TNW_CODIGO,;
+							 TNW->TNW_MOSTRA, TNW->TNW_DTINIC, TNW->TNW_TIPO, SA1->A1_COD, SA1->A1_LOJA, SA1->A1_NOME,;
+							 IIf( lUpdMdt48, IIf( !Empty( NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN->TNN_CODORI' ) ), STR0063, STR0064 ), "" ) } ) //"Sim"//"Não"
+					EndIf
+
+				EndIf
+
+				dbSelectArea( "TNW" )
+				dbSkip()
+			End
+
+			dbSelectArea( "SA1" )
+			dbSkip()
+		End
+
+	Else
+
+		If TNN->( FieldPos( "TNN_CC" ) ) > 0
+			dbSelectArea( "TNN" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TNN" ) )
+				While !Eof() .And. TNN->TNN_FILIAL == xFilial( "TNN" )
+					If !Empty( TNN->TNN_CC )
+						lCipaSetor := .T.
+						If aScan( aSetores, {|x| x == TNN->TNN_CC } ) == 0
+							aADD( aSetores, TNN->TNN_CC )
+						EndIf
+					Else
+						lCipaGeral := .T.
+					EndIf
+					dbSkip()
+				End
+			Else
+				lCipaGeral := .T.
+			EndIf
+		Else
+			lCipaGeral := .T.
+		EndIf
+
+		If lCipaGeral
+			aADD( aSetores, Space( nSizeSI3 ) )
+		EndIf
+
+		If lFimEvento
+			aSetores := {}
+		EndIf
+
+		For nCont := 1 to Len( aSetores )
+
+			dbSelectArea( "TNW" )
+			dbSetOrder( 5 )
+			dbSeek( xFilial( "TNW" )+"1" )
+			While !Eof() .And. xFilial( "TNW" )+"1" == TNW->( TNW_FILIAL+TNW_TIPO ) .And. !lTemNovo
+				If lCipaSetor
+					IF Empty( TNW->TNW_USUFIM ) .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA" .And. NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN->TNN_CC' ) == aSetores[nCont]
+						lTemNovo := .T.
+					EndIf
+				Else
+					IF Empty( TNW->TNW_USUFIM ) .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA"
+						lTemNovo := .T.
+					EndIf
+				EndIf
+
+				dbSelectArea( "TNW" )
+				dbSetOrder( 5 )
+				dbSkip()
+			End
+
+			If !lTemNovo
+				cMandato_ := Space( 6 )
+				dDtMand__ := dDataBase
+				dbSelectArea( "TNN" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TNN" ) )
+
+				While !Eof() .And. xFilial( "TNN" ) == TNN->TNN_FILIAL
+
+					If lCipaSetor
+
+						If TNN->TNN_CC == aSetores[nCont]
+
+							If TNN->TNN_DTTERM > dDtMand__
+								cMandato_ := TNN->TNN_MANDAT
+								dDtMand__ := TNN->TNN_DTTERM
+							EndIf
+
+						EndIf
+
+					Else
+
+						If TNN->TNN_DTTERM > dDtMand__
+							cMandato_ := TNN->TNN_MANDAT
+							dDtMand__ := TNN->TNN_DTTERM
+						EndIf
+
+					EndIf
+
+					dbSkip()
+				End
+
+				If !Empty( cMandato_ ) .And. !Empty( dDtMand__ )
+					fGRAVA_TNW( {IIf( lCipatr, STR0059, STR0038 ), "   ",; //"CIPATR" //"CIPA" //Usuario / Cod. Sesmt
+						 dDtMand__-90, "00:00", dDtMand__, "23:59",; // DtInicio / HrInicio / DtFim / HrFim
+						 nDiasAntes, IIf( lCipatr, STR0054, STR0012 ), "1", cMandato_,; // Dias Antes / Mensagem / Mostra / Codigo //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+						 "1", IIf( lCipatr, STR0054, STR0012 ), " " } )// Tipo / Des Tipo / User Fim //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+				Else
+					fGRAVA_TNW( {IIf( lCipatr, STR0059, STR0038), "   ",; //"CIPATR" //"CIPA" //Usuario / Cod. Sesmt
+						 dDataBase, "00:00", dDataBase+30, "23:59",; // DtInicio / HrInicio / DtFim / HrFim
+						 nDiasAntes, IIf( lCipatr, STR0054, STR0012 ), "1", Space( 6 ),; // Dias Antes / Mensagem / Mostra / Codigo //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+						 "1", IIf( lCipatr, STR0054, STR0012 ), " " } )// Tipo / Des Tipo / User Fim //"INCLUIR PROXIMO MANDATO CIPATR" //"INCLUIR PROXIMO MANDATO CIPA"
+				EndIf
+
+			EndIf
+
+		Next nCont
+
+		dbSelectArea( "TNW" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "TNW" ) )
+
+		While !Eof() .And. xFilial( "TNW" ) == TNW->TNW_FILIAL
+
+			lIncTNW := .F.
+
+			If lFimEvento
+
+				If !Empty( TNW->TNW_USUFIM )
+					lIncTNW := .T.
+				EndIf
+
+			ElseIf !lVisualizar .Or. lVisualizar == Nil
+
+				If dDataBase >= TNW->TNW_DTINIC-TNW->TNW_ANTES .And. Empty( TNW->TNW_USUFIM ) .And. ( TNW->TNW_MOSTRA <> "2" .Or. Valtype( lLoadMdt ) == "U")
+					lIncTNW := .T.
+				EndIf
+
+			Else
+
+				If Empty( TNW->TNW_USUFIM ) .And. dDataBase < TNW->TNW_DTINIC
+					lIncTNW := .T.
+				EndIf
+
+			EndIf
+
+			// Adiciona o Evento
+			If lIncTNW .And. Alltrim( TNW->TNW_LOGIN ) == "CIPA" .And. TNW->TNW_TIPO >= "1" .And. TNW->TNW_TIPO <= "E"
+
+				If lCpoSetor
+					aAdd( aEvento, {TNW->TNW_SEQUEN, TNW->TNW_DESTIP, TNW->TNW_CODIGO, TNW->TNW_MOSTRA, TNW->TNW_DTINIC, TNW->TNW_TIPO,;
+						 NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN_CC' ), IIf( lUpdMdt48,;
+						 IIf( !Empty( NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN_CODORI' ) ), STR0063, STR0064 ), "" ) } ) //"Sim"//"Não"
+				Else
+					aAdd( aEvento, {TNW->TNW_SEQUEN, TNW->TNW_DESTIP, TNW->TNW_CODIGO, TNW->TNW_MOSTRA, TNW->TNW_DTINIC, TNW->TNW_TIPO,;
+						 IIf( lUpdMdt48, IIf( !Empty( NGSeek( 'TNN', TNW->TNW_CODIGO, 1, 'TNN_CODORI' ) ), STR0063, STR0064 ), "" ) } ) //"Sim"//"Não"
+				EndIf
+
+			EndIf
+
+			dbSelectArea( "TNW" )
+			dbSkip()
+		End
+
+	EndIf
+
+	If lSigaMdtps
+
+		If lFimEvento
+			ASORT( aEvento, , , { |x, y| x[8]+x[9] < y[8]+y[9] .Or. ( x[8]+x[9] == y[8]+y[9] .And. x[5] > y[5]) } )
+		Else
+			ASORT( aEvento, , , { |x, y| x[8]+x[9]+DtoS( x[5] ) < y[8]+y[9]+DtoS( y[5] ) } )
+		EndIf
+
+	Else
+
+		If lFimEvento
+			ASORT( aEvento, , , { |x, y| x[5] > y[5] } )
+		Else
+			ASORT( aEvento, , , { |x, y| x[5] < y[5] } )
+		EndIf
+
+	EndIf
+
+Return aEvento
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA111Grv
+
+Grava no Usuario que ele nao quer ver as mensagens.
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+
+@sample  MDTA111Grv("Administrador")
+
+@param   cUser, Caractere, Usuário logado no sistema
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function MDTA111Grv(cUser)
+
+	Local nFor
+
+	If lUmaVez
+
+		For nFor := 1 To Len( aEventos )
+			TNW->( DbSetOrder( 1 ) )
+
+			If TNW->( DbSeek( xFilial( "TNW" )+aEventos[nFor][1] ) )
+				RecLock( "TNW", .F. )
+					TNW->TNW_MOSTRA := "2"
+				MsUnLock( "TNW" )
+			EndIf
+
+		Next nFor
+
+	EndIf
+
+	oDlgEve:End()
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT111_Rea
+
+Mostra os cadastros para o usuario baixar as pendencias.
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+
+@sample  MDT111_Rea(.T.)
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function MDT111_Rea(lChama)
+
+	Local nOpcao := 0
+	Local cEvento
+	Local cCli
+	Local cLoja
+	Local aAreaSA1 := SA1->(GetArea())
+	Local dDataCip := dDataBase
+	Local lCipatr  := SuperGetMv( "MV_NG2NR31", .F., "2" ) == "1"
+
+	Private lUpdExec
+	Private aItensCIPA := {	 {"2", "TNN_CONVOC"},;
+							 {"3", "TNN_COMISS"},;
+							 {"4", "TNN_COPEDI"},;
+							 {"5", "TNN_INSCRI"},;
+							 {"6", "TNN_EDITAL"},;
+							 {"7", "TNN_INSCRF"},;
+							 {"8", "TNN_ELEICR"},;
+							 {"9", "TNN_RESULT"},;
+							 {"A", "TNN_CURCIP"},;
+							 {"B", "TNN_COSIND"},;
+							 {"C", "TNN_POSSE" },;
+							 {"D", "TNN_CALREU"},;
+							 {"E", "TNN_REGURT"}}
+
+	If Len( aEventos ) == 0
+		MsgAlert( STR0013, STR0014 ) //"A lista de eventos está vazia."###"Atenção!"
+		Return .F.
+	EndIf
+
+	dbSelectArea( "SX3" )
+	dbSetOrder( 1 )
+
+	If dbSeek( "TK8" )
+		lUpdExec := .T.
+	Else
+		lUpdExec := .F.
+	EndIf
+
+	cEvento   := aEventos[oList:nAt, 6]
+	cPrograma := "MDTA111"
+
+	If !lChama
+
+		If aEventos[oList:nAt, 6] == '1'
+			MsgAlert( STR0015+STR0017, STR0014 ) //"Os eventos do tipo 'INCLUIR PROXIMO MANDATO CIPA' não poderão ser excluídos, "
+											   //"pois eles garantem que o ciclo da CIPA não se encerre."###"Atenção!"
+			Return .F.
+		EndIf
+
+		If !MsgYesNo( STR0018, STR0014 ) //"Confirma exclusão?"###"Atenção!"
+			Return .F.
+		EndIf
+
+		nOpcao := 1
+	EndIf
+
+	CursorWait()
+
+	If lSigaMdtps
+
+		If lCpoSetor
+			cCli := aEventos[oList:nAt, 8]
+			cLoja := aEventos[oList:nAt, 9]
+		Else
+			cCli := aEventos[oList:nAt, 7]
+			cLoja := aEventos[oList:nAt, 8]
+		EndIf
+
+		dbSelectArea( "SA1" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SA1" )+cCli+cLoja )
+		cCliMdtps := cCli+cLoja
+
+		If lChama
+
+			If aEventos[oList:nAt, 6] == '1'
+				INCLUI := .T.
+				ALTERA := .F.
+				nOpcao := MDTA111TCD( "TNN", Recno(), 3 )
+
+			ElseIf aEventos[oList:nAt, 6] >= '2' .And. aEventos[oList:nAt, 6] <= 'E'
+
+				If MsgYesNo( STR0019 ) //"Deseja finalizar esta atividade?"
+					nIndCPO := aScan( aItensCIPA, {|x| x[1] == aEventos[oList:nAt, 6]} )
+					DbSelectArea( "TNN" )
+					DbSetOrder( 3 )  //TNN_FILIAL+TNN_CLIENT+TNN_LOJAC+TNN_MANDAT
+
+					If dbSeek( xFilial( "TNN" )+cCli+cLoja+PadR( aEventos[oList:nAt, 3], 6 ) ) .And. nIndCPO > 0
+
+						If MDT111DT( @dDataCip )
+							cCpoCIPA := "TNN->"+aItensCIPA[nIndCPO, 2]
+							RecLock( "TNN", .F. )
+								&cCpoCIPA. := dDataCip
+							TNN->(MsUnLock())
+							nOpcao := 1
+
+							If aEventos[oList:nAt, 6] == '2'
+
+								If MsgYesNo( STR0020 ) //"Deseja imprimir o Edital de Convocação para Inscrição nas Eleições CIPA"
+									MDTR920( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == '3'
+								bNGGRAVA  := {|| CHKDEL111( 1 ) }
+								INCLUI := .F.
+								ALTERA := .T.
+
+								If lUpdExec
+									nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+								Else
+									nOpcao := NGCAD01( "TNN", Recno(), 4 )
+								EndIf
+
+								bNGGRAVA  := {}
+
+								If nOpcao == 1
+
+									If MsgYesNo( STR0021 ) //"Deseja imprimir a carta designacao da comissao eleitoral?"
+										MDTR921( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+									EndIf
+
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == '4'
+
+								If MsgYesNo( STR0022 ) //"Deseja emitir aviso ao Sindicato sobre Eleições CIPA?"
+									MDTR922( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == '5'
+
+								If MsgYesNo( STR0023 ) //"Deseja imprimir fichas de inscrições?"
+									MDTR923( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == '7'
+
+								If MsgYesNo( STR0024 ) //"Deseja imprimir Edital de Convocação para Eleições CIPA?"
+									MDTR924( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+								If MsgYesNo( STR0025 ) //"Deseja imprimir cédulas para votação?"
+									MDTR925( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+								If MsgYesNo( STR0026 ) //"Deseja imprimir folha de comprovante de votação?"
+									MDTR926( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == '8'
+								bNGGRAVA  := {|| CHKDEL111( 2 ) }
+								INCLUI := .F.
+								ALTERA := .T.
+
+								If lUpdExec
+									nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+								Else
+									nOpcao := NGCAD01( "TNN", Recno(), 4 )
+								EndIf
+
+								bNGGRAVA  := {}
+							ElseIf aEventos[oList:nAt, 6] == '9'
+
+								If MsgYesNo( STR0027 ) //"Deseja imprimir a Ata da Eleição com o resultado final?"
+									MDTR927( PadR( aEventos[oList:nAt, 3], 6 ), , cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == 'C'
+								bNGGRAVA  := {|| CHKDEL111( 3 ) }
+								INCLUI := .F.
+								ALTERA := .T.
+
+								If lUpdExec
+									nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+								Else
+									nOpcao := NGCAD01( "TNN", Recno(), 4 )
+								EndIf
+
+								bNGGRAVA  := {}
+
+								If nOpcao == 1
+
+									If MsgYesNo( STR0028 ) //"Deseja imprimir a Ata de Instalação e Posse do novo mandato CIPA?"
+										MDTR928( PadR( aEventos[oList:nAt, 3], 6 ), , cCli, cLoja )
+									EndIf
+
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == 'D'
+
+								If MsgYesNo( STR0029 ) //"Deseja imprimir o calendário de reuniões ordinárias CIPA?"
+									MDTR929( PadR( aEventos[oList:nAt, 3], 6 ), , cCli, cLoja )
+								EndIf
+
+							ElseIf aEventos[oList:nAt, 6] == 'E'
+
+								If MsgYesNo( IIf( lCipatr, STR0057, STR0030 ) ) //"Deseja Efetuar o Registro da CIPATR na DRT?" //"Deseja Efetuar o Registro da CIPA na DRT?"
+									MDTR930( PadR( aEventos[oList:nAt, 3], 6 ), cCli, cLoja )
+								EndIf
+
+							EndIf
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		If nOpcao == 1
+			cPendencia := aEventos[oList:nAt][1]
+			TNW->(DbSetOrder( 1 ))
+
+			If TNW->(DbSeek( xFilial( "TNW" )+cPendencia ) )
+				RecLock( "TNW", .F. )
+
+					If !lChama
+						dbDelete()
+					Else
+						TNW->TNW_USUFIM := cUserName
+					EndIf
+
+				MsUnLock( "TNW" )
+			EndIf
+
+			aDel( aEventos, oList:nAt )
+			aSize( aEventos, Len( aEventos )-1 )
+
+			If cEvento == '1'
+				aEventos := MDTCarTNW( l2LoadMdt, l2Visualizar, .F. )
+				oList:nAt := Len( aEventos )
+				oList:SetArray( aEventos )
+				oList:bLine := bList111
+				oList:GoTop()
+			EndIf
+
+		EndIf
+
+		RestArea( aAreaSA1 )
+
+	Else
+
+		If lChama
+
+			If aEventos[oList:nAt, 6] == '1'
+				INCLUI := .T.
+				ALTERA := .F.
+				nOpcao := MDTA111TCD( "TNN", Recno(), 3 )
+
+
+			ElseIf aEventos[oList:nAt, 6] >= '2' .And. aEventos[oList:nAt, 6] <= 'E'
+
+				If MsgYesNo( STR0019 ) //"Deseja finalizar esta atividade?"
+					nIndCPO := aScan( aItensCIPA, {|x| x[1] == aEventos[oList:nAt, 6]} )
+					DbSelectArea( "TNN" )
+					DbSetOrder( 1 )  //TNN_FILIAL+TNN_MANDAT
+
+					If dbSeek( xFilial( "TNN" )+PadR( aEventos[oList:nAt, 3], 6 ) ) .And. nIndCPO > 0 .And. MDT111DT( @dDataCip )
+						cCpoCIPA := "TNN->"+aItensCIPA[nIndCPO, 2]
+						RecLock( "TNN", .F. )
+						&cCpoCIPA. := dDataCip
+						TNN->(MsUnLock())
+						nOpcao := 1
+
+						If aEventos[oList:nAt, 6] == '2'
+
+							If MsgYesNo( STR0020 ) //"Deseja imprimir o Edital de Convocação para Inscrição nas Eleições CIPA"
+								MDTR920( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == '3'
+							bNGGRAVA  := {|| CHKDEL111( 1 ) }
+							INCLUI := .F.
+							ALTERA := .T.
+
+							If lUpdExec
+								nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+							Else
+								nOpcao := NGCAD01( "TNN", Recno(), 4 )
+							EndIf
+
+							bNGGRAVA  := {}
+
+							If nOpcao == 1
+
+								If MsgYesNo( STR0021 ) //"Deseja imprimir a carta designacao da comissao eleitoral?"
+									MDTR921( PadR( aEventos[oList:nAt, 3], 6 ) )
+								EndIf
+
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == '4'
+
+							If MsgYesNo( STR0022 ) //"Deseja emitir aviso ao Sindicato sobre Eleições CIPA?"
+								MDTR922( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == '5'
+
+							If MsgYesNo( STR0023 ) //"Deseja imprimir fichas de inscrições?"
+								MDTR923( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == '7'
+
+							If MsgYesNo( STR0024 ) //"Deseja imprimir Edital de Convocação para Eleições CIPA?"
+								MDTR924( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+							If MsgYesNo( STR0025 ) //"Deseja imprimir cédulas para votação?"
+								MDTR925( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+							If MsgYesNo( STR0026 ) //"Deseja imprimir folha de comprovante de votação?"
+								MDTR926( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == '8'
+							bNGGRAVA  := {|| CHKDEL111( 2 ) }
+							INCLUI := .F.
+							ALTERA := .T.
+
+							If lUpdExec
+								nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+							Else
+								nOpcao := NGCAD01( "TNN", Recno(), 4 )
+							EndIf
+
+							bNGGRAVA  := {}
+
+						ElseIf aEventos[oList:nAt, 6] == '9'
+
+							If MsgYesNo( STR0027 ) //"Deseja imprimir a Ata da Eleição com o resultado final?"
+								MDTR927( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == 'C'
+							bNGGRAVA  := {|| CHKDEL111( 3 ) }
+							INCLUI := .F.
+							ALTERA := .T.
+
+							If lUpdExec
+								nOpcao := MDTA111TCD( "TNN", Recno(), 4 )
+							Else
+								nOpcao := NGCAD01( "TNN", Recno(), 4 )
+							EndIf
+
+							bNGGRAVA  := {}
+
+							If nOpcao == 1
+
+								If MsgYesNo( STR0028 ) //"Deseja imprimir a Ata de Instalação e Posse do novo mandato CIPA?"
+									MDTR928( PadR( aEventos[oList:nAt, 3], 6 ) )
+								EndIf
+
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == 'D'
+
+							If MsgYesNo( STR0029 ) //"Deseja imprimir o calendário de reuniões ordinárias CIPA?"
+								MDTR929( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						ElseIf aEventos[oList:nAt, 6] == 'E'
+
+							If MsgYesNo( IIf( lCipatr, STR0057, STR0030 ) ) //"Deseja Efetuar o Registro da CIPATR na DRT?" //"Deseja Efetuar o Registro da CIPA na DRT?"
+								MDTR930( PadR( aEventos[oList:nAt, 3], 6 ) )
+							EndIf
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		If nOpcao == 1
+			cPendencia := aEventos[oList:nAt][1]
+			TNW->(DbSetOrder( 1 ))
+
+			If TNW->( DbSeek( xFilial( "TNW" )+cPendencia ) )
+				RecLock( "TNW", .F. )
+
+				If !lChama
+					dbDelete()
+				Else
+					TNW->TNW_USUFIM := cUserName
+				EndIf
+
+				MsUnLock( "TNW" )
+			EndIf
+
+			aDel( aEventos, oList:nAt )
+			aSize( aEventos, Len( aEventos )-1 )
+
+			If cEvento == '1'
+				aEventos := MDTCarTNW( l2LoadMdt, l2Visualizar, .F. )
+				oList:nAt := Len( aEventos )
+				oList:SetArray( aEventos )
+				oList:bLine := bList111
+				oList:GoTop()
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	oList:Refresh()
+	CursorArrow()
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fGRAVA_TNW
+
+Funcao de gravacao dos eventos no processo CIPA
+
+@author  Denis Hyroshi de Souza  Data
+@since   12/08/04
+
+@sample  fGRAVA_TNW(aParam)
+
+@param   aParam, Array, param_descr, Informações usadas para gravar a agenda de eventos
+/*/
+//-------------------------------------------------------------------
+Function fGRAVA_TNW(aParam)
+
+	Local aAreaXXX := GetArea()
+	Local aAreaTNW := TNW->(GetArea())
+
+	If lSigaMdtps
+		dbSelectArea( "TNW" )
+		dbSetOrder( 7 )  //TNW_FILIAL+TNW_CLIENT+TNW_LOJA+TNW_TIPO+TNW_CODIGO
+		If !dbSeek( xFilial( "TNW" )+SA1->( A1_COD+A1_LOJA )+aParam[11]+PadR( aParam[10], 10 ) )
+			RestArea( aAreaTNW )
+
+			If Dow( aParam[03] ) == 7 //Sabado
+				aParam[03] := aParam[03] - 1 //Altera para Sexta
+			EndIf
+			If Dow( aParam[03] ) == 1 //Domingo
+				aParam[03] := aParam[03] - 2 //Altera para Sexta
+			EndIf
+
+			cSeqTNW := GETSXENUM( "TNW", "TNW_SEQUEN" )
+			CONFIRMSX8()
+
+			Reclock( "TNW", .T. )
+				TNW->TNW_FILIAL := xFilial( "TNW" )
+				TNW->TNW_SEQUEN := cSeqTNW
+				TNW->TNW_LOGIN  := aParam[01]
+				TNW->TNW_CODUSU := aParam[02]
+				TNW->TNW_DTINIC := aParam[03]
+				TNW->TNW_HRINIC := aParam[04]
+				TNW->TNW_DTFIM  := aParam[05]
+				TNW->TNW_HRFIM  := aParam[06]
+				TNW->TNW_ANTES  := aParam[07]
+				TNW->TNW_MENSAG := aParam[08]
+				TNW->TNW_MOSTRA := aParam[09]
+				TNW->TNW_CODIGO := aParam[10]
+				TNW->TNW_TIPO   := aParam[11]
+				TNW->TNW_DESTIP := aParam[12]
+				TNW->TNW_USUFIM := aParam[13]
+				TNW->TNW_CLIENT := SA1->A1_COD
+				TNW->TNW_LOJA   := SA1->A1_LOJA
+			TNW->(MsUnLock())
+		Else
+			If aParam[11] == "1"
+				Reclock( "TNW", .F. )
+					TNW->TNW_LOGIN  := aParam[01]
+					TNW->TNW_MOSTRA := aParam[09]
+					TNW->TNW_USUFIM := aParam[13]
+				TNW->(MsUnLock())
+			EndIf
+		EndIf
+	Else
+		dbSelectArea( "TNW" )
+		dbSetOrder( 5 )  //TNW_FILIAL+TNW_TIPO+TNW_CODIGO
+		If !dbSeek( xFilial( "TNW" )+aParam[11]+PadR( aParam[10], 10 ) )
+			RestArea( aAreaTNW )
+
+			If Dow( aParam[03] ) == 7 //Sabado
+				aParam[03] := aParam[03] - 1 //Altera para Sexta
+			EndIf
+			If Dow( aParam[03] ) == 1 //Domingo
+				aParam[03] := aParam[03] - 2 //Altera para Sexta
+			EndIf
+
+			cSeqTNW := GETSXENUM( "TNW", "TNW_SEQUEN" )
+			CONFIRMSX8()
+
+			Reclock( "TNW", .T. )
+				TNW->TNW_FILIAL := xFilial( "TNW" )
+				TNW->TNW_SEQUEN := cSeqTNW
+				TNW->TNW_LOGIN  := aParam[01]
+				TNW->TNW_CODUSU := aParam[02]
+				TNW->TNW_DTINIC := aParam[03]
+				TNW->TNW_HRINIC := aParam[04]
+				TNW->TNW_DTFIM  := aParam[05]
+				TNW->TNW_HRFIM  := aParam[06]
+				TNW->TNW_ANTES  := aParam[07]
+				TNW->TNW_MENSAG := aParam[08]
+				TNW->TNW_MOSTRA := aParam[09]
+				TNW->TNW_CODIGO := aParam[10]
+				TNW->TNW_TIPO   := aParam[11]
+				TNW->TNW_DESTIP := aParam[12]
+				TNW->TNW_USUFIM := aParam[13]
+			TNW->(MsUnLock())
+		Else
+			If aParam[11] == "1"
+				Reclock( "TNW", .F. )
+					TNW->TNW_LOGIN  := aParam[01]
+					TNW->TNW_MOSTRA := aParam[09]
+					TNW->TNW_USUFIM := aParam[13]
+				TNW->(MsUnLock())
+			EndIf
+		EndIf
+
+	EndIf
+
+	RestArea( aAreaXXX )
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} UserCIPA
+
+Grava todos os usuarios da CIPA em vetor
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+
+@sample  UserCIPA("Administrador")
+
+@param   cUserCIPA, Caractere, Nome do usuário da CIPA
+
+@return  Array, Usuarios da CIPA no Modulo de Medicina
+/*/
+//-------------------------------------------------------------------
+Static Function UserCIPA(cUserCIPA)
+
+	Local aUser    := {}
+	Local cUserAll := cUserCIPA
+	Local cUserTMP := ""
+
+	While .T.
+
+		nPos := At( ",", cUserAll )
+
+		If nPos == 0
+			cUserTMP := cUserAll
+			cUserAll := ""
+		Else
+			cUserTMP := Substr( cUserAll, 1, nPos-1 )
+			cUserAll := Substr( cUserAll, nPos+1 )
+		EndIf
+
+		If !Empty( cUserTMP )
+			aADD( aUser, Upper( Alltrim( cUserTMP ) ) )
+		EndIf
+
+		If Empty( cUserAll )
+			Exit
+		EndIf
+	End
+
+Return aUser
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CHKDEL111
+
+Valida a alteracao do cadastro de Mandato CIPA
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+
+@sample  CHKDEL111(1)
+
+@param   nTipo, Numerico, Operação sendo executada
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function CHKDEL111(nTipo)
+
+	Local nMATRE  := aSCAN( aHEADER, {|x| AllTrim( Upper( X[2] ) ) == "TK8_MATRE"} )
+	Local lTk8Tippar := NGCADICBASE( "TK8_TIPPAR", "D", "TK8", .F. ) //Verifica se existe o campo "TK8_TIPPAR" na base.
+	Local lLinGet := .T.
+	Local i
+
+	If nTipo == 1
+
+		If lUpdExec
+
+			If !lTk8Tippar
+
+				For i := 1 to Len( aCols )
+
+					If Empty( aCols[i][nMatRe] ) .Or. aCols[i][Len( aCOLS[n] )]
+						lLinGet := .F.
+					Else
+						lLinGet := .T.
+						i := Len( aCols )
+					EndIf
+
+				Next i
+
+				If !lLinGet
+					MsgStop( STR0031 ) //"Todos os campos da pasta Comissao Eleitoral são de preenchimento obrigatório."
+					Return .F.
+				EndIf
+
+			EndIf
+
+		Else
+
+			If Empty( M->TNN_MATRE1 ) .Or. Empty( M->TNN_MATRE2 )
+				MsgStop( STR0031 ) //"Todos os campos da pasta Comissao Eleitoral são de preenchimento obrigatório."
+				Return .F.
+			EndIf
+
+		EndIf
+
+	ElseIf nTipo == 2
+
+		If M->TNN_HORAIN == "  :  " .Or. M->TNN_HORAFI == "  :  " .Or. Empty( M->TNN_VOTOS ) .Or. ;
+			Empty( M->TNN_PRESID ) .Or. Empty( M->TNN_SECRET ) .Or. Empty( M->TNN_LOCAL )
+
+			MsgStop( STR0032 ) //"Todos os campos da pasta Eleicao são de preenchimento obrigatório."
+			Return .F.
+		EndIf
+
+	ElseIf nTipo == 3
+
+		If Empty( M->TNN_PRESES ) .Or. Empty( M->TNN_SECSES )
+			MsgStop( STR0033 ) //"Todos os campos da pasta Instalação e Posse são de preenchimento obrigatório."
+			Return .F.
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MdtRest111
+
+Restaurar eventos da CIPA
+
+@author  Denis Hyroshi de Souza
+@since   12/08/04
+/*/
+//-------------------------------------------------------------------
+Static Function MdtRest111()
+
+	Local aEvenFim, nX
+	Local oDlgF, oFont, oTempTRB
+	Local aArea := GetArea()
+	Local asMenuA := { {STR0040, "Mk111Even(1)" },; //"Marcar todos os eventos"
+					   {STR0041, "Mk111Even(2)" },; //"Desmarcar todos os eventos"
+					   {STR0042, "Mk111Even(3)" } } //"Inverter marcação"
+	Private oMARK1
+	Private oMenuA
+	Private cMARCA := GetMark()
+
+	nSizeSI3 := IIf(( TAMSX3( "I3_CUSTO" )[1]) < 1, 9, ( TAMSX3( "I3_CUSTO" )[1] ))
+	nSizeCli := IIf(( TAMSX3( "A1_COD" )[1]) < 1, 6, ( TAMSX3( "A1_COD" )[1] ))
+	nSizeLoj := IIf(( TAMSX3( "A1_LOJA" )[1]) < 1, 2, ( TAMSX3( "A1_LOJA" )[1] ))
+
+	aDBF := {}
+	AADD( aDBF, { "OK", "C", 02, 0 } )
+	AADD( aDBF, { "MANDATO", "C", 06, 0 } )
+	AADD( aDBF, { "SEQUENC", "C", 05, 0 } )
+	AADD( aDBF, { "DESCRIC", "C", 60, 0 } )
+	AADD( aDBF, { "DATAEVE", "D", 08, 0 } )
+	AADD( aDBF, { "CCUSTO", "C", nSizeSI3, 0 } )
+	AADD( aDBF, { "CLIENTE", "C", nSizeCli, 0 } )
+	AADD( aDBF, { "LOJA", "C", nSizeLoj, 0 } )
+	AADD( aDBF, { "NOMECLI", "C", 40, 0 } )
+	AADD( aDBF, { "INCREM", "C", 06, 0 } )
+
+	oTempTRB := FWTemporaryTable():New( "TRB1", aDBF )
+	oTempTRB:AddIndex( "1", {"INCREM"} )
+	oTempTRB:Create()
+
+	lInverte := .F.
+	lQuery   := .T.
+
+	aTRB1 := {}
+	AADD( aTRB1, { "OK", NIL, " ", } )
+	If lSigaMdtPS
+		AADD( aTRB1, { "CLIENTE", NIL, STR0034, } ) //"Cliente"
+		AADD( aTRB1, { "LOJA", NIL, STR0035, } ) //"Loja"
+		AADD( aTRB1, { "NOMECLI", NIL, STR0036, } ) //"Nome"
+	EndIf
+	AADD( aTRB1, { "MANDATO", NIL, STR0007, } ) //"Mandato CIPA"
+	AADD( aTRB1, { "DATAEVE", NIL, STR0010, } ) //"Data do Evento"
+	AADD( aTRB1, { "DESCRIC", NIL, STR0009, } ) //"Descricao"
+	AADD( aTRB1, { "SEQUENC", NIL, STR0008, } ) //"Pendencia"
+	If lCpoSetor
+		AADD( aTRB1, { "CCUSTO", NIL, STR0037, } ) //"Centro Custo"
+	EndIf
+
+	aEvenFim := MDTCarTNW( nil, nil, .T. )
+	nProxNum := 0
+
+	For nX := 1 To Len( aEvenFim )
+		nProxNum++
+		If lCpoSetor
+			If lSigaMdtPS
+				TRB1->(DbAppend())
+				TRB1->MANDATO := aEvenFim[nX, 3]
+				TRB1->SEQUENC := aEvenFim[nX, 1]
+				TRB1->DESCRIC := aEvenFim[nX, 2]
+				TRB1->DATAEVE := aEvenFim[nX, 5]
+				TRB1->CCUSTO  := aEvenFim[nX, 7]
+				TRB1->CLIENTE := aEvenFim[nX, 8]
+				TRB1->LOJA    := aEvenFim[nX, 9]
+				TRB1->NOMECLI := aEvenFim[nX, 10]
+				TRB1->INCREM  := StrZero( nProxNum, 6 )
+			Else
+				TRB1->(DbAppend())
+				TRB1->MANDATO := aEvenFim[nX, 3]
+				TRB1->SEQUENC := aEvenFim[nX, 1]
+				TRB1->DESCRIC := aEvenFim[nX, 2]
+				TRB1->DATAEVE := aEvenFim[nX, 5]
+				TRB1->CCUSTO  := aEvenFim[nX, 7]
+				TRB1->INCREM  := StrZero( nProxNum, 6 )
+			EndIf
+		Else
+			If lSigaMdtPS
+				TRB1->(DbAppend())
+				TRB1->MANDATO := aEvenFim[nX, 3]
+				TRB1->SEQUENC := aEvenFim[nX, 1]
+				TRB1->DESCRIC := aEvenFim[nX, 2]
+				TRB1->DATAEVE := aEvenFim[nX, 5]
+				TRB1->CLIENTE := aEvenFim[nX, 7]
+				TRB1->LOJA    := aEvenFim[nX, 8]
+				TRB1->NOMECLI := aEvenFim[nX, 9]
+				TRB1->INCREM  := StrZero( nProxNum, 6 )
+			Else
+				TRB1->(DbAppend())
+				TRB1->MANDATO := aEvenFim[nX, 3]
+				TRB1->SEQUENC := aEvenFim[nX, 1]
+				TRB1->DESCRIC := aEvenFim[nX, 2]
+				TRB1->DATAEVE := aEvenFim[nX, 5]
+				TRB1->INCREM  := StrZero( nProxNum, 6 )
+			EndIf
+		EndIf
+	Next nX
+
+	dbSelectArea( "TRB1" )
+	dbSetOrder( 1 )
+	Dbgotop()
+	If TRB1->(Reccount()) <= 0
+		RestArea( aArea )
+		lRefresh := .T.
+		MsgInfo( STR0043, STR0044 ) //"Não foram encontrados eventos finalizados."###"Atenção"
+	Else
+		nOpca1 := 2
+		DEFINE FONT oFont NAME "Arial" SIZE 0, -12
+		Define MsDialog oDlgF From 000, 000 To 315, 705 Title STR0045 Pixel COLOR CLR_BLACK, CLR_WHITE of oMainwnd //"Eventos CIPA" //"Restaurar Eventos CIPA"
+
+		oMARK1 := MsSelect():NEW( "TRB1", "OK", , aTRB1, @lINVERTE, @cMARCA, { 3, 6, 155, 313} )
+		oMARK1:bMARK := {|| .T. }
+		oMARK1:oBROWSE:lHASMARK := .T.
+		oMARK1:oBROWSE:lCANALLMARK := .F.
+		NGPOPUP( aSMenuA, @oMenuA )
+		oMARK1:OBROWSE:BHEADERCLICK := { |o, x, y| oMenuA:Activate( x, y, oMARK1:oBROWSE ) }
+
+		Define sButton oBtnX From 003, 322 Type 01 Enable Of oDlgF Action ( nOpca1:=1, oDlgf:End() )
+		Define sButton oBtnY From 023, 322 Type 02 Enable Of oDlgF Action ( oDlgf:End() )
+
+		ACTIVATE MSDIALOG oDlgF CENTERED
+
+		If nOpca1 == 1
+			dbSelectArea( "TRB1" )
+			dbGoTop()
+			While !Eof()
+				If Empty( TRB1->OK )
+					dbSkip()
+					Loop
+				EndIf
+				dbSelectArea( "TNW" )
+				dbSetOrder( 1 )
+				If dbSeek( xFilial( "TNW" )+TRB1->SEQUENC )
+					RecLock( "TNW", .F. )
+						TNW->TNW_USUFIM := ""
+					MsUnLock( "TNW" )
+				EndIf
+				dbSelectArea( "TRB1" )
+				dbSkip()
+			End
+
+			aEventos := MDTCarTNW( l2LoadMdt, l2Visualizar, .F. )
+			oList:nAt := Len( aEventos )
+			oList:SetArray( aEventos )
+			oList:bLine := bList111
+			oList:GoTop()
+		EndIf
+
+	EndIf
+
+	oTempTRB:Delete()
+
+	RestArea( aArea )
+	lRefresh := .T.
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Mk111Even
+
+Marca/desmarca todos os eventos
+
+@author  Denis Hyroshi de Souza
+@since   02/10/08
+
+@sample  Mk111Even(1)
+
+@param   nMark, Numérico, Define como a função irá marcar os eventos
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function Mk111Even(nMark)
+
+	Local aArea := GetArea()
+	Local nRecno := TRB1->(Recno())
+
+	If nMark == 1
+		dbSelectArea( "TRB1" )
+		dbGoTop()
+
+		While !eof()
+			TRB1->OK := cMARCA
+			dbSkip()
+		End
+
+	ElseIf nMark == 2
+		dbSelectArea( "TRB1" )
+		dbGoTop()
+
+		While !eof()
+			TRB1->OK := "  "
+			dbSkip()
+		End
+
+	ElseIf nMark == 3
+		dbSelectArea( "TRB1" )
+		dbGoTop()
+
+		While !eof()
+			TRB1->OK := IIf( Empty( TRB1->OK ), cMARCA, "  " )
+			dbSkip()
+		End
+
+	EndIf
+
+	RestArea( aArea )
+	TRB1->( dbGoTo( nRecno ) )
+	oMARK1:oBROWSE:REFRESH( .T. )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA111LIN
+
+Verifica se o conteudo LIMMIN é memor que o LIMAX
+
+@author  Hugo Rizzo Pereira
+@since   21/09/2010
+
+@return  Lógico, Sempre .T.
+/*/
+//-------------------------------------------------------------------
+Function MDTA111LIN
+
+	Local nFilRe := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TK8_FILRE"} )
+	Local nMatRe := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TK8_MATRE"} )
+	Local i
+
+	If (!Empty( aCols[n][nFilRe] ) .Or. !Empty( aCols[n][nMatRe] ) ) .And. !aCols[n][Len( aCols[n] )]
+
+		If Empty( aCols[n][nFilRe] ) .Or. Empty( aCols[n][nMatRe] )
+			HELP( " ", 1, "OBRIGAT" )
+			Return .F.
+		EndIf
+
+	EndIf
+
+	If Len( aCols ) == 1
+
+		If Empty( aCols[1][nFilRe] ) .Or. Empty( aCols[1][nMatRe] ) .Or. aCols[1][Len( aCols[1] )]
+			Return .T.
+		EndIf
+
+	EndIf
+
+	For i := 1 to Len( aCols )
+
+		If !aCols[n][Len( aCols[i] )]
+
+			If i <> n .And. !aCols[n][Len( aCols[n] )]
+
+				If aCols[i][nMatRe] == aCols[n][nMatRe]
+					Help( " ", 1, "JAEXISTINF" )
+					Return .F.
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	Next i
+
+	If !Empty( aCols[n][nFilRe] ) .And. !Empty( aCols[n][nMatRe] ) .And. !aCols[n][Len( aCols[n] )]
+		dbSelectArea( "SRA" )
+		dbSetOrder( 01 )
+
+		If !dbSeek( xFilial( "SRA", aCols[n][nFilRe] )+ aCols[n][nMatRe] )
+			Help( " ", 1, "REGNOIS" )
+			Return .F.
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} A111TUDOOK
+
+Verifica se todos os campos obrigatórios foram preenchidos
+
+@author  Hugo Rizzo Pereira
+@since   21/09/10
+
+@return  Lógico, Retorna .F. de acordo com o retorno da função Obrigatorio
+/*/
+//-------------------------------------------------------------------
+Function A111TUDOOK
+
+	If Type( "bNGGRAVA" ) == "B"
+		If !Eval( bNGGRAVA )
+			Return .F.
+		EndIf
+	EndIf
+
+	If !Obrigatorio( aSvAGetsF1, aSvATelaF1 )
+		Return .F.
+	EndIf
+
+	If !Obrigatorio( aSvAGetsF3, aSvATelaF3 )
+		Return .F.
+	EndIf
+
+	If !Obrigatorio( aSvAGetsF4, aSvATelaF4 )
+		Return .F.
+	EndIf
+
+	If lFO
+		If !Empty( aSvATelaFO )
+			If !Obrigatorio( aSvAGetsFO, aSvATelaFO )
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+
+Utilizacao de Menu Funcional.
+
+@author NG Informatica
+@since 01/07/2008
+
+@param	1. Nome a aparecer no cabecalho
+		2. Nome da Rotina associada
+		3. Reservado
+		4. Tipo de Transaâ€¡â€žo a ser efetuada:
+			1 - Pesquisa e Posiciona em um Banco de Dados
+			2 - Simplesmente Mostra os Campos
+			3 - Inclui registros no Bancos de Dados
+			4 - Altera o registro corrente
+			5 - Remove o registro corrente do Banco de Dados
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+
+@version P11/P12
+
+@return Array, Opções de menu
+/*/
+//------------------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+
+
+	If lSigaMdtps
+		aRotina := { { STR0001, "AxPesqui", 0, 1},; //"Pesquisar"
+					 { STR0002, "MDT111INC", 0, 2, 0, .F.},; //"Visualizar"
+					 { STR0005, "Eventos CIPA", 0, 4} } //"Eventos CIPA"
+	Else
+		aRotina := { { STR0001, "AxPesqui", 0, 1},;     //"Pesquisar"
+					 { STR0002, "MDT665INC", 0, 2, 0, .F.},;    //"Visualizar"
+					 { STR0003, "MDT665INC", 0, 3, 0, .F.},; //"Incluir"
+					 { STR0004, "MDT665INC", 0, 4, 0, .F.},; //"Alterar"
+					 { STR0005, "MDT665INC", 0, 5, 0, .F.},; //"Excluir"
+					 { STR0005, "Eventos CIPA", 0, 6, 0, } } //"Eventos CIPA"
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT111DT
+Apresenta o browser para que seja informado a data do evento.
+
+@author Guilherme Freudenburg
+@since 31/07/2014
+@version 11
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function MDT111DT(dDataCip)
+
+	Local aArea := GetArea()
+	Local oDlgDt	//Objeto
+	Local oPnlTop	//Painel
+	Local lRet:=.T.
+
+	Define MsDialog oDlgDt From 000, 000 To 100, 290 Title STR0047 Pixel COLOR CLR_BLACK, CLR_WHITE STYLE nOr( DS_MODALFRAME,WS_POPUP,WS_CAPTION ) of oMainwnd //Informe a Data do Evento
+
+		oDlgDt:lEscClose := .F.//Desabilita a utilização do Esc
+
+		oPnlTop := TPanel():New( 00, 00, , oDlgDt, , , , , , 0, 50, .F., .F. )
+			oPnlTop:Align := CONTROL_ALIGN_TOP
+
+			@ 020, 010 Say STR0048 Of oPnlTop Pixel Color CLR_HBLUE //"Data"
+			@ 020, 030 MsGet dDataCip SIZE 45, 10 Picture '99/99/9999' Of oPnlTop Pixel HasButton
+			@ 015, 080 Button STR0049 Of oPnlTop SIZE 60, 11 Pixel ACTION {|| lRet:=.T., oDlgDt:End() }//Confirmar
+			@ 030, 080 Button STR0050 Of oPnlTop SIZE 60, 11 Pixel ACTION {|| lRet:=.F., oDlgDt:End() }//Cancelar
+
+	Activate MsDialog oDlgDt Centered
+
+	RestArea( aArea )
+
+Return lRet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA111Imp(lChama)
+Função para impressão da tela de controle de eventos
+
+@type function
+
+@return Nulo, Não tem retorno
+
+@author  Milena Leite de Oliveira
+@since   08/01/2020
+/*/
+//-------------------------------------------------------------------
+Function MDTA111Imp()
+
+	Local   aArea := GetArea()
+	Local   oReport
+	Private cPerg := "MDT111"
+
+	If TRepInUse()
+		oReport := ReportDef()
+		oReport:SetPortrait()
+		oReport:PrintDialog()
+	EndIf
+
+	RestArea( aArea )
+
+Return
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef()
+Define as seções impressas no relatório
+
+@return oReport
+
+@author  Milena Leite de Oliveira
+@since   09/01/2020
+/*/
+//-------------------------------------------------------------------
+
+Static Function ReportDef()
+
+	Local oReport
+	Local oSection1
+
+	//-------------------------------------------------------------------------
+	//Criacao do componente de impressao                                       |
+	//                                                                         |
+	//TReport():New                                                            |
+	//ExpC1 : Nome do relatorio                                                |
+	//ExpC2 : Titulo                                                           |
+	//ExpC3 : Pergunte                                                         |
+	//ExpB4 : Bloco de codigo que sera executado na confirmacao da impressao   |
+	//ExpC5 : Descricao                                                        |
+	//                                                                         |
+	//-------------------------------------------------------------------------
+
+	oReport := TReport():New( "MDTA111", OemToAnsi( STR0060 ), "MDT111", {|oReport| ReportPrint( oReport )}, OemToAnsi( STR0060 ), , {||}, , ) // Relatório de Eventos
+
+	Pergunte( oReport:uParam, .F. )
+
+	oSection1 := TRSection():New( oReport, STR0005, cControle ) //"Eventos"
+	TRCell():New( oSection1, "aEventosMd", "cControle", STR0007, "@!", 10, , {||aEventos[nPos][3]} ) // "Mandato"
+	TRCell():New( oSection1, "aEventosDt", "cControle", STR0010, "@!", 25, , {||aEventos[nPos][5]} ) // "Data do Evento"
+	TRCell():New( oSection1, "aEventosDc", "cControle", STR0009, "@!", 70, , {||aEventos[nPos][2]} ) // "Descrição"
+	TRCell():New( oSection1, "aEventosPd", "cControle", STR0008, "@!", 20, , {||aEventos[nPos][1]} ) // "Pendência"
+	TRCell():New( oSection1, "aEventosME", "cControle", STR0046, "@!", 20, , {||aEventos[nPos][7]} ) // "Mandato extraordinário"
+
+Return oReport
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Imprime relatório personalizado
+
+@type ReportPrint(oReport)
+
+@return l, Lógico para imprimir ou não o relatório
+
+@author Milena Leite de Oliveira
+@since 09/01/2020
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oReport)
+
+	Local oSection1 := oReport:Section( 1 )
+	Local lGera     := .F.
+	Local nAt
+
+	Private nPos
+
+	If oReport:Cancel()
+		Return .T.
+	EndIf
+
+	oSection1:Init()
+
+	//Se o mandato estiver no intervalo dos parâmetros e não estiver vazio
+	For nAt := 1 To Len( aEventos )
+		If aEventos[nAt][3] >= MV_PAR01 .And. aEventos[nAt][3] <= MV_PAR02
+			If aEventos[nAt][5] >= MV_PAR03 .And. Empty( MV_PAR04 )
+					lGera:=.T.
+
+					oSection1:Init( .F. ) //Não imprime o cabeçalho da seção
+
+					nPos := nAt //Seta nPos a cada loop para o TRCell
+
+					oSection1:PrintLine()
+			ElseIf aEventos[nAt][5] >= MV_PAR03 .And. aEventos[nAt][5] <= MV_PAR04
+					lGera:=.T.
+
+					oSection1:Init( .F. ) //Não imprime o cabeçalho da seção
+
+					nPos := nAt //Seta nPos a cada loop para o TRCell
+
+					oSection1:PrintLine()
+			EndIf
+		EndIf
+	Next nAt
+
+	oSection1:Finish()
+
+	If !lGera
+		MsgInfo( STR0061, STR0044 ) //"Não existem dados para montar o relatório!"###"Atenção"
+		Return .F.
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA111VAL
+Valida valores das perguntas
+
+@return Lógico - Valor lógico que indica se o valor digitado no parâmetro é válido ou não
+
+@param nCampo - Campo que será validado
+
+@author Milena Leite de Oliveira
+@since 13/12/2019
+/*/
+//---------------------------------------------------------------------
+Function MDTA111VAL(nCampo)
+
+	Local cMandate
+	Local lNormal
+	Local lRet := .T.
+
+	If nCampo == 1 .Or. nCampo == 2
+		cMandate := IIf( nCampo == 1, MV_PAR01, MV_PAR02 )
+		lNormal  := IIf( nCampo == 1, Empty( MV_PAR01 ), MV_PAR02 == Replicate( 'Z', Len( MV_PAR02 ) ) )
+
+		If lNormal .Or. ExistCpo("TNN",cMandate) // Verifica se existe mandato digitado no array até achar
+			If ( !Empty( MV_PAR02 ) .And. MV_PAR01 > MV_PAR02 )
+				MsgStop( OemToAnsi( STR0062 ) ) //"Valor Inválido"
+				lRet := .F.
+			EndIf
+		Else
+			lRet := .F.
+		EndIf
+
+	ElseIf( !Empty( MV_PAR04 ) .And. MV_PAR03 > MV_PAR04 )
+		MsgStop( OemToAnsi( STR0062 ) ) //"Valor Inválido"
+		lRet := .F.
+	EndIf
+
+Return lRet

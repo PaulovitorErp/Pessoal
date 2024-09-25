@@ -1,0 +1,3183 @@
+#Include "MDTA630.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA630
+Programa Cadastro de EPI's entregues aos funcionarios.
+O programa inicia com o browser da tabela de forneceores de EPI, ao
+teclar no botao funcionarios, o programa mostra uma tela estilo pai
+filho na parte pai dados dos fornecedor e do epi e na parte filho,
+mostra os funcionarios que ja receberão o epi. o usuario podera
+incluir novos.
+
+@type    function
+@author  Deivys Joenck
+@since   27/07/2000
+@sample  MDTA630()
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function MDTA630()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	// Retorna o tipo referente a EPI cadastrado no parâmetro
+	Private cTipo 		:= SuperGetMv( "MV_MDTPEPI", .F., "" )
+	Private lCpDtDev	:= NGCADICBASE( "TNF_DTDEVO", "D", "TNF", .F. )
+	Private cPrograma	:= "MDTA630"
+	Private lLoteTNF	:= IIf( NGCADICBASE( "TNF_LOTECT", "D", "TNF", .F. ) .And. NGCADICBASE( "TNF_LOTESB", "D", "TNF", .F. ) .And. ;
+						   NGCADICBASE( "TNF_ENDLOC", "D", "TNF", .F. ) .And. NGCADICBASE( "TNF_NSERIE", "D", "TNF", .F. ), .T., .F. )
+
+	//Integracao com o Estoque
+	Private cUsaInt1   	:= SuperGetMv( 'MV_NGMDTES', .F., 'N' )
+	Private cUsaInt2   	:= SuperGetMv( 'MV_NG2SA', .F., 'N' )
+	Private cUsaLocz   	:= AllTrim( SuperGetMv( "MV_LOCALIZ", .F., "N" ) )
+	Private cUsaRast   	:= AllTrim( SuperGetMv( "MV_RASTRO", .F., "N" ) )
+	Private lESTNEGA   	:= AllTrim( SuperGetMv( "MV_ESTNEG", .F., "N" ) ) == 'S'
+	Private lCpoNumSep 	:= TNF->( FieldPos( "TNF_NUMSEQ" ) ) > 0 .And. lCpDtDev
+	Private lMdtGerSA  	:= cUsaInt2 == "S" //Indica se gera SA ao inves de requisitar do estoque
+	Private lGera_SA   	:= NGCADICBASE( "TNF_ITEMSA", "D", "TNF", .F. ) .And. NGCADICBASE( "TNF_NUMSA", "D", "TNF", .F. )
+	Private lDEVBIO		:= NGCADICBASE( "TNF_DEVBIO", "D", "TNF", .F. )
+	Private dDataBloq  	:= SuperGetMv( "MV_DBLQMOV" ) //Data para bloqueio de movimentos.
+	Private aDevPar		:= {}
+	Private aOld_TLW	:= {} //Array utlizado na devolução parcial
+	Private aColsTLW	:= {} //Array utlizado na devolução parcial
+	Private lMsErroAuto
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+
+		If !FindFunction( "MDT695TRB" )
+			MsgStop( STR0105 + CRLF +; //"Rotina não poderá ser executada, há incompatibilidade no Repositório."
+			STR0106 + "XXXXXX" + STR0107, STR0020 )//"Para mais informações contate Administrador do sistema para atualiza-lo, conforme chamado XXXXXX )."
+		Else
+			If cUsaInt1 != "S" .Or. !lMdtGerSA
+				lGera_SA := .F.
+			EndIf
+
+			If !lLoteTNF .Or. (cUsaInt1 != "S" .Or. cUsaLocz != "S" .And. cUsaRast != "S")
+				lLoteTNF := .F.
+				cUsaLocz := "N"
+				cUsaRast := "N"
+			EndIf
+
+			lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+
+			Private aRotina   := MenuDef()
+			Private cCadastro := ""
+			Private cPerg     := "MDT695    "
+			Private nEPIDev
+
+			Pergunte( cPerg, .F. )
+
+			nEPIDev := MV_PAR01
+
+			If lSigaMdtps
+				cCadastro := OemtoAnsi( STR0026 )  //"Clientes"
+
+				dbSelectArea( "SA1" )
+				dbSetOrder( 1 )
+
+				mBrowse( 6, 1, 22, 75, "SA1" )
+			Else
+
+				// Define o cabecalho da tela de atualizacoes
+				cCadastro := OemtoAnsi( STR0004 ) //"EPIs Entregues por Funcionario"
+				Private aCHKDEL  := {}
+				Private bNGGRAVA
+				Private lWhenEpi := .F.
+				Private lCodFun  := .F.
+				Private c1CodFun := "RA_CODFUNC"
+				Private c2CodFun := "TNF_CODFUN"
+				Private nIndTNB  := 1
+
+				If TNF->(FieldPos( "TNF_CODPOS" )) > 0 .And. SRA->(FieldPos( "RA_POSTO" )) > 0
+					lCodFun  := .T.
+					c1CodFun := "RA_POSTO"
+					c2CodFun := "TNF_CODPOS"
+					nIndTNB  := 4
+				EndIf
+
+				Private lConfExc := .F.
+				Private cHora695 := Substr( Time(), 1, 7 )
+				Private cEpie695 := Space( 15 )
+
+				If AllTrim( SuperGetMv( "MV_MDTEPID", .F., "N" ) ) == "S"
+					lConfExc := .T.
+				EndIf
+
+				// Endereca a funcao de BROWSE
+				dbSelectArea( "TN3" )
+				dbSetOrder( 1 )
+				//Aplica F4 para consulta do estoque de EPIs
+				SetKey( VK_F4, { || MaViewSB2( TN3->TN3_CODEPI ) } )
+				mBrowse( 6, 1, 22, 75, "TN3" )
+				Set Filter To
+			EndIf
+		EndIf
+	EndIf
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM( aNGBEGINPRM )
+
+	SetKey( VK_F4, {|| } )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NGFUN630
+Programa de Inclusao,alteracao,exclusao
+
+@type function
+
+@source MDTA630.prx
+
+@author Deivys Joenck
+
+@param  cAlias, Caracter, Parâmetro numérico 1
+@param  nReg  , Numerico, Parâmetro caracter 2
+@param  nOpcx , Lógico  , Parâmetro opcional lógico 3
+
+@sample NGFUN630( 'TN3' , 1 , 3 )
+
+@return Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NGFUN630( cAlias, nReg, nOpcx )
+
+	Local LVar01     := 1
+	Local nLinhas    := 0
+	Local aNoFields  := {}
+	Local aButtons   := {}
+	Local aCols_Old  := {}
+	Local GetList    := {}
+	Local aColsAlt	 := {}
+	Local nOrdem     := 1 //Data Entrega + Hora Entrega
+	Local cRadioOpc  := { STR0110,; //"Data Entrega + Hora Entrega"
+						   STR0111 }  //"Matrícula"
+	Local bCampo
+	Local cSaveMenuh
+	Local nCnt
+	Local oPnl
+	Local nSavRec
+	Local oDlg
+	Local i
+	Local nXX
+	Local nYY
+	Local nW
+	Local nInd
+	Local oDlgHCO
+	Local oTempTN3
+	Local nLeft
+	Local x
+	Local y
+	Local nX
+	Local cEpiFil
+	Local cCaEpiFil
+	Local aEpiFil
+	Local dEpiDat
+
+	Private cTRBTN3  := GetNextAlias()
+	Private aSize    := MsAdvSize( , .F., 430 )
+	Private aObjects := {}
+	Private cFilif   := Nil
+	Private aCOLS
+	Private aCOLStnf
+	nSavRec := RecNo()
+	nOpcao  :=nOpcx
+
+
+	Private oGet
+	Private oMenu
+
+	Private lWh695TNF := .T. //Variavel que controla o X3_WHEN dos campos da TNF
+	Private lWh695IND := .T. //Variavel que controla o X3_WHEN do campo TNF_INDDEV
+	Private lWh695LOT := .T. //Variavel que controla o X3_WHEN do campo Lote SubLote
+	Private lWh695OBS := .T. //Variavel que controla o X3_WHEN do campo Observação
+
+	Private nPosChv := 0
+	Private nPosAnt := 0
+	Private aChvTNF := {}
+	Private aDevEpi := {}
+
+	//Utilizado no MDTA695 para devolução parcial ( TLW )
+	Private cAliasTLW  := GetNextAlias()
+	Private cArquivTLW := ""
+	Private aHeadTLW   := {}
+	Private lUsouFunc  := .F. //Indica se o usuário usou a opção de funcionários que alimenta autimaticamente a GetDados
+	Private nOpcVenc   := 3 //1-Entrega EPI Vencido / 2-Não entrega EPI Vencido / 3-Pergunta se entrega EPI Vencido
+	Private nUsado     := 0
+	Private aTELA[0][0]
+	Private aGETS[0]
+	Private aHeader[0]
+
+	Private nEPI
+	Private nFORNEC
+	Private nLOJA
+	Private nNUMCAP
+	Private nDTENTR
+	Private nHRENTR
+	Private nMAT
+	Private nDTADEV
+	Private oRadOp
+	Private oReodernar
+
+	Default dEpiDatAnt := CToD("//")
+
+	aAdd( aObjects, { 050, 050, .T., .T. } )
+	aAdd( aObjects, { 100, 100, .T., .T. } )
+	aInfo   := { aSize[1], aSize[2], aSize[3], aSize[4], 0, 0 }
+	aPosObj := MsObjSize( aInfo, aObjects, .T. )
+
+	aAdd( aButtons, { "NG_ICO_LEGENDA", { || LegMdtTNF() }, STR0056, STR0056 } ) //"Legenda"
+
+	If !SoftLock( cAlias )
+		Return
+	EndIf
+
+	If Type( "MV_PAR02" ) = "D"
+		dEpiDat := MV_PAR02 //Busca filtro de data
+	Else
+		dEpiDat := dEpiDatAnt
+	EndIf
+
+	//Valores e Caracteristicas da TRB
+	aCampos := {}
+	aAdd( aCampos, { "CODEPI", "C", TamSX3( "TN3_CODEPI" )[1], 0 } )
+	aAdd( aCampos, { "GENERI", "C", TamSX3( "TN3_GENERI" )[1], 0 } )
+	aAdd( aCampos, { "FORNEC", "C", TamSX3( "TN3_FORNEC" )[1], 0 } )
+	aAdd( aCampos, { "LOJA", "C", TamSX3( "TN3_LOJA" )[1], 0 } )
+	aAdd( aCampos, { "NUMCAP", "C", TamSX3( "TN3_NUMCAP" )[1], 0 } )
+	aAdd( aCampos, { "DTVENC", "D", TamSX3( "TN3_DTVENC" )[1], 0 } )
+	If TN3->( FieldPos( "TN3_DTVALI" ) ) > 0
+		aAdd( aCampos, { "DTVALI", "D", TamSX3( "TN3_DTVENC" )[1], 0 } )
+	EndIf
+		//Cria TRB
+	oTempTN3 := FWTemporaryTable():New( cTRBTN3, aCampos )
+	oTempTN3:AddIndex( "1", { "CODEPI" } )
+	oTempTN3:AddIndex( "2", { "GENERI" } )
+	oTempTN3:AddIndex( "3", { "FORNEC" } )
+	oTempTN3:AddIndex( "4", { "LOJA" } )
+	oTempTN3:AddIndex( "5", { "NUMCAP" } )
+	oTempTN3:AddIndex( "6", { "DTVENC" } )
+	If TN3->( FieldPos( "TN3_DTVALI" ) ) > 0
+		oTempTN3:AddIndex( "7", { "DTVALI" } )
+	EndIf
+	oTempTN3:Create()
+
+	dbSelectArea( "TN3" )
+	dbSetOrder( 1 ) //TN3_FILIAL+TN3_FORNEC+TN3_LOJA+TN3_CODEPI+TN3_NUMCAP
+	If dbSeek( xFilial( "TN3" ) + TN3->TN3_FORNEC + TN3->TN3_LOJA + TN3->TN3_CODEPI + TN3->TN3_NUMCAP )
+		//Alimenta os campos da TRB com os valores padrões
+		RecLock( cTRBTN3, .T. )
+			( cTRBTN3 )->CODEPI := TN3->TN3_CODEPI
+			( cTRBTN3 )->GENERI := TN3->TN3_GENERI
+			( cTRBTN3 )->FORNEC := TN3->TN3_FORNEC
+			( cTRBTN3 )->LOJA	:= TN3->TN3_LOJA
+			( cTRBTN3 )->NUMCAP	:= TN3->TN3_NUMCAP
+			( cTRBTN3 )->DTVENC	:= TN3->TN3_DTVENC
+			If TN3->( FieldPos( "TN3_DTVALI" ) ) > 0
+				( cTRBTN3 )->DTVALI	:= TN3->TN3_DTVALI
+			EndIf
+		MsUnLock( cTRBTN3 )
+	EndIf
+	//Se for Genérico
+	If ( cTRBTN3 )->GENERI == '2'
+		//Abre uma tela para selecionar o Epi filho.
+		aEpiFil := NG695EPIF( ( cTRBTN3 )->FORNEC, ( cTRBTN3 )->LOJA, ( cTRBTN3 )->CODEPI )
+		If Len(aEpiFil) > 0
+			cEpiFil := aEpiFil[1]
+			cCaEpiFil := aEpiFil[2]
+		EndIf
+
+		If !Empty( cEpiFil )
+			dbSelectArea( "TL0" )
+			dbSetOrder( 1 ) //TL0_FILIAL+TL0_EPIGEN+TL0_FORNEC+TL0_LOJA+TL0_EPIFIL+TL0_NUMCAP+TL0_DTINIC+TL0_DTFIM
+			If dbSeek( xFilial( "TL0" ) + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + cEpiFil + cCaEpiFil )
+				//Se for selecionado algum Epi Filho deve considerar o mesmo
+				RecLock( cTRBTN3, .F. )
+					( cTRBTN3 )->CODEPI	:= cEpiFil
+					( cTRBTN3 )->NUMCAP	:= TL0->TL0_NUMCAP
+					( cTRBTN3 )->DTVENC	:= TL0->TL0_DTVENC
+					If TL0->( FieldPos( "TL0_DTVALI" ) ) > 0
+						( cTRBTN3 )->DTVALI	:= TL0->TL0_DTVALI
+					EndIf
+				MsUnLock( cTRBTN3 )
+			EndIf
+		EndIf
+	EndIf
+
+	If SuperGetMv( "MV_MDTEPIV", .F., 3 ) == 1
+		nOpcVenc := 1
+	ElseIf SuperGetMv( "MV_MDTEPIV", .F., 3 ) == 2
+		nOpcVenc := 2
+	EndIf
+
+	If ( cTRBTN3 )->DTVENC < dDataBase
+		If nOpcVenc == 2
+			MsgStop( STR0039 ) //"Este EPI está com a data de vencimento ultrapassada."
+			Return .F.
+		ElseIf nOpcVenc == 3
+			If !MsgYesNo( STR0039 + " " + STR0040 ) //"Este EPI está com a data de vencimento ultrapassada."###"Deseja continuar?"
+				Return .F.
+			EndIf
+		EndIf
+	Else
+		If TN3->( FieldPos( "TN3_DTVALI" ) ) > 0
+			If !Empty( ( cTRBTN3 )->DTVALI ) .And. ( cTRBTN3 )->DTVALI < dDataBase
+				If nOpcVenc == 2
+					MsgStop( STR0108 )//"Este EPI está com a data de validade ultrapassada."
+					Return .F.
+				ElseIf nOpcVenc == 3
+					If !MsgYesNo( STR0108 + " " + STR0040 ) //"Este EPI está com a data de validade ultrapassada." ###"Deseja continuar?"
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	dbSelectArea( "SB1" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SB1" ) + ( cTRBTN3 )->CODEPI ) .And. SB1->B1_MSBLQL == '1'
+		MsgInfo( STR0041 ) //"O Produto (EPI) está bloqueado para uso. As informações somente poderão ser visualizadas."
+		nOpcx := 2
+	EndIf
+	//Verifica se existe algum dado no arquivo
+	dbSelectArea( cAlias )
+	dbSetOrder( 1 )
+
+	For i := 1 To FCount()
+		x   := "m->" + FieldName( i )
+		&x. := FieldGet( i )
+	Next i
+
+	cALIAS := "TNF"
+
+	If lSigaMdtps
+		nIndTNF := NGRETORDEM( "TNF", "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR", .F. )
+		nIndTNF := IIf( nIndTNF > 0, nIndTNF, 11 ) //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+		cSeekTNF := xFilial( "TNF" ) + TN3->TN3_FORNEC + TN3->TN3_LOJA + TN3->TN3_CLIENT + TN3->TN3_LOJACL + TN3->TN3_CODEPI + TN3->TN3_NUMCAP
+		cCondTNF := "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CLIENT+TNF_LOJACL+TNF_CODEPI+TNF_NUMCAP"
+	Else
+		nIndTNF  := 1  //TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP+TNF_MAT+DTOS(TNF_DTENTR)+TNF_HRENTR
+		cSeekTNF := xFilial( "TNF" ) + ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->NUMCAP
+		cCondTNF := "TNF_FILIAL+TNF_FORNEC+TNF_LOJA+TNF_CODEPI+TNF_NUMCAP"
+	EndIf
+
+	dbSelectArea( "TNF" )
+	dbSetOrder( nIndTNF )
+	dbSeek( cSeekTNF )
+
+	nCnt := 0
+	While !Eof() .And. &(cCondTNF) == cSeekTNF
+		nCnt++
+		dbSkip()
+	End
+
+	//Monta a entrada de dados do arquivo
+	bCampo   := { |nCPO| Field( nCPO ) }
+
+	//Monta o cabecalho
+
+	dbSelectArea( "SX2" )
+	dbSeek( "TNF" )
+
+	aAdd( aNoFields, 'TNF_FORNEC' )
+	aAdd( aNoFields, 'TNF_LOJA' )
+	aAdd( aNoFields, 'TNF_CODEPI' )
+	aAdd( aNoFields, 'TNF_NUMCAP' )
+	aAdd( aNoFields, 'TNF_DESC' )
+
+	If cUsaInt1 != "S"
+		aAdd( aNoFields, "TNF_TIPODV" )
+		aAdd( aNoFields, "TNF_NUMSEQ" )
+		aAdd( aNoFields, "TNF_CUSTO" )
+		aAdd( aNoFields, "TNF_LOCAL" )
+		aAdd( aNoFields, "TNF_LOTECT" )
+		aAdd( aNoFields, "TNF_LOTESB" )
+		aAdd( aNoFields, "TNF_ENDLOC" )
+		aAdd( aNoFields, "TNF_NSERIE" )
+	Else
+		If cUsaLocz != "S"
+			aAdd( aNoFields, "TNF_ENDLOC" )
+			aAdd( aNoFields, "TNF_NSERIE" )
+		EndIf
+		If cUsaRast != "S"
+			aAdd( aNoFields, "TNF_LOTECT" )
+			aAdd( aNoFields, "TNF_LOTESB" )
+		EndIf
+	EndIf
+
+	If lSigaMdtps
+
+		aAdd( aNoFields, 'TNF_CLIENT' )
+		aAdd( aNoFields, 'TNF_LOJACL' )
+
+		#IFDEF TOP
+			cQuery := "SELECT * FROM " + RetSqlName( "TNF" ) + " TNF WHERE TNF.TNF_FILIAL = '" + xFilial( "TNF" ) + "'" +;
+			" AND TNF.TNF_CLIENT = '" + ( cTRBTN3 )->CLIENT + "'" +;
+			" AND TNF.TNF_LOJACL = '" + ( cTRBTN3 )->LOJACL + "'" +;
+			" AND TNF.TNF_FORNEC = '" + ( cTRBTN3 )->FORNEC + "'" +;
+			" AND TNF.TNF_LOJA = '" + ( cTRBTN3 )->LOJA + "' AND TNF.TNF_CODEPI = '" + ( cTRBTN3 )->CODEPI + "' AND TNF.TNF_NUMCAP = '" +;
+			 ( cTRBTN3 )->NUMCAP + "' AND TNF.D_E_L_E_T_ = ' '"
+			If nEPIDev == 2 //Mostrar EPI's devolvidos
+				cQuery +=  " AND TNF.TNF_INDDEV = '1'"
+			ElseIf nEPIDev == 3 //Nao devolvidos
+				cQuery +=  " AND TNF.TNF_INDDEV <> '1'"
+			EndIf
+			FillGetDados( 4, "TNF", 6, xFilial( "TNF" ) + ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + ( cTRBTN3 )->CLIENT +;
+			 ( cTRBTN3 )->LOJACL + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->NUMCAP,;
+			 { || "TNF_FILIAL + TNF_FORNEC + TNF_LOJA + TNF_CLIENT + TNF_LOJACL + TNF_CODEPI + TNF_NUMCAP" }, { || .T. }, aNoFields, , , cQuery )
+		#ELSE
+			cGETWHTPB := "TNF->TNF_FILIAL == '" + xFilial( "TNF" ) + "' " + ;
+			".And. TNF->TNF_CLIENT == '" + ( cTRBTN3 )->CLIENT + "' " + ;
+			".And. TNF->TNF_LOJACL == '" + ( cTRBTN3 )->LOJACL + "' " + ;
+			".And. TNF->TNF_FORNEC == '" + ( cTRBTN3 )->FORNEC + "' " + ;
+			".And. TNF->TNF_LOJA == '"   + ( cTRBTN3 )->LOJA   + "' " + ;
+			".And. TNF->TNF_CODEPI == '" + ( cTRBTN3 )->CODEPI + "' " + ;
+			".And. TNF->TNF_NUMCAP == '" + ( cTRBTN3 )->NUMCAP + "' "
+ 			If nEPIDev == 2 //Mostrar EPI's devolvidos
+				cFilif :=  " TNF->TNF_INDDEV == '1'"
+			ElseIf nEPIDev == 3 //Nao devolvidos
+				cFilif :=  " TNF->TNF_INDDEV <> '1'"
+			EndIf
+			FillGetDados( 4, "TNF", 6, "( cTRBTN3 )->FORNEC+( cTRBTN3 )->LOJA+TN3->TN3_CLIENT+TN3->TN3_LOJACL+( cTRBTN3 )->CODEPI+( cTRBTN3 )->NUMCAP",;
+			 {|| }, {|| .T.}, aNoFields, , , , {|| NGMontaAcols( "TNF", ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + ( cTRBTN3 )->CLIENT + ;
+			 ( cTRBTN3 )->LOJACL + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->NUMCAP, cGETWHTPB, cFilif ) } )
+		#ENDIF
+
+	Else
+		#IFDEF TOP
+			cQuery := "SELECT * FROM " + RetSqlName( "TNF" ) + " TNF WHERE TNF.TNF_FILIAL = '" + xFilial( "TNF" ) +;
+			"' AND TNF.TNF_FORNEC = '" + ( cTRBTN3 )->FORNEC + "'" +;
+			" AND TNF.TNF_LOJA = '" + ( cTRBTN3 )->LOJA + "' AND TNF.TNF_CODEPI = '" + ( cTRBTN3 )->CODEPI +;
+			"' AND TNF.TNF_NUMCAP = '" + ( cTRBTN3 )->NUMCAP +;
+			"' AND TNF.D_E_L_E_T_ = ' '"
+			If nEPIDev == 2 //Mostrar EPI's devolvidos
+				cQuery +=  " AND TNF.TNF_INDDEV = '1'"
+			ElseIf nEPIDev == 3 //Nao devolvidos
+				cQuery +=  " AND TNF.TNF_INDDEV <> '1'"
+			EndIf
+			If !Empty( dEpiDat )
+				cQuery += "AND ( TNF.TNF_DTENTR = '" + Dtos( dEpiDat ) + "' " +;
+				" OR TNF.TNF_DTENTR > '" + Dtos( dEpiDat ) + "' ) "
+			EndIf
+			FillGetDados( 4, "TNF", 1, xFilial( "TNF" ) + ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->NUMCAP,;
+			 {|| "TNF_FILIAL + TNF_FORNEC + TNF_LOJA + TNF_CODEPI + TNF_NUMCAP"}, {|| .T.}, aNoFields, , , cQuery )
+		#ELSE
+			cGETWHTPB := "TNF->TNF_FILIAL == '" + xFilial( "TNF" ) + "' " +;
+			".And. TNF->TNF_FORNEC == '" + ( cTRBTN3 )->FORNEC + "' " +;
+			".And. TNF->TNF_LOJA == '"   + ( cTRBTN3 )->LOJA   + "' " +;
+			".And. TNF->TNF_CODEPI == '" + ( cTRBTN3 )->CODEPI + "' " +;
+			".And. TNF->TNF_NUMCAP == '" + ( cTRBTN3 )->NUMCAP + "' "
+			If nEPIDev == 2 //Mostrar EPI's devolvidos
+				cFilif :=  " TNF->TNF_INDDEV == '1'"
+			ElseIf nEPIDev == 3 //Nao devolvidos
+				cFilif :=  " TNF->TNF_INDDEV <> '1'"
+			EndIf
+			FillGetDados( 4, "TNF", 1, "( cTRBTN3 )->FORNEC+( cTRBTN3 )->LOJA+( cTRBTN3 )->CODEPI+( cTRBTN3 )->NUMCAP", {|| }, {|| .T.}, aNoFields, , , ,;
+			 { || NGMontaAcols( "TNF", ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA + ( cTRBTN3 )->CODEPI + ( cTRBTN3 )->NUMCAP, cGETWHTPB, cFilif ) } )
+
+		#ENDIF
+	EndIf
+
+	lCpoLegX := TNFColBmp( 2, @aHeader, @aCols ) //Adiciona a coluna BMP no aHeader e aCols
+
+	nPos     := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT" } )
+	nCpoLote := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOTECT" } )
+	nCpoSubL := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOTESB" } )
+	nCpoLocz := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_ENDLOC" } )
+	nCpoNSer := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NSERIE" } )
+	nDEVQTD  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDEVO" } )
+	nENTQTD  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDENT" } )
+
+	aHeader[nPos][6] := AllTrim( aHeader[nPos][6] ) + " .And. LINK190()"
+
+	If Empty( aCols )
+		aCols := BlankGetd( aHeader )
+	EndIf
+
+	nEPI    := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_CODEPI" } )
+	nFORNEC := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_FORNEC" } )
+	nLOJA   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOJA"   } )
+	nNUMCAP := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMCAP" } )
+	nDTENTR := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+	nHRENTR := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_HRENTR" } )
+	nMAT    := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT" } )
+	nDTADEV := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+
+	aSort( aCols, , , { |x, y| DToS( x[nDTENTR] ) + x[nHRENTR] < DTOS( y[nDTENTR] ) + y[nHRENTR] } )
+
+	nINDDEV := aSCan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_INDDEV" } )
+	aCOLStnf := aClone( aCOLS )
+	aHeaTNF  := aClone( aHEADER )
+
+	// DEVOLUÇÂO PARCIAL
+	MDT695TLW( @cArquivTLW )
+	//Carrega TRB da TLW
+	MDT695TRB( , ( cTRBTN3 )->FORNEC, ( cTRBTN3 )->LOJA, ( cTRBTN3 )->CODEPI, ( cTRBTN3 )->NUMCAP, .T. )
+
+	nOpca := 0
+	Inclui := .T.
+	DEFINE MSDIALOG oDlg TITLE Ccadastro From aSize[7], 0 To aSize[6], aSize[5] OF oMainWnd PIXEL
+
+		oPnlPai := tPanel():New( , , , oDlg, , , , CLR_BLACK, CLR_WHITE, 100, 100, , )
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oPnl := tPanel():New( , , , oPnlPai, , , , CLR_BLACK, CLR_WHITE, 100, 100, , )
+		oPnl:Align := CONTROL_ALIGN_TOP
+
+		dbSelectArea( "SA2" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SA2" ) + ( cTRBTN3 )->FORNEC + ( cTRBTN3 )->LOJA )
+		cCIDADE := AllTrim( SA2->A2_MUN ) + ' - ' + SA2->A2_EST
+		@ 09, 006 SAY OemToAnsi( STR0013 ) of oPnl PIXEL//"Fornecedor"
+		@ 08, 055 MSGET ( cTRBTN3 )->FORNEC SIZE 50, 8 When .F. of oPnl PIXEL
+		@ 09, 156 SAY OemToAnsi( STR0005 ) of oPnl PIXEL //"Nome"
+		@ 08, 186 MSGET SA2->A2_NOME SIZE 120, 8 When .F. of oPnl PIXEL
+		@ 09, 316 SAY OemToAnsi( STR0006 ) of oPnl PIXEL//"Loja"
+		@ 08, 344 MSGET ( cTRBTN3 )->LOJA SIZE 10, 8 When .F. of oPnl PIXEL
+
+		@ 24, 006  SAY OemToAnsi( STR0007 ) of oPnl PIXEL//"Endereco"
+		@ 22, 055  MSGET SA2->A2_END SIZE 200, 8 When .F. of oPnl PIXEL
+
+		@ 39, 006 SAY OemToAnsi( STR0008 ) of oPnl PIXEL//"Cidade"
+		@ 38, 055 MSGET cCIDADE SIZE 70, 8 When .F. of oPnl PIXEL
+
+		@ 39, 156 SAY OemToAnsi( STR0009 ) of oPnl PIXEL//"CEP"
+		@ 38, 186 MSGET SA2->A2_CEP PICTURE "@R 99999-999" SIZE 40, 8 When .F. of oPnl PIXEL
+		@ 39, 316 SAY OemToAnsi( STR0010 ) of oPnl PIXEL//"Telefone"
+		@ 38, 344 MSGET SA2->A2_TEL SIZE 60, 8 When .F. of oPnl PIXEL
+
+		dbSelectArea( "SB1" )
+		dbSetOrder( 1 )
+		dbSeek( xFilial( "SB1" ) + ( cTRBTN3 )->CODEPI )
+
+		@ 57, 006 SAY OemToAnsi( STR0011 ) of oPnl PIXEL//"Codigo EPI"
+		@ 55, 055  MSGET ( cTRBTN3 )->CODEPI SIZE 95, 8 When .F. of oPnl PIXEL
+		@ 57, 156 SAY OemToAnsi( STR0012 ) of oPnl PIXEL//"Descricao"  // @ 5.1, 12
+		@ 55, 186 MSGET SB1->B1_DESC SIZE 110, 8 When .F. of oPnl PIXEL
+		@ 57, 316 SAY OemToAnsi( STR0014 ) of oPnl PIXEL//"U.M."
+		@ 55, 344 MSGET SB1->B1_UM SIZE 15, 8 When .F. of oPnl PIXEL
+		@ 72, 006 SAY OemToAnsi( STR0016 ) of oPnl PIXEL//"Nº Cert. Aprovação"
+		@ 71, 055 MSGET ( cTRBTN3 )->NUMCAP SIZE 52, 8 When .F. of oPnl PIXEL
+
+		@ 70, 115 BUTTON STR0057 OF oPnl SIZE 54, 12 PIXEL ACTION ( MDT695DVPA( nOpcx, oGet, cTRBTN3 ) )  //"Devolução Parcial"
+		@ 70, 180 BUTTON STR0086 OF oPnl SIZE 54, 12 PIXEL ACTION IIf( BntFunc(), lUsouFunc :=.T., lUsouFunc := .F. )  //"Funcionários"
+
+		dbSelectArea( "TNF" )
+		dbgobottom()
+		dbSkip()
+
+		Private lVld630e := .T.
+		If lConfExc
+			oGet := MSGetDados():New( aPosObj[2, 1] - 5, aPosObj[2, 2] + 4, aPosObj[2, 3], aPosObj[2, 4] - 2, nOpcx,;
+									 "NG630LinOk", "NG630TudOk", "", .T., , , , 999999, , , , "NG630EXCC(1)", oPnlPai )
+		Else
+			oGet := MSGetDados():New( aPosObj[2, 1] - 5, aPosObj[2, 2] + 4, aPosObj[2, 3], aPosObj[2, 4] - 2, nOpcx,;
+									 "NG630LinOk", "NG630TudOk", "", .T., , , , 999999, , , , "NG630EXCC(2)", oPnlPai )
+		EndIf
+		oGet:oBrowse:bChange:= {|| fChangeGD( lGera_SA ) }
+		oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+		fChgWhTNF( oGet, "fChg630GD()", .F. )
+
+		NGPOPUP( asMenu, @oMenu )
+		oDlg:bRClicked:= { |o, x, y| oMenu:Activate( x, y, oPnlPai ) }
+
+		oPnlSupDir := TPanel():New( 0, 0, , oPnl, , , , , , 200, 100, .F., .F. )
+		oPnlSupDir:Align := CONTROL_ALIGN_RIGHT
+		oPnlShow := TButton():New( 002, 002, ">", oPnl, , 5, 10, , , .F., .T., .F., , .F., , , .F. )
+		oPnlShow:bAction := { |x, y| ( oPnlShow:cTitle := IIf( oPnlShow:cTitle == ">", "<", ">" ),;
+							 IIf( oPnlShow:cTitle == ">", oPnlSupDir:Show(), oPnlSupDir:Hide() ) ), }
+		oPnlShow:Align := CONTROL_ALIGN_RIGHT
+
+		// Oredenação dos registros
+
+		TGroup():New( 005, 005, 60, 100, STR0109, oPnlSupDir, , , .T. )
+
+		oRadOp := TRadMenu():New( 015, 010, cRadioOpc, , oPnlSupDir, , , , , , , , 113, 12, , , , .T. )
+
+		oRadOp:bSetGet := { |u| IIf( PCount() == 0, nOrdem, nOrdem := u ) }
+
+		oReodernar := TButton():New( 040, 010, STR0112, oPnlSupDir, { || OrdenaEpi( nOrdem ) }, 60, 12, , , , .T. ) //"&Reodernar"
+
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( oDlg, { || nOpca := 1, IIf( oGet:TudoOk(), oDlg:End(), nOpca := 0 ) }, { ||oDlg:End() }, , aButtons )
+
+	If nOpcA == 1 .And. nOpcx != 2
+		Begin Transaction
+			aCols_Old := aClone( aCOLS ) //Cria bkp antes da gravação para consultar os valores antigos, no caso de uma devolução parcial.
+			aColsAlt  := MDT695LinAl( aCols, aColsTNF, aHeader ) //Verifica as linhas alteradas
+			lGravaOk  := NG695GRAV( nOpca, cTRBTN3, aColsAlt )
+			If lGravaOk
+				//Processa Gatilhos
+				EvalTrigger()
+			EndIf
+
+		End Transaction
+
+		If lDEVBIO
+			aDevPar := {}  //Zera Variavel.
+			For nInd := 1 To Len( aCOLS )
+				cCond2TNF := aCOLS[nInd, nMAT] + DToS( aCOLS[nInd, nDTENTR] ) + Substr( aCOLS[nInd, nHRENTR], 1, 5 )
+				dbSelectArea( "TNF" )
+				dbSetOrder( nIndTNF )
+				If dbSeek( cSeekTNF + cCond2TNF ) //1=Epi devolvido;2=Epi em uso;3=Epi em Solic. Armazem
+
+					nPosTNF := fRetChave( aCOLS[nInd], aHeader, aColsTnf )
+					If nPosTNF > 0
+						If aColsTnf[ nPosTNF, nINDDEV] == "2" .And. Empty( aColsTnf[nPosTNF, nDTADEV] ) .And. !Empty( aCOLS[nInd][nDTADEV] ) .And. ;
+							( aCOLS[ nInd, nENTQTD ] == aCOLS[ nInd, nDEVQTD ] .And. aColsTnf[ nPosTNF, nDEVQTD ] == 0 )
+							aAdd( aDevEpi, TNF->(Recno()) )
+						//Verifica se quantidade esta preenchida e se o valor antigo é diferente do novo
+						ElseIf ( !Empty( aCOLS[nInd, nDEVQTD] ) .And. aColsTnf[nPosTNF, nDEVQTD] != TNF->TNF_QTDEVO )  //Caso ocorreu devolução parcial.
+							If aScan( aDevEpi, { | x | x == TNF->(Recno()) } ) == 0
+								For nW := 1 To Len( aColsTLW )
+									If !aColsTLW[nW, Len( aColsTLW[nW] ) ] //Verifica se registro não foi deletado.
+										If Len( aOld_TLW ) == 0 .Or. ;
+										aScan( aOld_TLW, { | x | x[ 1 ] == aColsTLW[nW, 1] .And. x[ 2 ] == aColsTLW[nW, 2] .And. x[ 3 ] == aColsTLW[nW, 3] } ) == 0 //Verifica a existencia da devolução.
+
+											aAdd( aDevPar, { TNF->TNF_FILIAL, TNF->TNF_CODEPI, TNF->TNF_FORNEC,;
+											 TNF->TNF_LOJA, TNF->TNF_NUMCAP, TNF->TNF_MAT, TNF->TNF_DTENTR, TNF->TNF_HRENTR,;
+											 aColsTLW[nW, 1], aColsTLW[nW, 2], aColsTLW[nW, 3] } )
+											If aScan( aDevEpi, { | x | x == TNF->(Recno()) } ) == 0
+												aAdd( aDevEpi, TNF->(Recno()) )
+											EndIf
+										Else
+											dbSelectArea( "TLW" )
+											dbSetOrder( 1 ) //TLW_FILIAL+TLW_FORNEC+TLW_LOJA+TLW_CODEPI+TLW_NUMCAP+TLW_MAT+DTOS(TLW_DTENTR)+TLW_HRENTR+DTOS(TLW_DTDEVO)+TLW_HRDEVO
+											If !dbSeek( TNF->TNF_FILIAL + TNF->TNF_FORNEC + TNF->TNF_LOJA + TNF->TNF_CODEPI +;
+											TNF->TNF_NUMCAP + TNF->TNF_MAT + DToS( TNF->TNF_DTENTR ) + TNF->TNF_HRENTR +;
+											DToS( aColsTLW[nW, 1] ) + aColsTLW[nW, 2] ) //Caso não exista a devolução Parcial em Base.
+												aAdd( aDevPar, { TNF->TNF_FILIAL, TNF->TNF_CODEPI, TNF->TNF_FORNEC,;
+												 TNF->TNF_LOJA, TNF->TNF_NUMCAP, TNF->TNF_MAT, TNF->TNF_DTENTR, TNF->TNF_HRENTR,;
+												 aColsTLW[nW, 1], aColsTLW[nW, 2], aColsTLW[nW, 3] } )
+												If aScan( aDevEpi, { | x | x == TNF->(Recno()) } ) == 0
+													aAdd( aDevEpi, TNF->(Recno()) )
+												EndIf
+											EndIf
+										EndIf
+									EndIf
+
+								Next nW
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			Next i
+		EndIf
+
+		If Len( aDevEpi ) > 0 .And. !lMsErroAuto
+			If MsgYesNo( STR0078 )//"Deseja imprimir o recibo de devolução de EPI?"
+				MDTR805( , , aDevEpi, .T., aDevPar )
+			EndIf
+		EndIf
+	EndIf
+
+	oTempTN3:Delete()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG630LinOk
+Critica se a linha digitada está Ok
+
+@author Inacio Luiz Kolling
+
+@param  o, Objeto, Onde está ainformação a ser verificada
+@param  nTudoOk, Numérico, Linha que será verificada
+
+@return lAjsStat, Lógico, Verdadeiro caso haja alteração de Status.
+Não permite a GetDados criar uma nova linha para não se perder no
+posicionamento.
+/*/
+//-------------------------------------------------------------------
+Function NG630LinOk( o, nTudoOk )
+
+	Local xx        := 0
+	Local npos      := 0
+	Local npos1     := 0
+	Local npos2     := 0
+	Local nMDTInteg := SuperGetMv( "MV_NG2INTE", .F., "1" )
+	Local nQuantEPI := 0
+	Local lLogix    := nMDTInteg == "2" //Logix
+	Local lFound    := .F.
+	Local lDelLine  := .F.
+	Local lTudoOk   := .F.
+	Local lRET      := .T.
+	Local lPermt    := .T.
+	Local lYesNo    := .T.
+	Local dDataBloq := SuperGetMv( "MV_DBLQMOV" ) //Data para bloqueio de movimentos.
+	Local lAjsStat  := .F.
+	Local nX
+	Local nPosTNF
+	Local nInd
+	Local nAt
+	Local cSeeklTNF
+
+	Default nTudoOk := 0
+
+	lTudoOk := nTudoOk != 0
+	nAt := IIf( lTudoOk, nTudoOk, n )
+
+	nPOS    := GdFieldPos( "TNF_MAT" )
+	nPOS1   := GdFieldPos( "TNF_DTENTR" )
+	nPOS2   := GdFieldPos( "TNF_HRENTR" )
+	nQTDENT := GdFieldPos( "TNF_QTDENT" )
+	nLocalT := GdFieldPos( "TNF_LOCAL" )
+	nNumseq := GdFieldPos( "TNF_NUMSEQ" )
+	nINDDEV := GdFieldPos( "TNF_INDDEV" )
+	nDTADEV := GdFieldPos( "TNF_DTDEVO" )
+	nTIPODV := GdFieldPos( "TNF_TIPODV" )
+	nDEVQTD := GdFieldPos( "TNF_QTDEVO" )
+	nLOCDEV := GdFieldPos( "TNF_LOCDV" )
+	nPosLeg := GdFieldPos( "COLBMP" )
+	nPosSaiLog:= GdFieldPos( "TNF_SAILOG" )
+	nPosEntLog:= GdFieldPos( "TNF_ENTLOG" )
+
+	cMat := aCols[nAt][nPos]
+	dDte := aCols[nAt][nPos1]
+	cHra := aCols[nAt][nPos2]
+	//"Indica se será bloqueado o Epi, após a impressão do relatório. 1 = Bloqueado ou  2 = Não Bloqueado."
+	If SuperGetMv( "MV_NG2EPIB", .F., "1" ) == "1"
+		If aCols[nAt][Len( aCols[nAt] )]
+			dbSelectArea( "TNF" )
+			dbSetOrder( nIndTNF )
+			If dbSeek( cSeekTNF + aCols[nAt][nPos] + DToS( aCols[nAt][nPos1] ) + aCols[nAt][nPos2] )
+				If !Empty( TNF->TNF_DTRECI )
+					Help( " ", 1, STR0098, , STR0099, 3, 0 ) // "Aviso"//"O EPI não pode ser deletado, pois já foi entregue ao funcionário. É permitido somente a devolução."
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	If ( !aCols[nAt][Len( aCols[nAt] )] .And. !lTudoOk ) .Or. lUsouFunc
+		If Empty( aCols[nAt][nPOS] )
+			MsgStop( STR0079 ) //"O campo Matrícula deve ser informado"
+			Return .F.
+		EndIf
+	EndIf
+	If !( aCols[nAt][Len( aCols[nAt] )] .And. !lTudoOk ) .Or. lUsouFunc
+		If Empty( aCols[nAt][nPOS1] )
+			MsgStop( STR0042 ) //"O campo Dt. Entrega deve ser informado"
+			Return .F.
+		EndIf
+		If Empty( aCols[nAt][nQTDENT] )
+			MsgStop( STR0015 ) //"O campo Qde Entregue deve ser informado"
+			Return .F.
+		EndIf
+		If nDEVQTD > 0
+			If aCols[nAt][nDEVQTD] > aCols[nAt][nQTDENT]
+				MsgStop( STR0058 ) //"A quantidade devolvida não pode ser maior que a quantidade entregue."
+				Return .F.
+			EndIf
+		EndIf
+
+		lAlterou := .T. //Se alterou algum campo da linha
+		nPosTNF  := aScan( aCOLStnf, {|x| aCols[nAt][nPOS] == x[nPOS] .And. aCols[nAt][nPOS1] == x[nPOS1] .And. aCols[nAt][nPOS2] == x[nPOS2] } )
+		If nPosTNF > 0
+			lAlterou := .F.
+			For nInd := 1 To Len( aCols[nAt] )
+				If aCols[nAt, nInd] != aCOLStnf[nPosTNF, nInd]
+					lAlterou := .T.
+					Exit
+				EndIf
+			Next nInd
+		Else
+			//Se linha nova e integração com estoque
+			If ( !lLogix .And. cUsaInt1 == "S" ) .And. aCols[nAt][nINDDEV] == "1"
+				MsgStop( STR0071 ) //"Na inclusão de uma entrega de EPI, não poderá ser informado como EPI Devolvido."
+				Return .F.
+			EndIf
+		EndIf
+
+		If lAlterou
+			//Data devolucao deve ser preenchida caso campo Ind Devolucao = SIM
+			If lCpDtDev //Se campo TNF_DTDEVO existir
+				If aCols[nAt][nINDDEV] == "1" .And. Empty( aCols[nAt][nDTADEV] )
+					MsgStop( STR0045 ) //"O campo Dt. Devoluc. é obrigatório quando informado 'Sim' no campo Devolucao."
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If ( cUsaInt1 == "S" .And. !lLogix )
+			If TNF->(FieldPos( "TNF_LOCAL" )) > 0 .And. nLocalT > 0 .And. lAlterou
+				//O alerta abaixo irá aparecer caso o campo "Local Almoxarifado" esteja vazio, e haja necessidade de movimentacao de estoque no SD3
+				If nPosTNF == 0 //Se o registro é novo
+					If Empty( aCols[nAt][nLocalT] )
+						MsgStop( STR0023 ) //"O campo Local Almox. deve ser informado"
+						Return .F.
+					EndIf
+					If nTIPODV > 0
+						If Empty( aCols[nAt][nTIPODV] ) .And. aCols[nAt][nINDDEV] == "1"
+							MsgStop( STR0043 ) //"O campo Repor Estoque deve ser informado."
+							Return .F.
+						EndIf
+					EndIf
+				Else
+					If( aColsTNF[nPosTNF][nLocalT] != aCols[nAt][nLocalT] ) .Or.;  //Local foi alterado
+					 ( IIf( nTIPODV > 0, aColsTNF[nPosTNF][nTIPODV] != aCols[nAt][nTIPODV], .F. ) ) .Or.;  //Repor Estoque foi alterado
+					 ( aColsTNF[nPosTNF][nQTDENT] != aCols[nAt][nQTDENT] ) .Or.;  //Qtde foi alterada
+					 ( aColsTNF[nPosTNF][nPOS] != aCols[nAt][nPOS] ) .Or.;  //MAtricula nao foi alterada
+					 ( aColsTNF[nPosTNF][nPOS1] != aCols[nAt][nPOS1] ) .Or.;  //Data da entrega foi alterada
+					 (;
+					 ( aCols[nAt][nINDDEV] == "1" .And. !Empty( aCols[nAt][nDTADEV] ) ) .And. ;  //Agora o Epi foi devolvido
+					 ( aColsTNF[nPosTNF][nINDDEV] != "1" .Or. Empty( aCols[nAt][nDTADEV] ) );  //Antes o Epi foi requisitado
+					 ) .Or.;
+					 (;
+					 ( aCols[nAt][nINDDEV] != "1" .Or. Empty( aCols[nAt][nDTADEV] ) ) .And. ;   //Agora o Epi foi requisitado
+					 ( aColsTNF[nPosTNF][nINDDEV] == "1" .And. !Empty( aCols[nAt][nDTADEV] ) )  ;   //Antes o Epi foi devolvido.
+					 ) .Or.;
+					 ( IIf( cUsaRast == "S", aColsTNF[nPosTNF][nCpoLote] != aCols[nAt][nCpoLote], .F. ) ) .Or.; //Lote Alterado
+					 ( IIf( cUsaRast == "S", aColsTNF[nPosTNF][nCpoSubL] != aCols[nAt][nCpoSubL], .F. ) ) .Or.; //SubLote Alterado
+					 ( IIf( cUsaLocz == "S", aColsTNF[nPosTNF][nCpoLocz] != aCols[nAt][nCpoLocz], .F. ) ) .Or.; //Localizacao Alterado
+					 ( IIf( cUsaLocz == "S", aColsTNF[nPosTNF][nCpoNSer] != aCols[nAt][nCpoNSer], .F. ) ) //Num Serie Alterado
+
+						If nTIPODV > 0 .And. aCols[nAt][nINDDEV] == "1"
+							If Empty( aCols[nAt][nTIPODV] )
+								MsgStop( STR0043 ) //"O campo Repor Estoque deve ser informado."
+								Return .F.
+							ElseIf nLOCDEV > 0
+								If Empty( aCols[nAt][nLOCDEV] )
+									MsgStop( STR0100 ) //"O campo Armazém Dev. deve ser informado."
+									Return .F.
+								EndIf
+							EndIf
+						EndIf
+						//Mostra MSG caso Almoxarifado vazio e apenas houve alteracao pela Devolucao Parcial
+						If Empty( aCols[nAt][nLocalT] )
+							If  !( aColsTNF[nPosTNF][nLocalT] == aCols[nAt][nLocalT] .And.;  //Local continua vazio
+							aColsTNF[nPosTNF][nPOS1] == aCols[nAt][nPOS1] .And.;  //Data da entrega nao foi alterada
+							aColsTNF[nPosTNF][nPOS] == aCols[nAt][nPOS] .And.;  //MAtricula nao foi alterada
+							aColsTNF[nPosTNF][nQTDENT] == aCols[nAt][nQTDENT] .And.;  //Qtde nao foi alterada
+							( (aCols[nAt][nINDDEV] == "1" .And. aColsTNF[nPosTNF][nINDDEV] != "1") .Or.;
+							(aCols[nAt][nINDDEV] != "1" .And. aColsTNF[nPosTNF][nINDDEV] == "1") ) .And.;
+							MDTTLWEDIT( 2, cAliasTLW ) )
+
+								MsgStop( STR0023 ) //"O campo Local Almox. deve ser informado"
+								Return .F.
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			lInclusao := .T.
+			lAuxIF    := .F.
+			lAuxIF2   := .F.
+			lAuxSB2   := .F.
+			lAuxTpDv  := .F.
+			lDevRet   := .F.
+			lDevRepor := .F.
+
+			dbSelectArea( "TNF" )
+			dbSetOrder( nIndTNF )
+			If dbSeek( cSeekTNF + aCols[nAt][nPOS] + DToS( aCOLS[nAt][nPOS1] ) + aCOLS[nAt][nPOS2] )
+				lInclusao := .F.
+			EndIf
+
+			If nPosTNF == 0
+				lAuxIF := .T.
+			Else
+				If aCols[nAt][nQTDENT] > aCOLStnf[nPosTNF][nQTDENT]
+					lAuxIF := .T.
+				ElseIf aCols[nAt][nQTDENT] < aCOLStnf[nPosTNF][nQTDENT]
+					lAuxIF2 := .T.
+				EndIf
+				If nLocalT > 0
+					If aCols[nAt][nLocalT] != aCOLStnf[nPosTNF][nLocalT]
+						lAuxSB2 := .T.
+					Else
+						If cUsaRast == "S"
+							If aCols[nAt][nCpoLote] != aCOLStnf[nPosTNF][nCpoLote] .Or. aCols[nAt][nCpoSubL] != aCOLStnf[nPosTNF][nCpoSubL]
+								lAuxSB2 := .T.
+							EndIf
+						EndIf
+						If cUsaLocz == "S"
+							If aCols[nAt][nCpoLocz] != aCOLStnf[nPosTNF][nCpoLocz] .Or. aCols[nAt][nCpoNSer] != aCOLStnf[nPosTNF][nCpoNSer]
+								lAuxSB2 := .T.
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+				If aCols[nAt][nINDDEV] == "2" .And. aCOLStnf[nPosTNF][nINDDEV] == "1"
+					lDevRet := .T.
+				EndIf
+				If nTIPODV > 0
+					If aCols[nAt][nTIPODV] == "1" .And. aCols[nAt][nINDDEV] == "1" //Se Devolucao = S e Repor Estoque = S
+						If aCols[nAt][nTIPODV] != aCOLStnf[nPosTNF][nTIPODV] .Or. aCols[nAt][nDTADEV] != aCOLStnf[nPosTNF][nDTADEV]
+							lAuxTpDv := .T.
+						EndIf
+					EndIf
+					If aCols[nAt][nTIPODV] == "2" .And. aCols[nAt][nINDDEV] == "1" .And. aCOLStnf[nPosTNF][nTIPODV] == "1"
+						lDevRepor := .T.
+					EndIf
+				EndIf
+				If nDEVQTD > 0 .And. (aCOLStnf[nPosTNF][nDEVQTD] > 0 .Or. aCols[nAt][nDEVQTD] > 0)
+					If aCols[nAt][nQTDENT] != aCOLStnf[nPosTNF][nQTDENT]
+						MsgStop( STR0059 ) //"A Quantidade Entregue não poderá ser alterada, caso o Epi já foi devolvido totalmente ou parcialmente."
+						Return .F.
+					EndIf
+					If !Empty( aCOLStnf[nPosTNF][nLocalT] ) .And. lAuxSB2
+						MsgStop( STR0060 ) //"O Almoxarifado não poderá ser alterado, caso o Epi já foi devolvido totalmente ou parcialmente."
+						Return .F.
+					EndIf
+					If cUsaRast == "S"
+						If aCols[nAt][nCpoLote] != aCOLStnf[nPosTNF][nCpoLote]
+							MsgStop( STR0067 ) //"O Lote não poderá ser alterado, caso o Epi já foi devolvido totalmente ou parcialmente."
+							Return .F.
+						EndIf
+						If aCols[nAt][nCpoSubL] != aCOLStnf[nPosTNF][nCpoSubL]
+							MsgStop( STR0068 ) //"O Sub-Lote não poderá ser alterado, caso o Epi já foi devolvido totalmente ou parcialmente."
+							Return .F.
+						EndIf
+					EndIf
+					If cUsaLocz == "S"
+						If aCols[nAt][nCpoLocz] != aCOLStnf[nPosTNF][nCpoLocz]
+							MsgStop( STR0069 ) //"A Localização não poderá ser alterado, caso o Epi já foi devolvido totalmente ou parcialmente."
+							Return .F.
+						EndIf
+						If aCols[nAt][nCpoNSer] != aCOLStnf[nPosTNF][nCpoNSer]
+							MsgStop( STR0070 ) //"O Num. de Série não poderá ser alterado, caso o Epi já foi devolvido totalmente ou parcialmente."
+							Return .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			cLocTnf_ := IIf( TNF->(FieldPos( "TNF_LOCAL" )) > 0, aCols[nAt][nLocalT], "01" )
+			cTmpLote := IIf( cUsaRast == "S", aCols[nAt][nCpoLote], "" )
+			cTmpSubL := IIf( cUsaRast == "S", aCols[nAt][nCpoSubL], "" )
+			cTmpLocz := IIf( cUsaLocz == "S", aCols[nAt][nCpoLocz], "" )
+			cTmpNSer := IIf( cUsaLocz == "S", aCols[nAt][nCpoNSer], "" )
+			If lInclusao .Or. lAuxIF .Or. lAuxIF2 .Or. lAuxSB2 .Or. lDevRet
+				If !lInclusao .And. aCols[nAt][nINDDEV] == "1" .And. (lAuxIF .Or. lAuxIF2)
+					MsgStop( STR0044 ) //"Ao alterar o campo Quantidade, o campo Devolucao não deverá ser preenchido com 'Sim'."
+					Return .F.
+				EndIf
+				If (lInclusao .Or. lAuxIF .Or. lAuxSB2 .Or. lDevRet)
+					If aCols[nAt][nINDDEV] != "1"
+						If !lESTNEGA
+							nQtClass := NGSEEK( "SB2", ( cTRBTN3 )->CODEPI + cLocTnf_, 1, "SB2->B2_QACLASS" )
+							nQtClass := IIf( ValType( nQtClass ) == "N", nQtClass, 0 )
+							nAcumulado := A695RTACUM( 4, ( cTRBTN3 )->CODEPI, cLocTnf_, , , , )
+							If nAcumulado > 0
+								If !NGSALSB2( ( cTRBTN3 )->CODEPI, cLocTnf_, nAcumulado, , nQtClass )
+									Return .F.
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			If (lAuxSB2 .And. aCols[nAt][nINDDEV] == "1") .Or.;
+			(nPosTNF > 0 .And. aCols[nAt][nINDDEV] == "1" .And. aCOLStnf[nPosTNF][nINDDEV] != "1") .Or.;
+			(nPosTNF > 0 .And. nDEVQTD > 0 .And. aCols[nAt][nDEVQTD] != aCOLStnf[nPosTNF][nDEVQTD])
+
+				If cUsaRast == "S" .And. Rastro( ( cTRBTN3 )->CODEPI )
+					If !Empty( cTmpSubL )
+						nAcumulado := A695RTACUM( 1, ( cTRBTN3 )->CODEPI, cLocTnf_, cTmpLote, cTmpSubL, , , .F. )
+						dbSelectArea( "SB8" )
+						dbSetOrder( 02 )
+						If dbSeek( xFilial( "SB8" ) + cTmpSubL ) .And. cTmpLote + ( cTRBTN3 )->CODEPI + cLocTnf_ == SB8->B8_LOTECTL + SB8->B8_PRODUTO + SB8->B8_LOCAL
+							If QtdComp( SB8SALDO( , , , , , , , , .T. ) + nAcumulado ) > QtdComp( SB8->B8_QTDORI )
+								Help( " ", 1, "A240LOTQTD" )
+								Return .F.
+							EndIf
+						EndIf
+					Else
+						nAcumulado := A695RTACUM( 2, ( cTRBTN3 )->CODEPI, cLocTnf_, cTmpLote, , , , .F. )
+						dbSelectArea( "SB8" )
+						dbSetOrder( 03 )
+						If dbSeek( xFilial( "SB8" ) + ( cTRBTN3 )->CODEPI + cLocTnf_ + cTmpLote )
+							If QtdComp( SB8SALDO( , , , , , , , , .T. ) + nAcumulado ) > QtdComp( SB8->B8_QTDORI )
+								Help( " ", 1, "A240LOTQTD" )
+								Return .F.
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			//Verifica se a data entrega do equipamento foi informada depois do parametro MV_ULMES
+			If lInclusao .Or. lAuxIF .Or. lAuxIF2 .Or. lAuxSB2 .Or. lDevRet .Or. lDevRepor
+				If aCols[nAt][nINDDEV] == "1" .And. !lDevRepor
+					IF !fDataDvTNF( aCols[nAt][nDtaDev], .T. )
+						Return .F.
+					EndIf
+				Else
+					If !fNgDtTNF( aCols[n][nPOS1], .T., , lDevRepor )
+						Return .F.
+					EndIf
+				EndIf
+			ElseIf lAuxTpDv //Repor Estoque = S - houve alteração de data ou antes Repor Estoque = N
+				If !fDataDvTNF( aCols[nAt][nDTADEV], .T. )
+					Return .F.
+				EndIf
+			EndIf
+
+			//Data devolucao deve ser preenchida caso campo Ind Devolucao = SIM
+			If aCols[nAt][nINDDEV] == "1" .And. Empty( aCols[nAt][nDTADEV] )
+				If lInclusao .Or. TNF->TNF_INDDEV != "1" .Or. !Empty( TNF->TNF_DTDEVO )
+					MsgStop( STR0045 ) //"O campo Dt. Devoluc. é obrigatório quando informado 'Sim' no campo Devolucao."
+					Return .F.
+				EndIf
+			EndIf
+			//Se for integração Logix
+		ElseIf lLogix
+
+			dbSelectArea( "SRA" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "SRA" ) + aCOLS[ nAt, nPOS ] )
+
+			dbSelectArea( "SB1" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "SB1" ) + TN3->TN3_CODEPI )
+
+			dbSelectArea( "SCP" )
+			RegToMemory( "SCP", .T. )
+			M->CP_PRODUTO := TN3->TN3_CODEPI
+			M->CP_UM      := SB1->B1_UM
+			M->CP_QUANT   := aCOLS[ nAt, nQTDENT ]
+			M->CP_DATPRF  := aCOLS[ nAt, nPOS1 ]
+			M->CP_LOCAL   := aCOLS[ nAt, nLocalT ]
+			M->CP_CC      := IIf( FindFunction( "MDTCCFunc" ), MDTCCFunc( SRA->RA_MAT, SRA->RA_CC, aCOLS[ nAt, nPOS1 ] ), SRA->RA_CC )
+			M->CP_EMISSAO := dDataBase
+			M->CP_DESCRI  := SB1->B1_DESC
+			M->CP_SOLICIT := cUserName
+			M->CP_OBS     := Upper( STR0003 ) + ": " + SRA->RA_FILIAL + "-" + aCOLS[ nAt, nPOS ] //"FUNCIONARIO"
+			If TNF->( FieldPos( "TNF_CODOBS" ) ) > 0
+				cObsSCP	:= SubStr( AllTrim( M->CP_OBS ) + " " + MSMM( TNF->TNF_CODOBS, TamSX3( "TNF_OBSLOG" )[1] ), 1, 180 )
+			Else
+				cObsSCP	:= Upper( STR0003 ) + ": " + SRA->RA_FILIAL + "-" + aCOLS[ nAt, nPOS ] //"FUNCIONARIO"
+			EndIf
+			//Campo CC
+			If FindFunction( "MDTCCFunc" )
+				cCCSCP := MDTCCFunc( SRA->RA_MAT, SRA->RA_CC, aCOLS[ nAt, nPOS1 ] )
+			Else
+				cCCSCP := SRA->RA_CC
+			EndIf
+
+			nPosTNF  := aScan( aCOLStnf, {|x| aCols[nAt][nPOS] == x[nPOS] .And. aCols[nAt][nPOS1] == x[nPOS1] .And. aCols[nAt][nPOS2] == x[nPOS2] } )
+
+			cMDTSerie  := ""
+			cMdtStatus := ""
+			cMdtReserva:= ""
+			lDelLine   := aTail( aCOLS[ nAt ] )
+			nOperacao := IIf( Empty( aCOLS[ nAt, nPosEntLog ] ), 3, IIf( lDelLine, 5, 4 ) )
+
+			dbSelectArea( "SCP" )
+			RegToMemory( "SCP", .T. )
+			M->CP_PRODUTO := TN3->TN3_CODEPI
+			M->CP_UM      := SB1->B1_UM
+			M->CP_QUANT   := aCOLS[ nAt, nQTDENT ]
+			M->CP_DATPRF  := aCOLS[ nAt, nPOS1 ]
+			M->CP_LOCAL   := aCOLS[ nAt, nLocalT ]
+			M->CP_CC      := IIf( FindFunction( "MDTCCFunc" ), MDTCCFunc( SRA->RA_MAT, SRA->RA_CC, aCOLS[ nAt, nPOS1 ] ), SRA->RA_CC )
+			M->CP_EMISSAO := dDataBase
+			M->CP_DESCRI  := SB1->B1_DESC
+			M->CP_SOLICIT := cUserName
+			M->CP_OBS     := Upper( STR0003 ) + ": " + SRA->RA_FILIAL + "-" + aCOLS[ nAt, nPOS ] //"FUNCIONARIO"
+			If TNF->( FieldPos( "TNF_CODOBS" ) ) > 0
+				M->CP_OBS := SubStr( AllTrim( M->CP_OBS ) + " " + MSMM( TNF->TNF_CODOBS, TamSX3( "TNF_OBSLOG" )[1] ), 1, 180 )
+			EndIf
+			// Simulação de Entrada
+			If ( lDelLine .And. !Empty( aCOLS[ nAt, nPosEntLog ] ) ) .Or.; // Houve exclusão com Código de Entrada Logix /
+			( !lDelLine .And. nPosTNF > 0 .And. lAlterou .And. ;// Houve alteração de uma linha já existente
+			(( aCOLS[ nAt, nDEVQTD ] == aCOLS[ nAt, nQTDENT ] .And. aCOLS[ nAt, nINDDEV ] != "1" .And. aColsTNF[ nPosTNF, nINDDEV ] == "1" ));
+			)
+
+				cMDTSerie := "SIMULENT"
+				nOperacao := IIf( Empty( aCOLS[ nAt, nPosEntLog ] ), 3, IIf( lDelLine, 5, 4 ) )
+				cMDTNumRes:= aCOLS[ nAt, nPosEntLog ]
+				lRet := NGMUReques( , "SCP", .T., nOperacao )
+			EndIf
+
+			// Simulação de Saída
+			If ( !lDelLine .And. ( nPosTNF == 0 .Or. lAlterou ) .And.;
+			( aCOLS[ nAt, nINDDEV ] $ "2|3"  ) ) .Or. ( lDelLine .And. !Empty( aCOLS[ nAt, nPosSaiLog ] ) )
+
+				cMDTSerie := "SIMULSAI"
+				nOperacao := IIf( Empty( aCOLS[ nAt, nPosSaiLog ] ), 3, IIf( lDelLine, 5, 4 ) )
+				cMDTNumRes:= IIf( nOperacao != 3, aCOLS[ nAt, nPosSaiLog ], "" )
+				lRet := NGMUReques( , "SCP", .T., nOperacao )
+			EndIf
+
+			If !lTudoOk .And. !Empty( M->CP_PRODUTO ) .And. !Empty( cMdtStatus )
+				If cMdtStatus == "1" // 1 – Verde – Solicitação atendida onde a reserva de estoque foi baixada.
+					aCOLS[ nAt, nPosLeg ] := "BR_VERDE"
+				ElseIf cMdtStatus == "2"// 2 – Amarela – Solicitação não atendida com estoque e sem solicitação de compra pendente.
+					aCOLS[ nAt, nPosLeg ] := "BR_AMARELO"
+				ElseIf cMdtStatus == "3"// 3 – Laranja – Solicitação não atendida sem estoque e com solicitação de compra pendente.
+					aCOLS[ nAt, nPosLeg ] := "BR_LARANJA"
+				ElseIf cMdtStatus == "4"// 4 – Amarela – Solicitação não atendida com estoque e com o recebimento da solicitação de compra pendente.
+					aCOLS[ nAt, nPosLeg ] := "BR_AMARELO"
+				ElseIf cMdtStatus == "5"// 5 – Vermelho – Solicitação de devolução ao estoque atendida.
+					aCOLS[ nAt, nPosLeg ] := "BR_VERMELHO"
+				ElseIf cMdtStatus == "6"// 6 – Azul – Solicitação de devolução ao estoque não atendida.
+					aCOLS[ nAt, nPosLeg ] := "BR_AZUL"
+				EndIf
+			EndIf
+
+			RegToMemory( "SCP", .T. )
+		EndIf
+	EndIf
+
+	If aCols[nAt][nDTADEV] > dDatabase
+		MsgStop( STR0046 ) //"Data da devolução não poderá ser superior à data atual"
+		Return .F.
+	EndIf
+
+	If nPOS > 0 .And. nPos1 > 0 .And. npos2 > 0
+		For nX := 1 to Len( aCOLS )
+			If nx != nAt
+				If !Empty( aCOLS[nX][nPOS] ) .And. aCOLS[nX][nPOS] == cMat .And. aCols[nX][nPos1] == dDte .And.;
+				aCols[nX][nPos2] == cHra
+					xx := xx + 1
+				EndIf
+			EndIf
+		Next
+	EndIf
+
+	If xx > 0
+		Help( " ", 1, "JAEXISTINF" )
+		Return .F.
+	EndIf
+
+	nCodigo := aCols[n, nPos]
+	dData := aCols[n, nPos1]
+
+	nPosChv := aScan( aChvTNF, { |x| x == cMat + DToS( dDte ) + cHra } )
+
+	If nPosChv == 0 .And. nPosTNF == 0 //Verifica se existe um registro novo
+		For nx := 1 To Len( aCols )
+			If nx != n .And. !aCols[ n, Len( aCols[ n ] ) ]  .And. aCols[ nx, nPos ] == nCodigo .And. aCols[ nx, nPos1 ] == dData .And.;
+			!aCols[ nx, Len( aCols[ nx ] ) ] .And. aCols[ nx, nINDDEV ] == "2"
+				If !MsgYesNo( STR0074 )  //"Este EPI já foi entregue hoje para este funcionário. Deseja confirmar a entrega?"
+					Return .F.
+				Else
+					Exit
+				EndIf
+			EndIf
+		Next nx
+	EndIf
+
+	If nPosChv == 0 .And. nPosTNF == 0 .And. aCols[ n, nINDDEV ] == "2" .And. !lMdtGerSA .And. !aCols[ n, Len( aCols[ n ] ) ]
+		For nX := 1 To Len( aCols )
+			If nx != n .And. lYesNo
+				If aCols[ n, nPos ] == aCols[ nX, nPos ] .And. aCols[ nX, nINDDEV ] == "2" .And. !aCols[ nX, Len( aCols[ nX ] ) ]
+					If NGSEEK( "TN3", (cTRBTN3)->FORNEC + (cTRBTN3)->LOJA + (cTRBTN3)->CODEPI + (cTRBTN3)->NUMCAP, 1, "TN3_INDEVO" ) != "2"
+						lYesNo := IIf( lPermt, MsgYesNo( STR0072 + Chr( 13 ) + STR0073 ), .T. ) //"Este funcionário já possui um EPI do mesmo tipo."##"Deseja alterar o status do EPI anterior para 'Devolvido'?"
+						If lYesNo
+							If cUsaInt1 == "S" .And. ( aCols[ n, nPOS1 ] <= dDataBloq .And. ; // (Se a entrega é menor ou igual a data de bloqueio e
+											!Empty( aCols[ nX, nPOS1 ] ) .And. ; // se a data de entrega do EPI anterior não estiver vazio e
+											Empty( aCols[ nX, nDTADEV ] ) ) .Or. ; // se a data de devolução do EPI anterior estiver vazia) OU
+											( aCols[ nX, nDTADEV ] <= dDataBloq .And. ; // (Se a data de devolução do EPI anterior seja menor ou igual a data de bloqueio e
+											!Empty( aCols[ nX, nDTADEV ] ) ) // a data de devolução do EPI anterior não esteja vazia)
+
+								ShowHelpDlg( STR0020, { STR0101 }, 1, { STR0102 }, 2 )//ATENÇÃO # "A data informado está bloqueada para movimentos." # "Favor verificar o parâmetro MV_DBLQMOV."
+							Else
+								aCols[ nx, nPosLeg ] := "BR_VERMELHO"
+								aCols[ nX, nDTADEV ] := dDte
+								aCols[ nX, nINDDEV ] := "1"
+								aCols[ nX, nDEVQTD ] := aCols[ nX, nQTDENT ]
+								If cUsaInt1 == "S"
+									aCols[ nX, nLOCDEV ] := IIf( nLOCDEV == 0, aCols[ nX, nLocalT ], aCols[ nX, nLOCDEV ] )
+									aCols[ nX, nTIPODV ] := "1"
+								EndIf
+								//Tratamento de posicionamento quando há devolução
+								lAjsStat := .T.
+								oGet:oBrowse:nAt := nX
+							EndIf
+							lPermt := .F.
+						Else
+							lPermt := .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		Next nX
+		//Atualiza Browser
+		oGet:oBrowse:Refresh()
+		oGet:oBrowse:SetFocus()
+	EndIf
+
+	If lYesNo .Or. lPermt
+		If nPosChv == 0 .And. nPosTNF == 0 .And. !lMdtGerSA .And. !aCols[ n, Len( aCols[ n ] )] .And. aCols[ n, nINDDEV ] == "2"
+			//Verifica toda a TNF, caso seja o mesmo epi, ele bota o status como devolvido.
+			dbSelectArea( "TNF" )
+			dbSetOrder( 3 ) //TNF_FILIAL+TNF_MAT+TNF_CODEPI+DTOS(TNF_DTENTR)+TNF_HRENTR
+			If dbSeek( xFilial( "TNF" ) + aCols[n, nPOS] + ( cTRBTN3 )->CODEPI )
+				While TNF->(!Eof()) .And. aCols[ n, nPOS ] == TNF->TNF_MAT .And. TNF->TNF_CODEPI == ( cTRBTN3 )->CODEPI
+					If TNF->TNF_INDDEV == "2" .And. ( TNF->TNF_FORNEC != ( cTRBTN3 )->FORNEC .Or. TNF->TNF_FORNEC == ( cTRBTN3 )->FORNEC .And. TNF->TNF_LOJA != ( cTRBTN3 )->LOJA )  .And. lYesNo
+						lYesNo:= IIf( lPermt, MsgYesNo( STR0072 + Chr( 13 ) + STR0073 ), .T. ) //"Este funcionário já possui um EPI do mesmo tipo."##"Deseja alterar o status do EPI anterior para 'Devolvido'?"
+						If lYesNo
+							If cUsaInt1 == "S" .And. ( TNF->TNF_DTENTR <= dDataBloq .And. !Empty( TNF->TNF_DTENTR ) .And. Empty( TNF->TNF_DTDEVO ) .Or.;
+							!Empty( dDte ) .And. dDte <= dDataBloq )
+								ShowHelpDlg( STR0020, { STR0101 }, 1, { STR0102 }, 2 ) //ATENÇÃO # "A data informado está bloqueada para movimentos." # "Favor verificar o parâmetro MV_DBLQMOV."
+								Return .F.
+							Else
+								nQuantEPI := TNF->TNF_QTDEVO
+								Reclock( "TNF", .F. )
+									TNF->TNF_QTDEVO := TNF->TNF_QTDENT
+									TNF->TNF_INDDEV := "1"
+									TNF->TNF_DTDEVO := dDte
+									If cUsaInt1 == "S"
+										TNF->TNF_LOCDV 	:= TNF->TNF_LOCAL
+										TNF->TNF_TIPODV := "1"
+									EndIf
+								MsUnlock( "TNF" )
+								//Cria registro na TLW
+								RecLock( "TLW", .T. )//Caso não exista registro na TLW.
+									TLW->TLW_FILIAL := xFilial( "TLW" )
+									TLW->TLW_FORNEC := TNF->TNF_FORNEC
+									TLW->TLW_LOJA   := TNF->TNF_LOJA
+									TLW->TLW_CODEPI := TNF->TNF_CODEPI
+									TLW->TLW_NUMCAP := TNF->TNF_NUMCAP
+									TLW->TLW_MAT    := TNF->TNF_MAT
+									TLW->TLW_DTENTR := TNF->TNF_DTENTR
+									TLW->TLW_HRENTR := TNF->TNF_HRENTR
+									TLW->TLW_DTDEVO := dDte
+									TLW->TLW_HRDEVO := Substr( Time(), 1, 5 )
+									TLW->TLW_QTDEVO := ( TNF->TNF_QTDENT - nQuantEPI )
+									If nTIPODV > 0
+										TLW->TLW_TIPODV := aCols[ nx, nTIPODV ]
+									EndIf
+									TLW->TLW_LOCAL  := TNF->TNF_LOCAL
+								MsUnlock( "TLW" )
+							EndIf
+							lPermt := .F.
+						EndIf
+					EndIf
+					TNF->(dbSkip())
+				End
+			EndIf
+		EndIf
+	EndIf
+
+Return !lAjsStat
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG630TudOk
+Critica se a nota toda está Ok
+
+@param   o, Objeto, Onde estão as informações a serem verificadas
+@author  Inacio Luiz Kolling
+
+@return  lRet, Lógico, Verdadeiro se estiver tudo Ok
+/*/
+//-------------------------------------------------------------------
+Function NG630TudOk( o )
+
+	Local aFuncs := {}
+
+	Local cDev := ''
+	Local cReq := ''
+
+	Local nX, nInd, nPosEpiEfi
+	Local npos := 0
+	Local npos1 := 0
+	Local npos2 := 0
+	Local nPosNum := 0
+	Local nMDTInteg := SuperGetMv( "MV_NG2INTE", .F., "1" )
+
+	Local lRet := .T.
+	Local lLogix := nMDTInteg == "2" // Logix
+	Local lAlterou := .F.
+	Local lEstAuto := cUsaInt1 == 'S' .And. cUsaInt2 == 'N'
+
+	Private aEpiEso := {}
+
+	nPOS    := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_MAT" } )
+	nPOS1   := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_DTENTR" } )
+	nPOS2   := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_HRENTR" } )
+	nQTDENT := aSCAN( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDENT" } )
+	nLocalT := aSCAN( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOCAL" } )
+	nNumseq := aSCAN( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMSEQ" } )
+	nINDDEV := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_INDDEV" } )
+	nDTDEVO := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_DTDEVO" } )
+	nPosEpiEfi := aSCAN( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_EPIEFI" } )
+
+	If lEstAuto // Integração com o estoque habilitada de forma automática via execauto
+
+		cDev := SuperGetMv( 'MV_NG2D3DE', .F., '' )
+		cReq := SuperGetMv( 'MV_NG2D3RE', .F., '' )
+
+		If Empty( cDev ) .Or. cDev == '499'
+
+			Help( Nil, Nil, 'MV_NG2D3DE', Nil, STR0113 + Space( 1 ) + '(499)', 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0114 } )
+			lRet := .F.
+
+		EndIf
+
+		If ( Empty( cReq ) .Or. cReq == '999' )
+
+			Help( Nil, Nil, 'MV_NG2D3RE', Nil, STR0113 + Space( 1 ) + '(999)', 1, 0, Nil, Nil, Nil, Nil, Nil, { STR0115 } )
+			lRet := .F.
+
+		EndIf
+
+	EndIf
+
+	If lRet
+
+		For nX := 1 To Len( aCols )
+
+			If ( lLogix .And. ( n != nX .Or. aTail( aCols[ nX ] ) ) ) .Or. lUsouFunc
+				lRet := NG630LinOk( o, nX )
+				If !lRet
+					Exit
+				EndIf
+			EndIf
+
+			If !aCols[nX][Len( aCols[nX] )]
+				nPosNum  := aScan( aCOLStnf, { |x| aCols[nX][nPos1] == x[nPOS1] .And. aCols[nX][nPOS2] == x[nPOS2] .And. aCols[nX][nPOS] == x[nPOS] } )
+				lAlterou := .T. //Se alterou algum campo da linha
+				If nPosNum > 0
+					lAlterou := .F.
+					For nInd := 1 To Len( aCols[nX] )
+						If aCols[nX, nInd] != aCOLStnf[nPosNum, nInd]
+							lAlterou := .T.
+							Exit
+						EndIf
+					Next nInd
+				EndIf
+
+				If lCpDtDev .And. lAlterou //Se campo TNF_DTDEVO existir e a linha foi alterada
+					If aCols[nX][nINDDEV] == "1"
+						If Empty( aCols[nX][nDTDEVO] )
+							msgStop( STR0033 + Chr( 13 ) + Chr( 10 ) +;  //'Não foi possível gravar as informações pois '
+							STR0034 + Alltrim( Str( nX, 9 ) ) + "." + Chr( 13 ) + Chr( 10 ) +;  //'existe uma inconsistência na linha '
+							STR0035 + Chr( 13 ) + Chr( 10 ) +;  //'Quando o campo "Devolução" está como "Sim"'
+							STR0036 )  //'a data de devolução deve estar preenchida.'
+							lRet := .F.
+							Exit
+						EndIf
+					Else
+						If !Empty( aCols[nX][nDTDEVO] )
+							msgStop( STR0033 + Chr( 13 ) + Chr( 10 ) +;  //'Não foi possível gravar as informações pois '
+							STR0034 + Alltrim( Str( nX, 9 ) ) + "." + Chr( 13 ) + Chr( 10 ) +;  //'existe uma inconsistência na linha '
+							STR0037 + Chr( 13 ) + Chr( 10 ) +;  //'Quando o campo "Devolução" está como "Não"'
+							STR0038 )  //'a data de devolução deve estar vazia.'
+							lRet := .F.
+							Exit
+						EndIf
+					EndIf
+				EndIf
+
+				If cUsaInt1 == "S"
+					lInclusao := .T.
+					lAuxIF    := .F.
+					lAuxIF2   := .F.
+					dbSelectArea( "TNF" )
+					dbSetOrder( nIndTNF )
+					If dbSeek( cSeekTNF + aCols[nX][nPOS] + DToS( aCOLS[nX][nPOS1] ) + aCOLS[nX][nPOS2] )
+						lInclusao := .F.
+					EndIf
+
+					If nPosNum == 0
+						lAuxIF := .T.
+					Else
+						If aCols[nX][nQTDENT] > aCOLStnf[nPosNum][nQTDENT]
+							lAuxIF := .T.
+						ElseIf aCols[nX][nQTDENT] < aCOLStnf[nPosNum][nQTDENT]
+							lAuxIF2 := .T.
+						EndIf
+						If nLocalT > 0
+							If aCols[nX][nLocalT] != aCOLStnf[nPosNum][nLocalT]
+								lAuxIF := .T.
+							Else
+								If cUsaRast == "S"
+									If aCols[nX][nCpoLote] != aCOLStnf[nPosNum][nCpoLote] .Or. aCols[nX][nCpoSubL] != aCOLStnf[nPosNum][nCpoSubL]
+										lAuxSB2 := .T.
+									EndIf
+								EndIf
+								If cUsaLocz == "S"
+									If aCols[nX][nCpoLocz] != aCOLStnf[nPosNum][nCpoLocz] .Or. aCols[nX][nCpoNSer] != aCOLStnf[nPosNum][nCpoNSer]
+										lAuxSB2 := .T.
+									EndIf
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+
+					If (lInclusao .Or. lAuxIF) .And. aCols[nX][nINDDEV] != "1"
+						cLocTnf_ := IIf( TNF->(FieldPos( "TNF_LOCAL" )) > 0, aCols[nX][nLocalT], "01" )
+						If !lESTNEGA
+							nQtClass := NGSEEK( "SB2", ( cTRBTN3 )->CODEPI + cLocTnf_, 1, "SB2->B2_QACLASS" )
+							nQtClass := IIf( ValType( nQtClass ) == "N", nQtClass, 0 )
+							nAcumulado := A695RTACUM( 4, ( cTRBTN3 )->CODEPI, cLocTnf_, , , , )
+							If nAcumulado > 0
+								If !NGSALSB2( ( cTRBTN3 )->CODEPI, cLocTnf_, nAcumulado, , nQtClass )
+									MsgInfo( STR0022 + Alltrim( Str( nX, 9 ) ) ) //"Problema ocorreu na linha: "
+									lRet := .F.
+									Exit
+								EndIf
+							EndIf
+						EndIf
+						If cUsaRast == "S" .Or. cUsaLocz == "S"
+							cTmpLote := IIf( cUsaRast == "S", aCols[nX][nCpoLote], "" )
+							cTmpSubL := IIf( cUsaRast == "S", aCols[nX][nCpoSubL], "" )
+							cTmpLocz := IIf( cUsaLocz == "S", aCols[nX][nCpoLocz], "" )
+							cTmpNSer := IIf( cUsaLocz == "S", aCols[nX][nCpoNSer], "" )
+							If !MdtSldSBF( ( cTRBTN3 )->CODEPI, cLocTnf_, cTmpLote, cTmpSubL, cTmpLocz, cTmpNSer, aCols[nX][nQTDENT], .F., aCols[nX][nPOS1] )
+								MsgInfo( STR0022 + Alltrim( Str( nX, 9 ) ) ) //"Problema ocorreu na linha: "
+								lRet := .F.
+								Exit
+							EndIf
+						EndIf
+					EndIf
+					If lInclusao .Or. lAuxIF .Or. lAuxIF2
+						If aCols[nX][nINDDEV] == "1"
+							If !fDataDvTNF( aCols[nX][nDtDevo], .T., STR0047 + Alltrim( Str( nX, 9 ) ), nX )
+								lRet := .F.
+								Exit
+							EndIf
+						Else
+							If !fNgDtTNF( aCols[nX][nPOS1], .T., STR0047 + Alltrim( Str( nX, 9 ) ) ) //"Linha: "
+								lRet := .F.
+								Exit
+							EndIf
+						EndIf
+					EndIf
+				EndIf
+
+				//Caso a linha do funcionário tenha sido alterada
+				If aScan( aFuncs, { |x| x[ 1 ] == aCols[ nX, nPOS ] } ) == 0 .And. aCols[ nX, nINDDEV ] <> "1"
+
+					aAdd( aFuncs, { aCols[ nX, nPOS ], , , , , , , { { ( cTRBTN3 )->CODEPI, aCols[ nX, nPos1 ], , , , , ( cTRBTN3 )->NUMCAP } } } )
+
+					aAdd( aEpiEso, {;
+						( cTRBTN3 )->CODEPI,;
+						aCols[ nX, nPOS1 ],;
+						aCols[ nX, nDTDEVO ],;
+						aCols[ nX, nINDDEV ],;
+						( cTRBTN3 )->FORNEC,;
+						( cTRBTN3 )->LOJA,;
+						( cTRBTN3 )->NUMCAP,;
+						aCols[ nX, nPosEpiEfi ],;
+						aCols[ nX, nPOS ];
+					} )
+
+				EndIf
+
+			EndIf
+
+		Next nX
+
+	EndIf
+
+	//-------------------------------------------------------------------------------------
+	// Realiza as validações das informações do evento S-2240 que serão enviadas ao Governo
+	//-------------------------------------------------------------------------------------
+	If lRet .And. Len( aFuncs ) > 0 .And. FindFunction( "MDTIntEsoc" )
+		lRet := MDTEpiS2240( aFuncs, .F. )
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} D630CHK
+Consiste a existencia de outro codigo na GetDados
+
+@author  Deivys Joenck
+@since   31/07/2000
+@sample  D630CHK()
+
+@return  lRet, Lógico, Verdadeiro se não houver código duplicado
+/*/
+//-------------------------------------------------------------------
+Function D630CHK() //Funcao nao utilizada por nenhum processo do sistema.
+
+	Local xx   := 0
+	Local lRet := .T.
+	Local nX
+	Local npos
+
+	nPOS  := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_MAT" } )
+	nPOS1 := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_DTENTR" } )
+	nPOS2 := aScan( aHEADER, { |x| Trim( Upper( x[2] ) ) == "TNF_HRENTR" } )
+
+	If nPOS > 0
+
+		If !ExistChav( "TNF", cSeekTNF + aCOLS[N][NPOS] + DToS( aCOLS[N][nPOS1] ) + M->TNF_HRENTR, 6 )
+			Return .F.
+		EndIf
+
+		cMAT  := aCOLS[N][nPOS]
+		dENTR := aCOLS[N][nPOS1]
+
+		MsgStop( 'CMAT ->' + cMAT + '   DATA ENTR ->' + DToC( dENTR ) )
+
+		For nX := 1 To Len( aCOLS )
+			If aCOLS[nX][nPOS] == cMAT .And. aCOLS[nX][nPOS1] == dENTR .And. aCOLS[nX][nPOS2] == M->TNF_HRENTR
+				xx := xx + 1
+			EndIf
+		Next
+	EndIf
+
+	If xx > 0
+		Help( " ", 1, "JAEXISTINF" )
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc}LINK190
+Gatilho para completar o campo funcao na GetDados
+
+@author  Denis Hyroshi de Souza
+@since   18/10/2002
+@param   lMark, Lógico, Onde está a informação a ser verificada.
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function LINK190( lMark )
+
+	Local aArea      := GetArea()
+	Local lPerEntEPI := SuperGetMv( "MV_NGEPIEN" ) == "N"
+	Local lRetEPI    := .F.
+
+	Default lMark := .F.
+
+	If !lMark
+		nMAT    := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT" } )
+		nCODFUN := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == c2CodFun } )
+		nDTENTR := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+	EndIf
+
+	If lMark .Or. M->TNF_MAT != aCols[n,nMat]
+		If !MDT630FREE(M->TNF_MAT)
+			Return .F.
+		EndIf
+	EndIf
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SRA" ) + M->TNF_MAT )
+		If FindFunction( "MDTFunAti" ) //Na Ver12 alterar verificação para MDTChkSR8
+			lRetEPI := MDTFunAti( SRA->RA_MAT, .F. )
+		Else
+			cTextoMsg := ""
+			If lPerEntEPI
+				cMsgInfo1 := STR0017 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0053 // "O funcionário está demitido, não é possível a entrega de EPI's."
+				cMsgInfo2 := STR0019 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0053 //"O funcionário está de férias, não é possível a entrega de EPI's."
+				cMsgInfo3 := STR0018 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0053 //"O funcionário está afastado, não é possível a entrega de EPI's."
+			Else
+				cMsgInfo1 := STR0017 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0054 //"O funcionário está demitido, deseja efetuar as entregas de EPIs?"
+				cMsgInfo2 := STR0019 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0054 //"O funcionário está de férias, deseja efetuar as entregas de EPIs?"
+				cMsgInfo3 := STR0018 + " (" + AllTrim( SRA->RA_MAT ) + " - " + AllTrim( SRA->RA_NOME ) + "), " + STR0054 //"O funcionário está afastado temporariamente, deseja efetuar as entregas de EPIs?"
+			EndIf
+
+			dbSelectArea( "SRA" )
+			If !Empty( SRA->RA_SITFOLH )
+				If SRA->RA_SITFOLH == "D"
+					If ( SRA->RA_DEMISSA < dDataBase )
+						cTextoMsg := cMsgInfo1
+					EndIf
+				EndIf
+			EndIf
+			If Empty( cTextoMsg )
+				dbSelectArea( "SRH" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SRH" ) + SRA->RA_MAT )
+				While !Eof() .And. SRH->RH_FILIAL + SRH->RH_MAT == xFilial( "SRH" ) + SRA->RA_MAT
+					If !Empty( SRH->RH_DATAINI ) .And. dDataBase >= SRH->RH_DATAINI .And. (dDataBase <= SRH->RH_DATAFIM .Or. Empty( SRH->RH_DATAFIM ))
+						cTextoMsg := cMsgInfo2
+						Exit
+					EndIf
+					dbSelectArea("SRH")
+					dbSkip()
+				End
+			EndIf
+
+			If Empty( cTextoMsg )
+				dbSelectArea( "SR8" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "SR8" ) + SRA->RA_MAT )
+				While !Eof() .And. SR8->R8_FILIAL + SR8->R8_MAT == xFilial( "SR8" ) + SRA->RA_MAT
+					If SR8->R8_DATAINI <= dDataBase .And. ( Empty( SR8->R8_DATAFIM ) .Or. SR8->R8_DATAFIM >= dDataBase )
+						If SR8->R8_TIPO == "F"
+							cTextoMsg := cMsgInfo2
+							Exit
+						ElseIf SR8->R8_TIPO == "D"
+							cTextoMsg := cMsgInfo1
+							Exit
+						Else
+							cTextoMsg := cMsgInfo3
+							Exit
+						EndIf
+					EndIf
+					dbSelectArea( "SR8" )
+					dbSkip()
+				End
+			EndIf
+
+			If !Empty( cTextoMsg )
+				If lPerEntEPI
+					MsgStop( cTextoMsg )
+					lRetEPI := .T.
+				Else
+					If !MsgYesNo( cTextoMsg, STR0020 ) //"ATENÇÃO"
+						lRetEPI := .T.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		If lRetEPI
+			Return !lRetEPI
+		EndIf
+
+		//Verifica se o epi nao esta cadastrado como Epi da Funcao
+		If !lMark
+			If lSigaMdtps
+				dbSelectArea( "TNB" )
+				dbSetOrder( nIndTNB )  //TNB_FILIAL+TNB_CLIENT+TNB_LOJA+TNB_CODFUN+TNB_CODEPI
+				If !dbSeek( xFilial( "TNB" ) + cCliMdtps + SRA->RA_CODFUNC + TN3->TN3_CODEPI )
+					If !MsgYesNo( STR0021, STR0020 ) //"EPI não consta no cadastro de EPI x Função, confirmar a entrega do EPI?"###"ATENÇÃO"
+						RestArea( aArea )
+						Return .F.
+					EndIf
+				EndIf
+			Else
+				dbSelectArea( "TNB" )
+				dbSetOrder( nIndTNB )
+				If !dbSeek( xFilial( "TNB" ) + SRA->(&(c1CodFun)) + TN3->TN3_CODEPI )
+					If !MsgYesNo( STR0021, STR0020 ) //"EPI não consta no cadastro de EPI x Função, confirmar a entrega do EPI?"###"ATENÇÃO"
+						RestArea( aArea )
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		If !lMark .And. nCODFUN > 0
+			aCols[n][nCODFUN] := SRA->(&(c1CodFun))
+		EndIf
+	EndIf
+	RestArea( aArea )
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc}MDT630FREE
+Verifica se o registro da TNF está livre para uso
+
+@param cMatFun, Caractere, Marícula do Fucnionário.
+
+@author  Denis Hyroshi de Souza
+@since   03/03/2006
+@samplo  MDT630FREE( '0000035' )
+@return  lRet, Lógico, Verdadeiro se o registro estiver livre.
+/*/
+//-------------------------------------------------------------------
+Function MDT630FREE( cMatFun )
+
+	Local aArea := GetArea()
+	Local lRet  := .T.
+
+	If SuperGetMv( "MV_NG2REPI" ) == "S"
+		If lSigaMdtps
+			FreeForUse( "TNF", xFilial( "TNF" ) + TN3->TN3_FORNEC + TN3->TN3_LOJA + TN3->TN3_CLIENT +;
+					 TN3->TN3_LOJACL + TN3->TN3_CODEPI + TN3->TN3_NUMCAP + cMatFun )
+		Else
+			lRet := FreeForUse( "TNF", xFilial( "TNF" ) + TN3->TN3_FORNEC + TN3->TN3_LOJA + TN3->TN3_CODEPI + TN3->TN3_NUMCAP + cMatFun )
+		EndIf
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@type    function
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@sample  MenuDef()
+@Obs     Conteúdo do array a Rotina:
+		1. Nome a aparecer no cabecalho
+		2. Nome da Rotina associada
+		3. Reservado
+		4. Tipo de Transação a ser efetuada:
+			1 - Pesquisa e Posiciona em um Banco de Dados
+			2 - Simplesmente Mostra os Campos
+			3 - Inclui registros no Bancos de Dados
+			4 - Altera o registro corrente
+			5 - Remove o registro corrente do Banco de Dado
+		5. Nivel de acesso
+		6. Habilita Menu Funcional
+
+@return  aRotina, Array, Contem as opções da rotina
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local lPyme      := IIf( Type( "__lPyme" ) != "U", __lPyme, .F. )
+	Local lSigaMdtPS := IIf( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T., .F. )
+	Local aRotina
+
+	If lSigaMdtps
+		aRotina := { { STR0001, "AxPesqui", 0, 1 },; //"Pesquisar"
+					 { STR0002, "NGCAD01", 0, 2 },; //"Visualizar"
+					 { STR0027, "MDT630TN3", 0, 4 } } //"EPIs x Funcionário"
+	Else
+
+		aRotina := { { STR0001, "AxPesqui", 0, 1 },; //"Pesquisar"
+					 { STR0002,	"NGCAD01", 0, 2 },; //"Visualizar"
+					 { STR0003,	"NGFUN630", 0, 4 },; //"Funcionario"
+					 { STR0028, "NG630Fil", 0, 5 }}  //"Filtrar Funcionario"
+	EndIf
+
+	If !lPyme
+		AAdd( aRotina, { STR0025, "MsDocument", 0, 4 } )  //"Conhecimento"
+	EndIf
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG630EXCC
+Solicita confirmacao de exclusao de EPI
+
+@type    function
+@author  Denis
+@since   30/05/2006
+@sample  NG630EXCC(1)
+@param   nTipoVal, Numérico, (1) Pede a confirmação do usuário quanto
+a exclusão do EPI, (2) Não pede a confimação do usuário
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG630EXCC( nTipoVal )
+
+	Local cOldA     := IIf( Empty( Alias() ), "TNF", Alias() )
+	Local nPOS1     := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT"    } )
+	Local nPOS2     := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+	Local nPOSD     := aScan( aHEADER, { |x| AllTrim( Upper( x[2] ) ) == "TNF_INDDEV" } )
+	Local nPOSZ     := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+	Local nPOS5     := aScan( aHEADER, { |x| AllTrim( Upper( x[2] ) ) == "TNF_DTENTR" } )
+	Local dDataBloq := SuperGetMv( "MV_DBLQMOV" ) //Data para bloqueio de movimentos.
+	Local lRet__    := .T.
+	Local nPosNSA
+	Local nPosISA
+
+	If !aCols[n, Len( aCols[n] )] // Caso a linha tenha sido desmarcada da exclusão
+		Return .T.
+	Else
+		If cUsaInt1 == "S" .And. aCols[n, nPOSD] $ " 2" .And. Empty( aCols[n, nPOSZ] )
+			dDataUlMes := SuperGetMv( 'MV_ULMES' )
+			dDataBloq  := SuperGetMv( "MV_DBLQMOV" )
+			If !Empty( aCols[n, nPOS5] ) .And. ( dDataUlMes >= aCols[n, nPOS5] .Or. aCols[n, nPOS5] <= dDataBloq )
+				If lVld630e
+					Help( " ", 1, "FECHTO" )
+					lVld630e := .F.
+				Else
+					lVld630e := .T.
+				EndIf
+				Return .F.
+			EndIf
+		EndIf
+
+		If aCols[n, nPOSD] == "3"
+			nPosNSA := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMSA"  } )
+			nPosISA := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_ITEMSA" } )
+			dbSelectArea( "SCP" )
+			dbSetOrder( 1 )
+			If nPosNSA > 0 .And. nPosISA > 0 .And. ;
+			dbSeek( xFilial( "SCP" ) + aCols[n, nPosNSA] + aCols[n, nPosISA]) .And. SCP->CP_PRODUTO == ( cTRBTN3 )->CODEPI .And. ;
+			SCP->CP_PREREQU == "S"
+
+				MsgInfo( STR0061 ) //"Este Epi não poderá ser excluído, pois foi gerado pré-requisição."
+				lRet__ := .F.
+			EndIf
+			dbSelectArea( cOldA )
+		EndIf
+		Return lRet__
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fNgDtTNF
+Validacao da Data de Entrega do EPI
+
+@type    function
+@author  Denis
+@since   10/10/2007
+@sample  fNgDtTNF( 01/01/2010, .T.,'ATENÇÃO', .F., .F.)
+
+@param   dTNF_DTENTR, Data, Data de entrega do EPI
+@param   lViaProg, Lógico,
+@param   cTitMsg, Caractere, Título da mensagem
+@param   lDevRepor, Lógico, param_descr
+@param   lMemory, Lógico, param_descr
+
+@return  Lógico, Verdadeiro se a data de entrega não estiver vazia
+/*/
+//-------------------------------------------------------------------
+Function fNgDtTNF( dTNF_DTENTR, lViaProg, cTitMsg, lDevRepor, lMemory )
+
+	Local lExistSRA := .T.
+	Local cMAT      := ""
+	Local dDTENTR   := ""
+	Local dDataUlMes
+	Local nPOS
+	Local nPOS1
+
+	Default cUsaInt1  := AllTrim( SuperGetMv( "MV_NGMDTES" ) )
+	Default cTitMsg   := STR0020 //"Atenção"
+	Default lDevRepor := .F.
+	Default lMemory   := .F.
+
+	If !lMemory
+		nPOS  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT"    } )
+		nPOS1 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+		If nPOS > 0
+			cMAT := aCols[n, nPOS]
+		EndIf
+		dDTENTR := aCols[n, nPOS1]
+	Else
+		cMAT    := M->TNF_MAT
+		dDTENTR := M->TNF_DTENTR
+	EndIf
+
+	// Verifica se a data de entrega do EPI é superior a data de demissão, quando o parametro MV_NGEPIEN estiver igual a N.
+	If !Empty( dTNF_DTENTR ) .And. AllTrim( SuperGetMv( "MV_NGEPIEN" ) ) == "N"
+
+		If !Empty( cMAT )
+			dbSelectArea( "SRA" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "SRA" ) + cMAT )
+		EndIf
+
+		If lExistSRA
+			If !Empty( SRA->RA_DEMISSA ).And. dTNF_DTENTR > SRA->RA_DEMISSA
+				MsgStop( STR0076 ) //"Data de entrega do EPI superior a data de demissão do funcionário."
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty( dTNF_DTENTR ) .And. cUsaInt1 == "S" .And. IIf( Type( "lHist695" ) == "L", !lHist695, .T. )
+		dDataUlMes := SuperGetMv( 'MV_ULMES' )
+		dDataBloq  := SuperGetMv( "MV_DBLQMOV" ) //Data para bloqueio de movimentos.
+
+		//Se o usuario alterou o conteudo do campo
+		If dDTENTR != dTNF_DTENTR .Or. ValType( lViaProg ) == "L"
+			//+--------------------------------------------------------------+
+			//¦ Verificar data do ultimo fechamento do Estoque.              ¦
+			//+--------------------------------------------------------------+
+			If dDataUlMes >= dTNF_DTENTR .Or. dTNF_DTENTR <= dDataBloq
+				If lDevRepor
+					Help( " ", 1, "FECHTO" )
+				ElseIf dTNF_DTENTR <= dDataBloq
+					ShowHelpDlg( STR0020, { STR0104 }, 1,; //ATENÇÃO # "Não pode ser digitada entrega com data anterior ou igual à data de bloqueio de movimentação."
+					 { STR0102 }, 2 ) //"Favor verificar o parâmetro MV_DBLQMOV."
+				Else
+					MsgInfo( STR0048 + CRLF + ; //"Não pode ser digitada entrega com data anterior"
+					 STR0049 + CRLF + CRLF + ; //"ou igual à última data de fechamento do estoque."
+					 STR0050 + DToC( dDataUlMes ), cTitMsg ) //"Data de fechamento do estoque: "
+				EndIf
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty( dTNF_DTENTR ) .And. Type( "lHist695" ) == "L"
+		If lHist695 //Se for histórico
+			If dTNF_DTENTR >= dDataBase
+				MsgInfo( STR0065 + Chr( 13 ) + Chr( 10 ) +; //"Não pode ser digitada data igual ou maior do que a data atual,"
+				 STR0066, cTitMsg ) //"pois esta rotina serve para adicionar informações no histórico."
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If ValType( lViaProg ) == "L"
+		Return .T.
+	EndIf
+
+Return NaoVazio( dTNF_DTENTR )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fDataDvTNF
+Validacao da Data de Devolucao do EPI
+
+@type    function
+@author  Denis
+@since   10/10/2007
+@sample  fDataDvTNF(04/09/2018, .T., 'ATENÇÃO', 3, .F.)
+
+@param   dTNF_DTDEVO, Data, Data de devolução do EPI
+@param   lViaProg, Lógico,
+@param   cTitMsg, Caractere, Título da mensagem
+@param   nX, Lógico, Registro posicionado
+@param   lMemory, Lógico, Se utiliza valores da memória
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fDataDvTNF( dTNF_DTDEVO, lViaProg, cTitMsg, nX, lMemory )
+
+	Local dDataBloq  := SuperGetMv( "MV_DBLQMOV" ) //Data para bloqueio de movimentos.
+	Local dDataUlMes := SuperGetMv( 'MV_ULMES' )
+	Local lVldUlMes  := .T.
+	Local dDTDEVO    := ""
+	Local cTIPODV    := ""
+	Local dDTENTR    := ""
+	Local nPOS
+	Local nPOS1
+	Local nPOS2
+	Local nPOS3
+
+	Default cTitMsg := STR0020 //"Atenção"
+	Default lMemory := .F.
+
+	If !lMemory//Caso utilize acols
+		Default nX := n //Registro posicionado
+	EndIf
+
+	If lMemory //Caso utilize a Memória
+
+		dDTDEVO := M->TNF_DTDEVO
+		dDTENTR := M->TNF_DTENTR
+		cTIPODV := M->TNF_TIPODV
+
+	Else //Se utilizar o aCols
+		nPOS  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+		nPOS1 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_INDDEV" } )
+		nPOS2 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+		nPOS3 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_TIPODV" } )
+
+		dDTDEVO := aCols[nX, nPOS]
+		If nPOS2 > 0
+			dDTENTR := aCols[nX, nPOS2]
+		EndIf
+		If nPOS3 > 0
+			cTIPODV := aCols[nX, nPOS3]
+		EndIf
+
+	EndIf
+
+	If !Empty( dTNF_DTDEVO ) .And. cUsaInt1 == "S"
+
+		If !Empty( cTIPODV )
+			If cTIPODV != "1"
+				lVldUlMes := .F.
+			EndIf
+		EndIf
+
+		If lVldUlMes
+			//Se o usuario alterou o conteudo do campo
+			If dDTDEVO != dTNF_DTDEVO .Or. ValType( lViaProg ) == "L"
+				//Verificar data do ultimo fechamento do Estoque.
+				If dDataUlMes >= dTNF_DTDEVO
+					MsgInfo( STR0051 + Chr( 13 ) + Chr( 10 ) + ; //"Não pode ser digitada devolução com data anterior"
+					STR0049 + Chr( 13 ) + Chr( 10 ) + Chr( 13 ) + Chr( 10 ) + ; //"ou igual à última data de fechamento do estoque."
+					STR0050 + DTOC( dDataUlMes ), cTitMsg ) //"Data de fechamento do estoque: "
+					Return .F.
+				EndIf
+			EndIf
+
+			If dTNF_DTDEVO <= dDataBloq .And. !Empty( dTNF_DTDEVO )
+				ShowHelpDlg( STR0020, { STR0103 }, 1,;//ATENÇÃO # "Não pode ser digitada devolução com data anterior ou igual à data de bloqueio de movimentação."
+				 { STR0102 }, 2 ) // "Favor verificar o parâmetro MV_DBLQMOV."
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If lMemory //Caso utilize a memória
+		If !Empty( dTNF_DTDEVO )
+			RecLock( "TNF", .F. )
+				TNF->TNF_INDDEV := "1"
+			MsUnlock( "TNF" )
+		Else
+			RecLock( "TNF", .F. )
+				TNF->TNF_INDDEV := "2"
+			MsUnlock( "TNF" )
+		EndIf
+	Else//Se utiliza aCols
+		If nPOS1 > 0
+			If !Empty( dTNF_DTDEVO )
+				aCols[nX, nPOS1] := "1"
+			Else
+				aCols[nX, nPOS1] := "2"
+			EndIf
+		EndIf
+	EndIf
+
+	If !Empty( dTNF_DTDEVO ) .And. !Empty( dDTENTR )
+		If dTNF_DTDEVO < dDTENTR
+			MsgInfo(STR0051+Chr(13)+Chr(10)+; //"Não pode ser digitada devolução com data anterior"
+			STR0052, cTitMsg ) //"à data de entrega do equipamento."
+			Return .F.
+		EndIf
+	EndIf
+
+	If !Empty(dTNF_DTDEVO) .And. Type("lHist695") == "L"
+		If lHist695 //Se for histórico
+			If dTNF_DTDEVO >= dDataBase
+				MsgInfo( STR0065 + Chr( 13 ) + Chr( 10 ) +; //"Não pode ser digitada data igual ou maior do que a data atual,"
+				STR0066, cTitMsg ) //"pois esta rotina serve para adicionar informações no histórico."
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fIndiDvTNF
+Validacao do campo Indica Devolucao EPI
+
+@type    function
+@author  Denis
+@since   10/10/2007
+@sample  fIndiDvTNF( '2' )
+
+@param   cTNF_INDDEV, Caractere, Campo de devolução do EPI
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fIndiDvTNF( cTNF_INDDEV )
+
+	Local nPOS      := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+	Local nPOS1     := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_INDDEV" } )
+	Local nPOS2     := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_TIPODV" } )
+	Local nPOSBMP   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "COLBMP" } )
+	Local nPosNSA   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMSA"  } )
+	Local nPosISA   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_ITEMSA" } )
+	Local nPosEpi   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_CODEPI" } )
+	Local nPosQDv   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDEVO" } )
+	Local nFORNEC   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_FORNEC" } )
+	Local nLOJA     := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOJA"   } )
+	Local nNUMCAP   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMCAP" } )
+	Local nDTENTR   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTENTR" } )
+	Local nHRENTR   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_HRENTR" } )
+	Local nQTDENT   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDENT" } )
+	Local nDESCB1   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DESC" } )
+	Local nMATQTD   := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT" } )
+	Local nMDTInteg := SuperGetMv( "MV_NG2INTE", .F., "1" )
+	Local lLogix	:= nMDTInteg == "2"
+	Local cEpi      := " "
+	Local nDevBio
+
+	Private lDEVBIO := NGCADICBASE( "TNF_DEVBIO", "D", "TNF", .F. )
+
+	If lDevBio
+		nDevBio := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DEVBIO" } )
+	EndIf
+
+	If lGera_SA
+		If aCols[n, nPOS1] == "3"
+			MsgInfo( STR0062 ) //"A situação não poderá ser modificada quando o Epi estiver em Solicitação ao Armazém."
+			Return .F.
+		ElseIf aCols[n, nPOS1] == "1" .And. cTNF_INDDEV == "2"
+			MsgInfo( STR0063 ) //"A situação não poderá ser modificada para Epi Em Uso, somente para Epi em Solicitação ao Armazém."
+			Return .F.
+		EndIf
+	Else
+		If aCols[n, nPOS1] == "1" .And. cTNF_INDDEV == "2"
+			If !MsgYesNo( STR0075 )//"Você acabou de fazer uma devolução parcial, deseja colocar o Epi em uso novamente?"
+				cTNF_INDDEV	  := aCols[n, nPOS1]
+				M->TNF_INDDEV := aCols[n, nPOS1]
+			Else
+				cKey := ""
+				If cPrograma == "MDTA695"
+					nQtdadeEn := aCols[n, nQTDENT]
+					dDataSvEn := aCols[n, nDTENTR]
+					cHoraSvEn := aCols[n, nHRENTR]
+					cEpiSvoEn := aCols[n, nPosEpi]
+					cFornecEn := aCols[n, nFORNEC]
+					cLojaSvEn := aCols[n, nLOJA]
+					cNumCapEn := aCols[n, nNUMCAP]
+					cDesSb1En := aCols[n, nDESCB1]
+					cMatricEn := SRA->RA_MAT
+					cNomeFuEn := SRA->RA_NOME
+					cKEY := cFornecEn + cLojaSvEn + cEpiSvoEn + cNumCapEn + cMatricEn + DToS( dDataSvEn ) + cHoraSvEn
+				ElseIf cPrograma == "MDTA630"
+					nQtdadeEn := aCols[n, nQTDENT]
+					dDataSvEn := aCols[n, nDTENTR]
+					cHoraSvEn := aCols[n, nHRENTR]
+					cEpiSvoEn := TN3->TN3_CODEPI
+					cFornecEn := TN3->TN3_FORNEC
+					cLojaSvEn := TN3->TN3_LOJA
+					cNumCapEn := TN3->TN3_NUMCAP
+					cDesSb1En := NGSEEK( "SB1", cEpiSvoEn, 1, "B1_DESC" )
+					cMatricEn := aCols[n, nMATQTD]
+					cNomeFuEn := NGSEEK( "SRA", cMatricEn, 1, "RA_NOME" )
+					cKEY := cMatricEn + DToS( dDataSvEn ) + cHoraSvEn
+				EndIf
+				If Type( "cAliasTLW" ) != "U" .And. Select( cAliasTLW ) > 0
+					dbSelectArea( cAliasTLW )
+					dbSetOrder( 1 )
+					dbSeek( cKey )
+					While (cAliasTLW)->( !Eof() ) .And. (cAliasTLW)->( TLW_FORNEC + TLW_LOJA + TLW_CODEPI + TLW_NUMCAP +;
+							TLW_MAT + DToS( TLW_DTENTR ) + TLW_HRENTR ) == cKey
+						RecLock( cAliasTLW, .F. )
+							dbDelete()
+						MsUnLock()
+
+						(cAliasTLW)->( dbSkip() )
+					End
+				EndIf
+			EndIf
+		ElseIf cTNF_INDDEV == "3"
+			MsgInfo( STR0064 ) //"Somente poderá gerar Solicitação ao Armazém quando os parâmetros MV_NG2SA e MV_NGMDTES estiverem configurados com S-Sim."
+			Return .F.
+		EndIf
+	EndIf
+
+	If cTNF_INDDEV != "1"
+		aCols[n, nPOS] := SToD( "" )
+		If lDevBio
+			aCols[n, nDevBio] := ""
+		EndIf
+		If nPOS2 > 0
+			aCols[n, nPOS2] := " "
+		EndIf
+	EndIf
+
+	If cTNF_INDDEV == "2"
+		aCols[n, nPosQDv] := 0
+	EndIf
+
+	If nPOSBMP > 0
+		If !lLogix
+			If cTNF_INDDEV == "3"
+				cEpi := TN3->TN3_CODEPI
+				If nPosEpi > 0
+					cEpi := aCols[n, nPosEpi]
+				EndIf
+				dbSelectArea( "SCP" )
+				dbSetOrder( 1 )
+				If nPosNSA > 0 .And. nPosISA > 0 .And. ;
+					dbSeek( xFilial( "SCP" ) + aCols[n, nPosNSA] + aCols[n, nPosISA] ) .And. SCP->CP_PRODUTO == cEpi .And. ;
+					SCP->CP_PREREQU == "S"
+					If CP_QUJE == 0
+						cLegenda := "BR_LARANJA"
+					ElseIf SCP->CP_QUJE != SCP->CP_QUANT
+						cLegenda := "BR_AZUL_CLARO"
+					ElseIf aTmp[ nPosInDe ] == "3"
+						cLegenda := "BR_AMARELO"
+					EndIf
+				ElseIf cTNF_INDDEV == "3
+					cLegenda := "BR_AMARELO"
+				EndIf
+			ElseIf cTNF_INDDEV == "1"
+				aCols[n, nPOSBMP] := "BR_VERMELHO"
+			Else
+				aCols[n, nPOSBMP] := "BR_VERDE"
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fLocalTNF
+Validacao do campo Local EPI
+
+@type    function
+@author  Denis
+@since   10/10/2007
+@param   cTNF_LOCAL, Caractere, Local do EPI
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fLocalTNF( cTNF_LOCAL )
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fQtdadeTNF
+Validacao do campo Quantidade do EPI
+
+@type    function
+@author  Denis
+@since   10/10/2007
+@sample  fQtdadeTNF( 100 )
+@param   nTNF_QTDENT, Numérico, param_descr
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fQtdadeTNF( nTNF_QTDENT )
+
+	Local nPOS  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_QTDENT" } )
+	Local nPOS1 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_INDDEV" } )
+	Local nPOS2 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+	Local nPOS3 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_TIPODV" } )
+	Local nPOS4 := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOCDV"  } )
+
+	Default cUsaInt1 := SuperGetMv( 'MV_NGMDTES', .F., 'N' )
+
+	If !Positivo( nTNF_QTDENT )
+		Return .F.
+	EndIf
+
+	If cUsaInt1 == "S"
+		If nTNF_QTDENT != aCols[n, nPOS]
+			If lGera_SA
+				aCols[n, nPOS1] := "3"
+			Else
+				aCols[n, nPOS1] := "2"
+			EndIf
+			aCols[n, nPOS2] := SToD( "" )
+			If nPOS3 > 0
+				aCols[n, nPOS3] := " "
+			EndIf
+			If  nPOS4 > 0
+				aCols[n, nPOS4] := Space( Len( TNF->TNF_LOCDV ) )
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630TN3
+Monta um browse com as tarefas por funcionario
+
+@type    function
+@author  Andre Perez Alvarez
+@since   24/09/2007
+@sample  MDT630TN3()
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+/*Function MDT630TN3()
+
+	Local aArea	    := GetArea()
+	Local oldROTINA := aClone( aROTINA )
+	Local oldCad    := cCadastro
+
+	cCliMdtPs := SA1->A1_COD + SA1->A1_LOJA
+
+	aRotina := { { STR0001, "AxPesqui", 0, 1 },;  //"Pesquisar"
+				 { STR0002,	"NGCAD01", 0, 2  },;  //"Visualizar"
+				 { STR0003,	"NGFUN630", 0, 4 },;  //"Funcionario"
+			 	 { STR0028, "NG630Fil", 0, 5 } }  //"Filtrar Funcionario"
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cCadastro := OemtoAnsi( STR0004 ) //"EPIs Entregues por Funcionario"
+	Private aCHKDEL   := {}
+	Private bNGGRAVA
+
+	Private lWhenEpi := .F.
+	Private lCodFun  := .F.
+	Private c1CodFun := "RA_CODFUNC"
+	Private c2CodFun := "TNF_CODFUN"
+	Private nIndTNB  := 4  //TNB_FILIAL+TNB_CLIENT+TNB_LOJA+TNB_CODFUN+TNB_CODEPI
+
+	//Integracao com o Estoque
+	Private lESTNEGA   := IIf( AllTrim( SuperGetMv( "MV_ESTNEG" ) ) == 'S', .T., .F. )
+	Private lCpoNumSep := IIf( TNF->(FieldPos( "TNF_NUMSEQ" )) > 0, .T., .F. ) .And. lCpDtDev
+	Private lConfExc   := .F.
+	Private cHora695   := Substr( Time(), 1, 7 )
+	Private cEpie695   := Space( 15 )
+
+	Default cUsaInt1 := AllTrim( SuperGetMv( "MV_NGMDTES" ) )
+
+	If AllTrim( SuperGetMv( "MV_MDTEPID" ) ) == "S"
+		lConfExc := .T.
+	EndIf
+
+	//aCHKDEL array que verifica a INTEGRIDADE REFERENCIAL na exclusão do registro.
+	//1 - Chave de pesquisa
+	//2 - Alias de pesquisa
+	//3 - Ordem de pesquisa
+
+	// Endereca a funcao de BROWSE
+	dbSelectArea( "TN3" )
+	Set Filter To TN3->(TN3_CLIENT + TN3_LOJACL) == cCliMdtps
+	dbSetOrder( 5 )  //TN3_FILIAL+TN3_CLIENT+TN3_LOJACL+TN3_FORNEC+TN3_LOJA+TN3_CODEPI+TN3_NUMCAP
+	mBrowse( 6, 1, 22, 75, "TN3" )
+
+	DbSelectArea( "TN3" )
+	Set Filter To
+
+	aROTINA := aClone( oldROTINA )
+	RestArea( aArea )
+	cCadastro := oldCad
+
+Return Nil*/ // Função não utilizada
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG630Fil
+Filtra EPI pelo campo Devolucao
+
+@type    function
+@author  Emanuel Batista
+@since   18/07/2008
+@sample  NG630Fil('TN3', 1 )
+
+@param   cAlias, Caractere, Alias da tabela
+@param   nReg, Numérico, Número do registro
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG630Fil( cAlias, nReg )
+
+	If Pergunte( "MDT695    ", .T. )
+		nEPIDev := MV_PAR01
+		NGFUN630( cAlias, nReg, 3 )
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630DES
+Carrega o campo Descricao de EPI  (TN3_DESC)
+
+@type    function
+@author  Andre E. P. Alvarez
+@since   15/09/2008
+@sample  MDT630DES()
+
+@return  cDesc, Caractere, Descrição do EPI
+/*/
+//-------------------------------------------------------------------
+Function MDT630DES()
+
+	Local aArea := GetArea()
+	Local cDesc := ""
+
+	dbSelectArea( "SB1" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SB1" ) + TN3->TN3_CODEPI )
+		cDesc := SB1->B1_DESC
+	EndIf
+	RestArea( aArea )
+
+Return cDesc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fChg630GD
+Funcao executada quando o foco muda de linha da GD
+
+@type    function
+@author  Denis
+@since   27/11/2009
+@sample  fChg630GD()
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fChg630GD()
+
+	Local lTemPreR  := .F.
+	Local nPOS      := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == "TNF_MAT"    } )
+	Local nPOS1     := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == "TNF_DTENTR" } )
+	Local nPOS2     := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == "TNF_HRENTR" } )
+	Local nIndDev   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_INDDEV" } )
+	Local nQTDE     := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == "TNF_QTDENT" } )
+	Local nDTADEV   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DTDEVO" } )
+	Local nPosNSA   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_NUMSA"  } )
+	Local nPosISA   := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_ITEMSA" } )
+	Local nPOSX     := aScan( aHeader, { |x| AllTrim( Upper( x[2] ) ) == "COLBMP" } )
+	Local nMDTInteg := SuperGetMv( "MV_NG2INTE", .F., "1" )
+
+	Local lLogix   := nMDTInteg == "2"
+	Local lAlterou := .T. //Se alterou algum campo da linha
+	Local lDEVBIO2 := NGCADICBASE( "TNF_DEVBIO", "D", "TNF", .F. )
+	Local lParcBai := .F.
+
+	If lDEVBIO2
+		nDEVBIO := aScan( aHeader, { |x| AllTrim( Upper( X[2] ) ) == "TNF_DEVBIO" } )
+		If ReadVar() != "M->TNF_DEVBIO"
+			M->TNF_DEVBIO := aCols[n][nDEVBIO]
+		EndIf
+	EndIf
+	If ReadVar() != "M->TNF_MAT"
+		M->TNF_MAT := aCols[n][nPOS]
+	EndIf
+	If ReadVar() != "M->TNF_DTENTR"
+		M->TNF_DTENTR := aCols[n][nPOS1]
+	EndIf
+	If ReadVar() != "M->TNF_HRENTR"
+		M->TNF_HRENTR := aCols[n][nPOS2]
+	EndIf
+	If ReadVar() != "M->TNF_INDDEV"
+		M->TNF_INDDEV := aCols[n][nINDDEV]
+	EndIf
+	If ReadVar() != "M->TNF_QTDENT"
+		M->TNF_QTDENT := aCols[n][nQTDE]
+	EndIf
+	If ReadVar() != "M->TNF_DTDEVO"
+		M->TNF_DTDEVO := aCols[n][nDTADEV]
+	EndIf
+
+	lWh695TNF := .T. //Variavel que controla o X3_WHEN dos campos da TNF
+	lWh695IND := .T. //Variavel que controla o X3_WHEN do campo TNF_INDDEV
+	lWh695LOT := .T. //Variavel que controla o X3_WHEN do campo Lote SubLote
+	lWh695OBS := .F. //Variavel que controla o X3_WHEN do campo Observação
+
+	nPosTNF   := aScan( aCOLStnf, { |x| M->TNF_MAT  == x[nPOS]  .And. M->TNF_DTENTR == x[nPOS1] .And. M->TNF_HRENTR == x[nPOS2] } )
+
+	If nPosTNF == 0
+		If cUsaInt1 == "S" .And. !lGera_SA
+			aCols[n][nIndDev] := "2"
+			lWh695IND := .F.
+		EndIf
+	Else
+		If cUsaRast == "S"
+			If M->TNF_QTDENT == aCOLStnf[nPosTNF][nQTDE] .And. ( !Empty( aCOLStnf[nPosTNF][nCpoLote] ) .Or. !Empty( aCOLStnf[nPosTNF][nCpoSubL] ) )
+				lWh695LOT := .F.
+			EndIf
+		EndIf
+
+		lAlterou := .F.
+		lDevEntr := .F.
+		lEntrDev := .F.
+		If ( M->TNF_INDDEV == "1" .And. !Empty( M->TNF_DTDEVO ) ) .And. ; //Agora o Epi foi devolvido
+		( aColsTNF[nPosTNF][nINDDEV] != "1" .Or. Empty( M->TNF_DTDEVO ) ) //Antes o Epi foi requisitado
+			lEntrDev := .T.
+		EndIf
+		If ( M->TNF_INDDEV != "1" .Or. Empty( M->TNF_DTDEVO ) ) .And. ; //Agora o Epi foi requisitado
+		( aColsTNF[nPosTNF][nINDDEV] == "1" .And. !Empty( M->TNF_DTDEVO ) ) //Antes o Epi foi devolvido.
+			lDevEntr := .T.
+		EndIf
+		If aColsTNF[nPosTNF][nINDDEV] == "3" .And. !lLogix //Se estiver Entregue ou em Solic. Armazém
+			dbSelectArea( "SCP" )
+			dbSetOrder( 1 ) //CP_FILIAL+CP_NUM+CP_ITEM+DTOS(CP_EMISSAO)
+			If nPosNSA > 0 .And. nPosISA > 0 .And. dbSeek( xFilial( "SCP" ) + aCols[n, nPosNSA] + aCols[n, nPosISA] ) .And. ;
+				SCP->CP_PRODUTO == TN3->TN3_CODEPI .And. SCP->CP_PREREQU == "S"
+
+				If CP_QUJE == 0
+					lTemPreR  := .T. //Indica pré-requicisao
+					lWh695TNF := .F.
+				ElseIf SCP->CP_QUJE != SCP->CP_QUANT
+					lParcBai  := .T. //Indica que a pré-requisição foi parcialmente baixada
+				EndIf
+
+			EndIf
+		EndIf
+		If aColsTNF[nPosTNF][nQTDE] != M->TNF_QTDENT .Or. lDevEntr //Qtde foi alterada ou Re-entrega
+			lAlterou := .T.
+		EndIf
+	EndIf
+
+	If lAlterou .And. lGera_SA
+		aCols[n, nIndDev] := "3"
+	EndIf
+
+	If aCols[n, nIndDev] $ "1/3"
+		lWh695IND := .F. //Desativa o campo TNF_INDDEV
+	EndIf
+
+	If nIndDev > 0 .And. nPOSX > 0
+		// Se não for Logix atualiza legenda conforme Status do EPI
+		// Ou se a Consulta no Logix retornou como não consistente
+		If !lLogix
+			If M->TNF_INDDEV == "3"
+				If lTemPreR
+					aCOLS[n][nPOSX] := "BR_LARANJA"
+				ElseIf lParcBai
+					aCOLS[n][nPOSX] := "BR_AZUL_CLARO"
+				Else
+					aCOLS[n][nPOSX] := "BR_AMARELO"
+				EndIf
+			ElseIf M->TNF_INDDEV == "1"
+				aCOLS[n][nPOSX] := "BR_VERMELHO"
+			Else
+				aCOLS[n][nPOSX] := "BR_VERDE"
+			EndIf
+		ElseIf Empty( aCols[n][nPOS] )//Quando for Logix e a linha for nova, com o EPI não informado, legenda padrao é Verde
+			aCOLS[n][nPOSX] := "BR_AMARELO"
+			lWh695OBS := .T. //Variavel que controla o X3_WHEN do campo Observação
+		ElseIf AllTrim( aCOLS[ nPOSX ] ) $ "BR_LARANJA|BR_AMARELO"
+			lWh695OBS := .T.
+		ElseIf AllTrim( aCOLS[n][nPOSX] ) $ "BR_VERMELHO|BR_CINZA"
+			lWh695TNF := .F.
+		ElseIf AllTrim( aCOLS[n][nPOSX] ) $ "BR_VERDE"
+			lWh695IND := .T.
+		EndIf
+	EndIf
+	oGet:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fChangeGD
+Funcao executada quando o foco muda de linha da GD
+
+@type    function
+@author  Denis
+@since   27/11/2009
+@sample  fChangeGD(.T.)
+@param   lGera_SA, Lógico, Se gera a Solicitação de Armazém
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fChangeGD( lGera_SA )
+
+	Local nPos1    := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_MAT"   } )
+	Local nPos2    := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_LOCAL" } )
+	Local lArqProd := SuperGetMv( "MV_ARQPROD", .F., "SB1" ) == "SB1"
+	Local aAreaSB1 := {} //Salva area da SB1
+
+	fChg630GD()
+
+	If nPos1 > 0 .And. nPos2 > 0
+		If Empty( aCOLS[n][nPos1] )
+			If lArqProd //Caso seja SB1
+				aCOLS[n][nPos2] := SB1->B1_LOCPAD
+			Else
+				aAreaSB1 := SB1->( GetArea() )//Salva area da SB1
+				dbSelectArea( "SBZ" )
+				dbSetOrder( 1 ) //BZ_FILIAL+BZ_COD
+				If dbSeek( xFilial( "SBZ" ) + ( cTRBTN3 )->CODEPI )
+					aCOLS[n][nPos2] := SBZ->BZ_LOCPAD
+				EndIf
+				RestArea( aAreaSB1 )
+			EndIf
+		EndIf
+	EndIf
+	If oGet:oBrowse:nColPos == 1
+		oGet:oBrowse:nColPos := 2
+		oGet:oBrowse:Refresh()
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BntFunc
+Funcao de Pesquisar no Browse.
+
+@return Sempre verdadeiro
+@sample BntFunc()
+@author Guilherme Freudenburg
+@since  05/03/2014
+
+@return lRet, Lógico, Verdadeiro se o usuário confirmou
+/*/
+//-------------------------------------------------------------------
+Static Function BntFunc()
+
+	Local aArea := GetArea()
+
+	Local bOkReq	 := { || nOpcao := 1, oDlgReq:End() }
+	Local bCancelReq := { || nOpcao := 0, oDlgReq:End() }
+	Local cAliasTRB  := GetNextAlias()
+	Local aDescIdx	 := {}
+	Local cPesquisar := Space( 200 )
+	Local aDBF
+	Local aTRB	    //Variaveis para montar TRB
+	Local oDlgReq 	//Variaveis de Tela
+	Local oPnlMSG
+	Local oTempTNF
+	Local nOpcao
+	Local lInverte
+	Local lRet
+
+	Private cMarca   := GetMark()
+	Private aCbxPesq	 //ComboBox com indices de pesquisa
+	Private cCbxPesq := ""
+	Private oCbxPesq	 //ComboBox de Pesquisa
+
+	lInverte:= .F.
+
+	//Valores e Caracteristicas da TRB
+	aDBF := {}
+	aAdd( aDBF, { "TRB_OK", "C", 02, 0 } )
+	aAdd( aDBF, { "TRB_MAT", "C", TamSX3( "TNF_MAT" )[1], 0 } )
+	aAdd( aDBF, { "TRB_NOME", "C", TamSX3( "TNF_NOME" )[1], 0 } )
+	aAdd( aDBF, { "TRB_DTENTR", "D", TamSX3( "TNF_DTENTR" )[1], 0 } )
+	aAdd( aDBF, { "TRB_HRENTR", "C", TamSX3( "TNF_HRENTR" )[1], 0 } )
+	aAdd( aDBF, { "TRB_CODFUN", "C", TamSX3( "TNF_CODFUN" )[1], 0 } )
+
+	aTRB := {}
+	aAdd( aTRB, { "TRB_OK", NIL, " ", } )
+	aAdd( aTRB, { "TRB_MAT", NIL, STR0080, } )     //"Matricula"
+	aAdd( aTRB, { "TRB_NOME", NIL, STR0081, } )    //"Nome"
+	aAdd( aTRB, { "TRB_DTENTR", NIL, STR0095, } )  //"Data Entrega"
+	aAdd( aTRB, { "TRB_HRENTR", NIL, STR0096, } )  //"Hora Entrega"
+	aAdd( aTRB, { "TRB_CODFUN", NIL, STR0097, } )  //"Função"
+	//Cria TRB
+	oTempTNF := FWTemporaryTable():New( cAliasTRB, aDBF )
+	oTempTNF:AddIndex( "1", {"TRB_MAT"   } )
+	oTempTNF:AddIndex( "2", {"TRB_NOME"  } )
+	oTempTNF:AddIndex( "3", {"TRB_OK"    } )
+	oTempTNF:AddIndex( "4", {"TRB_DTENTR"} )
+	oTempTNF:AddIndex( "5", {"TRB_HRENTR"} )
+	oTempTNF:AddIndex( "6", {"TRB_CODFUN"} )
+	oTempTNF:Create()
+
+	dbSelectArea( "SRA" )
+
+	Processa( { |lEnd| fBuscaMat( cAliasTRB, oGet, cMarca ) }, STR0082, STR0083 )	//"Buscando Requisitos..."//"Espere"
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+
+	If (cAliasTRB)->(Reccount()) <= 0
+		oTempTNF:Delete()
+		RestArea( aArea )
+		lRefresh := .T.
+		Msgstop( STR0084, STR0085 ) 	//"Não existem Requisitos cadastrados" //"ATENÇÃO"
+		Return .T.
+	EndIf
+
+	nOpcao := 0
+
+	DEFINE MSDIALOG oDlgReq TITLE OemToAnsi( STR0086 ) From 64, 160 To 580, 730 OF oMainWnd Pixel  //"Funcionários"
+
+	oPnlAll := TPanel():New( 01, 01, , oDlgReq, , , , CLR_BLACK, CLR_WHITE, 0, 55, .F., .F. )
+		oPnlAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+	oPnlTxtBox := TPanel():New( 01, 01, , oPnlAll, , , , CLR_BLACK, CLR_WHITE, 0, 55, .F., .F. )
+		oPnlTxtBox:Align	:= CONTROL_ALIGN_TOP
+	oPnlPesq := TPanel():New( 0, 0, Nil, oPnlAll, Nil, .T., .F., Nil, Nil, 0, 55, .F., .F. )
+		oPnlPesq:Align := CONTROL_ALIGN_TOP
+
+	oPnlMark := TPanel():New( 0, 0, Nil, oPnlAll, Nil, .T., .F., Nil, Nil, 0, 55, .F., .F. )
+		oPnlMark:Align := CONTROL_ALIGN_ALLCLIENT
+	@ 8, 9.6 To 45, 280 OF oPnlTxtBox PIXEL
+	TSay():New( 19, 12, { || OemtoAnsi( STR0087 ) }, oPnlTxtBox, , , .F., .F., .F., .T., CLR_BLACK, CLR_WHITE, 200, 010 ) //"Estes são os funcionários cadastrados."
+	TSay():New( 29, 12, { || OemtoAnsi( STR0088 ) }, oPnlTxtBox, , , .F., .F., .F., .T., CLR_BLACK, CLR_WHITE, 200, 010 ) //"Selecione os que receberão o EPI."
+
+	//--- PESQUISAR
+	//Define as opcoes de Pesquisa
+	aCbxPesq := aClone( aDescIdx )
+	aAdd( aCbxPesq, STR0089	) //"Matricula + Nome"
+	aAdd( aCbxPesq, STR0090	) //"Nome + Matricula"
+	aAdd( aCbxPesq, STR0091	) //"Marcados"
+	cCbxPesq := aCbxPesq[ 1 ]
+
+	oCbxPesq := TComboBox():New( 010, 002, { | u | IIf( PCount() > 0, cCbxPesq := u, cCbxPesq ) }, ;
+		aCbxPesq, 200, 08, oPnlPesq, , { | | }, , , , .T., , , , , , , , , "cCbxPesq" )
+	oCbxPesq:bChange := { | | fIndexSet( cAliasTRB, aCbxPesq, @cPesquisar, oMARK ) }
+
+	oPesquisar := TGet():New( 025, 002, { | u | IIf( PCount() > 0, cPesquisar := u, cPesquisar ) }, oPnlPesq, 200, 008,	 "", { | | .T. },;
+	 CLR_BLACK, CLR_WHITE, , .F., , .T., , .F., { | | .T. }, .F., .F., , .F., .F., "", "cPesquisar", , , , .F. )
+
+	oBtnPesq := TButton():New( 010, 220, STR0092, oPnlPesq, { | | fTRBPes( cAliasTRB, oMARK, cPesquisar ) },;//"Pesquisar"
+	 60, 10, , , .F., .T., .F., , .F., , , .F. )
+
+	oMARK := MsSelect():New( cAliasTRB, "TRB_OK", , aTRB, @lINVERTE, @cMARCA, { 100, 5, 264, 281 }, , , oPnlMark )
+	oMARK:bMARK := { || MDT630MK( @oMark ) }
+	oMARK:oBROWSE:lHASMARK		:= .T.
+	oMARK:oBROWSE:lCANALLMARK	:= .T.
+	oMARK:oBROWSE:bALLMARK		:= { || MDT630INV( cMarca, cAliasTRB, aCbxPesq ) } //Funcao inverte marcadores
+	oMARK:oBROWSE:ALIGN			:= CONTROL_ALIGN_ALLCLIENT
+	EnchoiceBar( oDlgReq, bOkReq, bCancelReq )
+
+	ACTIVATE MSDIALOG oDlgReq CENTERED
+
+	lRet := ( nOpcao == 1 )
+
+	If lRet
+		MDT630CPY( @oGet, cAliasTRB )	//Funcao para copiar planos a GetDados
+	EndIf
+
+	oTempTNF:Delete()
+
+	RestArea(aArea)
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTRBPes
+Funcao de Pesquisar no Browse.
+
+@sample fTRBPes( 'TRB001', oMark, '0000036' )
+@param  cAliasTRB1, Caractere Alias do MarkBrowse
+@param  oMark, Objeto, Objeto do MarkBrowse
+
+@author Guilherme Freudenburg
+@since  05/03/2014
+
+@return Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function fTRBPes( cAliasTRB, oMark, cPesquisar )
+
+	Local nRecNoAtu := 1//Variavel para salvar o recno
+	Local lRet		:= .T.
+
+	//Posiciona no TRB e salva o recno
+	dbSelectArea( cAliasTRB )
+	nRecNoAtu := RecNo()
+
+	dbSelectArea( cAliasTRB )
+	If dbSeek( AllTrim( cPesquisar ) )
+		//Caso exista a pesquisa, posiciona
+		oMark:oBrowse:SetFocus()
+	Else
+		//Caso nao exista, retorna ao primeiro recno e exibe mensagem
+		dbGoTo( nRecNoAtu )
+		ApMsgInfo( STR0038, STR0015 ) //"Valor não encontrado."###"Atenção"
+		oPesquisar:SetFocus()
+		lRet := .F.
+	EndIf
+
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh(.T.)
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fIndexSet
+Seta o indice para pesquisa
+
+@author Guilherme Freudenburg
+@since  05/03/2014
+@sample fIndexSet( 'TRB001', { "Matricula+Nome", "Nome+Matricula", ;
+					"Marcados" }, @cPesquisar, oMark )
+
+@param  cAliasTRB, Caractere, Alias do TRB
+@param  aCbxPesq, Array, Indices de pesquisa do markbrowse
+@param  cPesquisar, Caractere, Valor da Pesquisa
+@param  oMark, Objeto, Objeto do MarkBrowse
+
+@return Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fIndexSet( cAliasTRB, aCbxPesq, cPesquisar, oMark )
+
+	Local nIndice := fIndComb( aCbxPesq ) // Retorna numero do indice selecionado
+	// Efetua ordenacao do alias do markbrowse, conforme indice selecionado
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoTop()
+
+	// Se o indice selecionado for o ultimo [Marcados]
+	If nIndice == Len( aCbxPesq )
+		cPesquisar := Space( Len( cPesquisar ) ) 	// Limpa campo de pesquisa
+		oPesquisar:Disable()						// Desabilita campo de pesquisa
+		oBtnPesq:Disable()              			// Desabilita botao de pesquisa
+		oMark:oBrowse:SetFocus()     				// Define foco no markbrowse
+	Else
+		oPesquisar:Enable()               			// Habilita campo de pesquisa
+		oBtnPesq:Enable()               			// Habilita botao de pesquisa
+		oBtnPesq:SetFocus()             			// Define foco no campo de pesquisa
+	EndIf
+
+	oMark:oBrowse:Refresh()
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fIndComb
+Retorna o indice, em numero, do item selecionado no combobox
+
+@param  aIndMrk, Array, Indices de pesquisa do markbrowse
+
+@author Guilherme Freudenburg
+@since  05/03/2014
+@sample fIndComb({ "Matricula+Nome", "Nome+Matricula", "Marcados" })
+
+@return nIndice, Numérico, Valor do Indice
+/*/
+//-------------------------------------------------------------------
+Static Function fIndComb( aIndMrk )
+
+	Local nIndice := aScan( aIndMrk, { | x | AllTrim( x ) == AllTrim( cCbxPesq ) } )
+
+	// Se o indice nao foi encontrado nos indices pre-definidos, apresenta mensagem
+	If nIndice == 0
+		ShowHelpDlg( STR0085, { STR0093 }, 1,; 	//"Atenção"###"Índice não encontrado."
+			{ STR0094 }, 1 ) //"Contate o administrador do sistema."
+		nIndice := 1
+	EndIf
+
+Return nIndice
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaMat
+Funcao para retornar todos os Funcionários
+
+@author Guilherme Freudenburg
+@since  31/03/2014
+@sample fBuscaMat('TRB001', oGet, 'XX1')
+
+@param  cAliasTRB, Caractere, Alias usado na TRB
+@param  oGetRE, Objeto, Conteúdo da GetDados
+@param  cMarca, Caractere, Variavel da marcação
+
+@return Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function fBuscaMat( cAliasTRB , oGetRE , cMarca )
+
+	Local nPosCod := 1
+	Local aArea   := GetArea()
+	Local aColsOK := aClone( aCols )
+	Local aHeadOk := aClone( aHeader )
+	Local lFunDem := SuperGetMv( "MV_NGEPIEN" ) == "S"
+
+	nPosCod := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_MAT"	} )
+	nPosLeg := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "COLBMP"	} )
+	nPosCod := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_MAT"	} )
+	nPosDes := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_NOME" } )
+	nPosDT 	:= aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_DTENTR" } )
+	nPosHR  := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_HRENTR" } )
+	nPosFUC := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_CODFUN" } )
+
+	dbSelectArea( "SRA" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SRA" ) )
+		While SRA->(!Eof()) .And. SRA->RA_FILIAL == xFilial( "SRA" )
+			// Verifica se as informações de demissão estão vazias ou se o MV_NGEPIEN mostra os Demitidos
+			If (SRA->RA_SITFOLH != 'D' .And. Empty( SRA->RA_DEMISSA )) .Or. lFunDem
+				RecLock( cAliasTRB, .T. )
+					If aScan( aColsOk , {|x| 	x[nPosCod] == SRA->RA_MAT .And. x[nPosDT] == dDataBase .And.;
+					x[nPosHR] == SubStr( Time(), 1, 5 ) } ) == 0
+						(cAliasTRB)->TRB_OK	:=  Space( Len( (cAliasTRB)->TRB_OK ) )
+					Else
+						(cAliasTRB)->TRB_OK	:=  cMarca
+					EndIf
+					(cAliasTRB)->TRB_MAT 	:= SRA->RA_MAT
+					(cAliasTRB)->TRB_NOME 	:= SRA->RA_NOME
+					(cAliasTRB)->TRB_DTENTR	:= dDataBase
+					(cAliasTRB)->TRB_HRENTR	:= Time()
+					(cAliasTRB)->TRB_CODFUN :=SRA->RA_CODFUNC
+				(cAliasTRB)->(MsUnLock())
+			EndIf
+			SRA->(dbSkip())
+		End
+	EndIf
+	RestArea( aArea )
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630INV
+Inverte a marcacao do browse
+
+@author Guilherme Freudenburg
+@since  31/03/14
+@sample MDT630INV( '0R', 'TRB001', { "Matricula+Nome", ;
+					"Nome+Matricula", "Marcados" } )
+
+@param  cMarca, Caractere, Variavel da marcação
+@param  cAliasTRB, Caractere, Alias usado na TRB
+@param  aCbxPesq, Array, Contem os indices
+
+@return Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function MDT630INV( cMarca, cAliasTRB, aCbxPesq )
+
+	Local nx      := 0 //Variavel de controle.
+	Local nIndice := fIndComb( aCbxPesq ) // Retorna numero do indice selecionado
+
+	dbSelectArea( cAliasTRB )
+	dbSetOrder( nIndice )
+	dbGoTop()
+	For nX := 1 To (cAliasTRB)->(RecCount())
+		(cAliasTRB)->(dbGoto(nX))
+		RecLock( cAliasTRB, .F. )
+			(cAliasTRB)->TRB_OK := IIf( Empty( (cAliasTRB)->TRB_OK ), cMARCA, " " )
+		MsUnLock()
+	Next nX
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630CPY
+Copia os planos selecionados no markbrowse para a GetDados
+
+@author Guilherme Freudenburg
+@since  31/03/14
+@sample MDT630CPY(@oGet,'TRB001')
+
+@param  oGet, Objeto, Informaçõe da GetDados
+@param  cAliasTRB, Caractere, Alias da TRB com os dados a serem
+copiados
+
+@return Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function MDT630CPY( oGet, cAliasTRB )
+
+	Local nMDTInteg := SuperGetMv( "MV_NG2INTE" , .F. , "1" )
+	//Variáveis de posicionamento
+	Local nCols
+	Local nPosCod
+	Local nPosDT
+	Local nPosHR
+	Local nPosFUC
+	Local nPosLeg
+	Local nPosLoja
+
+	Local lLogix  := nMDTInteg == "2"
+	Local aColsOk := aClone( aCols )
+	Local aHeadOk := aClone( aHeader )
+	Local aColsTp := BLANKGETD( aHeadOk )
+
+	nPosLeg	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "COLBMP"		} )
+	nPosCod	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_MAT"	} )
+	nPosDes	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_NOME"	} )
+	nPosDT 	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_DTENTR"	} )
+	nPosHR	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_HRENTR"	} )
+	nPosFUC	 := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_CODFUN"	} )
+	nPosLoja := aScan( aHeadOk, { |x| Trim( Upper( x[2] ) ) == "TNF_LOCAL"	} )
+	nPosInd  := aScan( aHEADER, { |x| AllTrim( Upper( X[2] ) ) == "TNF_INDDEV" } )
+
+	For nCols := 1 To Len( aColsOk ) //Caso o aCols tenha algum registro incompleto deleta
+		If Empty( aColsOk[ nCols, nPosCod ] )
+			aDel( aColsOk, nCols )
+			aSize( aColsOk, Len( aColsOk ) -1 )
+		EndIf
+	Next nCols
+
+	dbSelectArea( cAliasTRB )
+	dbGoTop()
+	While ( cAliasTRB )->( !Eof() )
+		If !Empty( (cAliasTRB)->TRB_OK ) .And. aScan( aColsOk, {|x| x[nPosCod] == (cAliasTRB)->TRB_MAT .And.;
+		x[nPosDT] == (cAliasTRB)->TRB_DTENTR .And.;
+		x[nPosHR] == (cAliasTRB)->TRB_HRENTR} ) == 0
+			M->TNF_MAT := (cAliasTRB)->TRB_MAT
+			If LINK190( .T. )
+				aAdd( aColsOk, aClone( aColsTp[1] ) )
+				aColsOk[ Len( aColsOk ), nPosLeg ] := IIf( lLogix, "BR_AMARELO", IIf( aColsOk[Len( aColsOk ), nPosInd] == "3", "BR_AMARELO", "BR_VERDE" ) )
+				aColsOk[ Len( aColsOk ), nPosCod ] := ( cAliasTRB )->TRB_MAT
+				aColsOk[ Len( aColsOk ), nPosDes ] := ( cAliasTRB )->TRB_NOME
+				aColsOk[ Len( aColsOk ), nPosDT  ] := ( cAliasTRB )->TRB_DTENTR
+				aColsOk[ Len( aColsOk ), nPosHR  ] := ( cAliasTRB )->TRB_HRENTR
+				aColsOk[ Len( aColsOk ), nPosFUC ] := ( cAliasTRB )->TRB_CODFUN
+				If nPosLoja > 0 //Verifica se esta sendo utlizado o campo
+					aColsOk[ Len( aColsOk ), nPosLoja ] := NGSEEK( "SB1", TN3->TN3_CODEPI, 1, "B1_LOCPAD" )
+				EndIf
+			EndIf
+		EndIf
+		( cAliasTRB )->( dbSkip() )
+	End
+
+	If Len( aColsOK ) <= 0
+		aColsOK := aClone( aColsTp )
+	EndIf
+
+	aSort( aColsOK, , , { |x, y| x[1] < y[1] } ) //Ordena por plano
+	aCols := aClone( aColsOk )
+	oGet:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630MK
+Marca os registro no MarkBrowser
+
+@param  oMark, Objeto, MarkBrowser utilizado
+@author Guilherme Freudenburg
+@since  31/03/14
+@sample MDT630MK( @oMark )
+
+@return Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT630MK( oMark )
+
+	//Ao selecionar uma linha, realiza o Refresh na tela.
+	oMark:oBrowse:Refresh()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTTNFWHEN
+Funcao que faz o controle dos campos com WHEN na TNF
+
+@author Vitor Emanuel Batista
+@since  15/04/2011
+@sample MDTTNFWHEN()
+
+@return Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTTNFWHEN( cReadVar )
+
+	Local nINDDEV
+
+	Default cReadVar := ReadVar()
+
+	If Type( "aCols" ) == "A" .And. Type( "aHeader" ) == "A"
+		nINDDEV := GDFIELDPOS( "TNF_INDDEV" )
+	EndIf
+
+	If cReadVar $ "M->TNF_DTDEVO/M->TNF_TIPODV/M->TNF_LOCDV"
+		Return IIf( nINDDEV > 0, aCols[n][nINDDEV], M->TNF_INDDEV ) == "1"
+	ElseIf cReadVar $ "M->TNF_NSERIE/M->TNF_ENDLOC/M->TNF_LOTECT/M->TNF_LOTESB"
+		Return IIf( nINDDEV > 0, aCols[n][nINDDEV], M->TNF_INDDEV ) != "3"
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630VLPR
+Função para validação de parametros SX6.
+
+@param  nParam, Numérico, (1) Valida o Parâmetro de Requisição,
+(2) Valida o Parâmetro de Devolução
+
+@author Jackson Machado
+@since  16/12/2015
+@sample MDT630VLPR(1)
+
+@return lRet, Lógico, Indica se foi correta a informação.
+/*/
+//-------------------------------------------------------------------
+Function MDT630VLPR( nParam )
+
+	Local cConteudo	:= Alltrim( M->X6_CONTEUD )
+	Local lRet		:= .T.
+
+	If cConteudo $ "499/999" .Or. ExistCPO( "SF5", cConteudo )
+		If nParam == 1 //MV_NG2D3RE
+			If cConteudo <= "500"
+				lRet := .F.
+			EndIf
+		ElseIf nParam == 2 //MV_NG2D3DE
+			If cConteudo > "500"
+				lRet := .F.
+			EndIf
+		EndIf
+		If !lRet
+			Help( " ", 1, "F5_TIPO" )
+		EndIf
+	Else
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTFILEPI
+Função responsável por realizar o filtro do F3  - MDTSB1 - Epis
+Verifica o tipo preenchido no parâmetro MV_MDTPEPI, caso esteja vazio
+trará de todos os tipos.
+
+@author  Guilherme Freudenburg
+@since   22/02/2016
+@sample  MDTFILEPI()
+
+@return  lRet, Lógico, Retorno lógico
+/*/
+//-------------------------------------------------------------------
+Function MDTFILEPI()
+
+	Local lRet     := .T.  //Variavel de controle
+	Local aArea	   := GetArea()
+	Local aAreaSB1 := SB1->( GetArea() )
+
+	If !( "TN3_CODEPI" $ ReadVar() ) .And. !IsInCallStack( "MDTA620" ) //Não valida se for a inclusão de EPI por Fornecedor
+		If lRet
+			dbSelectArea( "TN3" )
+			dbSetOrder( 2 )
+			lRet := dbSeek( xFilial( "TN3" ) + SB1->B1_COD )
+		EndIf
+		//Valida se o EPI está vinculado a algum Pai (EPI Genérico)
+		If !lRet
+			dbSelectArea( "TL0" )
+			dbSetOrder( 2 )
+			lRet := dbSeek( xFilial( "TL0" ) + SB1->B1_COD )
+		EndIf
+	EndIf
+
+	RestArea( aAreaSB1 )
+	RestArea( aArea )
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT630FBRW
+Função responsavel por realizar o filtro do browser.
+
+@author Guilherme Freudenburg
+@since  10/05/2016
+@sample MDT630FBRW()
+
+@return lReturn, Lógico, Se o produto pertence ao tipo determinado
+como EPI
+/*/
+//-------------------------------------------------------------------
+Function MDT630FBRW()
+
+	Local lReturn := .T.
+
+	lReturn := Posicione( "SB1", 1, xFilial( "SB1", TN3->TN3_FILIAL ) + TN3->TN3_CODEPI, "B1_TIPO" ) $ SuperGetMv( "MV_MDTPEPI", .F., "" )
+
+Return lReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fRetChave
+Função para buscar na aColsTNF a posição correspondente no parametro
+aColsPesq.
+
+@sample fRetChave( oGet:aCols, nX , oGet:aHeader )
+@author Guilherme Benkendorf
+@since  15/05/2015
+
+@param  aColsPesq, Array, Contém valores de pesquisa
+@param  aHeaderAux, Array, Conteúdo do aHeader
+@param  aColsCons, Array, aCols que será consultado
+
+@return nPosTNF, Numérico, Posição correspondente no aColsTNF
+/*/
+//-------------------------------------------------------------------
+Static Function fRetChave( aColsPesq , aHeaderAux , aColsCons )
+
+	Local lCall630	:= IsInCallStack( "MDTA630" )
+
+	Local nPosMatr := GdFieldPos( "TNF_MAT", aHeaderAux )    // Matricula
+	Local nPosNumC := GdFieldPos( "TNF_NUMSA", aHeaderAux )  // Numero CA
+	Local nPosDtEn := GdFieldPos( "TNF_DTENTR", aHeaderAux ) // Data Entrega
+	Local nPosHrEn := GdFieldPos( "TNF_HRENTR", aHeaderAux ) // Hora Entrega
+
+	Local nPosTNF := 0
+
+	Default aColsCons := aClone( aColsTnf )
+
+	If lCall630
+		nPosTNF := aScan( aColsCons, { | x | aColsPesq[ nPosMatr ] == x[ nPosMatr ] .And. ;
+		aColsPesq[ nPosNumC	] == x[ nPosNumC ] .And. ;
+		aColsPesq[ nPosDtEn	] == x[ nPosDtEn ] .And. ;
+		aColsPesq[ nPosHrEn	] == x[ nPosHrEn ] } )
+	EndIf
+
+Return nPosTNF
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} OrdenaEpi
+Função para ordenar os registros de entrega de EPI de acordo com a
+seleção do usuário.
+
+@sample OrdenaEpi( 1 )
+@author Julia Kondlatsch
+@since  13/04/2018
+
+@return Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function OrdenaEpi( nOrdem )
+
+	If NG630LinOk( oGet )
+		If nOrdem == 1 //Data Entrega + Hora Entrega
+			aSort( aCols, , , { |x, y| DToS( x[nDTENTR] ) + x[nHRENTR] < DToS( y[nDTENTR] ) + y[nHRENTR] } )
+		Else //Matrícula
+			aSort( aCols, , , { |x, y| ( x[nMAT] ) < ( y[nMAT] ) } )
+		EndIf
+	EndIf
+
+	oGet:oBrowse:Refresh()
+
+Return Nil

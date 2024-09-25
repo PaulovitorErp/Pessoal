@@ -1,0 +1,1302 @@
+#INCLUDE "MNTR900.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTR900
+Lista Abastecimento por Veiculo
+
+@samples MNTR900()
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@version MP12
+@type function
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MNTR900()
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local lExist
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		Private aPesq := {}
+		Private aRotina 	:= MenuDef()
+		Private cCadastro   := OemToAnsi(STR0005)   //"Relatorio de Abastecimento por Veículo"
+		Private cPerg       := PADR("MNR900", Len(Posicione("SX1", 1, "MNR900", "X1_GRUPO")), " ")
+		Private aPerg       := {}
+		Private cContab     := GetMv("MV_MCONTAB")
+		Private vCampoCC    := {}
+		Private lOper       := IIf(Alltrim(GetMv("MV_NGOPER")) == "S", .T., .F.)
+		Private nSizeFil    := IIf(FindFunction("FWGETTAMFILIAL"), FWGETTAMFILIAL, Len(TQN->TQN_FILIAL))
+		Private nSizeBem 	:= TAMSX3("T9_CODBEM")[1]
+
+		//Totalizadores que serão utilizados nos relatorios.
+		Private nTOTLIT     := 0000.00
+		Private nTOTVLABA   := 000.00
+		Private nTOTKM      := 000000
+		Private nVEITOTLIT  := 0000.00
+		Private nVEITOTABA  := 000.00
+		Private nVEITOTKM   := 000000
+		Private cTRBB 		:= GetNextAlias()
+		Private aDBF  		:= {}
+		Private oTempTable
+		Private oBrowse
+
+		// Variável utilizada para controle de impressão de abastecimentos
+		Private aAbastImp   := {}
+
+		//+--------------------------------------------------------------+
+		//|  Vetor utilizado para armazenar retorno da função MNT045TRB, |
+		//|  criada de acordo com o item 18 (RoadMap 2013/14)			 |
+		//+--------------------------------------------------------------+
+		Private vFilTRB := MNT045TRB()
+
+		SetKey(VK_F4, {|| MNT045FIL( vFilTRB[2] )})
+
+		//|---------------------------------------------------------------|
+		//| Término das alterações do SX1  								  |
+		//|---------------------------------------------------------------|
+
+		If cContab == "CTB"
+			vCampoCC := {"CTT","CTT_CUSTO","CTT_OPERAC","CTT_FILIAL"}
+		ElseIf cContab == "CON"
+			vCampoCC := {"SI3","I3_CUSTO","I3_OPERAC","I3_FILIAL"}
+		EndIf
+
+		aDBFB := {}
+		aAdd( aDBFB, { "VEIC  "  , "C", 16, 0 } )
+		aAdd( aDBFB, { "NOMBEM"  , "C", 40, 0 } )
+		aAdd( aDBFB, { "PLACA"   , "C",  8, 0 } )
+		aAdd( aDBFB, { "DATABA"  , "D", 12, 0 } )
+		aAdd( aDBFB, { "HRAABA"  , "C",  5, 0 } )
+		aAdd( aDBFB, { "KM    "  , "N",  9, 0 } )
+		aAdd( aDBFB, { "KM2   "  , "N",  9, 0 } )
+		aAdd( aDBFB, { "LITROS"  , "N",  9, 3 } )
+		aAdd( aDBFB, { "VALUN "  , "N",  TAMSX3("TQN_VALUNI")[1]/*9*/, TAMSX3("TQN_VALUNI")[2]/*3*/ } )
+		aAdd( aDBFB, { "VALABA"  , "N", 15, 3 } )
+		aAdd( aDBFB, { "KMPERC"  , "N",  9, 0 } )
+		aAdd( aDBFB, { "MEDIA "  , "N", 15, 2 } )
+		aAdd( aDBFB, { "MEDIAUC" , "N", 15, 2 } )
+		aAdd( aDBFB, { "MEDESP"  , "N", 09, 2 } )
+		aAdd( aDBFB, { "POSTO "  , "C", 30, 0 } )
+		aAdd( aDBFB, { "CODMOT"  , "C",  6, 0 } )
+		aAdd( aDBFB, { "NOMMOT"  , "C", 40, 0 } )
+		aAdd( aDBFB, { "CNPJ"    , "C", 14, 0 } )
+		aAdd( aDBFB, { "CODBEM"  , "C", 16, 0 } )
+		aAdd( aDBFB, { "NOMFL"   , "C", 15, 0 } )
+		aAdd( aDBFB, { "USUARIO" , "C", 15, 0 } )
+		aAdd( aDBFB, { "FILIAL"  , "C", nSizeFil, 0 } )
+		aAdd( aDBFB, { "COMBUST" , "C", 20, 0 } )
+		aAdd( aDBFB, { "ORDEM"   , "C",  5, 0 } )
+		aAdd( aDBFB, { "NABAST"  , "C", 15, 0 } )
+
+		aTRBB :=  {{STR0012, "NOMFL"   , "C", 02, 0, "@!" 					},; //"Filial"
+				{STR0013, "VEIC"    , "C", 16, 0, "@!" 					},; //"Veículo"
+				{STR0014, "PLACA"   , "C", 16, 0, "@!" 					},; //"Placa"
+				{STR0015, "NOMMOT"  , "C", 40, 0, "@!" 					},; //"Motorista"
+				{STR0016, "DATABA"  , "D", 12, 0, "@E 99/99/9999" 		},; //"Dat.Abst"
+				{STR0075, "HRAABA"  , "C",  5, 0, "@!" 					},; //"Hr. Abast."
+				{STR0040, "KM"      , "N",  9, 0, "@E 999,999,999" 		},; //"Contador"
+				{STR0078, "KM2"      , "N",  9, 0, "@E 999,999,999"     },; //"Segundo Contador"
+				{STR0017, "LITROS"  , "N",  9, 3, "@E 99,999.999" 		},; //"Qtd.Abst."
+				{STR0018, "COMBUST" , "C", 20, 0, "@!" 					},; //"Combustível"
+				{STR0019, "VALUN"   , "N",  9, 3, '@E 99,999.' + Replicate('9',TAMSX3("TQN_VALUNI")[2]) },; //"Vlr.Unit"
+				{STR0020, "VALABA"  , "N", 15, 3, "@E 99,999,999,999.999"},; //"Vlr.Abast"
+				{STR0021, "KMPERC"  , "N",  6, 0, "@E 999,999,999" 		},; //"Qtd.Contador Trab."
+				{STR0022, "POSTO"   , "C", 30, 0, "@!" 					},; //"Posto"
+				{STR0023, "MEDIA"   , "N", 15, 3, "@E 99,999,999,999.999"},; //"Média Q.Cont/Q.Abs."
+				{STR0024, "MEDESP"  , "N",  9, 2, "@E 999,999.99" 		},; //"Med.Esp."
+				{STR0043, "MEDIAUC" , "N", 15, 3, "@E 99,999,999,999.999"},; //"Média Q.Abs./Q.Cont"
+				{STR0025, "USUARIO" , "C", 15, 0, "@!" 					},; //"Usuário"
+				{STR0073, "CNPJ"    , "C", 14, 0, "@!" 					},; //"CNPJ"
+				{STR0074, "FILIAL"  , "C", nSizeFil, 0, "@!" 			},; //"Cod. Filial"
+				{STR0076, "ORDEM"   , "C",  5, 0, "@!" 					}}  // "Ordem"
+
+		If pergunte( cPerg , .T. ) //Chama perguntas do relatório.
+
+			SetKey(VK_F4, {|| })
+			fTempTable()
+
+			Processa({ |lEnd| lExist := MNR900INI()}, STR0010,STR0011 ) //"Aguarde..."###"Processando Registros..."
+
+			If lExist
+				dbSelectArea(cTRBB)
+				dbGoTop()
+				dbSetOrder(1)
+
+				//Realiza a montagem do browser.
+				oBrowse:= FWMBrowse():New()
+				oBrowse:SetDescription( cCadastro )
+				oBrowse:DisableReport()
+				oBrowse:SetTemporary( .T. )
+				oBrowse:SetAlias( cTRBB )
+				oBrowse:SetFields( aTRBB )
+				oBrowse:SetSeek( .T. , aPesq )
+				oBrowse:Activate()
+
+			EndIf
+			MNT045TRB( .T., vFilTRB[1], vFilTRB[2])
+			oTempTable:Delete()//Deleta Tabela Temporaria
+		EndIf
+
+		dbSelectArea("TQN")
+		dbSetOrder(1)
+		dbSeek(xFilial("TQN"))
+
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+
+@author Guilherme Freudenburg
+@since 15/12/2017
+
+@return oModel objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+    // Cria a estrutura a ser usada no Modelo de Dados
+	Local oStructTQN := FWFormStruct( 1 ,"TQN" , /*bAvalCampo*/ , /*lViewUsado*/ )
+
+	// Modelo de dados que será construído
+	Local oModel
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New( "MNTR900" , /*bPre*/ , /*bPost*/ , /*bCommit*/ , /*bCancel*/ )
+		//--------------------------------------------------
+		// Componentes do Modelo
+		//--------------------------------------------------
+		oModel:AddFields( "TQNMASTER" , Nil , oStructTQN , /*bPre*/ , /*bPost*/ , /*bLoad*/ )
+
+			//Adicina a chave principal.
+			oModel:SetPrimaryKey( { "TQN_FILIAL" , "TQN_FROTA" , "TQN_DTABAS" , "TQN_HRABAS" } )
+
+			// Adiciona a descrição do Modelo de Dados (Geral)
+			oModel:SetDescription( STR0077 ) //"Entrada Manual de Abastecimento"
+
+			// Adiciona a descricao do Componente do Modelo de Dados
+			oModel:GetModel( "TQNMASTER" ):SetDescription(STR0077)//"Entrada Manual de Abastecimento"
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+
+@author Guilherme Freudenburg
+@since 15/12/2017
+
+@return oView objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	// Cria um objeto de Modelo de dados baseado no ModelDef() do fonte informado
+	Local oModel := FWLoadModel( "MNTR900" )
+
+	// Cria a estrutura a ser usada na View
+	Local oStructTQN := FWFormStruct( 2 , "TQN" , /*bAvalCampo*/ , /*lViewUsado*/ )
+
+	// Interface de visualização construída
+	Local oView
+
+	// Cria o objeto de View
+	oView := FWFormView():New()
+		// Objeto do model a se associar a view.
+		oView:SetModel( oModel )
+
+		// Adiciona no View um controle do tipo formulário (antiga Enchoice)
+		oView:AddField( "VIEW_TQN" , oStructTQN , "TQNMASTER" )
+
+			//Adiciona um titulo para o formulário
+			oView:EnableTitleView( "VIEW_TQN" , STR0077 )	//"Entrada Manual de Abastecimento"
+
+			// Cria os componentes "box" horizontais para receberem elementos da View
+			oView:CreateHorizontalBox( "TELATQN" , 100,/*cIDOwner*/,/*lFixPixel*/,/*cIDFolder*/,/*cIDSheet*/ )
+
+		// Associa um View a um box
+		oView:SetOwnerView( "VIEW_TQN" , "TELATQN" )
+
+	//Inclusão de itens nas Ações Relacionadas de acordo com O NGRightClick
+	NGMVCUserBtn(oView)
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900INI
+Monta o arquivo temporario inicial mostrado no browse
+
+@author Marcos Wagner Junior
+
+@since 20/08/07
+
+@version MP12
+@type function
+@sample MNR900INI()
+
+@return Sempre Verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function MNR900INI()
+
+	Local aArea     := GetArea()
+	Local cJoin     := '%%'
+	Local cWhere    := ''
+	Local cOrder    := ''
+	Local cAliasQry := GetNextAlias()
+	Local cFil      := "  "
+	Local cNomeFil  := " "
+	Local cFilTQN 	:= ""
+	Local nNumOrdem := 1
+	Local cSt9Tqn   := '%AND ' + NGMODCOMP('ST9', 'TQN') + '%'
+
+	Private dData
+	Private cVeiculo
+	Private nKM :=0
+
+	// Define ordenação dos registros
+	cOrder := IIf( MV_PAR07 == 2, '%%', '%DESC%' )
+
+	// Joins para tipo de operação
+	If lOper
+		cJoin := '%'
+
+		cJoin += 'INNER JOIN ' + RetSQLName( vCampoCC[1] ) + ' CTT ON '
+		cJoin +=	' CTT.' + vCampoCC[2] + ' = TQN.TQN_CCUSTO AND '
+		cJoin +=    " CTT.D_E_L_E_T_ = ' '"
+
+		// Compartilhamento CTT
+		cJoin += IIf( NGSX2MODO( vCampoCC[1] ) == 'E', ' AND CTT.' + vCampoCC[4] + ' = ST9.T9_FILIAL ',;
+			' AND CTT.' + vCampoCC[4] + ' = ' + ValToSQL( xFilial( vCampoCC[1] ) ) )
+
+		cJoin += 'INNER JOIN ' + RetSQLName( 'TSZ' ) + ' TSZ ON
+		cJoin += 	' TSZ.TSZ_CODSER = CTT.' + vCampoCC[3] + ' AND '
+		cJoin +=    " TSZ.D_E_L_E_T_ = ' '"
+
+		// Compartilhamento TSZ
+		cJoin += IIf( NGSX2MODO( 'TSZ' ) == 'E', ' AND TSZ.TSZ_FILIAL = CTT.' + vCampoCC[4] ,;
+			' AND TSZ.TSZ_FILIAL = ' + ValToSQL( xFilial( 'TSZ' ) ) )
+
+		cJoin += '%'
+
+	EndIf
+
+	// Compatilhamento TQN
+	cWhere := '%' + IIf( NGSX2MODO( 'TQN' ) == 'E', ' AND TQN.TQN_FILIAL  BETWEEN ' + ValToSQL( MV_PAR03 ) + ' AND ' +;
+		ValToSQL( MV_PAR04 ), ' AND TQN.TQN_FILIAL = ' + ValToSQL( xFilial( 'TQN' ) ) ) + '%'
+
+	BeginSQL Alias cAliasQry
+
+		SELECT
+			TQN.TQN_FILIAL,
+			TQN.TQN_PLACA ,
+			TQN.TQN_FROTA ,
+			TQN.TQN_DTABAS,
+			TQN.TQN_HRABAS,
+			TQN.TQN_HODOM ,
+			TQN.TQN_POSCO2,
+			TQN.TQN_QUANT ,
+			TQN.TQN_VALUNI,
+			TQN.TQN_VALTOT,
+			TQN.TQN_CODMOT,
+			TQN.TQN_USUARI,
+			ST9.T9_CODBEM ,
+			TQN.TQN_POSTO ,
+			TQN.TQN_LOJA  ,
+			TQN.TQN_CNPJ  ,
+			ST9.T9_NOME   ,
+			TQN.TQN_CODCOM,
+			TQN.TQN_FILORI,
+			TT8.TT8_MEDIA,
+			TT8.TT8_TPCONT,
+			TQN.TQN_NABAST
+		FROM
+			%table:TQN% TQN
+		INNER JOIN
+			%table:ST9% ST9 ON
+				ST9.T9_CODBEM = TQN.TQN_FROTA AND
+				ST9.T9_SITBEM = 'A'           AND
+				ST9.%NotDel%
+				%exp:cSt9Tqn%
+		INNER JOIN
+			%table:TT8% TT8 ON
+				TT8.TT8_CODBEM = TQN.TQN_FROTA  AND
+				TT8.TT8_CODCOM = TQN.TQN_CODCOM AND
+				TT8.TT8_FILIAL = ST9.T9_FILIAL  AND
+				TT8.%NotDel%
+		%exp:cJoin%
+		WHERE
+			TQN.TQN_FROTA  BETWEEN %exp:MV_PAR05% AND %exp:MV_PAR06% AND
+			TQN.TQN_DTABAS BETWEEN %exp:DToS( MV_PAR01 )% AND %exp:DToS( MV_PAR02 )% AND
+			TQN.%NotDel%
+			%exp:cWhere%
+		ORDER BY
+			TQN.TQN_FROTA || TQN.TQN_DTABAS || TQN.TQN_HRABAS %exp:cOrder%
+
+	EndSQL
+
+	ProcRegua(LastRec())
+	dData 	 := " "
+	cVeiculo := " "
+	nKM 	 := 0
+
+	While !EoF()
+
+		IncProc(STR0010,STR0011) //"Aguarde..."###"Processando Registros..."
+
+		If MNT045STB( (cAliasQry)->T9_CODBEM, vFilTRB[2] )
+			dbSkip()
+			Loop
+		EndIf
+
+		cFrota	 := (cAliasQry)->TQN_FROTA
+		cFilBem	 := (cAliasQry)->TQN_FILIAL
+		cHorAbas := (cAliasQry)->TQN_HRABAS
+		dDatAbas := (cAliasQry)->TQN_DTABAS
+		nKM      := NGCONTPER( (cAliasQry)->TQN_FROTA,(cAliasQry)->TQN_DTABAS,(cAliasQry)->TQN_HRABAS, (cAliasQry)->TT8_TPCONT )
+
+		RestArea(aArea)
+
+		RecLock(cTRBB, .T.)
+
+		If (cAliasQry)->TQN_FILIAL <> cFil
+			cFil := (cAliasQry)->TQN_FILIAL
+			dbSelectArea("SM0")
+			SM0->(dbSetOrder(1))
+			If MsSeek(SM0->M0_CODIGO+(cAliasQry)->TQN_FILIAL)
+				(cTRBB)->NOMFL := SM0->M0_FILIAL
+				cNomeFil := SM0->M0_FILIAL
+			EndIf
+		Else
+			(cTRBB)->NOMFL := cNomeFil
+		EndIf
+
+		(cTRBB)->FILIAL    := (cAliasQry)->TQN_FILIAL
+		(cTRBB)->CODBEM    := (cAliasQry)->T9_CODBEM
+		(cTRBB)->MEDESP    := (cAliasQry)->TT8_MEDIA
+		(cTRBB)->NABAST    := (cAliasQry)->TQN_NABAST
+
+		cFilTQN 		   := IIf( !Empty( (cAliasQry)->TQN_FILORI ), (cAliasQry)->TQN_FILORI,  (cAliasQry)->TQN_FILIAL )
+		(cTRBB)->POSTO     := POSICIONE('TQF',1, xFilial("TQF", cFilTQN) + (cAliasQry)->TQN_POSTO + (cAliasQry)->TQN_LOJA,'TQF_NREDUZ')
+		(cTRBB)->CNPJ      := POSICIONE('TQF',1, xFilial("TQF", cFilTQN) + (cAliasQry)->TQN_POSTO + (cAliasQry)->TQN_LOJA,'TQF_CNPJ')
+
+		dbSelectArea( "DA4" )
+		dbSetOrder( 01 ) //DA4_FILIAL+DA4_COD
+		If MSSeek( xFilial( "DA4" ) + (cAliasQry)->TQN_CODMOT )
+			(cTRBB)->NOMMOT := AllTrim( DA4->DA4_NOME ) //Nome do Motorista
+		EndIf
+
+		(cTRBB)->VEIC      := (cAliasQry)->TQN_FROTA
+		(cTRBB)->NOMBEM    := (cAliasQry)->T9_NOME
+		(cTRBB)->PLACA     := (cAliasQry)->TQN_PLACA
+		(cTRBB)->DATABA    := STOD((cAliasQry)->TQN_DTABAS)
+		If (cAliasQry)->TT8_TPCONT == '1'
+			
+			(cTRBB)->KM    := (cAliasQry)->TQN_HODOM
+			(cTRBB)->KM2   := 0
+		Else
+
+			(cTRBB)->KM    := 0
+			(cTRBB)->KM2   := (cAliasQry)->TQN_POSCO2
+
+		EndIf
+		(cTRBB)->LITROS    := (cAliasQry)->TQN_QUANT
+		(cTRBB)->COMBUST   := SubStr( AllTrim( NGSEEK('TQM', (cAliasQry)->TQN_CODCOM, 1, 'TQM_NOMCOM') ), 1, 20 )
+		(cTRBB)->VALUN     := (cAliasQry)->TQN_VALUNI
+		(cTRBB)->VALABA    := (cAliasQry)->TQN_VALTOT
+		(cTRBB)->KMPERC    := nKM
+		(cTRBB)->CODMOT    := (cAliasQry)->TQN_CODMOT
+		(cTRBB)->MEDIA     := IIf( nKM > 0, ( (cTRBB)->KMPERC / (cAliasQry)->TQN_QUANT ), 0 )
+		(cTRBB)->MEDIAUC   := IIf( nKM > 0, ( (cAliasQry)->TQN_QUANT / (cTRBB)->KMPERC ), 0 )
+		(cTRBB)->USUARIO   := ALLTRIM((cAliasQry)->TQN_USUARI)
+		(cTRBB)->HRAABA    := (cAliasQry)->TQN_HRABAS
+		(cTRBB)->ORDEM     := STRZERO(nNumOrdem, 5, 0)
+		MsUnLock(cTRBB)
+		dbSelectArea(cALIASQRY)
+		dbSkip()
+		nNumOrdem++
+	EndDo
+
+	(cALIASQRY)->(dbCloseArea())
+
+	dbSelectArea(cTRBB)
+	dbGoTop()
+	If Reccount() = 0
+		MsgInfo(STR0026,STR0027) //"Não existem dados para montar a tela de consulta."###"ATENÇÃO"
+		Return .F.
+	EndIf
+
+	nNumOrdem := 1
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900PA
+Reprocessa o browse de acordo com os parametros
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@version MP12
+@type function
+@sample MNR900PA()
+
+@return Sempre Verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function MNR900PA()
+
+	If !Pergunte(cPerg,.T.)
+		Return
+	EndIf
+
+	dbSelectArea(cTRBB)
+	Zap
+
+	fTempTable() // Deleta Tabela Temporaria
+
+	Processa({ |lEnd| MNR900INI()},STR0028) //"Aguarde ..Processando Arquivo de Filiais"
+
+	dbSelectArea(cTRBB)
+	dbGoTop()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900VI
+Visualiza consulta
+@author Marcos Wagner Junior
+@since 20/08/07
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNR900VI()
+
+	Local aAlias := GetArea()
+
+	dbSelectArea("TQN")
+	dbSetOrder(1)
+	dbSeek((cTRBB)->FILIAL+(cTRBB)->VEIC+DTOS((cTRBB)->DATABA)+(cTRBB)->HRAABA)
+	NgCad01("TQN",Recno(),1)
+
+	Restarea(aAlias)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900IM
+Relatorio de Abastecimento por Filiais
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@version undefined
+@type function
+@sample MNR900IM()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Function MNR900IM()
+
+	Local oReport
+	Local aArea := GetArea() //Salva área
+
+	//Zera as variáveis de controle de impressão.
+	nTOTVLABA  := 000.00
+	nVEITOTABA := 000.00
+	nTOTKM     := 000000
+	nVEITOTKM  := 000000
+	nTOTLIT    := 0000.00
+	nVEITOTLIT := 0000.00
+
+	If FindFunction("TRepInUse") .And. TRepInUse() //Interface de impressao
+		oReport := ReportDef()
+		oReport:SetLandScape() //Default Paisagem
+		oReport:PrintDialog()
+	Else
+		MNR900RAF()
+	EndIf
+
+	RestArea(aArea) //Retorna área
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportDef
+Define as secoes impressas no relatorio
+
+@author Pedro A. de M. Neto
+@since 03/03/2010
+
+@version MP12
+@type function
+@sample ReportDef()
+@obs uso MNR900IM
+
+@return oReport, Objeto, Objeto de impressão.
+/*/
+//---------------------------------------------------------------------
+Static Function ReportDef()
+
+	//+------------------------------------------------------------------------+
+	//| Variaveis utilizadas na construcao do relatorio personalizavel         |
+	//+------------------------------------------------------------------------+
+	Local oReport
+	Local oSection1
+	Local oSection2
+	Local bMedia	  := {|| nTotKm / nTotLit}
+	Local bMediaVeic  := {|| nVeiTotKm / nVeiTotLit}
+	Local bMediaAcum  := {|| nTotLit / nTotKm}
+	Local bMedAcuVei  := {|| nVeiTotLit / nVeiTotKm}
+	Local nEspacamen  := 5 // Espaço extra adicionado ao tamanho das colunas para manter o alinhamento
+
+	aAbastImp := {}
+
+	//|------------------------------------------------------------------------|
+	//| Criacao do componente de impressao                                     |
+	//|                                                                        |
+	//| TReport():New                                                          |
+	//| ExpC1 : Nome do relatorio                                              |
+	//| ExpC2 : Titulo                                                         |
+	//| ExpC3 : Pergunte                                                       |
+	//| ExpB4 : Bloco de codigo que sera executado na confirmacao da impressao |
+	//| ExpC5 : Descricao                                                      |
+	//|                                                                        |
+	//|------------------------------------------------------------------------|
+	//|------------------------------------------------------------------------|
+	//| Criacao da secao utilizada pelo relatorio                              |
+	//|                                                                        |
+	//| TRSection():New                                                        |
+	//| ExpO1 : Objeto TReport que a secao pertence                            |
+	//| ExpC2 : Descricao da seçao                                             |
+	//| ExpA3 : Array com as tabelas utilizadas pela secao. A primeira tabela  |
+	//|         sera considerada como principal para a seção.                  |
+	//| ExpA4 : Array com as Ordens do relatório                               |
+	//| ExpL5 : Carrega campos do SX3 como celulas                             |
+	//|         Default : False                                                |
+	//| ExpL6 : Carrega ordens do Sindex                                       |
+	//|         Default : False                                                |
+	//|                                                                        |
+	//|------------------------------------------------------------------------|
+	//|------------------------------------------------------------------------|
+	//| Criacao da celulas da secao do relatorio                               |
+	//|                                                                        |
+	//| TRCell():New                                                           |
+	//| ExpO1 : Objeto TSection que a secao pertence                           |
+	//| ExpC2 : Nome da celula do relatório. O SX3 será consultado             |
+	//| ExpC3 : Nome da tabela de referencia da celula                         |
+	//| ExpC4 : Titulo da celula                                               |
+	//|         Default : X3Titulo()                                           |
+	//| ExpC5 : Picture                                                        |
+	//|         Default : X3_PICTURE                                           |
+	//| ExpC6 : Tamanho                                                        |
+	//|         Default : X3_TAMANHO                                           |
+	//| ExpL7 : Informe se o tamanho esta em pixel                             |
+	//|         Default : False                                                |
+	//| ExpB8 : Bloco de código para impressao.                                |
+	//|         Default : ExpC2                                                |
+	//|                                                                        |
+	//|------------------------------------------------------------------------|
+
+	oReport := TReport():New("MNTR900",OemToAnsi(STR0034),,{|oReport| ReportPrint(oReport)},STR0029) //"Relatório de Abastecimento por Veículo" ###//"Relatório de abastecimento por veículo."
+
+	oSection1 := TRSection():New(oReport,STR0013,{(cTRBB)}) //"Veículo"
+	TRCell():New(oSection1,"VEIC"			,(cTRBB),STR0045,/*Picture*/	,16) //"Código Veículo"
+	TRCell():New(oSection1,"NOMBEM"			,(cTRBB),STR0046,/*Picture*/	,40) //"Descrição Veículo"
+
+	oSection2 := TRSection():New(oSection1,STR0047,{(cTRBB)}) //"Abastecimentos do veículo"
+
+		TRCell():New(oSection2,"DATABA"		,(cTRBB),STR0048,"99/99/9999"	 			,TAMSX3("TQN_DTABAS")[1] + nEspacamen) //"Data"
+		TRCell():New( oSection2, 'HRAABA'   , (cTRBB), STR0075, '99:99'                 ,TAMSX3("TQN_HRABAS")[1] + nEspacamen ) // Hr. Abast
+		TRCell():New(oSection2,"POSTO"		,(cTRBB),STR0022,/*Picture*/				,TAMSX3("TQN_POSTO")[1] + nEspacamen) //"Posto"
+		TRCell():New(oSection2,"NOMMOT"	    ,(cTRBB),STR0049,/*Picture*/				,TAMSX3("DA4_NOME")[1] + nEspacamen) //"Motorista"
+		TRCell():New(oSection2,"KM"	  		,(cTRBB),STR0079,"@E 999,999,999"			,TAMSX3("TQN_HODOM")[1] + nEspacamen) //"Cont 1"
+		TRCell():New(oSection2,"KM2"	  	,(cTRBB),STR0080,"@E 999,999,999"			,TAMSX3("TQN_POSCO2")[1] + nEspacamen) //"Cont 2"
+		TRCell():New(oSection2,"LITROS"		,(cTRBB),STR0050,"@E 99,999,999,999.999"	,TAMSX3("TQN_QUANT")[1] + nEspacamen) //"Q. Abs."
+		TRCell():New(oSection2,"COMBUST"	,(cTRBB),STR0018,"@!"						,TAMSX3("TQN_CODCOM")[1] + nEspacamen) //"Combustível"
+		TRCell():New(oSection2,"VALUN"		,(cTRBB),STR0051,'@E 999,999,999.'+Replicate('9',TAMSX3("TQN_VALUNI")[2]),TAMSX3("TQN_VALUNI")[1] + nEspacamen) //"Val.Unit."
+		TRCell():New(oSection2,"VALABA"		,(cTRBB),STR0052,"@E 99,999,999,999.999"	,TAMSX3("TQN_VALTOT")[1] + nEspacamen) //"Vlr.Abst."
+		TRCell():New(oSection2,"KMPERC" 	,(cTRBB),STR0053,"@E 999,999,999"			,TAMSX3("TQN_HODOM")[1] + nEspacamen ) //"Q.Con.Tr."
+		TRCell():New(oSection2,"MEDIA"		,(cTRBB),STR0054,"@E 999,999.999"			,10) //"Q.Con.Tr./Q.Abs."
+		TRCell():New(oSection2,"MEDESP"		,(cTRBB),STR0055,"@E 99,999,999.99"			,17) //"Média Esp."
+		TRCell():New(oSection2,"MEDIAUC"	,(cTRBB),STR0056,"@E 99,999.999"			,19) //"Q.Abs./Q.Con.Tr."
+		TRCell():New(oSection2,"USUARIO"	,(cTRBB),STR0025,/*Picture*/				,TAMSX3("TQN_USUARI")[1] + nEspacamen) //"Usuário"
+
+		TRPosition():New(oSection2,"DA4",1,{|| xFilial("DA4")+(cTRBB)->CODMOT} )
+
+	//+------------------------------------------------------------------------+
+	//| Fazendo com que os cabecalhos de campos numericos sejam impressos da   |
+	//| esquerda para a direita                                                |
+	//+------------------------------------------------------------------------+
+
+	oSection2:Cell("KM"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("KM2"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("LITROS"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("VALUN"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("VALABA"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("KMPERC"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("MEDIA"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("MEDESP"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("MEDIAUC"):SetHeaderAlign("RIGHT")
+	oSection2:Cell("USUARIO"):SetHeaderAlign("CENTER")
+
+	// oSection2:Cell('LITROS'):SetAlign('CENTER')
+	oSection2:Cell("USUARIO"):SetAlign("CENTER")
+
+	//+------------------------------------------------------------------------+
+	//|Definindo os totalizadores.                                             |
+	//+------------------------------------------------------------------------+
+
+	// Totalizadores por veiculo
+	oBreak := TRBreak():New(oSection1,oSection1:Cell("VEIC"),STR0057,.F.)//"Total Veículo"
+	TRFunction():New(oSection2:Cell("LITROS") , /*cId*/, "SUM",		oBreak, /*cTitle*/, "@E 999,999.999"	,	/*uFormula*/,.F./*lEndSection*/,.F./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('1')})
+	TRFunction():New(oSection2:Cell("VALABA") , /*cId*/, "SUM",		oBreak, /*cTitle*/, "@E 999,999,999,999.999",	/*uFormula*/,.F./*lEndSection*/,.F./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('2')})
+	TRFunction():New(oSection2:Cell("KMPERC") , /*cId*/, "SUM",		oBreak, /*cTitle*/, "@E 999,999,999"		,	/*uFormula*/,.F./*lEndSection*/,.F./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('3')})
+	TRFunction():New(oSection2:Cell("MEDIA")  , /*cId*/, "ONPRINT",	oBreak, /*cTitle*/, "@E 999,999.999"		,	bMediaVeic	,.F./*lEndSection*/,.F./*lEndReport*/,.F./*lEndPage*/)
+	TRFunction():New(oSection2:Cell("MEDIAUC"), /*cId*/, "ONPRINT",	oBreak, /*cTitle*/, "@E 99,999.999"			,	bMedAcuVei	,.F./*lEndSection*/,.F./*lEndReport*/,.F./*lEndPage*/)
+
+	// Totalizadores gerais
+	TRFunction():New(oSection2:Cell("LITROS")	, /*cId*/, "SUM"	, /*uBreak*/, /*cTitle*/, "@E 999,999.999"			, /*uFormula*/ ,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('4')} )
+	TRFunction():New(oSection2:Cell("VALABA")	, /*cId*/, "SUM"	, /*uBreak*/, /*cTitle*/, "@E 999,999,999,999.999"	, /*uFormula*/ ,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('5')} )
+	TRFunction():New(oSection2:Cell("KMPERC")	, /*cId*/, "SUM"	, /*uBreak*/, /*cTitle*/, "@E 9999,999,999"			, /*uFormula*/ ,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/, , {||fValidSoma('6')} )
+	TRFunction():New(oSection2:Cell("MEDIA")	, /*cId*/, "ONPRINT", /*uBreak*/, /*cTitle*/, "@E 999,999.999"			, bMedia	   ,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/ )
+	TRFunction():New(oSection2:Cell("MEDIAUC")	, /*cId*/, "ONPRINT", /*uBreak*/, /*cTitle*/, "@E 99,999.999"			, bMediaAcum   ,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/ )
+
+	//Codigo para imprimir a legenda:
+	TRFunction():New(oSection2:Cell("MEDIAUC"), /*cId*/, "ONPRINT", /*uBreak*/, "" 		,"@!"	, {|| "  " }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/)//linha em branco
+	TRFunction():New(oSection2:Cell("MEDIAUC"), /*cId*/, "ONPRINT", /*uBreak*/, "" 		,"@!"	, {|| "  " }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/)//linha em branco
+	TRFunction():New(oSection2:Cell("MEDIAUC"), /*cId*/, "ONPRINT", /*uBreak*/, STR0072 ,"@"	, {|| "  " }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/) //imprime a string Legenda
+	TRFunction():New(oSection2:Cell("KMPERC") , /*cId*/, "ONPRINT", /*uBreak*/, STR0053 ,"@"	, {|| STR0068 }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/) //"Q.Con.Tr:     " + "Quantidade Contador Trabalhado"
+	TRFunction():New(oSection2:Cell("MEDIA")  , /*cId*/, "ONPRINT", /*uBreak*/, STR0054 ,"@"	, {|| STR0069 }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/) //"Q.Con.Tr./Q.: " + "Quantidade Contador Trabalhado / Quantidade Abastecida"
+	TRFunction():New(oSection2:Cell("MEDESP") , /*cId*/, "ONPRINT", /*uBreak*/, STR0055 ,"@"	, {|| STR0070 }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/) //"Média Es:     " + "Média Esperada"
+	TRFunction():New(oSection2:Cell("MEDIAUC"), /*cId*/, "ONPRINT", /*uBreak*/, STR0056 ,"@"	, {|| STR0071 }	,.F./*lEndSection*/,.T./*lEndReport*/,.F./*lEndPage*/) //"Q.Abs./Q.Con: " + "Quantidade Abastecida / Quantidade Contador Trabalhado"
+
+Return oReport
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ReportPrint
+Realiza a impressão do relatório oReport.
+
+@author Pedro A. de M. Neto
+@since 03/03/2010
+
+@param oReport, Object, descricao
+
+@version MP12
+@type function
+@sample ReportPrint(oReport)
+
+@return Sempre Vazio.
+/*/
+//---------------------------------------------------------------------
+Static Function ReportPrint(oReport)
+
+	Local cCodVeic 	:= ""
+	Local oSection1	:= oReport:Section(1) // Secao "Veículo"
+	Local oSection2	:= oReport:Section(1):Section(1) // Secao "Abastecimentos do veículo"
+	Local aNabast   := {}
+
+	dbSelectArea(cTRBB)
+	dbSetOrder(1)
+	dbGoTop()
+
+	oReport:SetMeter(RecCount())
+
+	While !Eof() .And. !oReport:Cancel()
+		If (cTRBB)->VEIC <> cCodVeic //Caso ocorra a mudança de veículo.
+			nVeiTotLit	:= 0
+			nVeiTotKm	:= 0
+			oSection1:Init()
+			oSection2:Init()
+			cCodVeic := (cTRBB)->VEIC
+			oSection1:PrintLine()
+		EndIf
+
+		// Trecho para impedir a soma repetida de abastecimentos
+		If aScan(aNabast, (cTRBB)->NABAST) == 0
+
+			aAdd(aNabast, (cTRBB)->NABAST)
+
+			// Alimentando contadores
+			nVeiTotLit	+= (cTRBB)->LITROS
+			nVeiTotKm	+= (cTRBB)->KMPERC
+			nTotLit		+= (cTRBB)->LITROS
+			nTotKm		+= (cTRBB)->KMPERC
+
+		EndIf
+
+		oSection2:PrintLine()
+		oReport:IncMeter()
+
+		dbSelectArea(cTRBB)
+		dbSkip()
+
+		If (cTRBB)->VEIC <> cCodVeic .OR. Eof()
+			oSection2:Finish()
+			oSection1:Finish()
+		Endif
+	EndDo
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900RAF
+Relatóri de Abastecimento de Veículo no modelo Padrão.
+
+@author Pedro A. de M. Neto
+@since 03/03/2010
+
+@version MP12
+@type function
+@sample MNR900RAF()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Function MNR900RAF()
+
+	Local cString    := "TQN"
+	Local cDesc1     := STR0029 //"Relatório de abastecimento por veículo."
+	Local cDesc2     := STR0030 //"O usuário poderá utilizar a opção Parâmetros para"
+	Local cDesc3     := STR0031 //"a obtenção da seleção desejada."
+	Local wnRel      := "MNTR900"
+
+	Private aReturn  := { STR0032, 1,STR0033 , 2, 2, 1, "",1 } //"Administração"###"Zebrado"
+	Private nLastKey := 0
+	Private Titulo   := STR0034 //"Relatório de Abastecimento por Veículo"
+	Private Tamanho  := "G"
+
+	dbSelectArea("TQN")
+	dbSelectArea(cTRBB)
+	dbGoTop()
+	If Reccount() > 0 //Verifica se possui algum registro.
+		wnRel := SetPrint(cString,wnRel,,Titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+
+		If nLastKey = 27
+			Set Filter To
+			dbSelectArea("TQN")
+			Return
+		Endif
+
+		SetDefault(aReturn,cString)
+		RptStatus({|lEnd| R900Imp(@lEnd,wnRel,Titulo,Tamanho)},Titulo)
+		dbSelectArea("TQN")
+	Else
+		MsgInfo(STR0035,STR0027) //"Não exitem dados para imprimir o relatório."###"ATENÇÃO"
+	EndIf
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} R900Imp
+Realiza a impressão do relatório no modelo Padrão.
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@param lEnd   , Lógico   , Determina o fim da impressão.
+@param wnRel  , Boolean  , Variável de impressão.
+@param Titulo , Caracater, Título do relatório.
+@param Tamanho, Caracter , Tamanho do relatório.
+
+@type function
+@version MP12
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Static Function R900Imp(lEnd,wnRel,Titulo,Tamanho)
+
+	Local cRodaTxt  := ''
+	Local nCntImpr  := 0
+	Local aNabast   := {}
+
+	Private li := 80 ,m_pag := 1
+	Private NomeProg := "MNTR900"
+	Private Cabec1   := STR0044 //"                                                                                                                                                                                  Média      "
+	Private Cabec2   := STR0036 //"Data        Posto                      Motorista                          Contador      Q. Abs.  Combustível          Val.Unit.   Vlr.Abst.    Q.Con.Tr.   Q.Con.Tr./Q.Abs.   Med.Esp.  Q.Abs./Q.Con.Tr.  Usuário"
+	Private cCODVEIC := "  "
+
+	//+--------------------------------------------------------------+
+	//| Verifica se deve comprimir ou nao                            |
+	//+--------------------------------------------------------------+
+	nTipo  := IIF( aReturn[4]==1, 15, 18 )
+
+	//+--------------------------------------------------------------+
+	//| Monta os Cabecalhos                                          |
+	//+--------------------------------------------------------------+
+
+	/*/
+	1         2         3         4         5         6         7         8         9         0         1         2         3         4         5         6         7         8         9         0         1         2
+	01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+	*****************************************************************************************************************************************************************************************************************************
+	Média           Média      Média
+	Data        Posto                      Motorista                          Contador      Q. Abs. Combustível           Val.Unit.   Vlr.Abst.    Q.Con.Tr.   Q.Con.Tr./Q.Abs.       Esp.  Q.Abs./Q.Con.Tr.  Usuário
+	*****************************************************************************************************************************************************************************************************************************
+	99/99/9999  xxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999  999,999,999 xxxxxxxxxxxxxxxxxxxx 99,999.999  999,999.99  999,999,999         99,999.999 999,999.99        99,999.999  xxxxxxxxxxxxxxx
+	99/99/9999  xxxxxxxxxxxxxxxxxxxxxxxxx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  999,999,999  999,999,999 xxxxxxxxxxxxxxxxxxxx 99,999.999  999,999.99  999,999,999         99,999.999 999,999.99        99,999.999  xxxxxxxxxxxxxxx
+	Total Geral:                               999,999.999                               99,999,999.99 9999,999,999        999,999.999
+	/*/
+
+	//+----------------------------------------------------------+
+	//| Define o indice de leitura do arquivo                    |
+	//+----------------------------------------------------------+
+
+	dbSelectAre(cTRBB)
+	dbSetOrder(1)
+
+	SetRegua(LastRec())
+	dbGoTop()
+
+	While !EoF()
+
+		If lEnd
+			@ Prow()+1,001 PSay STR0037  //"CANCELADO PELO OPERADOR"
+			Exit
+		EndIf
+		IncRegua()
+		If (cTRBB)->VEIC <> cCODVEIC
+			NgSomaLi(58)
+			NgSomaLi(58)
+			NgSomaLi(58)
+			@ Li,000 PSay STR0038 //"Veículo:"
+			@ Li,010 PSay AllTrim((cTRBB)->VEIC) + ' - ' + (cTRBB)->NOMBEM
+			cCODVEIC := (cTRBB)->VEIC
+			NgSomaLi(58)
+			@ Li,000 Psay REPLICATE(chr(45),220)
+			NgSomaLi(58)
+		EndIf
+
+		If (cTRBB)->VEIC = cCODVEIC
+			NgSomaLi(58)
+			@ Li,000 PSay (cTRBB)->DATABA //data abastecimento
+			@ Li,012 PSay SubStr((cTRBB)->POSTO,1,25)//posto
+			@ Li,039 PSay SubStr((cTRBB)->NOMMOT,1,30)//motorista
+			@ Li,058 PSay (cTRBB)->KM      Picture "@E 999,999,999" //contador1
+			@ Li,075 PSay (cTRBB)->KM2      Picture "@E 999,999,999" //contador2
+			@ Li,091 PSay (cTRBB)->LITROS  Picture "@E 99,999.999"  //quant. abast.
+			@ Li,111 PSay (cTRBB)->COMBUST Picture "@!" //combustiveç
+
+			@ Li,115 +4-(TAMSX3("TQN_VALUNI")[2]) PSay (cTRBB)->VALUN   Picture '@E 999,999.'+Replicate('9',TAMSX3("TQN_VALUNI")[2])//valor uni.
+			@ Li,128 PSay (cTRBB)->VALABA  Picture "@E 9,999,999,999,999.99"  //valor abast.
+			@ Li,150 PSay (cTRBB)->KMPERC  Picture "@E 999,999,999"       //q.con.tr
+			@ Li,170 PSay (cTRBB)->MEDIA   Picture "@E 99,999.999"        //media q.con.tr / q.abs.
+			@ Li,181 Psay (cTRBB)->MEDESP  Picture "@E 999,999.99"        //media esp.
+			@ Li,199 PSay (cTRBB)->MEDIAUC Picture "@E 99,999.999"        //media q.abs./q.con.tr
+			@ Li,215 Psay SubStr((cTRBB)->USUARIO,1,7)                   //usuario
+			
+			// Trecho para impedir que o mesmo abastecimento seja contado duas vezes
+			If aScan(aNabast, (cTRBB)->NABAST) == 0
+
+				aAdd(aNabast, (cTRBB)->NABAST)
+			
+				//Variáveis totalizadoras.
+
+				nTOTLIT   += (cTRBB)->LITROS
+				nTOTVLABA += (cTRBB)->VALABA
+				nTOTKM    += (cTRBB)->KMPERC
+				nVEITOTLIT += (cTRBB)->LITROS
+				nVEITOTABA += (cTRBB)->VALABA
+				nVEITOTKM  += (cTRBB)->KMPERC
+			
+			EndIf
+
+			
+
+		EndIf
+		dbSelectArea(cTRBB)
+		dbSkip()
+
+		If (cTRBB)->VEIC <> cCODVEIC .OR. Eof()
+			NgSomaLi(58)
+			NgSomaLi(58)
+			@ Li,059 Psay STR0042 //"Total Veículo:"
+			@ Li,090 Psay nVEITOTLIT Picture "@E 999,999.999"
+			@ Li,129 Psay nVEITOTABA Picture "@E 999,999,999,999.99"
+			@ Li,148 Psay nVEITOTKM Picture "@E 9999,999,999"
+			@ Li,168 Psay (nVEITOTKM/nVEITOTLIT) Picture "@E 999,999.999"
+			@ Li,198 PSay (nVEITOTLIT/nVEITOTKM) Picture "@E 99,999.999"
+			nVEITOTLIT := 0000.00
+			nVEITOTABA := 000.00
+			nVEITOTKM  := 000000
+		Endif
+
+	EndDo
+
+	If (cTRBB)->(RecCount()) > 0
+		NgSomaLi(58)
+		NgSomaLi(58)
+		@ Li,059 Psay STR0041 //"Total Geral:"
+		@ Li,090 Psay nTOTLIT Picture "@E 999,999.999"
+		@ Li,129 Psay nTOTVLABA Picture "@E 999,999,999,999.99"
+		@ Li,148 Psay nTOTKM Picture "@E 9999,999,999"
+		@ Li,168 Psay (nTOTKM/nTOTLIT) Picture "@E 999,999.999"
+		@ Li,198 PSay (nTOTLIT/nTOTKM) Picture "@E 99,999.999"
+	EndIf
+
+	//Impressão da legenda do relatório
+	NgSomaLi(58)
+	NgSomaLi(58)
+	NgSomaLi(58)
+	@ Li,000 Psay STR0063  //"Legenda"
+	NgSomaLi(58)
+	@ Li,000 Psay STR0064 + STR0068 + " | "                 + STR0065 + STR0069 //"Q.Con.Tr.: " + "Quantidade Contador Trabalhado" | "Q.Con.Tr./Q.Abs.: " + "Quantidade Contador Trabalhado / Quantidade Abastecida"
+	NgSomaLi(58)
+	@ Li,000 Psay STR0066 + STR0070 + "                 | " + STR0067 + STR0071 //"Méd.Esp.: " + "Média Esperada" | "Q.Abs./Q.Con.Tr.: " + "Quantidade Abastecida / Quantidade Contador Trabalhado"
+
+	Roda(nCntImpr,cRodaTxt,Tamanho)
+
+	//+--------------------------------------------------------------+
+	//| Devolve a condicao original do arquivo principal             |
+	//+--------------------------------------------------------------+
+	RetIndex('TQN')
+
+	Set Filter To
+	Set Device To Screen
+
+	If aReturn[5] = 1
+		Set Printer To
+		dbCommitAll()
+		OurSpool(wnrel)
+	Endif
+
+	MS_FLUSH()
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900Pes
+Monta a tela de pesquisa especifica para filtrar o browser.
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@version MP12
+@type function
+@sample MNR900Pes()
+
+@return Sempre Verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function MNR900Pes()
+
+	Local cORDEM900 := Space(Len(TQN->TQN_FROTA))
+
+	Define MsDialog oDlg5 From 300,120 To 390,330 Title OemToAnsi(STR0001) Pixel  //"Pesquisar"
+
+	@ 0.5,1 say OemtoAnsi(STR0013) //"Veículo"
+	@ 0.5,4 Msget cORDEM900 Picture '@!' SIZE 52,10
+
+	Define sButton From 030,046 Type 1 Enable Of oDlg5 Action MNR900Rec(cORDEM900)
+	Define sButton From 030,075 Type 2 Enable Of oDlg5 Action oDlg5:End()
+
+	Activate MsDialog oDlg5 Centered
+
+	dbSelectArea(cTRBB)
+	dbSetOrder(1)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900Rec
+Realiza o posicionamento no registro desejado, através do valor selecionado
+a partir da função MNR900Pes.
+
+@author Marcos Wagner Junior
+@since 20/08/07
+
+@param cPesqVeic, Caracter, Código do veículo que será pesquisado.
+
+@version MP12
+@type function
+@sample MNR900Rec("0000000000000001")
+
+@return Sempre Verdadeiro
+/*/
+//---------------------------------------------------------------------
+Static Function MNR900Rec(cPesqVeic)
+
+	If !Empty(cPesqVeic) //Verifica se foi preechido algum valor na pesquisa.
+
+		//Realiza tratativa na variavel de pesquisa.
+		cPesqVeic := Alltrim(cPesqVeic)
+		cPesqVeic := PadR(cPesqVeic,nSizeBem )
+
+		dbSelectArea(cTRBB)
+		dbSetOrder(2) //VEIC - Utiliza o indice de veículo.
+		dbSeek(cPesqVeic) //Posiciona no registro.
+
+	EndIf
+
+	//Fecha a Dailog
+	oDlg5:End()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT900DT
+Valida o parametro ate data
+
+@author Marcos Wagner Junior
+@since 20/08/07
+@version undefined
+
+@type function
+@obs uso MNTR900
+/*/
+//---------------------------------------------------------------------
+Function MNT900DT()
+
+	If  MV_PAR02 < MV_PAR01
+		MsgStop(STR0039)  //"Data final não pode ser inferior à data inicial!"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900CC
+Valida os codigos De Motivo, Ate Motivo
+
+@author Marcos Wagner Junior
+@since 05/10/06
+@version undefined
+
+@param nOpc, numeric, descricao
+@param cParDe, characters, descricao
+@param cParAte, characters, descricao
+@param cTabela, characters, descricao
+
+@type function
+@obs uso MNTR900
+/*/
+//---------------------------------------------------------------------
+Function MNR900CC(nOpc,cParDe,cParAte,cTabela)
+
+	If (Empty(cParDe) .AND. cParAte = 'ZZZZZZZZZZZZZZZZ' )
+		Return .T.
+	Else
+		If nOpc == 1
+			If Empty(cParDe)
+				Return .T.
+			Else
+				lRet := IIf(Empty(cParDe),.T.,ExistCpo(cTabela,cParDe))
+				If !lRet
+					Return .F.
+				EndIf
+			Endif
+		ElseIf nOpc == 2
+			If (cParAte == 'ZZZZZZZZZZZZZZZZ')
+				Return .T.
+			Else
+				lRet := IIF(ATECODIGO(cTabela,cParDe,cParAte,04),.T.,.F.)
+				If !lRet
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900FL
+Valida codigos de Filial, Ate Filial
+
+@author Marcos Wagner Junior
+@since 01/08/07
+@version undefined
+
+@param nOpc, numeric, descricao
+@param cParDe, characters, descricao
+@param cParAte, characters, descricao
+
+@type function
+@obs uso MNTR900
+/*/
+//---------------------------------------------------------------------
+Function MNR900FL(nOpc,cParDe,cParAte)
+	If Empty(cParDe) .AND. (cParAte == Replicate('Z',nSizeFil))
+		Return .T.
+	Else
+		If nOpc == 1
+			If Empty(cParDe)
+				Return .T.
+			Else
+				lRet := IIf(Empty(cParDe),.T.,ExistCpo('SM0',SM0->M0_CODIGO+cParDe))
+				If !lRet
+					Return .F.
+				EndIf
+			Endif
+		Elseif nOpc == 2
+			If (cParAte == Replicate('Z',nSizeFil))
+				Return .T.
+			Else
+				lRet := IIF(ATECODIGO('SM0',SM0->M0_CODIGO+cParDe,SM0->M0_CODIGO+cParAte,10),.T.,.F.)
+				If !lRet
+					Return .F.
+				EndIf
+			Endif
+		EndIf
+	EndIf
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+Parametros do array a Rotina:
+1. Nome a aparecer no cabecalho
+2. Nome da Rotina associada
+3. Reservado
+4. Tipo de Transa‡„o a ser efetuada:
+    1 - Pesquisa e Posiciona em um Banco de Dados
+    2 - Simplesmente Mostra os Campos
+    3 - Inclui registros no Bancos de Dados
+    4 - Altera o registro corrente
+    5 - Remove o registro corrente do Banco de Dados
+5. Nivel de acesso
+6. Habilita Menu Funcional
+
+@sample MenuDef()
+
+@author Rafael Diogo Richter
+@since 02/02/2008
+
+@version MP12
+@type function
+
+@return aRotina, Array, Contem as opções do MenuDef.
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {{STR0001 , "MNR900PES"	, 0, 1   },; //"Pesquisar"
+					  {STR0002 , "MNR900VISU"	, 0, 2   },; //"Visualizar"
+					  {STR0003 , "MNR900PA" 	, 0, 3, 0},; //"Parametros"
+					  {STR0004 , "MNR900IM" 	, 0, 3, 0}}  //"Imprimir"
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fTempTable
+Função responsável por criação de da tabela temporária cTRBB.
+
+@sample fTempTable()
+
+@author Douglas Constancio
+@since 21/11/2016
+
+@version MP12
+@type Static Function
+@sample fTempTable()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Static Function fTempTable()
+
+	If Type("oTempTable") <> "U"
+		oTempTable:Delete() //Deleta Tabela Temporaria
+	EndIf
+
+	oTempTable  := FWTemporaryTable():New( cTRBB, aDBFB ) //Instancia classe FWTemporaryTable
+
+	//Cria os indices
+	If NGSX2MODO("ST9") == "E"
+		If MV_PAR07 == 2
+			oTempTable:AddIndex( "Ind01" , {"FILIAL","VEIC","DATABA","HRAABA","CNPJ"})
+			//Cria Array para montar a chave de pesquisa
+			aAdd( aPesq, {STR0074 + " + " + STR0013 + " + " + STR0016 + " + " + STR0075 + " + " + STR0073, {{"", "C", 255, 0, "", "@!"}}})
+		Else
+			oTempTable:AddIndex( "Ind01" , {"ORDEM","VEIC","DATABA","HRAABA","CNPJ"} )
+			//Cria Array para montar a chave de pesquisa
+			aAdd( aPesq, {STR0076 + " + " + STR0013 + " + " + STR0016 + " + " + STR0075 + " + " + STR0073, {{"", "C", 255, 0, "", "@!"}}})
+		EndIf
+	Else
+		If MV_PAR07 == 2
+			oTempTable:AddIndex( "Ind01" , {"VEIC","DATABA","HRAABA","CNPJ"})
+			//Cria Array para montar a chave de pesquisa
+			aAdd( aPesq, {STR0013 + " + " + STR0016 + " + " + STR0075 + " + " + STR0073, {{"", "C", 255, 0, "", "@!"}}})
+		Else
+			oTempTable:AddIndex( "Ind01" , {"FILIAL","VEIC","DATABA","HRAABA","CNPJ"})
+			//Cria Array para montar a chave de pesquisa
+			aAdd( aPesq, {STR0074 + " + " + STR0013 + " + " + STR0016 + " + " + STR0075 + " + " + STR0073, {{"", "C", 255, 0, "", "@!"}}})
+		EndIf
+	EndIf
+	oTempTable:AddIndex( "Ind02" , {"VEIC", "NOMBEM"})
+
+	//Cria Array para montar a chave de pesquisa
+	aAdd( aPesq, {STR0013, {{"", "C", 255, 0, "", "@!"}}})
+
+	oTempTable:Create()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNR900VISU
+Função responsável pela visualização da rotina.
+
+@author Guilherme Freudenburg
+@since 15/12/2017
+
+@sample MNR900VISU()
+@obs Função utilizada apenas para posicionar no registro que será visualizado.
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MNR900VISU()
+
+Local oExecView
+
+dbSelectArea("TQN")
+dbSetOrder(01)//TQN_FILIAL+TQN_FROTA+DTOS(TQN_DTABAS)+TQN_HRABAS
+If dbSeek((cTRBB)->FILIAL+(cTRBB)->VEIC+DTOS((cTRBB)->DATABA)+(cTRBB)->HRAABA)
+	oExecView := FWViewExec():New()
+		oExecView:SetTitle( STR0077 ) //"Entrada Manual de Abastecimento"
+		oExecView:SetSource( "MNTR900" )
+		oExecView:SetModal( .F. )
+		oExecView:SetOperation( 1 ) //Visualizar
+		oExecView:OpenView( .F. )
+EndIf
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fValidSoma
+Função responsável por validar se um abastecimento já foi ou não contado
+no cálculo dos totais.
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 21/02/2023
+@Param cTipo, caractere, indica qual a linha de impressão que está chamando a função
+
+@return Logico, Retorna um boolean indicando se deve ou não somar a linha aos totais.
+/*/
+//------------------------------------------------------------------------------
+Static Function fValidSoma(cTipo)
+
+	Local lReturn := .F.
+
+	If aScan(aAbastImp, (cTRBB)->NABAST+cTipo) == 0
+
+		aAdd(aAbastImp, (cTRBB)->NABAST+cTipo)
+		lReturn := .T.
+	
+	EndIf
+
+Return lReturn

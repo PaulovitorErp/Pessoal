@@ -1,0 +1,2047 @@
+#INCLUDE "MDTA195.ch"
+#Include "Protheus.ch"
+
+#DEFINE nFILFUN 1
+#DEFINE nNUMFIC 2
+#DEFINE nMATRIC 3
+#DEFINE nDTPROG 4
+#DEFINE nDTINIC 5
+#DEFINE nDTFINA 6
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA195
+
+Programa de Geracao da Convocacao dos funcionarios para
+realizacao dos exames periodicos.
+Este programa ira obter os parametros informados pelo usua-
+que realizara os exames, calendario do horario de trabalho
+do medico, tempo medio de atendimento, e codigo do exame
+desejado. Os funcionarios que tiverem exames programados
+o periodo especificado e se enquadrarem nos demais parame-
+tros o sistema ira gerar um registro na agenda do medico,
+tabela "TMJ".
+O registro de Parametros sera gravado na Tabela "TMV", e se
+for excluido o programa excluira tambem todos os registros
+gerados por ele.
+
+@author  Marcio Luiz da Costa
+@since   08/02/00
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function MDTA195()
+	Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	Local aNGBEGINPRM := NGBEGINPRM() // Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+
+	Private lTMW_Filial := If( 	NGCADICBASE("TMV_FILDE","A","TMV",.F.) .and. ;
+								NGCADICBASE("TMV_FILATE","A","TMV",.F.) .and. ;
+								Empty(xFilial("TMW")) .and. ;
+								Empty(xFilial("TMV")) .and. ;
+								!Empty(xFilial("SRA")) , .t. , .f. ) //Indica se o PCMSO/Convocação é para varias filiais
+
+	Private aRotina := MenuDef()
+	Private cCadastro
+
+	If AMiIn( 35 ) // Somente autorizado para SIGAMDT
+
+		If FindFunction("MDTRESTRI") .AND. !MDTRESTRI(cPrograma)
+			// Devolve variaveis armazenadas (NGRIGHTCLICK)
+			NGRETURNPRM(aNGBEGINPRM)
+			Return .F.
+		EndIf
+
+		aCHOICE := {}
+
+		If lSigaMdtps
+			aChoice := NGCAMPNSX3( "TMV" , { "TMV_CLIENT" , "TMV_LOJA" , "TMV_FILIAL" } )
+
+			cCadastro := OemtoAnsi(STR0009)  //"Clientes"
+
+			DbSelectArea("SA1")
+			DbSetOrder(1)
+
+			mBrowse( 6, 1,22,75,"SA1")
+		Else
+
+			aChoice := NGCAMPNSX3( "TMV" , { "TMV_FILDE" , "TMV_FILATE" } )
+
+			Private  cExame := space(6), cExamant := space(6)
+
+			// Define cabecalho e Variaveis privadas
+			cCadastro := OemtoAnsi(STR0005) //"Geracao da Convocacao para Exames"
+			Private aCHKDEL := {}, bNGGRAVA
+			Private aDATEXC   :=  {}
+			Private nTotalPer :=  0
+			Private nPer      :=  0
+			Private aUtil     :=  {}
+
+			// Endereca a funcao de BROWSE
+			DbSelectArea("TMV")
+			DbSetOrder(1)
+			mBrowse( 06,01,22,75,"TMV")
+
+		EndIf
+
+	EndIf
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195INC
+
+Chama rotina de inclusao normal e se estiver tudo OK, chama a rotina
+para o processo de geracao da Convocacao para Exames.
+
+@author  Marcio Costa
+@since   28/01/00
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NG195INC()  // INCLUSAO DO REGISTRO DE PARAMETROS TMV.
+
+	aDATEXC :=  {}
+	dINICIO := SToD("")
+
+	If SuperGetMv("MV_NG2SEG",.F.,"2") == "1" .AND. !(SuperGetMV("MV_MDTPS",.F.,"N") == "S")
+		aRelac := {}
+		aADD(aRelac , {"TMV_CODUSU","MDTUSRLOG()"})
+		aADD(aRelac , {"TMV_NOMUSU","MDTUSRLOG(2)"})
+	EndIf
+
+	DbSelectArea("TMV")
+	DbSetOrder(1)
+
+	If FindFunction( "MDTA076" )
+		bNGGRAVA := {|x| CHKCODUSU() .And. MDT076HOR( ,MTOH( M->TMV_QTATEN ) ) }
+	Else
+		bNGGRAVA := {|x| CHKCODUSU() }
+	EndIf
+	lRET := NGCAD01("TMV",recno(),3)
+
+	If lRET == 1
+		// Carrega array com os dias que o medico nao atende no ambulat.
+		If !EMPTY(TMV->TMV_DTEXC1)
+			aAdd(aDATEXC,TMV->TMV_DTEXC1)
+		ENDIF
+		IF !EMPTY(TMV->TMV_DTEXC2)
+			aAdd(aDATEXC,TMV->TMV_DTEXC2)
+		ENDIF
+		IF !EMPTY(TMV->TMV_DTEXC3)
+			aAdd(aDATEXC,TMV->TMV_DTEXC3)
+		ENDIF
+		IF !EMPTY(TMV->TMV_DTEXC4)
+			aAdd(aDATEXC,TMV->TMV_DTEXC4)
+		ENDIF
+		IF !EMPTY(TMV->TMV_DTEXC5)
+			aAdd(aDATEXC,TMV->TMV_DTEXC5)
+		ENDIF
+		IF !EMPTY(TMV->TMV_DTEXC6)
+			aAdd(aDATEXC,TMV->TMV_DTEXC6)
+		ENDIF
+		Processa({|lEnd| NG195GERA()}) // MONTE TELA PARA ACOMPANHAMENTO DO PROCESSO.
+	ENDIF
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195GERA
+
+Rotina principal de controle da geracao das Consultas na Agenda do
+Medico - Tabela (TMJ).
+
+@author  Marcio Costa
+@since   09/02/00
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function  NG195GERA() // CONTROLA A GERACAO DOS EXAMES PARA OS FUNCIONARIOS
+
+	Local aFilRelat := {}
+	Local nXYZ
+	Local nX		:= 0
+	Local lTMJ_Excl := .F.
+	//MV_NG2AUSE foi cadastrado de forma errada no AtuSX, não remover a conversão
+	Local lConsAuse := cValTochar(SuperGetMv( "MV_NG2AUSE" , .F. , "2" )) == "1" //Verifica se deverá considerar Funcionários ausentes(Afastado ou Férias)
+
+	Private aFuncNew:= {} //Array com os Funcionários de férias e Afastados
+	Private nQteDIA := 0
+
+	//Não necessita zerar
+	Private aDIA      := {}
+	Private lCalendar := .F.
+	Private lDtIgual  := .F.
+	Private cHHMMFI   :=  Space (5)
+	If TMV->(FieldPos("TMV_TIPODT")) > 0
+		lDtIgual := .T.
+	Endif
+
+	//Necessita zerar para cada filial
+	Private nInic     :=  0
+	Private nFinal    :=  0
+	Private dINICIO   :=  SToD("")
+	Private dDATANT   :=  CtoD(" /  /     ")
+	Private cHHMMIN   :=  Space (5)
+	Private nHora     :=  0
+	Private nDia      :=  1
+	Private aOCI      :=  {}
+	Private nQtaten   :=  0
+	Private nUltCons  :=  0
+	Private lPrimConv := .T.
+	Private aDataEXA  := {}
+
+	If lTMW_Filial .And. !Empty(xFilial("TM5"))
+		aAreaSM0 := SM0->(GetArea())
+		dbSelectArea("SM0")
+		dbGoTop()
+		If Empty(TMV->TMV_FILDE)
+			dbSeek(cEmpAnt)
+		Else
+			dbSeek(cEmpAnt+TMV->TMV_FILDE)
+		Endif
+		While !Eof() .and. SM0->M0_CODIGO == cEmpAnt .and. SM0->M0_CODFIL <= TMV->TMV_FILATE
+			aAdd( aFilRelat , SM0->M0_CODFIL )
+			dbSkip()
+		End
+		RestArea(aAreaSM0)
+		If !Empty(xFilial("TMJ"))
+			lTMJ_Excl := .T.
+		Endif
+	Else
+		aAdd( aFilRelat , cFilAnt )
+	Endif
+
+	For nXYZ := 1 To Len(aFilRelat)
+
+		If lTMJ_Excl .Or. nXYZ == 1
+			nInic     := 0
+			nFinal    := 0
+			dINICIO   := SToD("")
+			dDATANT   := CtoD(" /  /     ")
+			cHHMMIN   := Space (5)
+			nHora     := 0
+			nDia      := 1
+			aOCI      := {}
+			nQtaten   := 0
+			nUltCons  := 0
+			lPrimConv := .T.
+			aDataEXA  := {}
+			nQteDIA   := 0
+		Endif
+
+		DbSelectArea("TM5")
+		DbSetOrder(3)
+		DbSeek( xFilial("TM5",aFilRelat[nXYZ]) + TMV->TMV_PCMSO)
+		ProcRegua(reccount()) // MONTA A REGUA DE ACOMPANHAMENTO
+
+		Do While !EOF()                              				.And. ;
+				 TM5->TM5_FILIAL == xFilial("TM5",aFilRelat[nXYZ]) 	.And. ;
+				 TM5->TM5_PCMSO  == TMV->TMV_PCMSO
+
+			IncProc() // INCREMENTO DA REGUA DE ACOMPAHAMENTO.
+
+			If !Empty(TM5->TM5_FILFUN)
+				If lTMW_Filial .And. (TM5->TM5_FILFUN < TMV->TMV_FILDE .Or. TM5->TM5_FILFUN > TMV->TMV_FILATE)
+					dbSelectArea("TM5")
+					dbskip()
+					Loop
+				ElseIf TM5->TM5_FILFUN <> cFilAnt
+					dbSelectArea("TM5")
+					dbskip()
+					Loop
+				EndIf
+			EndIf
+
+			//---------------------------------------------------------------
+			//	Selecionar registros conforme parametros informados.
+			//---------------------------------------------------------------
+			If TM5_DTPROG >= TMV->TMV_DTINPR           .And. ;
+				TM5_DTPROG <= TMV->TMV_DTFIPR          .And. ;
+				TM5_EXAME  == TMV->TMV_EXAME           .And. ;
+				EMPTY(TM5_DTRESU)
+
+				If dINICIO > TMV->TMV_DTFIRE            // Sai da Fun‡ao se a data de inicio
+					Return .T.                          // ja passou a data de termino para
+				EndIf                                   // atendimento das consultas.
+
+				DbSelectArea("SRA")                     // OBTER FUNCIONARIOS PARA GERACAO DA CONVOCACOA
+				DbSetOrder(1)
+				If DbSeek(xFilial("SRA",TM5->TM5_FILFUN) + TM5->TM5_MAT)
+					If EMPTY(SRA->RA_DEMISSA) .And. MDTA195POS()
+						If (EMPTY(TMV->TMV_CC) .Or. TMV->TMV_CC  ==  SRA->RA_CC) 				.And.;
+						   (EMPTY(TMV->TMV_CODFUN) .Or. TMV->TMV_CODFUN  ==  SRA->RA_CODFUNC) 	.And.;
+						   (EMPTY(TMV->TMV_TNOTRA) .Or. TMV->TMV_TNOTRA  ==  SRA->RA_TNOTRAB)
+
+							If !lCalendar
+								//---------------------------------------------------------------
+								//	Obter horario de trabalho do medico conforme calendario.
+								//---------------------------------------------------------------
+								aDia := NGMDT_H7(TMV->TMV_CALEND) // OBTER DADOS DO CALENDARIO
+								lCalendar := .T.
+							EndIf
+
+							NG195CALC() // CALCULAR DATA E HORA EXAME.
+
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+			DbSelectArea("TM5")
+			DbSetOrder(3)
+			DbSkip()
+		EndDo
+	Next nXYZ
+
+	//Parametro que define se deseja gerar convocação para funcionários Afastados ou de Férias.
+	If lConsAuse
+		//Ordena pela data de retorno + numero da ficha
+		aSort( aFuncNew , , , { | x , y | y[ nDTFINA ] > x[ nDTFINA ] .And. y[ nNUMFIC ] > x[ nNUMFIC ] } )
+		For nX := 1 To Len( aFuncNew )
+			//Chama função novamente para gravar funcionário de férias ou afastado
+			nUltCons := HTOM(cHHMMIN)
+			NG195DIA( dINICIO, nUltCons )
+			If nHora > nFinal
+				dINICIO += 1
+				NG195DIA( dINICIO )
+			EndIf
+			NG195GRAG(TMV->TMV_DTINRE, TMV->TMV_DTFIRE,,aFuncNew[nX])
+			nHora += TMV->TMV_QTATEN //realiza a soma no final, pois já esta com o horario de inicio correto
+			cHHMMIN := MtoH(nHora)
+		Next nX
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195CALC
+
+Calcular data e hora da realizacao do exame.
+
+@author  Marcio Costa
+@since   09/02/00
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function  NG195CALC()
+
+	Local lGravou    := .F.                       // Indica se gravou ou nao o registro na agenda
+	Local i
+	Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+
+	If lDtIgual .And. TMV->TMV_TIPODT != '1'
+		lDtIgual := .F.
+	Endif
+
+	If !lDtIgual
+		//----------------------------------------------------------------
+		//verificar data de inicio em relacao a convocacao anterior.
+		//----------------------------------------------------------------
+		IF EMPTY(dINICIO)
+			nQteDIA   := 0
+			dINICIO   := TMV->TMV_DTINRE
+			dInicatu  := TMV->TMV_DTINRE
+			cConvoAtu := TMV->TMV_CONVOC
+			cPcmsoAtu := TMV->TMV_PCMSO
+			cCodusu   := TMV->TMV_CODUSU
+			nQtAtual  := TMV->TMV_QTATEN
+			nConvoAtu := VAL(cConvoAtu)
+			nConvoAnt := nConvoAtu - 1
+			cUltHora  := "24:00"
+			cConvoAnt := STRZERO(nConvoAnt,4)
+
+	       //----------------------------------------------------------------
+	       //verificar data de inicio em relacao a convocacao anterior.
+	       //----------------------------------------------------------------
+
+			IF nConvoAnt > 0
+				NG195REGAN()
+			ENDIF
+		ENDIF
+
+	  	//----------------------------------------------------------------
+	  	//Busca hora inicio e final se mudou de dia
+	  	//----------------------------------------------------------------
+
+		If lSigaMdtPS .and. NGCADICBASE("TMV_QTEDIA","A","TMV",.F.)
+			If TMV->TMV_QTEDIA > 0
+				If nQteDIA == TMV->TMV_QTEDIA
+					dINICIO := dINICIO + 1
+					nQteDIA := 0
+				Endif
+			Endif
+		Endif
+
+		If dDatAnt != dINICIO
+
+			NG195DIA(dINICIO,nUltCons)
+
+			If nHora > nFinal
+				nUltCons := 0
+				dINICIO  := dINICIO + 1
+				nQteDIA  := 0
+				NG195DIA(dINICIO,nUltCons)
+			EndIf
+
+		Endif
+		nUltCons := 0
+		lGravou  := .F.
+
+		Do While !lGravou
+
+			Do While nHORA <= nFinal
+				For i := 1 to Len(aOCI)
+					If aOCI[i][1] <= nHORA .and. aOCI[i][2] >= nHORA
+						nHORA := aOCI[i][2]
+					Endif
+				Next
+
+				If nHORA < 1440
+					cHHMMIN := MtoH(nHORA)
+
+					DbSelectArea("TMJ")
+					Dbsetorder(1)
+					If !DbSeek(xFilial("TMJ",SRA->RA_FILIAL) + TMV->TMV_CODUSU + DtoS(dINICIO) + cHHMMIN)
+						If FindFunction( "MDTA076" )
+							cCodUsu := TMV->TMV_CODUSU
+							//Verifica se tem conflito com TY9
+							DbSelectArea("TY9")
+							Dbsetorder(1)
+							IF DbSeek(xFilial("TY9") + cCodUsu + DtoS(dINICIO) + cHHMMIN)
+								nHora := nHora + HTOM( TY9->TY9_QTDHRS )
+								Loop
+							EndIf
+
+							If !MDT195CONF() //chama função para verificar conflitos
+								nHora := nHora + 5
+								Loop
+							EndIf
+						EndIf
+
+						lRet := NG195GRAG(TMV->TMV_DTINRE, TMV->TMV_DTFIRE,.T.) //  PROCESSA ROTINA PARA GRAVAR REGISTRO TMJ ( AGENDA )
+						If lRet
+							nHora := nHora + TMV->TMV_QTATEN
+							nQteDIA++
+						EndIf
+						lGravou := .T.
+						Exit
+					Else //deverá verificar o tempo do atendimento encontrado e somar no nHora
+						If FindFunction( "MDTA076" )
+
+							If !Empty( TMJ->TMJ_QTDHRS )
+								cQtdHrs := TMJ->TMJ_QTDHRS
+							Else
+								dbSelectArea( "TML" )
+								dbSetOrder( 1 )
+								If dbSeek( xFilial( "TML" ) + TMV->TMV_CODUSU )
+									cQtdHrs := TML->TML_QTDHRS
+								EndIf
+							EndIf
+
+							nHora := nHora + HTOM( cQtdHrs )
+							Loop
+						EndIf
+					EndIf
+				Else
+					nHora := nHora + TMV->TMV_QTATEN
+				Endif
+
+
+			EndDo
+
+			dDatAnt := dINICIO
+			If !lGravou            // Se ainda nao gravou e a hora inicio maior que hora fial
+				dINICIO := dINICIO + 1
+				nQteDIA := 0
+
+				NG195DIA(dINICIO,0)
+
+				IF dINICIO > TMV->TMV_DTFIRE           // Sai da Fun‡ao se a data de inicio
+					Return .T.                         // ja passou a data de termino para
+				EndIf                                  // atendimento das consultas.
+			Endif
+		EndDo
+
+	Else
+
+		//Se a convocacao devera ser gerada para o mesmo dia da programacao
+		If lPrimConv
+			dINICIO   := TMV->TMV_DTINPR
+			dInicatu  := TMV->TMV_DTINPR
+			cConvoAtu := TMV->TMV_CONVOC
+			cPcmsoAtu := TMV->TMV_PCMSO
+			cCodusu   := TMV->TMV_CODUSU
+			nQtAtual  := TMV->TMV_QTATEN
+			lPrimConv := .f.
+		EndIf
+
+		dINICIO := TM5->TM5_DTPROG
+
+		nPosDt := 0 //aScan(aDataTMV,{|x| TM5->TM5_DTPROG == x[1] })
+
+		//Verifica se a data exata da programacao esta na agenda do medico,
+		//senao pega a proxima data da agenda
+		NG195DIA(dINICIO,nUltCons)
+		//Se a proxima data da agenda for fora do periodo da convocacao,
+		//tenta buscar data anteriores
+		If dINICIO > TMV->TMV_DTFIPR
+			dINICIO := TM5->TM5_DTPROG
+			NG195DIA(dINICIO,nUltCons,-1)
+		EndIf
+
+		//Nao tem calendario
+		If dINICIO < TMV->TMV_DTINPR .or. dINICIO > TMV->TMV_DTFIPR
+			Return
+		EndIf
+
+		lNaoMaior := If(dINICIO < TM5->TM5_DTPROG, .t. , .f. )
+
+		nUltCons := 0
+		lGravou  := .F.
+
+		While !lGravou
+
+			IF dINICIO < TMV->TMV_DTINPR .or. dINICIO > TMV->TMV_DTFIPR
+				Return
+			Endif
+
+			nPosHora := aScan(aDataEXA,{|x| dINICIO == x[1] })
+			If nPosHora == 0
+				aADD(aDataEXA , {dINICIO, 0 } )
+			Else
+				nHORA := aDataEXA[nPosHora,2] + TMV->TMV_QTATEN
+			Endif
+
+			While nHORA <= nFinal
+				For i := 1 to Len(aOCI)
+					If aOCI[i][1] <= nHORA .and. aOCI[i][2] >= nHORA
+						nHORA := aOCI[i][2]
+					Endif
+				Next
+
+				If nHORA < 1440
+					cHHMMIN := MtoH(nHORA)
+					dbSelectArea("TMJ")
+					dbSetOrder(1)
+					IF !DbSeek(xFilial("TMJ",SRA->RA_FILIAL) + TMV->TMV_CODUSU + DtoS(dINICIO) + cHHMMIN)
+					lRet := NG195GRAG(TMV->TMV_DTINPR, TMV->TMV_DTFIPR,.T.) //PROCESSA ROTINA PARA GRAVAR REGISTRO TMJ ( AGENDA )
+						If lRet
+							If nPosHora == 0
+								aADD(aDataEXA , {dINICIO, nHora} )
+							Else
+								aDataEXA[nPosHora,2] := nHORA
+							Endif
+							nHora := nHora + TMV->TMV_QTATEN
+						Endif
+						lGravou := .T.
+						Exit
+					ENDIF
+				Endif
+
+				nHora := nHora + TMV->TMV_QTATEN
+			End
+
+			dDatAnt := dINICIO
+			If !lGravou            // Se ainda nao gravou e a hora inicio maior que hora final
+				If lNaoMaior
+					dINICIO := dINICIO - 1
+					NG195DIA(dINICIO,0,-1)
+				Else
+					dINICIO := dINICIO + 1
+					NG195DIA(dINICIO,0)
+					IF dINICIO > TMV->TMV_DTFIPR
+						dINICIO := dDatAnt - 1
+						NG195DIA(dINICIO,0,-1)
+						lNaoMaior := .t.
+					Endif
+				Endif
+			Endif
+
+		End
+
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG195GRAG
+Grava os Registros na agenda do Medico.
+Function  NG195GRAG(dTMV_DTINRE, dTMV_DTFIRE)// GRAVAR AGENDA DO MEDICO
+@param dTMV_DTINRE  , Data, Indica a data inicio da realização de exames
+@param dTMV_DTFIRE  , Data, Indica a data fim da realização de exames
+@param lVldCond		, Lógico, Indica se é para realizar as validações de funcionários afastados ou de férias
+@author Marcio Costa
+@since 06/03/00
+@return
+/*/
+//---------------------------------------------------------------------
+Function NG195GRAG(dTMV_DTINRE, dTMV_DTFIRE, lVldCond , aValFunc ) // GRAVAR AGENDA DO MEDICO
+
+	Local nOrder	:= Indexord()
+	Local nRecno	:= Recno()
+	Local lFuncAfas	:= .F.
+	Local lFuncFeri	:= .F.
+	Local lRe		:= .T.
+	Local lGrava	:= .T.
+	Local lGravaTMJ := .F.
+
+	// MV_NG2AUSE foi cadastrado de forma errada no AtuSX, não remover a conversão
+	Local lConsAuse := cValTochar(SuperGetMv( "MV_NG2AUSE" , .F. , "2" )) == "1" // Verifica se deverá considerar Funcionários ausentes(Afastado ou Férias)
+	Local lAddAfast := SuperGetMv( "MV_NGMDTVA" , .F. , "2" ) == "1" // Verifica se deverá considerar Funcionários Afastados na geração
+	Local lAddFeria := SuperGetMv( "MV_MDTFERI" , .F. , "N" ) == "S" // Verifica se deverá considerar Funcionário de férias na geração
+	Local lFuncCond := .T.
+
+	//Indica valores a serem utilizados na gravação do Funcionário
+	Local cMatric	:= ""
+	Local cNumFic	:= ""
+	Local dDtProg	:= SToD( "" )
+
+	Private aDtAusen	:= {} // Array que receberá as data de inicio e fim da SR8 e SRH
+	Private dDtIniAus	:= SToD("") // Recebe Nova data da consulta
+	Private dDtFimAus	:= SToD("") // Recebe data do retorno
+	Default lVldCond	:= .F.
+	Default aValFunc	:= {}
+
+	If lVldCond
+
+		// Se parametro estiver habilitado deverá verificar se possui periodo de Afastamento para add no Array
+		If lAddAfast
+			// Se periodo de afastamento começar antes da data de inicio da geração e data fim terminar após a
+			// data fim da geração retornara .T., indicando que funcionário estará ausente no periodo da convocação
+			lFuncAfas := ( MDTChkSR8( "SR8",	1 ,;
+				                       SRA->RA_FILIAL+SRA->RA_MAT ,;
+				                       "SRA->RA_FILIAL == SR8->R8_FILIAL .and. SRA->RA_MAT == SR8->R8_MAT" ,;
+				                       dTMV_DTINRE ,;
+				                       dTMV_DTFIRE ) )
+		EndIf
+
+		// Se parametro estiver habilitado deverá verificar se possui periodo de Férias para add no Array
+		If lAddFeria
+			lFuncFeri := MDT195FER( SRA->RA_MAT, dTMV_DTINRE, dTMV_DTFIRE )
+		EndIf
+
+		// Só deverá alterar a data se estiver habilitado para considerar Funcionários Afastados ou de Férias
+		If lConsAuse
+			MDT195NEWDT( dTMV_DTINRE , dTMV_DTFIRE ) //Função para definir a nova data da consulta
+
+			// Verifica se data é válida
+			If !Empty( dDtIniAus )
+				NG195DIA( dDtIniAus )
+				dDtIniAus := dINICIO
+				dDtFimAus := dINICIO
+			EndIf
+
+			If ( lAddAfast .And. lFuncAfas ) .Or. ( lAddFeria .And. lFuncFeri )
+				// Add no array os funcionários afastados ou de férias
+				aAdd( aFuncNew,{ xFilial( "TMJ" , SRA->RA_FILIAL ), TM5->TM5_NUMFIC, SRA->RA_MAT,;
+									TM5->TM5_DTPROG, dDtIniAus, dDtFimAus } )
+				lFuncCond := .F.
+			EndIf
+
+		Else //Se parametro desabilitado
+
+			// Se estiver Afastado ou de Férias não deverá gravar
+			If ( lAddAfast .And. lFuncAfas ) .Or. ( lAddFeria .And. lFuncFeri )
+				lFuncCond := .F.
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	If Len( aValFunc ) > 0
+		cMatric	:= aValFunc[ nMATRIC ]
+		cNumFic	:= aValFunc[ nNUMFIC ]
+		dDtProg	:= aValFunc[ nDTPROG ]
+
+		If !Empty( aValFunc[ nDTINIC ] )
+			dINICIO := aValFunc[ nDTINIC ]
+		EndIf
+
+	Else
+		cMatric	:= SRA->RA_MAT
+		cNumFic	:= TM5->TM5_NUMFIC
+		dDtProg	:= TM5->TM5_DTPROG
+	EndIf
+
+	If lFuncCond
+
+		If MDT195INDI() .and. dINICIO >= dTMV_DTINRE .and. dINICIO <= dTMV_DTFIRE
+			lGravaTMJ := .T.
+		EndIf
+
+		// Indica se deverá gravar agenda
+		If lGravaTMJ .And. lGrava
+			RecLock("TMJ",.T.)
+			TMJ->TMJ_FILIAL  := xFilial("TMJ",SRA->RA_FILIAL)
+			TMJ->TMJ_CODUSU  := TMV->TMV_CODUSU
+			TMJ->TMJ_DTCONS  := dINICIO
+			TMJ->TMJ_HRCONS  := cHHMMIN
+			TMJ->TMJ_NUMFIC  := cNumFic
+			TMJ->TMJ_MOTIVO  := TMV->TMV_MOTIVO
+			TMJ->TMJ_PCMSO   := TMV->TMV_PCMSO
+			TMJ->TMJ_MAT     := cMatric
+			TMJ->TMJ_CONVOC  := TMV->TMV_CONVOC
+			TMJ->TMJ_PCMSO   := TMV->TMV_PCMSO
+			TMJ->TMJ_EXAME   := TMV->TMV_EXAME
+			TMJ->TMJ_DTPROG  := dDtProg
+			MSUNLOCK('TMJ')
+
+		EndIf
+
+	EndIf
+
+Return lRe
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195EXC
+Chama rotina de Exclusao normal e se der tudo ok chama a rotina para
+a exclusao de todos os registros relacionados ao parametro excluido
+( atraves do campo seqger ).
+
+@author  Marcio Costa
+@since   28/01/00
+
+@return  NIL, Nulo
+/*/
+//-------------------------------------------------------------------
+Function NG195EXC(cAli, nRecno, nOpcx)           // EXCLUSAO DA CONVOCACAO
+	Local aOLD := aCLONE(aROTINA)
+
+
+   PRIVATE aRotina := { { STR0001, 	"AxPesqui"  , 0 , 1},; //"Pesquisar"
+                        { STR0002,	"AxPesqui"  , 0 , 1},; //"Visualizar"
+                        { STR0003,  "AxPesqui"  , 0 , 1},; //"Incluir"
+                        { STR0006,  "AxPesqui"  , 0 , 1},; //"Alterar"
+                        { STR0004,  "AxPesqui"  , 0 , 1}} //"Excluir"
+
+   PRIVATE aTELA[0][0],aGETS[0],aHeader[0],nUsado:=0
+   nOpc := 5
+
+   DbSelectArea("TMV")
+   DbSetOrder(1)
+
+   M->TMV_PCMSO   := TMV->TMV_PCMSO
+   M->TMV_CONVOC  := TMV->TMV_CONVOC
+
+   lRET  := NGCAD01("TMV",recno(),5)
+
+   IF lRET = 1
+      NG195EXCO()
+   ENDIF
+   aROTINA := aCLONE(aOLD)
+   lRefresh := .T.
+   DbSelectArea("TMV")
+   DbGoTop()
+
+Return NIL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195EXCO
+
+Exclui os Funcionarios da Agenda Medica, registros gerados e
+Relacionados ao numero da Convocacao.
+
+@author  Marcio Costa
+@since   28/01/00
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function  NG195EXCO() // EXCLUSAO DA CONVOCACAO
+	Local aFilRelat := {}
+	Local nXYZ
+
+	If lTMW_Filial .and. !Empty(xFilial("TMJ"))
+		aAreaSM0 := SM0->(GetArea())
+		dbSelectArea("SM0")
+		dbGoTop()
+		If Empty(TMV->TMV_FILDE)
+			dbSeek(cEmpAnt)
+		Else
+			dbSeek(cEmpAnt+TMV->TMV_FILDE)
+		Endif
+		While !Eof() .and. SM0->M0_CODIGO == cEmpAnt .and. SM0->M0_CODFIL <= TMV->TMV_FILATE
+			aAdd( aFilRelat , SM0->M0_CODFIL )
+			dbSkip()
+		End
+		RestArea(aAreaSM0)
+	Else
+		aAdd( aFilRelat , cFilAnt )
+	Endif
+
+	For nXYZ := 1 To Len(aFilRelat)
+		DbSelectArea("TMJ")
+		DbSetOrder(3)
+		DbSeek(xFilial("TMJ",aFilRelat[nXYZ]) + M->TMV_PCMSO + M->TMV_CONVOC)
+		Do While !EOF() .AND. xFilial("TMV",aFilRelat[nXYZ]) ==  TMV->TMV_FILIAL   .AND.  ;
+						TMJ->TMJ_PCMSO    ==  M->TMV_PCMSO      .AND.  ;
+						TMJ->TMJ_CONVOC   ==  M->TMV_CONVOC
+			RecLock("TMJ",.F.)
+			dBDELETE()
+			MSUNLOCK('TMJ')
+			dbSkip()
+		EndDo
+	Next nXYZ
+
+	DbSetOrder(1)
+	DbSelectArea("TMV")
+	lRefresh := .T.
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195CALE
+
+Busca o codigo do calendario utilizado pelo atendente que ira realizar
+os exames periodicos na convocacao.
+
+@author  Marcio Costa
+@since   24/01/00
+
+@return  .T., Lógico
+/*/
+//-------------------------------------------------------------------
+Function NG195CALE()
+	Local cOLDALI   := ALIAS()
+	DbselectArea("TML")
+	DbsetOrder(2)
+	If Dbseek(xfilial("TML")+M->TMV_CODUSU)
+	M->TMV_CALEND := TML->TML_CALEND
+	Endif
+	DbSelectArea(cOLDALI)
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG195DIA
+
+Verifica se o dia cai em dia de trabalho do medico.
+
+@author  Marcio Costa
+@since   24/01/00
+
+@sample  NG195DIA( dINICIO, 0, -1 )
+
+@param   dInicio_temp, Date, Data a ser verificada
+@param   nUltCons, Numerico, Valor que se preenchido, alimenta a variavel nHora
+@param   nDiffPar, Numerico, Valor somado a data
+
+@return  .T., Logico
+/*/
+//-------------------------------------------------------------------
+Function NG195DIA(dInicio_temp,nUltCons,nDiffPar)
+	Local cOLDALI   := ALIAS()
+	Local I
+	Local nDiff := 1
+
+	If ValType(nDiffPar) == "N"
+		nDiff := nDiffPar
+	Endif
+
+    nDia      := DOW(dInicio_temp)
+    nDIA      := IF(nDIA == 1,7, nDIA-1)       // Adequa o calendario a microsica a funcao DOW
+    Do While HtoM(aDIA[nDIA][3]) == 0          // total de horas de trabalho no dia
+       dInicio_temp := dInicio_temp + nDiff
+       nDia    := DOW(dInicio_temp)
+       nDIA    := IF(nDIA == 1,7, nDIA-1)      // Adequa o calendario a microsica a funcao DOW
+    EndDo
+
+    // Verifica se o dia a ser gerado e dia valido, ou Escecao.
+    For I :=  1 to Len(aDATEXC)
+        IF dInicio_temp == aDATEXC[I]
+           dInicio_temp := dInicio_temp + nDiff
+           nDia    := DOW(dInicio_temp)
+           nDIA    := IF(nDIA == 1,7, nDIA-1)         // Adequa o calendario a microsica a funcao DOW
+                                                      // DOW retorna 1 para domingo,na microsiga 1 eh Segunda
+           Do While HtoM(aDIA[nDIA][3]) == 0          // total de horas de trabalho no dia
+              dInicio_temp := dInicio_temp + nDiff
+              nDia    := DOW(dInicio_temp)
+              nDIA    := IF(nDIA == 1,7, nDIA-1)      // Adequa o calendario a microsica a funcao DOW
+            EndDo
+         ENDIF
+    NEXT
+
+    aOCI    := aDIA[nDia][4]
+    nInic   := HtoM(aDIA[nDIA][1])
+    nFinal  := HtoM(aDia[nDIA][2])
+    nFinal  := nFinal - nQtAten              // Diminui tempo de atendimento.
+    nHORA   := If( Empty(nUltCons), nINIC, nUltCons)
+
+	dInicio := dInicio_temp
+	nQteDIA := 0
+	DbSelectArea(cOLDALI)
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³CHKAGENDA ³ Autor ³ Thiago Machado        ³ Data ³ 12/03/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Verifica se o medico tem agenda medica                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function CHKAGENDA()
+
+	DbSelectArea("TML")
+	DbSetOrder(1)
+	If !DbSeek( xFilial("TML")+M->TMV_CODUSU)
+	DbSelectArea("TMK")
+	DbSetOrder(1)
+	DbSeek(xFilial("TMK")+M->TMV_CODUSU)
+	MsgStop(STR0007+AllTrim(TMK->TMK_NOMUSU)+STR0008) //"O usuario "###" nao tem agenda medica"
+	Return .f.
+EndIf
+
+Return .T.
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    |CHKCODUSU ³ Autor ³ Denis Hyroshi de Souza³ Data ³ 15/08/02 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Verifica se o nome do medico esta preenchido               ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function CHKCODUSU()
+
+	Local aArea := GetArea()
+
+	IF Empty(M->TMV_CODUSU)
+	Help(" ",1,"NGSMEDOBR")
+	return .f.
+	Endif
+
+	If INCLUI
+
+		//Valida a existencia do calendario (arquivo SH7)
+		If !NGIFDBSEEK("SH7",TML->TML_CALEND,1)
+			ShowHelpDlg(STR0032,	{STR0033+Space(01)+STR0034+": "+TML->TML_CALEND},3,;//"ATENÇÃO"  //"Calendário do atentende não existe no cadastro de calendários."##"Calendário"
+										{STR0035},3)  //"O usuário deverá cadastrar um calendário de acordo com o código do calendário informado na agenda médica."
+			Return .F.
+		EndIf
+
+		dbSelectArea("TML")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TML")+M->TMV_CODUSU)
+			If M->TMV_CALEND <> TML->TML_CALEND
+				If !MsgYesNo(STR0026+" ("+AllTrim(+M->TMV_CALEND)+") "+STR0027+Chr(13)+; // "O calendário informado"###"não corresponde ao calendário"
+								STR0028+AllTrim(M->TMV_CODUSU)+" !"+Chr(13)+Chr(13)+; // "do médico "
+								STR0029) // "Deseja confirmar ?"
+					Return .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    |MDT195INDI³ Autor ³ Denis Hyroshi de Souza³ Data ³ 19/04/04 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Verifica se existe consulta p/ esse exame                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MDT195INDI()
+	Local aArea := GetArea()
+	Local lRet  := .t.
+
+	Dbselectarea("SIX")
+	Dbsetorder(1)
+	If Dbseek("TMJ"+"8")
+		Dbselectarea("TMJ")
+		Dbsetorder(8)
+		Dbseek(xFilial("TMJ",SRA->RA_FILIAL)+TM5->TM5_NUMFIC+DTOS(TM5->TM5_DTPROG)+TMV->TMV_EXAME)
+		While !eof() .and. xFilial("TMJ",SRA->RA_FILIAL) == TMJ->TMJ_FILIAL .and. TM5->TM5_NUMFIC == TMJ->TMJ_NUMFIC .and. ;
+			TM5->TM5_DTPROG == TMJ->TMJ_DTPROG .and. TMV->TMV_EXAME == TMJ->TMJ_EXAME
+
+			If TMJ->TMJ_DTCONS < dDataBase
+				lRet := .t.
+			Else
+				lRet := .f.
+				exit
+			Endif
+			Dbskip()
+		End
+	Endif
+
+	RestArea(aArea)
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    |NG195REGAN³ Autor ³ Denis Hyroshi de Souza³ Data ³ 19/04/04 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Busca convocacao anterior                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NG195REGAN()
+	Local nIndTMV := 2
+	Local cKeyTMV := xFilial("TMV")+TMV->TMV_CODUSU+TMV->TMV_CONVOC
+	Local cFilUsu := xFilial("TMV")+TMV->TMV_CODUSU
+
+	Dbselectarea("SIX")
+	Dbsetorder(1)
+	If Dbseek("TMV"+"3")
+		nIndTMV := 3
+		cKeyTMV := xFilial("TMV")+TMV->TMV_CODUSU+TMV->TMV_PCMSO+TMV->TMV_CONVOC
+	Endif
+
+	Dbselectarea("TMV")                     // OBTER REGISTRO ANTERIOR.
+	Dbsetorder(nIndTMV)
+	If Dbseek(cKeyTMV)
+		nQtaten := TMV->TMV_QTATEN
+		Dbskip(-1)
+		If TMV->TMV_FILIAL+TMV->TMV_CODUSU == cFilUsu
+			//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+			//³ Busca hora ultma consulta para dar continuidade na agenda    ³
+			//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+			If TMV->TMV_DTFIRE >= dInicatu
+				Dbselectarea("TMJ")               // OBTER ULTIMA CONSULTA MARCADA
+				Dbsetorder(5)
+				Dbseek(xFilial("TMJ",SRA->RA_FILIAL)+TMV->TMV_PCMSO+TMV->TMV_CODUSU+DTOS(TMV->TMV_DTFIRE)+cUltHora,.t.)
+				Dbskip(-1)
+				If TMJ->TMJ_DTCONS >=  dInicAtu
+					dINICIO  := TMJ->TMJ_DTCONS
+					nQteDIA  := 0
+					nUltCons := HtoM(TMJ_HRCONS)
+					nUltCons := nUltCons + TMV->TMV_QTATEN
+				Else
+					dINICIO  := dInicAtu
+					nQteDIA  := 0
+					nQtaten  := nQtAtual
+				Endif
+			Endif
+		Endif
+	Endif
+
+	DbSelectArea("TMV")                     // OBTER REGISTRO ANTERIOR.
+	DbSetOrder(1)
+	DbSeek(xFilial("TMV") + cPcmsoAtu + cConvoAtu)
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    |MDTA195POS³ Autor ³ Denis Hyroshi de Souza³ Data ³ 19/04/04 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Verifica o posto de servico do funcionario                 ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MDTA195POS()
+	If SRA->(FieldPos("RA_POSTO")) > 0 .and. TMV->(FieldPos("TMV_CODPOS")) > 0
+		If !Empty(TMV->TMV_CODPOS) .And. TMV->TMV_CODPOS  !=  SRA->RA_POSTO
+			Return .f.
+		Endif
+	Endif
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MenuDef  ³ Autor ³ Rafael Diogo Richter  ³ Data ³29/11/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Utilizacao de Menu Funcional.                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMDT                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³		1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                          ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MenuDef()
+
+	Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	Local aRotina
+
+	If lSigaMdtps
+		aRotina := { { STR0001,   "AxPesqui"  , 0 , 1},; //"Pesquisar"
+					{ STR0002,   "NGCAD01"   , 0 , 2},; //"Visualizar"
+					{ STR0010,   "MDT195TMV" , 0 , 4} } //"Convocações"
+	Else
+
+		aRotina :=	{ { STR0001,	"AxPesqui"   , 0 , 1},; //"Pesquisar"
+					{ STR0002,	"NGCAD01"    , 0 , 2},; //"Visualizar"
+					{ STR0003, 	"NG195INC"   , 0 , 3},; //"Incluir"
+					{ STR0011, 	"NG195MTI"   , 0 , 3},; //"Multi Inclusão"
+					{ STR0004, 	"NG195EXC"   , 0 , 5, 3} } //"Excluir"
+	Endif
+
+Return aRotina
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDT195TMV  ³ Autor ³ Andre Perez Alvarez     ³ Data ³31/10/07  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Monta um browse com as convocacoes do cliente.                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Sintaxe   ³ MDT195TMV()                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³                                                                ³±±
+±±³          ³                                                                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³                                                                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³  SIGAMDT                                                       ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Function MDT195TMV()
+
+	Local aArea	:= GetArea()
+	Local oldROTINA := aCLONE(aROTINA)
+	Local oldCad := cCadastro
+	cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+
+	aRotina :=	{ { STR0001, "AxPesqui"  , 0 , 1},; //"Pesquisar"
+				{ STR0002, "NGCAD01"   , 0 , 2},; //"Visualizar"
+				{ STR0003, "NG195INC"  , 0 , 3},; //"Incluir"
+				{ STR0011, "NG195MTI"  , 0 , 3},; //"Multi Inclusão"
+				{ STR0004, "NG195EXC"  , 0 , 5, 3} } //"Excluir"
+
+	PRIVATE  cExame    := space(6),     cExamant := space(6)
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Define cabecalho e Variaveis privadas                        ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	PRIVATE cCadastro := OemtoAnsi(STR0005) //"Geracao da Convocacao para Exames"
+	PRIVATE aCHKDEL := {}, bNGGRAVA
+	PRIVATE aDIA 		:= {}
+	PRIVATE nInic     :=  0
+	PRIVATE nFinal    :=  0
+	PRIVATE dINICIO   :=  SToD("")
+	PRIVATE dDATANT   :=  CtoD(" /  /     ")
+	PRIVATE cHHMMIN   :=  Space (5)
+	PRIVATE cHHMMFI   :=  Space (5)
+	PRIVATE aDATEXC   :=  {}
+	PRIVATE nTotalPer :=  0
+	PRIVATE lCalendar :=  .F.
+	PRIVATE nPer      :=  0
+	PRIVATE nHora     :=  0
+	PRIVATE nDia      :=  1
+	PRIVATE aOCI      :=  {}
+	PRIVATE nQtaten   :=  0
+	PRIVATE nUltCons  :=  0
+	PRIVATE aUtil     :=  {}
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Endereca a funcao de BROWSE                                  ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	DbSelectArea("TMV")
+	Set Filter To TMV->(TMV_CLIENT+TMV_LOJA) == cCliMdtps
+	DbSetOrder(1)
+	mBrowse( 06,01,22,75,"TMV")
+
+	DbSelectArea("TMV")
+	Set Filter To
+
+	aROTINA := aCLONE(oldROTINA)
+	RestArea(aArea)
+	cCadastro := oldCad
+
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MDT195FLVL³ Autor ³ Denis Hyroshi        ³ Data ³ 04/08/08 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Valida os campos De/Ate Filial                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ Generico                                                   ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MDT195FLVL(nTipo)
+	Local lRet    := .T.
+	Local cArea   := Alias()
+	Local aArea   := SM0->(GetArea())
+	//Local lCpoFil := If( NGCADICBASE("TMV_FILDE","D","TMV",.F.) .And. NGCADICBASE("TMW_FILDE","D","TMW",.F.) , .T. , .F. )
+
+	If nTipo == 1
+		If !Empty(M->TMV_FILDE)
+			dbSelectArea("SM0")
+			If !dbSeek(cEmpAnt+M->TMV_FILDE)
+				Help(" ",1,"REGNOIS")
+				lRet := .F.
+			Endif
+			If M->TMV_FILDE > M->TMV_FILATE
+				M->TMV_FILATE := M->TMV_FILDE
+			Endif
+		Endif
+	Else
+		If M->TMV_FILATE <> Replicate("Z",Len(M->TMV_FILATE))
+			If M->TMV_FILDE > M->TMV_FILATE
+				Help(" ",1,"DEATEINVAL")
+				lRet := .F.
+			Else
+				dbSelectArea("SM0")
+				If !dbSeek(cEmpAnt+M->TMV_FILATE)
+					Help(" ",1,"REGNOIS")
+					lRet := .F.
+				Endif
+			Endif
+		Endif
+	Endif
+
+	RestArea(aArea)
+	dbSelectArea(cArea)
+
+Return lRet
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³NG195MTI  ºAutor  |Roger Rodrigues     º Data ³  25/02/09   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Rotina para gerar convocação de vários exames ao mesmo tempoº±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³MDTA195                                                     º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Function NG195MTI(cALias, nRecno, nOpcx)
+
+	Local lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .t. , .f. )
+	Local x,i,k, oPanelTop, oPnlPai
+	Local aArea      := GetArea()
+	Local oDlgF, oFont, oMark1,oTempTable//Varívaeis de Objetos em tela
+	Local lSBIS      := SuperGetMv("MV_NG2SEG",.F.,"2") == "1" .And. !(SuperGetMV("MV_MDTPS",.F.,"N") == "S")
+	Local nFld
+	Local aCampos    := { "TMV_CODUSU", "TMV_NOMUSU", "TMV_EXAME" , ;
+						  "TMV_NOMEXA", "TMV_DTINRE", "TMV_DTFIRE", ;
+						  "TMV_CALEND", "TMV_QTATEN", "TMV_LOCAL"     }
+	Local aExc       := {  { 'TMV_CODUSU', 'X3_CONTEXT', IIf(lSBIS,'V', GetSx3Cache( 'TMV_CODUSU' , 'X3_CONTEXT' )) }, ;
+					       { 'TMV_NOMUSU', 'X3_CONTEXT', IIf(lSBIS,'V', GetSx3Cache( 'TMV_NOMUSU' , 'X3_CONTEXT' )) }, ;
+					       { 'TMV_EXAME' , 'X3_CONTEXT', 'V'            }, ;
+					       { 'TMV_NOMEXA', 'X3_CONTEXT', 'V'            }  }
+
+	Local cField
+
+	Private cMarca       := GetMark(), aMark :={}, lInverte:= .f.//Varíaveis do MarkBrowse
+	Private aNao         := {}, aChoice := {}//Varáveis para a montagem do MSMGet
+	Private aSize        := MsAdvSize(,.f.,430), aObjects := {}//Varíaveis para definição do tamanho dos objetos
+	Private M->TMV_PCMSO := SPACE(6),M->TMV_CONVOC := Space(4)
+	Private nOpt         := 2//Varíavel de Confirmaçao dos exames
+	Private cFilDe       := Space(Len(TMV->TMV_FILIAL)), cFilAte := Space(Len(TMV->TMV_FILIAL))//Varáveis para controle de filial
+	Private lMultInc     := .T.//Indica se é multi-inclusao, utilizada no when do campo de exames
+	Private oMenuPop
+	//Estrutura da Tabela Temporária
+	aDBF := {}
+	AADD(aDBF,{ "OK"     , "C" ,02, 0 })
+	AADD(aDBF,{ "CODIGO" , "C" ,If(TAMSX3("TM4_EXAME")[1] < 1, 6, TAMSX3("TM4_EXAME")[1]), 0 })
+	AADD(aDBF,{ "NOMEXA" , "C" ,20, 0 })
+
+	//Cria Tabela Temporária
+	cTRBMRK := GetNextAlias()
+	oTempTable := FWTemporaryTable():New( cTRBMRK, aDBF )
+	oTempTable:AddIndex( "1", {"CODIGO"} )
+	oTempTable:Create()
+
+	//Estrutura dos campos que aparecerão no MarkBrowse
+	aTRB1 := {}
+	AADD(aTRB1,{ "OK"     ,Nil, "  " ,})
+	AADD(aTRB1,{ "CODIGO" ,Nil, STR0015 ,})
+	AADD(aTRB1,{ "NOMEXA" ,Nil, STR0014 ,})
+
+	//Tela para seleção dos exames do PCMSO
+	DEFINE MSDIALOG oDlg TITLE OemToAnsi(STR0023) From 50,0 To 450,405 OF oMainWnd PIXEL //"Selecione os Exames do PCMSO"
+		oPnlPai := TPanel():New(0, 0, Nil, oDlg, Nil, .T., .F., Nil, Nil, 0, 0, .T., .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPanelTop := TPanel():New(0, 0, Nil, oPnlPai, Nil, .T., .F., Nil, Nil, 0, 20, .T., .F. )
+					oPanelTop:Align := CONTROL_ALIGN_TOP
+
+			@ 7,30 SAY OemToAnsi(STR0024) Pixel Of oPanelTop //"PCMSO:"
+			@ 5,53 MSGET M->TMV_PCMSO F3 "TMW" WHEN .T. SIZE 45,08 VALID (EXISTCPO("TMW",M->TMV_PCMSO) .AND. NEXTCONVOC()) Pixel HASBUTTON Of oPanelTop //Seleciona PCMSO
+			@ 4,110 BUTTON STR0025 Of oPanelTop SIZE 55,12 ACTION IF(!Empty(M->TMV_PCMSO),MDT195EXA(M->TMV_PCMSO),) Pixel //Carrega Exames do PCMSO //"Carregar Exames"
+
+			oMark1 := MsSelect():NEW((cTRBMRK),"OK",,aTRB1,@lINVERTE,@cMARCA,{20,4,200,200},,,oPnlPai)//Cria MarkBrowse
+			oMark1:oBrowse:lHASMARK := .T.
+			oMark1:oBrowse:lCANALLMARK := .T.
+			oMark1:oBrowse:bALLMARK := {|| MDTA195INV(cMarca,oMark1) }
+			oMark1:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{|| nOpt := 1,oDlg:End()},{|| nOpt := 2,oDlg:End()}) CENTERED
+
+
+	If nOpt = 1
+		//Guarda PCMSO para atribuição futura
+		cPcmso := M->TMV_PCMSO
+		If NGCADICBASE("TMV_FILDE","D","TMV",.F.) .And. NGCADICBASE("TMW_FILDE","D","TMW",.F.)
+			dbSelectArea("TMW")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TMW")+cPcmso)
+				cFilDe := TMW->TMW_FILDE
+				cFilAte:= TMW->TMW_FILATE
+			Endif
+		Endif
+		//Preenche array com exames selecionados
+		dbSelectArea((cTRBMRK))
+		dbGoTop()
+		While ( cTRBMRK )->( !EoF() )
+			If !Empty((cTRBMRK)->OK)
+				Aadd(aMark, {(cTRBMRK)->CODIGO, (cTRBMRK)->NOMEXA})
+			Endif
+			DbSkip()
+		End
+		//Verifica se foi marcado ao menos um exame
+		If Len(aMark) <= 0
+			//Deleta o arquivo temporario fisicamente
+			oTempTable:Delete()
+			Msgstop(STR0021,STR0020)  //"Nenhum exame selecionado!" //"ATENÇÃO"
+			Return .t.
+		Endif
+
+		//Atribui valor as varáiveis de tela
+		RegToMemory("TMV",.T.)
+
+		aNao := { "TMV_CODUSU", "TMV_NOMUSU", "TMV_EXAME", "TMV_NOMEXA", "TMV_DTINRE", ;
+				  "TMV_DTFIRE", "TMV_CALEND", "TMV_QTATEN", "TMV_LOCAL", "TMV_CONVOC" }
+		aChoice := NGCAMPNSX3( "TMV", aNao )
+		aNmChoice := {}
+
+		//Preenche aHeader
+		aHeader := {}
+
+		aHeader := NGHeadExc( aCampos, .F., .F., .F., aExc )
+
+		//Cria aCols
+		aCols	:= {}
+		//Preenche aCols com os Exames
+		For i=1 to Len(aMark)
+			Aadd(Acols,{If(lSBIS,MDTUSRLOG(),Space(Len(TMV_CODUSU))),If(lSBIS,MDTUSRLOG(2),Space(Len(TMV_NOMUSU))),aMark[i][1],aMark[i][2],STOD("  /  /"),STOD(""), Space(Len(TMV_CALEND)), 0,Space(Len(TMV_LOCAL))})
+		Next i
+
+		nOpca:=0//Varáivel para controle do botçao Confirmar
+
+		//Define o Tamanho dos objetos em tela
+		Aadd(aObjects,{050,050,.t.,.t.})
+		Aadd(aObjects,{100,100,.t.,.t.})
+		aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+		aPosObj := MsObjSize(aInfo, aObjects,.t.)
+		DEFINE MSDIALOG oDlg TITLE OemToAnsi(STR0005) From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd PIXEL
+		//Veráaveis dos campos da parte de cima
+		aTela := {}
+		aGets := {}
+		@ 000,000 MsPanel oPanel SIZE aSize[6],aSize[5] OF oDlg
+		//Cria Parte de cima da Tela
+		oEnc01:= MsMGet():New("TMV",nRecno,nOpcx,,,,aChoice,{aPosObj[1,1],aPosObj[1,2],aPosObj[1,3],aPosObj[1,4]},aChoice,,,,,oPanel,,,.f.)
+
+		//Preenche PCMSO
+		M->TMV_PCMSO := cPcmso
+		//Preenche varíaveis fornecidas pela função PROXCONVOC()
+		If NGCADICBASE("TMV_FILDE","D","TMV",.F.) .And. NGCADICBASE("TMW_FILDE","D","TMW",.F.)
+			M->TMV_FILDE  := cFilDe
+			M->TMV_FILATE := cFilAte
+		Endif
+		//Cria Parte de Baixo da tela
+		oGet := MSGetDados():New(aPosObj[2,1],aPosObj[2,2],aPosObj[2,3],aPosObj[2,4],nOpcx,"AllwaysTrue()","AllwaysTrue()","",.F.,,,,Len(aMark))
+		//Função para criar um menu Popup, "Copiar para todos".
+	    fPopUp( @oMenuPop , oGet:oBrowse )
+	    oGet:oBrowse:bRClicked := {|o,x,y| oMenuPop:Activate(x,y,oGet:oBrowse)}
+
+		Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{||nOpca:=1, If(!obrigatorio(aGets,aTela) .or. !NG195OK(aHeader,aCols),nOpca := 0,oDlg:End())},{||oDlg:End()})
+
+		If nOpca == 1
+			//Percorre aCols
+			For k := 1 to len(aCols)
+				cConvoc := NEXTCONVOC(.T.)//Varíavel com a próxima convocação
+				dbSelectArea("TMV")
+				RecLock("TMV",.T.)
+				//Percorre campos da TMV
+				For i := 1 To FCount()
+					y := "TMV->" + FieldName(i)
+					If Trim(Upper(FieldName(i))) == "TMV_FILIAL"
+						&y := xFilial("TMV")
+					ElseIf Trim(Upper(FieldName(i))) == "TMV_CONVOC"
+						&y := cConvoc
+					ElseIf (nPos := aScan( aNao, {|x| Trim(Upper(x)) == Trim(Upper(FieldName(i)))}) ) > 0//Verifica se é um campo da GetDados
+						&y := aCols[k][nPos]
+					Else
+						x := "M->" + FieldName(i)
+						&y := &x//Atribui o campo da mémoria ao da tabela
+					Endif
+				Next i
+				MsUnlock("TMV")
+				//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+				//³ Carrega array com os dias que o medico nao atende no ambulat.³
+				//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+				If !Empty(TMV->TMV_DTEXC1)
+					aAdd(aDATEXC,TMV->TMV_DTEXC1)
+				Endif
+				If !Empty(TMV->TMV_DTEXC2)
+					aAdd(aDATEXC,TMV->TMV_DTEXC2)
+				Endif
+				If !Empty(TMV->TMV_DTEXC3)
+					aAdd(aDATEXC,TMV->TMV_DTEXC3)
+				Endif
+				If !Empty(TMV->TMV_DTEXC4)
+					aAdd(aDATEXC,TMV->TMV_DTEXC4)
+				Endif
+				If !Empty(TMV->TMV_DTEXC5)
+					aAdd(aDATEXC,TMV->TMV_DTEXC5)
+				Endif
+				If !Empty(TMV->TMV_DTEXC6)
+					aAdd(aDATEXC,TMV->TMV_DTEXC6)
+				Endif
+				//Gera Convocação
+				Processa({|lEnd| NG195GERA()})
+			Next i
+		Endif
+	Endif
+
+	//Deleta o arquivo temporario fisicamente
+	oTempTable:Delete()
+
+	RestArea(aArea)
+
+Return .T.
+
+/*/
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MDTA195INV³ Autor ³Roger Rodrigues        ³ Data ³ 25/02/09 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³ Inverte a marcacao do browse                               ³±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ NG195MTI                                                   º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+/*/
+Function MDTA195INV(cMarca,oMark)
+
+
+	Local aArea := {}
+
+	aArea := GetArea()
+
+	dbSelectArea( cTRBMRK )
+	dbGoTop()
+	While ( cTRBMRK )->( !Eof() )
+		RecLock( cTRBMRK , .F. )
+		( cTRBMRK )->OK := IF( Empty( ( cTRBMRK )->OK ) , cMarca , Space( Len( cMarca ) ) )
+		(cTRBMRK)->( MsUnLock() )
+		(cTRBMRK)->( dbskip() )
+	End
+
+	RestArea( aArea )
+	dbSelectArea( cTRBMRK )
+	dbGoTop()
+	// Atualiza markbrowse
+	oMark:oBrowse:Refresh()
+
+Return .t.
+
+/*
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³MDT195EXA ºAutor  Roger Rodrigues      º Data ³  26/02/09   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Carrega os Exames do PCMSO selecionado                      º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ NG195MTI                                                   º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Function MDT195EXA(cPmcso)
+	//Limpa TRB
+	dbSelectArea((cTRBMRK))
+	ZAP
+
+	#IFDEF TOP
+		cAnaArqTRB := GetNextAlias()
+		cQuery := "SELECT TM5.TM5_EXAME, TM4.TM4_NOMEXA "
+		cQuery += "FROM " + RetSqlName("TM5") + " TM5 "
+		cQuery += 	"INNER JOIN " + RetSqlName("TM4") + " TM4 ON "
+		cQuery += 		"TM4.TM4_EXAME = TM5.TM5_EXAME AND "
+		cQuery += 		"TM4.TM4_FILIAL = '"+xFilial("TM4")+"' AND "
+		cQuery += 		"TM4.D_E_L_E_T_ <> '*' "
+		cQuery += "WHERE "
+		cQuery += 		"TM5.TM5_PCMSO = '"+cPmcso+"' AND "
+		cQuery += 		"TM5.TM5_FILIAL = '"+xFilial("TM5")+"' AND "
+		cQuery += 		"TM5.D_E_L_E_T_ <> '*' "
+		cQuery += "GROUP BY TM5.TM5_EXAME, TM4.TM4_NOMEXA"
+		cQuery := ChangeQuery(cQuery)
+		MPSysOpenQuery( cQuery , cAnaArqTRB )
+		//Preenche TRB com exames do PCMSO
+		dbSelectArea(cAnaArqTRB)
+		dbGoTop()
+		While !Eof()
+			RecLock((cTRBMRK),.T.)
+			(cTRBMRK)->CODIGO := (cAnaArqTRB)->TM5_EXAME
+			(cTRBMRK)->NOMEXA := (cAnaArqTRB)->TM4_NOMEXA
+			(cTRBMRK)->(MsUnLock())
+			dbSelectArea(cAnaArqTRB)
+			dbSkip()
+		End
+		dbSelectArea(cAnaArqTRB)
+		dbCloseArea()
+
+	#ELSE
+		//Preenche TRB com exames do PCMSO
+		dbSelectArea("TM5")
+		dbSetOrder(3)
+		dbSeek(xFilial("TM5")+cPmcso)
+		While !Eof() .and. xFilial("TM5")+cPmcso == TM5->TM5_FILIAL+TM5->TM5_PCMSO
+			dbSelectArea((cTRBMRK))
+			If !dbSeek(TM5->TM5_EXAME)
+				RecLock((cTRBMRK),.T.)
+				(cTRBMRK)->CODIGO := TM5->TM5_EXAME
+				(cTRBMRK)->NOMEXA := NGSEEK("TM4",TM5->TM5_EXAME,1,"TM4->TM4_NOMEXA")
+				(cTRBMRK)->(MsUnLock())
+			Endif
+			dbSelectArea("TM5")
+			dbSkip()
+		End
+	#ENDIF
+
+	//VerIfica se o PCMSO possui exames
+	Dbselectarea((cTRBMRK))
+	If (cTRBMRK)->(Reccount()) <= 0
+		Msgstop(STR0022,STR0020)  //"Não existem exames para o PCSMO" //"ATENÇÃO"
+		Return .t.
+	Else
+		dbGoTop()
+	Endif
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³NG195OK   ºAutor  ³Roger Rodrigues     º Data ³  25/03/09   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Valida se os campos da get dados estão preenchidos.         º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ NG195MTI                                                   º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function NG195OK(aHeader,aCols)
+	Local i := 0, f :=0, nPos
+	//Percorre aCols
+	For f = 1 to Len(aCols)
+		//Percorre aHeader
+		For i = 1 to len(aHeader)
+			//VerIfica se os campos obrigatórios estão preenchidos
+			If (nPos := aScan( aNao, {|x| Trim(Upper(x)) == Trim(Upper(aHeader[i][2]))}) ) > 0 .AND. Empty(aCols[f][i]);
+				.AND. Trim(Upper(aHeader[i][2])) <> "TMV_LOCAL"
+				//Mostra mensagem de Help
+				Help(1," ","OBRIGAT2",,aHeader[i][1],3,0)
+				Return .F.
+			Endif
+			If FindFunction( "MDTA076" )
+				//verifica se tempo para consulta termina em 0 ou 5
+				If Trim(Upper(aHeader[i][2])) == "TMV_QTATEN"
+					lRet := MDT076HOR(,MTOH(aCols[f][i]))
+					If !lRet
+						Return .F.
+					EndIf
+				EndIf
+			EndIf
+		Next f
+	Next i
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFuncao    ³MDTA195TEMºAutor  ³Wagner S. de Lacerdaº Data ³  28/06/2010 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³ Valida o tempo em minutos (Tempo (min)) nao permitindo     º±±
+±±º          ³ valores negativos.                                         º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ MDTA195                                                    º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MDTA195TEM() // TEmpo Minimo
+
+	Local lRet  := .T.
+	Local nTemp := M->TMV_QTATEN
+
+	If nTemp  < 0
+		MsgInfo(STR0031, STR0030) // "Tempo (em minutos) não pode ser negativo!"###"ATENÇÃO"
+		lRet := .F.
+	EndIf
+
+	If lRet
+		If FindFunction( "MDTA076" )
+			//verifica se tempo informado é divisor de 5
+			cTemp := MTOH( nTemp )
+			If !MDT076HOR( cTemp )
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA195DTP
+Funcao para validar data de Inicio e Fim da Convocação.
+
+@return Nil
+@sample
+@author Rodrigo Soledade
+@since 13/11/2013
+/*/
+//---------------------------------------------------------------------
+Function MDTA195DTP()
+
+	Local lRet := .T.
+	If !Empty(M->TMV_DTINPR) .And. !Empty(M->TMV_DTFIPR) .And. M->TMV_DTINPR > M->TMV_DTFIPR
+		ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+							{STR0039},3)//"A Data de Término deve ser maior que a Data de Início."
+		lRet := .F.
+	EndIf
+	If !Empty(M->TMV_DTINRE) .And. !Empty(M->TMV_DTINPR) .And. lRet
+		If M->TMV_DTINRE < M->TMV_DTINPR
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+						{STR0044},3)//"A Data de Inicio da programação deve ser menor ou igual a Data Inicio da Realização"
+			lRet := .F.
+		EndIf
+	EndIf
+	If !Empty(M->TMV_DTFIRE) .And. !Empty(M->TMV_DTFIPR) .And. lRet
+		If M->TMV_DTFIPR < M->TMV_DTFIRE
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+						{STR0045},3)//"A Data Fim da programação deve ser maior ou igual a Data Termino da Realização"
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195DTEX
+Funcao para validar data.
+
+@return Nil
+@sample
+@author Rodrigo Soledade
+@since 13/11/2013
+/*/
+//---------------------------------------------------------------------
+Function MDT195DTEX(dDtExcec)
+
+	Local lRet := .T.
+	Local dRef := SToD("")//Data de Referencia
+
+	If dDtExcec > dRef
+		If dDtExcec < M->TMV_DTINPR
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+						{STR0041},3)//"A Data de Exceção deve ser maior que a Data Inicio."
+			lRet := .F.
+		ElseIf dDtExcec > M->TMV_DTFIPR
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+						{STR0040},3)//"A Data de Exceção deve ser menor que a Data Fim."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195DTRL
+Funcao para validar Data de Realização.
+
+@return Nil
+@sample
+@author Rodrigo Soledade
+@since 13/11/2013
+/*/
+//---------------------------------------------------------------------
+Function MDT195DTRL()
+
+	Local lRet := .T.
+
+	If !Empty(M->TMV_DTINRE)
+		If M->TMV_DTINRE > M->TMV_DTFIRE .And. !Empty(M->TMV_DTFIRE)
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."//
+								{STR0039},3)//"A Data de Término deve ser maior que a Data de Início."
+			lRet := .F.
+		EndIf
+		If (!Empty(M->TMV_DTINPR) .Or. !Empty(M->TMV_DTFIPR)) .And. lRet
+			If M->TMV_DTINRE > M->TMV_DTFIPR .Or. M->TMV_DTINRE < M->TMV_DTINPR
+				ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+						{STR0043},3)//"A Data deve estar entre a Data de Inicio e a Data Fim da progração."
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+	If !Empty(M->TMV_DTFIRE)
+		If M->TMV_DTINRE > M->TMV_DTFIRE .And. !Empty(M->TMV_DTFIRE) .And. lRet
+			ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+							{STR0042},3)//"A Data de Inicio deve ser menor que a Data Termino."
+			lRet := .F.
+		EndIf
+		If !Empty(M->TMV_DTINPR) .Or. !Empty(M->TMV_DTFIPR) .And. lRet
+			If M->TMV_DTFIRE > M->TMV_DTFIPR .Or. M->TMV_DTFIPR < M->TMV_DTFIRE
+				ShowHelpDlg(STR0032,{STR0038},3,;//"ATENÇÃO"##"Data inválida."
+							{STR0043},3)//"A Data deve estar entre a Data de Inicio e a Data Fim da progração."
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} fCopyMInc()
+"Função para copiar para todos" ao clicar em uma linha da getdados com o botão direito,
+surgirá a opção "Copiar para todos" os registros que não estiverem com o Médico preenchido receberão
+as informações da linha selecionada.
+
+@return Nil
+
+@sample fCopyMInc()
+
+@author Jackson Machado
+@since 19/05/2017
+@version 1.0
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function fCopyMInc()
+
+Local f, nFld
+Local nPosFld, nPosMed
+Local aFldCopy 	:= { "TMV_CODUSU" , "TMV_NOMUSU" , "TMV_DTINRE" , "TMV_DTFIRE" , "TMV_CALEND" , "TMV_QTATEN" , "TMV_LOCAL" }
+Local aValues 	:= {}
+
+nPosMed := aScan( aHeader , { | x | AllTrim( Upper( x[ 2 ] ) ) == "TMV_CODUSU" } )
+For nFld := 1 To Len( aFldCopy )
+	nPosFld := aScan( aHeader , { | x | AllTrim( Upper( x[ 2 ] ) ) == aFldCopy[ nFld ] } )
+	aAdd( aValues , { nPosFld , aCols[ n , nPosFld ] } )
+Next nFld
+
+For	f := 1 to Len(aCols)
+	If f <> n .And. Empty(aCols[ f , nPosMed ])
+		For nFld := 1 To Len( aValues )
+			aCols[ f , aValues[ nFld , 1 ] ] := aValues[ nFld , 2 ]
+		Next nFld
+	Endif
+Next f
+
+oGet:oBrowse:Refresh()
+
+Return
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} fPopUp()
+Ao clicar em uma linha da GetDados, aparecerá uma opção de menu "Copiar para todos".
+
+@return Nil
+
+@sample fPopUp( oObj , oObj )
+
+@author Jackson Machado
+@since 19/05/2017
+@version 1.0
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function fPopUp(oMenu, oParent)
+
+oMenu := TMenu():New(0,0,0,0,.t.,,oParent)
+	oMenu:Add( TMenuItem():New(oMenu:Owner(),STR0046,,,,{|| fCopyMInc() },,,,,,,,,.T.) ) // "Copiar para Todos"
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195FER
+Verifica se o exame cai no periodo de ferias.
+@param cMatricula, Caracter, Matricula do funcionário
+@param dDtIniRe  , Data, Indica a data inicio da realização de exames
+@param dDtFimRe  , Data, Indica a data fim da realização de exames
+@author Jean Pytter da Costa
+@since 31/07/2017
+@return lFerias, Lógico, Indica se está no periodo das férias
+/*/
+//---------------------------------------------------------------------
+Static Function MDT195FER( cMatricula, dDtIniRe, dDtFimRe )
+	Local lFerias	:= .F.
+	Local nX 		:= 0
+	//Se possuir data de inicio da SR8, deverá validar com periodo de férias
+	Local dNewDtCon := If( !Empty( dDtIniAus ), dDtIniAus , SToD("") )
+	Default cMatricula	:= ""
+	Default dDtIniRe	:= SToD("")
+	Default dDtFimRe	:= SToD("")
+	dbSelectArea("SRH")
+	dbSetOrder(2)  //RH_FILIAL+RH_MAT+DTOS(RH_DATAINI)
+	dbSeek( xFilial("SRH") + cMatricula )
+	While ("SRH")->( !Eof() ) .And. xFilial("SRH") == SRH->RH_FILIAL .And. cMatricula == SRH->RH_MAT
+
+		If ( dDtIniRe >= SRH->RH_DATAINI .AND. dDtIniRe < SRH->RH_DATAFIM ) .Or. ;
+				( dDtFimRe >= SRH->RH_DATAINI .AND. dDtFimRe <= SRH->RH_DATAFIM )
+			//Add no array para ser feito as validações corretas no fonte
+			aAdd( aDtAusen , { SRH->RH_DATAINI, SRH->RH_DATAFIM, "" } )
+			lFerias	:= .T.
+        EndIf
+
+		dbSelectArea( "SRH" )
+		( "SRH" )->( dbSkip() )
+	End
+Return lFerias
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195NEWDT
+Verifica se o exame cai no periodo de ausencia por motivo de afastamento ou férias.
+@param dDtIniRe  , Data, Indica a data inicio da convocação de exames
+@param dDtFimRe  , Data, Indica a data fim da convocação de exames
+@author Jean Pytter da Costa
+@since 07/08/2017
+@return
+/*/
+//---------------------------------------------------------------------
+Function MDT195NEWDT( dDtIniRe, dDtFimRe )
+	Local nX := 1
+	Local lAusente := .F.
+
+	If Len( aDtAusen ) > 0
+		//array posição [nx, 1] = Data inicia ausencia
+		//array posição [nx, 2] = Data fim ausencia
+		//array posição [nx, 3] = Indica se é continuação(SR8), caso contrário ficará vazia
+		For nX := 1 To Len( aDtAusen )
+			//Se não for continuação
+			If Empty( aDtAusen[ nX , 3 ] )
+				//Caso a data inicio da ausencia começar antes da data inicio da geração e data fim da
+				//ausencia terminar antes da data fim da geração
+				If aDtAusen[ nX , 1 ] <= dDtIniRe .And. ( aDtAusen[ nX , 2 ] >= dDtIniRe .And. aDtAusen[ nX , 2 ] < dDtFimRe )
+					dDtIniAus := aDtAusen[ nX , 2 ] + 1 //Soma 1, pois será o dia de retorno do funcionário
+					dDtFimAus := aDtAusen[ nX , 2 ] + 1
+					lAusente := .T.
+				//Caso o periodo de ausencia estiver dentro do periodo de convocação
+				ElseIf aDtAusen[ nX , 1 ] > dDtIniRe .And. ( aDtAusen[ nX , 2 ] < dDtFimRe )
+					dDtIniAus := dDtIniRe
+					dDtFimAus := dDtIniRe
+					lAusente := .T.
+				//Caso a data inicial da ausencia estiver dentro do periodo da geração e data fim for superior ou igual a data fim da geração
+				ElseIf aDtAusen[ nX , 1 ] > dDtIniRe .And. ( aDtAusen[ nX , 2 ] >= dDtFimRe .And. !Empty( aDtAusen[ nX , 2 ] ))
+					dDtIniAus := dDtIniRe
+					dDtFimAus := dDtIniRe
+					lAusente := .T.
+				EndIf
+			Else //Se não possuir data fim informada
+				//Verifica se data final da ausencia esta preenchida e se data está dentro do periodo da convocação
+				If aDtAusen[ nX , 2 ] >= dDtIniRe .And. aDtAusen[ nX , 2 ] < dDtFimRe .And. !Empty( aDtAusen[ nX , 2 ] )
+					//Verifica se a nova data da consulta é menor que a data da geração da consulta
+					//Se for menor deverá atribuir o novo valor
+					If dDtIniAus < dDtIniRe
+						dDtIniAus := aDtAusen[ nX , 2 ] + 1 //Soma 1, pois será o dia de retorno do funcionário
+						dDtFimAus := aDtAusen[ nX , 2 ] + 1
+						lAusente := .T.
+					EndIf
+				Else
+					//Verifica se a nova data da consulta é menor que a data da geração, caso for deverá desconsiderar
+					//e se data fim está vazia
+					If dDtIniAus < dDtIniRe .And. Empty( aDtAusen[ nX , 2 ] )
+						dDtIniAus := aDtAusen[ nX , 2 ] + 999 //Soma 999, pdrão do GPE
+						dDtFimAus := aDtAusen[ nX , 2 ] + 999
+						lAusente := .T.
+					EndIf
+				EndIf
+			EndIf
+		Next nX
+	EndIf
+
+Return lAusente
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195CONF
+Função para verificar conflitos de horários.
+
+@type function
+
+@source MDTA195.prx
+
+@author Jean Pytter da costa
+@since 05/10/2016
+
+@sample MDT195CONF()
+
+@return Lógico, Indica se devera alterar algum horario.
+
+/*/
+//---------------------------------------------------------------------
+Function MDT195CONF()
+
+	Local lRet := .T.
+	Local cAliasConf := GetNextAlias()
+	Local cTabTMJ := RetSqlName("TMJ")
+	Local cTabTY9 := RetSqlName("TY9")
+
+	Private cHrIniCons 	:= ""
+	Private cHrFinCons 	:= ""
+	Private cHHMMAX		:= ""
+
+	// Seleciona todos horarios do dia
+	cQueryConf := "SELECT TMJ.TMJ_CODUSU AS CODUSU, TMJ.TMJ_DTCONS AS DTCONS, TMJ.TMJ_HRCONS AS HRCONS, TMJ.TMJ_QTDHRS AS QTDHRS"
+	cQueryConf += "FROM " + cTabTMJ + " TMJ "
+	cQueryConf += "WHERE TMJ.TMJ_CODUSU = '"+ cCodusu +"' AND TMJ.TMJ_DTCONS = '"+ DTOS(dINICIO)
+	cQueryConf += "' AND "
+	cQueryConf += 		"TMJ.D_E_L_E_T_ <> '*'"
+
+	cQueryConf += " UNION"
+
+	cQueryConf += "SELECT TY9.TY9_CODUSU AS CODUSU, TY9.TY9_DTCONS AS DTCONS, TY9.TY9_HRCONS AS HRCONS, TY9.TY9_QTDHRS AS QTDHRS"
+	cQueryConf += "FROM " + cTabTY9 + " TY9 "
+	cQueryConf += "WHERE TY9.TY9_CODUSU = '"+ cCodusu +"' AND TY9.TY9_DTCONS = '"+ DTOS(dINICIO)
+	cQueryConf += "' AND "
+	cQueryConf += 		"TY9.D_E_L_E_T_ <> '*'"
+	cQueryConf := ChangeQuery(cQueryConf)
+	MPSysOpenQuery( cQueryConf , cAliasConf )
+
+	DbSelectArea( cAliasConf )
+	DbGoTop()
+
+	While ( cAliasConf )->( !Eof() )
+
+		cHrIniCons := ( cAliasConf )->HRCONS
+		cHrFinCons := MTOH( HTOM( ( cAliasConf )->HRCONS ) + HTOM( ( cAliasConf )->QTDHRS ) )
+		cHHMMAX := MTOH( HTOM( cHHMMIN ) + TMV->TMV_QTATEN )
+
+		// Verifica se horario inicial esta entre alguma consulta
+		If cHHMMIN > cHrIniCons .And. cHHMMIN < cHrFinCons
+			lRet := .F.
+			Exit
+		EndIf
+
+		// Verifica se horario final termina entre alguma consulta
+		If cHHMMAX > cHrIniCons .And. cHHMMAX <= cHrFinCons
+			lRet := .F.
+			Exit
+		EndIf
+
+		// Verifica se o novo atendimento vai sobrepor algum horario antigo
+		If !MDT195SOB()
+			lRet := .F.
+			Exit
+		EndIf
+
+		DbSelectArea( cAliasConf )
+		( cAliasConf )->( DbSkip() )
+	EndDo
+
+	( cAliasConf )->( dbCloseArea() )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT195SOB
+Função para verificar horarios sobrepostos.
+
+@type function
+
+@source MDTA195.prx
+
+@author Jean Pytter da costa
+@since 05/10/2016
+
+@sample MDT195SOB()
+
+@return Lógico, Indica se devera alterar algum horario.
+/*/
+//---------------------------------------------------------------------
+Function MDT195SOB()
+
+	Local lRet := .T.
+	Local cAliasSob := GetNextAlias()
+	Local cTabTMJ := RetSqlName("TMJ")
+	Local cTabTY9 := RetSqlName("TY9")
+
+	cQuery := "SELECT TMJ.TMJ_CODUSU AS CODUSU, TMJ.TMJ_DTCONS AS DTCONS, TMJ.TMJ_HRCONS AS HRCONS, TMJ.TMJ_QTDHRS AS QTDHRS"
+	cQuery += "FROM " + cTabTMJ + " TMJ "
+	cQuery += "WHERE TMJ.TMJ_CODUSU = '"+ cCodusu +"' AND TMJ.TMJ_DTCONS = '"+ DTOS(dINICIO)
+	cQuery += "' AND ( ('" + cHrIniCons + "'Between '" + cHHMMIN + "' AND '"+ cHHMMAX  +"') OR "
+	cQuery += " ('" + cHrFinCons + "'Between '" + cHHMMIN + "' AND '"+ cHHMMAX  +"') ) AND "
+	cQuery += 		"TMJ.D_E_L_E_T_ <> '*'"
+
+	cQuery += " UNION"
+
+	cQuery += "SELECT TY9.TY9_CODUSU AS CODUSU, TY9.TY9_DTCONS AS DTCONS, TY9.TY9_HRCONS AS HRCONS, TY9.TY9_QTDHRS AS QTDHRS"
+	cQuery += "FROM " + cTabTY9 + " TY9 "
+	cQuery += "WHERE TY9.TY9_CODUSU = '"+ cCodusu +"' AND TY9.TY9_DTCONS = '"+ DTOS(dINICIO)
+	cQuery += "' AND ( ('" + cHrIniCons + "'Between '" + cHHMMIN + "' AND '"+ cHHMMAX  +"') OR "
+	cQuery += " ('" + cHrFinCons + "'Between '" + cHHMMIN + "' AND '"+ cHHMMAX  +"') ) AND "
+	cQuery += 		"TY9.D_E_L_E_T_ <> '*'"
+	cQuery := ChangeQuery(cQuery)
+	MPSysOpenQuery( cQuery , cAliasSob )
+
+	// Verifica se possui uma consulta 'dentro' da nova consulta
+	// Se consulta nova for das 08:00 as 08:40 e a antiga for das 08:10 as 08:20
+	DbSelectArea( cAliasSob )
+	DbGoTop()
+
+	While ( cAliasSob )->( !Eof() )
+		cConsBase := ( cAliasSob )->HRCONS // Horario inicial da consulta da base
+		cTempCons := MTOH( HTOM( ( cAliasSob )->HRCONS ) + HTOM( ( cAliasSob )->QTDHRS ) ) // Horario final da consulta da base
+
+		If cConsBase > cHHMMIN .And. cConsBase < cHHMMAX // Se horario inicial esta entre o novo
+
+			If cTempCons > cHHMMIN .And. cTempCons < cHHMMAX // Se horario final esta entre o novo
+				lRet := .F.
+			EndIf
+
+		EndIf
+
+		DbSelectArea( cAliasSob )
+		( cAliasSob )->( DbSkip() )
+	EndDo
+
+	( cAliasSob )->( dbCloseArea() )
+
+Return lRet

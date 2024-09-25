@@ -1,0 +1,1181 @@
+#INCLUDE "mnta830.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FILEIO.CH"
+#INCLUDE "COLORS.CH"
+#INCLUDE "DBTREE.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830
+Informa Contador do Bem
+
+@author Inácio Luiz Kolling
+@since 08/10/1998
+@resince 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830(cBem)
+
+    Local cCondSQL := '' //Variavel utilizada para receber a condição em SQL do P.E. MNTA8304
+	Local cExprFilTop := "T9_FILIAL = " + ValToSql( xFilial( 'ST9' ) ) + " AND T9_TEMCONT = 'S'" //Fitro da tela inicial
+
+	//Guarda conteudo e declara variaveis padrões
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Private asMenu        := NGRIGHTCLICK("MNTA830")
+	Private aRotina       := MenuDef()
+	Private cGERAPREV     := AllTrim(GETMv("MV_NGGERPR"))
+	Private cCadastro     := OemtoAnsi(STR0007) //"Informa Contador"
+	Private lmostra       := .T.
+	Private aBEMFIL       := {}
+	Private dDATAMOV      := dDataBase
+	Private nCONTADOR     := 0
+	Private M->TJ_SITUACA := 'L'
+	Private bFiltraBrw    := {|| Nil}
+	Private nCONT1V       := 0
+	Private nCONT2V       := 0
+	Private dDTLEIV       := dDataBase
+	Private nREGST9       := 0
+	Private cHORA1V       := Space(5)
+	Private cHORA2V       := Space(5)
+	Private cBemInF       := space(len(ST9->T9_CODBEM))
+	Private cBEMVIR       := cBemInF
+	Private cNOMBEM       := Space(Len(ST9->T9_NOME))
+	Private TIPOACOM      := .F.
+	Private TIPOACOM2     := .F.
+	Private nINDST9       := ST9->(IndexOrd())
+
+    //Alias das Tabelas Temporarias
+	Private cTRB32	:= GetNextAlias()
+	Private cTRB31	:= GetNextAlias()
+	Private cTRB33	:= GetNextAlias()
+
+	dbSelectArea("ST9")
+	If cBem <> Nil
+		ST9->(DbSeek(xFilial("ST9")+cBem))
+		lRefresh := .T.
+		MNTA830ACE(Alias(),Recno(),3)
+	Else
+		If ExistBlock("MNTA8304")
+			cCondSQL	:= ExecBlock("MNTA8304",.F.,.F.)
+			cExprFilTop += IIf( !Empty( cCondSQL ), ' AND ' + cCondSQL, '' )
+		EndIf
+
+		mBrowse( 6 , 1 , 22 , 75 , "ST9" , , , , , , , , , , , , , , cExprFilTop )
+
+	EndIf
+
+	//Retorna conteudo de variaveis padroes
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830ACE
+Programa de inclusao de Manutencao
+@author Inácio Luiz Kolling
+@since
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830ACE(cAlias,nReg,nOpcx)
+
+    Local i
+    Local lUseLanex := IIf( FindFunction('NGUSELANEX'), NGUSELANEX( ST9->T9_CODBEM ) , ;
+						AllTrim( SuperGetMv( 'MV_NGLANEX', .F., '' ) )  ) == "A"
+
+    Private cBEMVIR  := ST9->T9_CODBEM
+    Private cNOMBEM  := ST9->T9_NOME
+    Private cCOMP
+    Private lTRB     := .F.
+    Private lPRIMC   := .F.
+    Private nCONT1AN := 0
+    Private nCONT2AN := 0
+
+    If lUseLanex
+		MsgStop(STR0049,STR0048)//"Parâmetro MV_NGLANEX restringe lançamentos do tipo Contador."
+		Return .F.
+    EndIf
+
+	If ST9->T9_SITBEM = 'I'
+		Help(" ",1,"NGBEMINATI")
+		Return .F.
+	EndIf
+
+	If ST9->T9_SITBEM = 'T'
+		Help(" ",1,"NGBEMTRANSF",,STR0046,3,1) //"Este Bem foi TRANSFERIDO."
+		Return .F.
+	EndIf
+
+    nREGST9 := ST9->( Recno() )
+    nReg := nREGST9
+    //+--------------------------------------+
+    //| Cria Arquivo de Trabalho             |
+    //+--------------------------------------+
+    aCampos  := {}
+    Aadd(aCampos,{"CODBEM", "C", 16, 0})
+    Aadd(aCampos,{"VARDIA", "N", 06, 0})
+    Aadd(aCampos,{"CONTAC", "N", 12, 0})
+    Aadd(aCampos,{"DTULTA", "D", 08, 0})
+
+    //Intancia classe FWTemporaryTable
+	oTmpTab1  := FWTemporaryTable():New( cTRB32,aCAMPOS)
+	oTmpTab1:AddIndex("Ind01",{"CODBEM"} )
+	oTmpTab1:Create()
+
+    aDBF := {{"CODBEM" , "C", 16, 0} ,;
+             {"NOMEBEM", "C", 40, 0} ,;
+             {"SERVICO", "C", 06, 0} ,;
+             {"NOMESER", "C", 40, 0} ,;
+             {"SEQRELA", "C", 03, 0} ,;
+             {"DATAPRO", "D", 10, 0} ,;
+             {"PARECER", "C", 09, 0}}
+
+    //Intancia classe FWTemporaryTable 2
+	oTmpTbl2  := FWTemporaryTable():New(cTRB31,aDBF)
+	oTmpTbl2:AddIndex( "Ind01" , {"CODBEM","SERVICO","SEQRELA"}  )
+	oTmpTbl2:Create()
+
+    aRR := {}
+    aRR := NGCOMPEST(ST9->T9_CODBEM,'B',.T.)
+
+    If Len(aRR) > 0
+        For i := 1 To Len(aRR)
+            dbSelectArea("ST9")
+            Dbsetorder(1)
+            If !DbSeek(xFilial("ST9")+aRR[i])
+                (cTRB32)->(DbAppend())
+                (cTRB32)->CODBEM := aRR[i]
+                (cTRB32)->VARDIA := ST9->T9_VARDIA
+                (cTRB32)->CONTAC := ST9->T9_CONTACU
+                (cTRB32)->DTULTA := ST9->T9_DTULTAC
+            EndIf
+        Next i
+    EndIf
+
+    //+--------------------------------------+
+    //| Cria Arquivo de Trabalho             |
+    //+--------------------------------------+
+    aDBF  := STC->(DbStruct())
+    Aadd(aDBF,{"TC_NREPASS","N",01,0})
+
+    //Intancia classe FWTemporaryTable (ARQ. 3)
+	oTmpTbl3 := FWTemporaryTable():New(cTRB33,aDBF)
+	oTmpTbl3:AddIndex("Ind01", {"TC_CODBEM","TC_COMPONE","TC_SEQRELA"})
+	oTmpTbl3:AddIndex("Ind02", {"TC_COMPONE","TC_CODBEM","TC_SEQRELA"})
+	oTmpTbl3:Create()
+
+    cPAI := cBEMVIR
+    dbSelectArea("STC")
+    dbSeek(xFilial('STC')+cPAI)
+    While !Eof() .And. STC->TC_FILIAL = xFilial('STC') .And. STC->TC_CODBEM = cPAI
+        nREC  := RECNO()
+        cCOMP := STC->TC_COMPONE
+        lTRB  := .T.
+        (cTRB33)->(DbAppend())
+        For i := 1 TO FCOUNT()
+            (cTRB33)->(FieldPut(i, STC->(FIELDGET(i)) ))
+        Next i
+        (cTRB33)->TC_NREPASS := 1
+
+        dbSelectArea("STC")
+        If dbSeek(xFilial('STC')+cCOMP)
+            MNTA830TRB(cCOMP)
+        EndIf
+        Dbgoto(nREC)
+        Dbskip()
+    EndDo
+
+    dbSelectArea('ST9')
+    Dbsetorder(nINDST9)
+    Dbgoto(nREGST9)
+
+    If MNTA830GET(STR0007,2) == 1
+        dDATAMOV  := dDTLEIV
+        nCONTADOR := nCONT1V
+        nCONTADAU := nCONT1V
+        nCONT2    := nCONT2V
+        nCONTAD2  := nCONT2V
+        _PROXDT   := CTOD("  /  /  ")
+
+        // CALCULA A DATA DA PROXIMA MANUTENCAO
+        nDias := 0
+        If ExistBlock("NGVCTMAN")
+            nDias := ExecBlock("NGVCTMAN",.F.,.F.)
+        EndIf
+
+        dbSelectArea(cTRB32)
+        DbGotop()
+        While !Eof()
+            STF->(DbSeek(xFilial('STF')+(cTRB32)->CODBEM))
+            While !Eof() .and. xFilial("STF") == STF->TF_FILIAL .And.;
+            STF->TF_CODBEM == (cTRB32)->CODBEM
+
+                If STF->TF_ATIVO == "N"
+                    dbSelectArea("STF")
+                    dbSkip()
+                    Loop
+                EndIf
+
+                If STF->TF_PERIODO == "E"
+                    dbSelectArea("STF")
+                    dbSkip()
+                    Loop
+                EndIf
+
+                _PROXDT := CTOD("  /  /  ")
+                _PROXDT := NGXPROXMAN((cTRB32)->CODBEM)
+
+                xParecer := space(09)
+
+                If _PROXDT < dDatabase
+                    xParecer := 'ATRASADA'
+                Elseif _PROXDT = dDatabase
+                    xParecer := 'PARA HOJE'
+                EndIf
+                If nDias > 0
+                    If _PROXDT > dDatabase
+                        If dDataBase + nDias > _PROXDT
+                            xParecer := 'A REALIZAR'
+                        EndIf
+                    EndIf
+                EndIf
+
+                If !Empty(xParecer)
+                    xdata := substr(dtoc(_PROXDT),1,6) + substr(dtoc(_PROXDT),9,2)
+                    dbSelectArea('ST4')
+                    dbsetorder(1)
+                    dbseek(xFilial('ST4')+STF->TF_SERVICO)
+
+                    (cTRB31)->(DbAppend())
+                    (cTRB31)->CODBEM  := ST9->T9_CODBEM
+                    (cTRB31)->NOMEBEM := Substr(ST9->T9_NOME,1,40)
+                    (cTRB31)->SERVICO := STF->TF_SERVICO
+                    (cTRB31)->NOMESER := SubStr(ST4->T4_NOME,1,40)
+                    (cTRB31)->SEQRELA := STF->TF_SEQRELA
+                    (cTRB31)->DATAPRO := _PROXDT
+                    (cTRB31)->PARECER := xParecer
+                EndIf
+
+                dbSelectArea('STF')
+                Dbskip()
+            EndDo
+            dbSelectArea(cTRB32)
+            DbSkip()
+        EndDo
+
+        dbSelectArea(cTRB31)
+        If reccount() > 0
+            If MsgYesNo(STR0033+CHR(13)+CHR(13)+STR0034,STR0035)
+                MNTA830MOS()
+            EndIf
+        EndIf
+
+        //GERAR O.S AUTOMATICA POR CONTADOR
+        If (cGERAPREV = "S" .Or. cGERAPREV = "C") .And. (!Empty(nCONT1V) .Or. !Empty(nCONT2V))
+            If NGCONFOSAUT(cGERAPREV)
+                NGGEROSAUT(cBemInF,If(!Empty(nCONT1V),nCONT1V,nCONT2V),xFilial("STJ"))
+            EndIf
+        EndIf
+
+        If ExistBlock("MNTA8302")
+            ExecBlock("MNTA8302",.F.,.F.)
+        EndIf
+
+    EndIf
+
+    // Deleta as tabelas temporarias
+	oTmpTbl2:Delete()
+	oTmpTab1:Delete()
+	oTmpTbl3:Delete()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830FIF
+Consistência final do informa contador
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830FIF()
+
+	Local lRet := .T.
+
+    If ExistBlock("MNTA8301")
+        If !ExecBlock("MNTA8301",.F.,.F.)
+            Return .F.
+        EndIf
+    EndIf
+
+	vNRCONT1 := {}
+	vNRCONT2 := {}
+	Dbselectarea(cTRB33)
+	Dbgotop()
+	If Reccount() > 0
+		While !Eof()
+			If nCONT1V > 0 .And. nCONT2V > 0
+				If (cTRB33)->TC_NREPASS = 4
+					Aadd(vNRCONT1,(cTRB33)->TC_COMPONE)
+					Aadd(vNRCONT2,(cTRB33)->TC_COMPONE)
+				Elseif (cTRB33)->TC_NREPASS = 2
+					Aadd(vNRCONT1,(cTRB33)->TC_COMPONE)
+				Elseif (cTRB33)->TC_NREPASS = 3
+					Aadd(vNRCONT2,(cTRB33)->TC_COMPONE)
+				Endif
+			Elseif nCONT1V > 0 .And. (cTRB33)->TC_NREPASS = 2
+				Aadd(vNRCONT1,(cTRB33)->TC_COMPONE)
+			Elseif nCONT2V > 0 .And. (cTRB33)->TC_NREPASS = 3
+				Aadd(vNRCONT2,(cTRB33)->TC_COMPONE)
+			Endif
+			Dbskip()
+		End
+	Endif
+
+	Dbselectarea('ST9')
+	Dbsetorder(1)
+	Dbseek(xFILIAL("ST9")+cBemInF)
+
+	oSTP:= MNTCounter():New()
+	oSTP:setOperation(3)
+
+	If TIPOACOM .And. nCONT1V > 0
+		oSTP:setValue("TP_CODBEM" ,cBemInF)
+		oSTP:setValue("TP_POSCONT",nCONT1V)
+		oSTP:setValue("TP_DTLEITU",dDTLEIV)
+		oSTP:setValue("TP_HORA"   ,cHORA1V)
+   EndIf
+
+	If TIPOACOM2 .And. nCONT2V > 0
+		oSTP:setValue("TPP_CODBEM",cBemInF)
+		oSTP:setValue("TPP_POSCON",nCONT2V)
+		oSTP:setValue("TPP_DTLEIT",dDTLEIV)
+		oSTP:setValue("TPP_HORA"  ,cHORA2V)
+    EndIf
+
+	lRet := oSTP:inform(vNRCONT1,vNRCONT2)
+	If !lRet .And. !Empty(oSTP:getErrorList())
+		cError := oSTP:getErrorList()[1]
+		Help(,,'HELP',, cError,1,0)
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830MOS
+Mostra as manutencoes do acerto
+@author Inácio Luiz Kolling
+@since
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830MOS()
+
+    Private OldRot    := aClone(aRotina)
+    Private cCadastro := OemtoAnsi(STR0017) //"Manutencao Acerto"
+    Private aRotina   := {{ STR0016  ,"MNTA830IMP" , 0 , 4}} //"Imprimir"
+
+    aFIELD := {{STR0008, "CODBEM" , "C", 16, 0, "@!"},;         //"Bem"
+               {STR0009, "NOMEBEM", "C", 30, 0, "@!"},;         //"Nome Bem"
+               {STR0010, "SERVICO", "C", 06, 0, "@!"},;         //"Servico"
+               {STR0011, "NOMESER", "C", 30, 0, "@!"},;         //"Nome Servico"
+               {STR0012, "SEQRELA", "C", 03, 0, "@!"},;         //"Sequencia"
+               {STR0013, "DATAPRO", "D", 10, 0, "99/99/9999"},; //"Prx.Mant."
+               {STR0014, "PARECER", "C", 09, 0, "@!"}}
+
+    mBrowse(6, 1,22,75,(cTRB31),aFIELD)
+
+    dbSelectArea("ST9")
+    dbSetOrder(1)
+    aRotina := aClone(OldRot)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830IMP
+Imprime as manutencoes do acerto vencidas e/ou vencendo
+@author Inácio Luiz Kolling
+@since
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830IMP()
+
+    Local cString    := (cTRB31)
+    Local wnrel      := "MNTA830"
+    Local cDesc1     := STR0018 //"Relatorio das manutencoes do Acerto do contador que estao vencidas"
+    Local cDesc2     := STR0019 //"ou as manutencoes que estao vencendo no dia"
+    Local cDesc3     := " "
+
+    Private Tamanho  := "M"
+    Private aReturn  := {STR0020, 1,STR0021, 2, 2, 1, "",1} //"Zebrado"###"Administracao"
+    Private nLastKey := 0
+    Private titulo   := STR0022 //"Manutencoes do Acerto do Contador"
+    Private Cabec1
+    Private Cabec2
+    Private nTipo    := 0
+    Private nomeprog := "MNTA830"
+
+    //+---------------------------------------+
+    //| Envia controle para a funcao SETPRINT |
+    //+---------------------------------------+
+    wnrel:=SetPrint(cString,wnrel,,titulo,cDesc1,cDesc2,cDesc3,.F.,"")
+    If nLastKey = 27
+        Set Filter To
+        Return
+    EndIf
+
+    SetDefault(aReturn,cString)
+    RptStatus({|lEnd| MNTA830IRE(@lEnd,wnRel,titulo,tamanho)},titulo)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830IRE
+Chamada do Relatório
+@author Inácio Luiz Kolling
+@since 08/10/1998
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA830IRE(lEnd,wnRel,titulo,tamanho)
+
+    Local cRodaTxt := ""
+    Local nCntImpr := 0
+
+    Private li    := 80
+    Private m_pag := 1
+
+    nTipo  := IIF(aReturn[4]==1,15,18)
+
+    Cabec1 := STR0023 //"Bem             Nome do Bem                               Servico Nome                                   Seq. Prx.Manut. Parecer"
+    Cabec2 := ""
+
+    //           1         2         3         4         5         6         7         8         9         0         1         2         3
+    // 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012
+    // xxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 999 99/99/9999 PARA HOJE
+
+    dbSelectArea(cTRB31)
+    dbgotop()
+
+    SetRegua(LastRec())
+    While !Eof()
+        IncRegua()
+        NGSOMALI(58)
+        @ Li,000 PSay (cTRB31)->CODBEM
+        @ Li,017 PSay (cTRB31)->NOMEBEM
+        @ Li,058 PSay (cTRB31)->SERVICO
+        @ Li,065 PSay (cTRB31)->NOMESER
+        @ Li,106 PSay (cTRB31)->SEQRELA picture '@!'
+        @ Li,110 PSay (cTRB31)->DATAPRO picture '99/99/9999'
+        @ Li,121 PSay (cTRB31)->PARECER
+        dbSelectArea(cTRB31)
+        dbSkip()
+    EndDo
+
+    Roda(nCntImpr,cRodaTxt,Tamanho)
+
+    dbSelectArea(cTRB31)
+    dbGotop()
+
+    Set Filter To
+    Set device to Screen
+
+    If aReturn[5] = 1
+        Set Printer To
+        dbCommitAll()
+        OurSpool(wnrel)
+    EndIf
+
+    MS_FLUSH()
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830GET
+Recebimento dos valores para informa e virada
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830GET(cTITJA,nVFIM)
+
+	Local oMenu
+	Local lTEMEST   := .F.
+	Local nLinBtn   := 108 // Variável que mantém o botão "Estrutura" abaixo dos campos.
+	Local aPictures := fBuscaPict()
+
+	nCONT1V := 0
+	nCONT2V := 0
+	dDTLEIV := dDataBase
+	cHORA1V := Space(5)
+	cHORA2V := Space(5)
+    cBemInF := ST9->T9_CODBEM
+
+	dbSelectArea("ST9")
+	nREGST9 := ST9->( Recno() )
+	cBEMVIR := ST9->T9_CODBEM
+	cNOMBEM := ST9->T9_NOME
+
+	TIPOACOM  := IIf(ST9->T9_TEMCONT = "S",.T.,.F.)
+    //FindFunction remover na release GetRPORelease() >= '12.1.027'
+	If FindFunction("MNTCont2")
+		TIPOACOM2 := MNTCont2(xFilial("TPE"), ST9->T9_CODBEM )
+    Else
+	    TIPOACOM2 := IIf(TPE->(dbSeek(xFilial("TPE")+ST9->T9_CODBEM)),.T.,.F.)
+    EndIf
+
+	If Empty(cBemInF)
+		Help(" ",1,"NOTEMCONTD")
+		Return 0
+	EndIf
+
+	dbSelectArea("ST9")
+	dbSetOrder(nINDST9)
+	dbSeek(xFilial('ST9')+cBemInF)
+
+	If nVFIM = 2
+		dbSelectArea("STC")
+		DbSetOrder(1)
+		If dbSeek(xFilial('STC')+cBemInF)
+			lTEMEST := .T.
+		EndIf
+	EndIf
+
+	nLIFI  := If(lTEMEST,33,30)
+	nOpcal := 0
+	Define MsDialog oDlg3 Title cTITJA From 15,15 To nLIFI,85 Of oMainWnd
+
+		@ 45,008 SAY OEMTOANSI(STR0008) SIZE 47,07 OF oDlg3 PIXEL Color CLR_HBLUE //"Bem"
+		@ 45,040 MSGET cBEMVIR SIZE 60 ,08 OF oDlg3 PIXEL When .F.
+		@ 45,102 MSGET cNOMBEM SIZE 150,08 OF oDlg3 PIXEL When .F.
+
+		@ 60,008 Say OemtoAnsi(STR0028) Size 47,07 Of oDlg3 Pixel Color CLR_HBLUE//"Data Leitura"
+		@ 60,040 MsGet dDTLEIV  Of oDlg3 Pixel Size 60,08 Picture '99/99/99' Valid Naovazio(dDTLEIV) .AND. NGCPDIAATU(dDTLEIV,"<=",.T.,.T.,.T.) HASBUTTON
+
+		@ 75,008 Say OemtoAnsi(STR0029+" 1") Size 47,07 Of oDlg3 Pixel //"Contador"
+		@ 75,040 MsGet nCONT1V  Of oDlg3 Pixel Size 60,08 Picture aPictures[1] When TIPOACOM
+
+		@ 75,185 Say OemtoAnsi(STR0030) Size 47,07 Of oDlg3 Pixel //"Hora Leitura"
+		@ 75,223 MsGet cHORA1V Of oDlg3 Pixel Size 10,08 Picture "99:99" When TIPOACOM Valid MNTA830VHO(cHORA1V)
+
+		@ 90,008 Say OemtoAnsi(STR0029+" 2") Size 47,07 Of oDlg3 Pixel             // Color CLR_HBLUE //"Contador"
+		@ 90,040 MsGet nCONT2V  Of oDlg3 Pixel Size 60,08 Picture aPictures[2] When TIPOACOM2
+
+		@ 90,185 Say OemtoAnsi(STR0030) Size 47,07 Of oDlg3 Pixel //"Hora Leitura"
+		@ 90,223 MsGet cHORA2V Of oDlg3 Pixel Size 10,08 Picture "99:99" When TIPOACOM2 Valid MNTA830VHO(cHORA2V)
+
+		// Ponto de entrada para inclusão de campos.
+		If ExistBlock("MNTA830A")
+			ExecBlock("MNTA830A",.F.,.F.,{oDlg3})
+			nLinBtn += 15
+		EndIf
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg3:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg3)}
+
+	If nVFIM = 1
+		ACTIVATE MSDIALOG oDlg3 ON INIT EnchoiceBar(oDlg3,{||nOpcal:=1,If(MNTA830CCON() .And. MNT830FVIR(),oDlg3:End(),nOpcal := 2)},{||oDlg3:End()})
+	Else
+		If lTEMEST
+			@ nLinBtn,163 BITMAP oBmp1 RESOURCE "FOLDER6" SIZE 8,8 PIXEL OF oDlg3 NOBORDER WHEN .F.
+			@ nLinBtn,176 BUTTON STR0036 SIZE 35,12 PIXEL Of oDlg3 ACTION MNTA830NRE()
+		EndIf
+		ACTIVATE MSDIALOG oDlg3 ON INIT EnchoiceBar(oDlg3,{||nOpcal:=1,If(!MNTA830FIF(),nOpcal := 2,oDlg3:End())},{||oDlg3:End()})
+	EndIf
+
+Return nOpcal
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830VIR
+Virada de contador
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830VIR(cAlias,nReg,nOpcx)
+
+    If MNTA830GET(STR0026+' '+STR0027+' '+STR0029,1) == 1
+        dbSelectArea('ST9')
+        Dbsetorder(1)
+        DbSeek(xFILIAL("ST9")+cBemInF)
+
+        If ExistBlock("MNTA8303")
+            ExecBlock("MNTA8303",.F.,.F.)
+        EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830VHO
+Consistência da hora dos contadores
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830VHO(cVHORAV)
+
+    Local cHora   := Substr(Time(),1,5)
+    Local dDataAt := dDataBase
+    Local lRet    := .T.
+
+     If cVHORAV > cHora .And. dDataAt <= dDTLEIV
+        MsgInfo(STR0047) // "Informe uma hora menor ou igual a atual"
+        lRet := .F.
+    EndIf
+
+    If lRet
+        If Alltrim(cVHORAV) <> ':'
+            If !NGVALHORA(cVHORAV,.T.)
+                lRet := .F.
+            EndIf
+        EndIf
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT830FVIR
+Consistência final do contadores
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNT830FVIR()
+
+	Local lRet := .T.
+
+	oSTP:= MNTCounter():New()
+	oSTP:setOperation(3)
+
+	If TIPOACOM .And. nCONT1V > 0
+		oSTP:setValue("TP_CODBEM" ,cBemInF)
+		oSTP:setValue("TP_POSCONT",nCONT1V)
+		oSTP:setValue("TP_DTLEITU",dDTLEIV)
+		oSTP:setValue("TP_HORA"   ,cHORA1V)
+	EndIf
+
+	If TIPOACOM2 .And. nCONT2V > 0
+		oSTP:setValue("TPP_CODBEM",cBemInF)
+		oSTP:setValue("TPP_POSCON",nCONT2V)
+		oSTP:setValue("TPP_DTLEIT",dDTLEIV)
+		oSTP:setValue("TPP_HORA"  ,cHORA2V)
+	EndIf
+
+	lRet := oSTP:Turn()
+	If !lRet
+		cError := oSTP:getErrorList()[1]
+		Help(,,'HELP',, cError,1,0)
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830CCON
+Consistência do preenchimentos dos dados dos contadores
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830CCON()
+
+    Local cMENSVC := Space(1)
+    Local cHOV1VI := If(Alltrim(cHORA1V) = ':',Space(5),cHORA1V)
+    Local cHOV2VI := If(Alltrim(cHORA2V) = ':',Space(5),cHORA2V)
+    Local cHora   := Substr(Time(),1,5)
+    Local dDataAt := dDataBase
+    Local lRet    := .T.
+
+    If cHORA1V > cHora .And. dDataAt <= dDTLEIV
+        MsgInfo(STR0047) // "Informe uma hora menor ou igual a atual"
+        lRet := .F.
+    EndIf
+
+    If lRet
+        If Empty(nCONT1V) .And. Empty(cHOV1VI) .And. Empty(nCONT2V) .And. Empty(cHOV2VI)
+            cMENSVC := STR0031
+        Else
+            If Empty(nCONT1V) .And. !Empty(cHOV1VI) .Or. !Empty(nCONT1V) .And. Empty(cHOV1VI)
+                cMENSVC := STR0031+ ' 1'
+            EndIf
+            If Empty(cMENSVC)
+                If TIPOACOM2
+                    If Empty(nCONT2V) .And. !Empty(cHOV2VI) .Or. !Empty(nCONT2V) .And. Empty(cHOV2VI)
+                        cMENSVC := STR0031+' 2'
+                    EndIf
+                EndIf
+            EndIf
+        EndIf
+
+        If !Empty(cMENSVC)
+            MsgInfo(cMENSVC,STR0032)
+            lRet := .F.
+        EndIf
+    EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830CIN
+Consistência do valor do contador ( 1/2 )
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830CIN(nVLRCONT,nTPCON)
+
+    Local lRETINC := .T.
+
+    If nVLRCONT < 1
+        MsgInfo(STR0029+' '+Str(nTPCON,1)+' '+STR0042,STR0032)
+        lRETINC := .F.
+    Else
+        If !CHKPOSLIM(cBemInF,nVLRCONT,nTPCON)
+            lRETINC := .F.
+        EndIf
+    EndIf
+
+    dbSelectArea("ST9")
+    dbSetOrder(nINDST9)
+
+Return lRETINC
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830NRE
+Consistência da virada de contador
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830NRE()
+
+    Local i
+    Local oBmp1
+    Local oMenu
+
+    Private oTREE
+    Private ODLG
+
+    If !MNTA830CCON()
+        Return
+    EndIf
+
+    If lPRIMC
+        nCONT1AN := nCONT1V
+        nCONT2AN := nCONT2V
+        lPRIMC   := .F.
+    EndIf
+
+    cCONTR := STR0029
+    cCONTS := STR0037
+    cNAOST := STR0025
+    cREPAS := STR0038
+
+    cREPA1 := cREPAS+" "+cCONTR+" 1"
+    cREPA2 := cREPAS+" "+cCONTR+" 2"
+    cREPAT := cREPAS+" "+cCONTS
+
+    nCOLEG := If(nCONT1V > 0 .And. nCONT2V > 0,192,105)
+    cREPAC := If(nCONT1V > 0 .And. nCONT2V > 0,cREPAT,If(nCONT1V > 0,cREPA1,cREPA2))
+
+    cDESC  := SPACE(40)
+    cFIRST := st9->t9_codbem
+    cPAI   := cFIRST
+    cDESC  := ST9->T9_NOME
+
+    dbSelectArea("STC")
+    AHEADER := {}
+    aCOLTAM := {}
+
+    For I := 1 To 50
+        Aadd(aCOLTAM,16)
+    Next
+
+    Aadd(AHEADER, "")
+    Aadd(AHEADER, "")
+    Aadd(AHEADER, "")
+
+    lTREE := .F.
+    DEFINE FONT NgFont NAME "Mono AS Regular" SIZE 0, -10
+    DEFINE MSDIALOG ODLG FROM  10.5,6 TO 395,580 TITLE STR0038+' '+STR0029+' '+STR0039 PIXEL
+
+    @ 05,008 SAY OEMTOANSI(STR0008+' '+STR0040) SIZE 37,7 OF ODLG PIXEL
+    @ 05,040 MSGET cPAI  SIZE 48, 08 OF ODLG PIXEL WHEN .F.
+    @ 05,100 MSGET oDESC VAR cDESC SIZE 160,08 OF ODLG PIXEL WHEN .F.
+
+    @ 18,008 SAY OEMTOANSI(STR0028) SIZE 37,7 OF ODLG PIXEL
+    @ 18,040 MSGET dDTLEIV SIZE 48, 08 OF ODLG PIXEL Picture '99/99/99'WHEN .F.
+
+    @ 18,100 SAY OEMTOANSI(STR0029+" 1") SIZE 37,7 OF ODLG PIXEL
+    @ 18,135 MSGET nCONT1V SIZE 48, 08 OF ODLG PIXEL PICTURE "@E 999,999,999" WHEN .F.
+
+    @ 18,195 SAY OEMTOANSI(STR0030) SIZE 37,7 OF ODLG PIXEL
+    @ 18,230 MSGET cHORA1V SIZE 48, 08 OF ODLG PIXEL Picture '99:99'WHEN .F.
+
+    @ 31,008 SAY OEMTOANSI(STR0029+" 2") SIZE 37,7 OF ODLG PIXEL
+    @ 31,040 MSGET nCONT2V SIZE 48, 08 OF ODLG PIXEL PICTURE "@E 999,999,999"  WHEN .F.
+
+    @ 31,100 SAY OEMTOANSI(STR0030) SIZE 37,7 OF ODLG PIXEL //"Hora Leitura.:"
+    @ 31,135 MSGET cHORA2V SIZE 48, 08 OF ODLG PIXEL Picture '99:99'WHEN .F.
+
+    MNTA830GEN()
+
+    DEFINE SBUTTON FROM 170, 240 TYPE 20 ENABLE OF ODLG ACTION ODLG:END()
+
+    @ 158,11 To 188,nCOLEG PIXEL OF oDlg
+    @ 153,12 SAY OEMTOANSI(STR0041) SIZE 80,7 OF ODLG PIXEL Color CLR_HBLUE
+    @ 163,15 BITMAP oBmp1 RESOURCE "FOLDER10" SIZE 8,8 PIXEL OF oDlg NOBORDER WHEN .F.
+    @ 163,28 BUTTON cREPAC SIZE 71,12 PIXEL ACTION MNTA830MAR(oTREE:GETCARGO(),1)
+
+    If nCONT1V > 0 .And. nCONT2V > 0
+        @ 163,106 BITMAP oBmp1 RESOURCE "FOLDER12" SIZE 8,8 PIXEL OF oDlg NOBORDER WHEN .F.
+        @ 163,118 BUTTON cNAOST+" "+cREPA1 SIZE 71,12 PIXEL ACTION MNTA830MAR(oTREE:GETCARGO(),2)
+    ElseIf nCONT1V > 0 .And. nCONT2V = 0
+        @ 175,15 BITMAP oBmp1 RESOURCE "FOLDER12" SIZE 8,8 PIXEL OF oDlg NOBORDER WHEN .F.
+        @ 175,28 BUTTON cNAOST+" "+cREPA1 SIZE 71,12 PIXEL ACTION MNTA830MAR(oTREE:GETCARGO(),2)
+    EndIf
+
+    If nCONT2V > 0
+        @ 175,15 BITMAP oBmp1 RESOURCE "FOLDER14" SIZE 8,8 PIXEL OF oDlg NOBORDER WHEN .F.
+        @ 175,28 BUTTON cNAOST+" "+cREPA2 SIZE 71,12 PIXEL ACTION MNTA830MAR(oTREE:GETCARGO(),3)
+    EndIf
+
+    If nCONT1V > 0 .And. nCONT2V > 0
+        @ 175,106 BITMAP oBmp1 RESOURCE "FOLDER7" SIZE 8,8 PIXEL OF oDlg NOBORDER WHEN .F.
+        @ 175,118 BUTTON cNAOST+" "+cREPAC SIZE 71,12 PIXEL ACTION MNTA830MAR(oTREE:GETCARGO(),4)
+    EndIf
+
+    NGPOPUP(asMenu,@oMenu)
+    oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+    ACTIVATE MSDIALOG ODLG CENTERED
+    nCONT1AN := nCONT1V
+    nCONT2AN := nCONT2V
+
+    dbSelectArea("ST9")
+    Dbsetorder(nINDST9)
+    Dbgoto(nREGST9)
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830GEN
+Cria o objeto oTree que gerencia os niveis
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830GEN()
+
+	Local cDESC := SPACE(40)
+	Local cDESC2
+
+    If lTREE
+        oTREE:END()
+        lTREE := .F.
+    EndIf
+    oTREE := DbTree():NEW(045,012,150,272,ODLG,,,.T.)
+    lTREE := .T.
+
+    dbSelectArea("ST9")
+    Dbsetorder(1)
+    If dbSeek(xFilial('ST9')+cFIRST) .And. !EMPTY(cFIRST)
+        cDESC := ST9->T9_NOME
+    EndIf
+
+    dbSelectArea(cTRB33)
+    Dbsetorder(1)
+    lTRB  := dbSeek(cFIRST)
+    nREPC := 0
+    If lTRB
+        cDESC2   := cFIRST+REPLICATE(" ",25-LEN(RTRIM(cFIRST)))
+        cPRODESC := cDESC2+' - '+cDESC
+        DBADDTREE oTREE PROMPT cPRODESC OPENED RESOURCE "FOLDER10", "FOLDER11" CARGO cFIRST
+        While !Eof() .And.  ALLTRIM((cTRB33)->TC_CODBEM) == ALLTRIM(cFIRST)
+            nREC  := RECNO()
+            cCOMP := (cTRB33)->TC_COMPONE
+            nREPC := MNTA830DBA((cTRB33)->TC_NREPASS)
+            cITEM := IIf(ST9->(dbSeek(xFilial('ST9')+cCOMP)),ST9->T9_NOME," ")
+            dbSelectArea(cTRB33)
+            If dbSeek(cCOMP)
+                MNTA830MAK(cCOMP, cITEM)
+            Else
+            cDESC2   := cCOMP+REPLICATE(" ",25-LEN(RTRIM(cCOMP)))
+            cPRODESC := cDESC2+' - '+cITEM
+            If Empty(nREPC)
+                DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER10" CARGO cCOMP
+            Else
+            If nREPC = 1
+               DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER10" CARGO cCOMP
+            Elseif nREPC = 2
+               DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER12" CARGO cCOMP
+            Elseif nREPC = 3
+               DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER14" CARGO cCOMP
+            Else
+               DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER7" CARGO cCOMP
+            EndIf
+         EndIf
+      EndIf
+        Dbgoto(nREC)
+        Dbskip()
+    End
+        DBENDTREE oTREE
+    EndIf
+
+    oTREE:REFRESH()
+    oTREE:SETFOCUS()
+    oTREE:TREESEEK(cFIRST)
+    oTREE:SETFOCUS()
+    ODLG:REFRESH()
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830MAK
+Busca Itens filhos na estrutura - Funcao Recursiva
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830MAK(cPAI,cDESCPAI)
+
+    Local nREC
+	Local cDESC2
+	Local nREPX := 0
+
+    cDESCPAI := If(ST9->(dbSeek(xFilial('ST9')+cPAI)),ST9->T9_NOME," ")
+    cDESC2   := cPAI+REPLICATE(" ",25-LEN(RTRIM(cPAI)))
+    cPRODESC := cDESC2+' - '+cDESCPAI
+    DBADDTREE oTREE PROMPT cPRODESC OPENED RESOURCE "FOLDER10", "FOLDER11" CARGO cPAI
+    While (cTRB33)->TC_CODBEM == cPAI .And.  !(cTRB33)->(Eof())
+        nREC  := RECNO()
+        cCOMP := (cTRB33)->TC_COMPONE
+        nREPX := MNTA830DBA((cTRB33)->TC_NREPASS)
+        cITEM := If(ST9->(dbSeek(xFilial('ST9')+cCOMP)),ST9->T9_NOME," ")
+        dbSelectArea(cTRB33)
+        If dbSeek(cCOMP)
+            MNTA830MAK(cCOMP)
+        ELSE
+            cDESC2   := cCOMP+REPLICATE(" ",25-LEN(RTRIM(cCOMP)))
+            cPRODESC := cDESC2+' - '+cITEM
+
+            If Empty(nREPX)
+                DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER10" CARGO cCOMP
+            Else
+                If nREPX = 1
+                    DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER10" CARGO cCOMP
+                Elseif nREPX = 2
+                    DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER12" CARGO cCOMP
+                Elseif nREPX = 3
+                    DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER14" CARGO cCOMP
+                Else
+                    DBADDITEM oTREE PROMPT cPRODESC RESOURCE "FOLDER7" CARGO cCOMP
+                EndIf
+            EndIf
+        EndIf
+        Dbgoto(nREC)
+        Dbskip()
+    EndDo
+
+    DBENDTREE oTREE
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830DBA
+Refaz o controle dos repasses dos contadores
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830DBA(nREPA)
+
+    Local nREPAV := nREPA
+
+    If nREPA > 1
+        If nCONT1AN > 0 .And. nCONT2AN > 0
+            If nCONT1V = 0
+                If nREPA = 4
+                    nREPAV := MNTA830REP(3)
+                Elseif nREPAV = 2
+                    nREPAV := MNTA830REP(1)
+                EndIf
+            ElseIf nCONT2V = 0
+                If nREPA = 4
+                    nREPAV := MNTA830REP(2)
+                Elseif nREPA = 3
+                    nREPAV := MNTA830REP(1)
+                EndIf
+            EndIf
+        ElseIf nCONT1AN > 0 .And. nCONT1V = 0  // era 1 e nao e mais
+            nREPAV := MNTA830REP(1)
+        Elseif nCONT1AN = 0 .And. nCONT1V > 0 // nao era 1 agora e 1
+            If nREPAV = 4
+                nREPAV := MNTA830REP(2)
+            Elseif nREPAV = 3 .And. nCONT2V = 0
+                nREPAV := MNTA830REP(1)
+            EndIf
+        Elseif nCONT2AN > 0 .And. nCONT2V = 0  // era 2 e nao e mais
+            nREPAV := MNTA830REP(1)
+        Elseif nCONT2AN = 0 .And. nCONT2V > 0 // nao era 2 agora e 2
+            If nREPAV = 4
+                nREPAV := MNTA830REP(3)
+            EndIf
+        EndIf
+    EndIf
+
+Return nREPAV
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830REP
+Regrava o repasse no arquivo temporario
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830REP(nNREP)
+
+    (cTRB33)->TC_NREPASS := nNREP
+
+Return (cTRB33)->TC_NREPASS
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830TRB
+Inclui no arquivo de trabalho os itens filhos
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830TRB(cPAI)
+
+    Local nREC
+    Local i
+
+    While !Eof() .And. STC->TC_FILIAL = xFilial('STC') .And. STC->TC_CODBEM = cPAI
+        nREC  := RECNO()
+        cCOMP := STC->TC_COMPONE
+        (cTRB33)->(DbAppend())
+        For i := 1 TO FCOUNT()
+            (cTRB33)->(FieldPut(i,STC->(FIELDGET(i))))
+        Next i
+        (cTRB33)->TC_NREPASS := 1
+
+        dbSelectArea("STC")
+        If dbSeek(xFilial('STC')+cCOMP)
+            MNTA830TRB(cCOMP)
+        EndIf
+        Dbgoto(nREC)
+        Dbskip()
+    EndDo
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA830MAR
+Marca os elementos da estrutura para repasse do contador(s)
+@author Inácio Luiz Kolling
+@since 27/05/2003
+@version P12
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA830MAR(cCODCOMP,nOPSEL)
+
+    If cCODCOMP <> cPAI
+        (cTRB33)->(Dbsetorder(2))
+        If (cTRB33)->(dbSeek(cCODCOMP))
+            (cTRB33)->TC_NREPASS := nOPSEL
+            If nOPSEL = 1
+                oTree:ChangeBmp("FOLDER10","FOLDER10")
+            ElseIf nOPSEL = 2
+                oTree:ChangeBmp("FOLDER12","FOLDER12")
+            ElseIf nOPSEL = 3
+                oTree:ChangeBmp("FOLDER14","FOLDER14")
+            ElseIf nOPSEL = 4
+                oTree:ChangeBmp("FOLDER7","FOLDER7")
+            EndIf
+        EndIf
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de menu Funcional
+@author Ricardo Dal Ponte
+@since 29/11/2006
+@version P12
+@return Array com opcoes da rotina
+Parametros Parametros do array a Rotina:
+           1. Nome a aparecer no cabecalho
+           2. Nome da Rotina associada
+           3. Reservado
+           4. Tipo de Transa‡„o a ser efetuada:
+           		1 - Pesquisa e Posiciona em um Banco de Dados
+               2 - Simplesmente Mostra os Campos
+               3 - Inclui registros no Bancos de Dados
+               4 - Altera o registro corrente
+               5 - Remove o registro corrente do Banco de Dados
+           5. Nivel de acesso
+           6. Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+    Local aRotina := {{STR0004, "PesqBrw"   , 0, 1},; //"Pesquisar"
+                      {STR0005, "NGCAD01"   , 0, 2},; //"Visualizar"
+                      {STR0006, "MNTA830ACE", 0, 4},; //"Informa"
+                      {STR0026, "MNTA830VIR", 0, 4}}  // "Virada"
+
+Return(aRotina)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaPict
+Busca as pictures para montagem da tela na mão.
+
+@author Maicon André Pinheiro
+@since 13/06/2017
+@version P12
+@return aPictures
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaPict()
+
+	Local aPictures := {}
+
+	aAdd(aPictures,Posicione("SX3",2,"T9_POSCONT","X3_PICTURE"))
+	aAdd(aPictures,Posicione("SX3",2,"TPE_POSCON","X3_PICTURE"))
+
+Return aPictures

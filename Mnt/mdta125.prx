@@ -1,0 +1,869 @@
+#Include "Mdta125.ch"
+#Include "Protheus.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA125
+Programa de Cadastro de Epi por risco. Para cada risco definido o
+usuario pordera relacionar os EPIs previamente definidos e ja
+registrados no sistema.
+
+@type    function
+@author  Thiago Machado
+@since   23/07/2001
+@sample  MDTA125()
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA125()
+
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	Local aNGBEGINPRM := NGBEGINPRM( )
+	Private lSigaMdtPS := If( SuperGetMv("MV_MDTPS",.F.,"N") == "S", .T. , .F. )
+	Private aRotina := MenuDef()
+
+	If lSigaMdtps
+		cCadastro := OemtoAnsi(STR0019) //"Clientes"
+
+		// Endereca a funcao de BROWSE
+		DbSelectArea("SA1")
+		DbSetOrder(1)
+		mBrowse( 6, 1,22,75,"SA1")
+	Else
+
+		// Define o cabecalho da tela de atualizacoes
+		cCadastro := OemtoAnsi(STR0007) //"Riscos"
+
+		// Endereca a funcao de BROWSE
+		DbSelectArea("TN0")
+		DbSetOrder(1)
+		mBrowse( 6, 1,22,75,"TN0")
+	Endif
+
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VALEPI125
+Verifica se o EPI esta realmente cadastrado como EPI
+@type    function
+@author  Liber de Esteban
+@since   08/06/2004
+@sample  VALEPI125()
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function VALEPI125()
+
+	Local cTipo := SuperGetMv("MV_MDTPEPI",.F.,"")
+	Local lSX5  := !Empty(cTipo)
+
+	If !MDTProEpi(M->TNX_EPI,cTipo,lSX5)
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fMDT125TIP
+Valida o campo TNX_TIPO
+@type    function
+@author
+@since   25/06/2004
+@sample  sample
+@param   cTIPO, Caractere, Tipo do EPI( 1-Obrigatório ou 2-Alterantivo )
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function fMDT125TIP( cTIPO )
+
+	If cTIPO == '1'
+		M->TNX_FAMIL := '1'
+	Endif
+	lRefresh := .T.
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional
+
+@type    function
+@author  Rafael Diogo Richter
+@since   29/11/2006
+@sample  MenuDef()
+@param   param, param_type, param_descr
+
+@Obs     Parametros do array a Rotina:
+	1. Nome a aparecer no cabecalho
+	2. Nome da Rotina associada
+	3. Reservado
+	4. Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+	5. Nivel de acesso
+	6. Habilita Menu Funcional
+
+@return  aRotina, Array, Opções da rotina
+/*/
+//-------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local lSigaMdtPS := If( SuperGetMv( "MV_MDTPS", .F., "N" ) == "S", .T. , .F. )
+	Local aRotina
+
+	If lSigaMdtps
+
+		aRotina := { { STR0001, "AxPesqui" , 0, 1 }, ; //"Pesquisar"
+					 { STR0002, "NGCAD01"  , 0, 2 }, ; //"Visualizar"
+					 { STR0007, "MDT115RI" , 0, 4 }  } //"Riscos"
+	Else
+
+		aRotina := { { STR0001, "AxPesqui" , 0, 1 }, ; //"Pesquisar"
+					 { STR0002, "NGCAD01"  , 0, 2 }, ; //"Visualizar"
+					 { STR0008, "MDT125EPI", 0, 4 }  } //"EPI's"
+
+	EndIf
+
+Return aRotina
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT125EPI
+Programa de Incluisao,alteracao,exclusao
+
+@type    function
+@author  Andre Perez Alvarez
+@since   04/08/2007
+@sample  MDT125EPI( 'TNX', 1, 1 )
+
+@param   cAlias, Caractere, Alias do arquivo
+@param   nReg, Numérico, Numero do registro
+@param   nOpcx, Numérico, Opcao selecionada no menu
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDT125EPI( cAlias, nReg, nOpcx )
+
+	Local i
+	Local oDlg, oGet, oPanelTop, oPanelMid
+	Local cCampo    := ''
+	Local cUsado    := ''
+	Local cNivCpo   := ''
+	Local aTamCpo   := {}
+	Local nCps		:= 0
+	Local cContx	:= ''
+	Local aNao      := { 'TNX_NUMRIS', 'TNX_AGENTE', 'TNX_NOMAGE', 'TNX_CLIENT' , 'TNX_LOJA' }
+
+	Private aCOLS
+	Private oMenu
+
+	//Verifica qual tipo de produto eh o tipo EPI
+	//e atualiza a consulta padrao de EPI's de acordo com isso
+	Private cTipo := SuperGetMv("MV_MDTPEPI",.F.,"")
+	Private lSX5  := !Empty(cTipo)  //Variaveis utilizadas na validacao do campo TNX_EPI
+
+	//Variaveis de tamanho de tela e objetos
+	Private aSize := MsAdvSize(,.F.,430), aObjects := {}
+	Aadd(aObjects,{050,050,.T.,.T.})
+	Aadd(aObjects,{020,020,.T.,.T.})
+	Aadd(aObjects,{100,100,.T.,.T.})
+	aInfo := {aSize[1],aSize[2],aSize[3],aSize[4],0,0}
+	aPosObj := MsObjSize(aInfo, aObjects,.T.)
+
+	// Verifica se existe algum dado no arquivo
+	dbSelectArea( "TNX" )
+	FOR i := 1 TO FCount()
+		x   := "m->" + FieldName(i)
+		&x. := FieldGet(i)
+	Next i
+
+	If lSigaMdtps
+		nIndTNX	 := 4 //TNX_FILIAL+TNX_CLIENT+TNX_LOJA+TNX_NUMRIS+TNX_EPI
+		cSeekTNX := cCliMdtps+TN0->TN0_NUMRIS
+		cCondTNX := 'TNX->TNX_FILIAL+TNX_CLIENT+TNX_LOJA+TNX->TNX_NUMRIS == "' + cSeekTNX + '"'
+	Else
+		nIndTNX  := 1 //TNX_FILIAL+TNX_NUMRIS+TNX_EPI
+		cSeekTNX := TN0->TN0_NUMRIS
+		cCondTNX := 'TNX->TNX_FILIAL+TNX->TNX_NUMRIS == "' + xFilial("TNX") + cSeekTNX + '"'
+	Endif
+
+	//Monta a entrada de dados do arquivo
+	Private aTELA := {},aGETS := {},aHeader[0],nUsado:=0
+
+	//Monta o cabecalho e a getdados
+	FillGetDados( nOpcx, "TNX", nIndTNX, cSeekTNX, {||}, {||.T.}, aNao, , , , { | | NGMontaaCols( "TNX", cSeekTNX, cCondTNX, , nIndTNX ) } )
+
+	If Empty( aCols )
+	   aCols := BlankGetd( aHeader )
+	EndIf
+
+	nCODEPI := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TNX_EPI" })
+	nTIPO   := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TNX_TIPO" })
+
+	PutFileInEof( "TNX" )
+
+	dbSelectArea("TMA")
+	dbSetOrder(1)
+	dbSeek(xFilial("TMA")+TN0->TN0_AGENTE)
+
+	nOpca := 0
+	DEFINE MSDIALOG oDlg TITLE STR0006 From aSize[7],0 To aSize[6],aSize[5] OF oMainWnd Pixel//"EPI's por Risco"
+
+		//Panel criado para correta disposicao da tela
+		oPnlPai := TPanel():New( , , , oDlg , , , , , , , , .F. , .F. )
+		oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPanelTop := TPanel():New(0,0,,oPnlPai,,,,,RGB(255,255,255),0, 45, .F., .F. )
+			oPanelTop:Align := CONTROL_ALIGN_TOP
+
+				@ 10 ,10  SAY OemtoAnsi(STR0009) Pixel OF oPanelTop //"Num.Risco"
+				@ 07 ,40  MSGET TN0->TN0_NUMRIS SIZE 20,10 WHEN .F. Pixel OF oPanelTop
+				@ 10 ,90  SAY OemToAnsi(STR0010) Pixel OF oPanelTop //"Nome Agente"
+				@ 07 ,125  MSGET TMA->TMA_NOMAGE SIZE 150,10 WHEN .F. Pixel OF oPanelTop
+
+				@ 30,10 BUTTON "&"+STR0008 SIZE 50,12 PIXEL ACTION ( MDT125BUT(cTipo,lSX5) ) OF oPanelTop  //"EPI's"
+
+				dbSelectArea("TNX")
+
+				oGet:= MSGetDados():New(60,1,216,275,nOpcx,"NG125LinOk()","NG125LinOk(.T.)","",.T.,/*aAlter*/,/*nFreeze*/, /*lEmpty*/, /*nMax*/, /*cFieldOk*/, /*cSuperDel*/, /*uPar*/, /*cDelOk*/, oPnlPai )
+				oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+				//Implementa Click da Direita
+				If Len(aSMenu) > 0
+					NGPOPUP(aSMenu,@oMenu)
+					oDlg:bRClicked	:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+					oPanelTop:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg)}
+					oPanelMid:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg)}
+				Endif
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{||nOpca:=1,if(oGet:TudoOk(),oDlg:End(),nOpca := 0)},{||oDlg:End(),nOpca := 0})
+
+	If nOpcA == 1
+		Begin Transaction
+
+		NG125GRAV( "TNX", nOpca )
+
+		//Processa Gatilhos
+		EvalTrigger()
+
+		//-----------------------------------------------------------------
+		// Realiza a integração das informações do evento S-2240 ao Governo
+		//-----------------------------------------------------------------
+		If FindFunction( "MDTIntEsoc" )
+			fEpiS2240()
+		EndIf
+
+		End Transaction
+	Endif
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG125LinOk
+Critica se a linha digitada está Ok
+
+@type    function
+@author  Andre Perez Alvarez
+@since   04/07/2007
+@sample  NG125LinOk( .T. )
+@param   lFim, Lógico, Indica se é o fim da inclusão
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG125LinOk( lFim )
+
+	Local f
+	Local lRet := .T.
+
+	Default lFim := .F.
+
+	If Len(aCols) == 1
+		If Empty(aCols[1][nCODEPI]) .Or. aCols[1][Len(aCols[1])]
+			lRet := .T.
+		Endif
+	Endif
+	//Percorre aCols
+	For f:= 1 to Len(aCols)
+		If !aCols[f][Len(aCols[f])]
+			If lFim .Or. f == n
+				//VerIfica se os campos obrigatórios estão preenchidos
+				If Empty(aCols[f][nCODEPI])
+					//Mostra mensagem de Help
+					Help(1," ","OBRIGAT2",,aHeader[nCODEPI][1],3,0)
+					lRet := .F.
+				Endif
+			Endif
+			//Verifica se é somente LinhaOk
+			If f <> n .And. !aCols[n][Len(aCols[n])]
+				If aCols[f][nCODEPI] == aCols[n][nCODEPI]
+					Help(" ",1,"JAEXISTINF")
+					lRet := .F.
+				Endif
+			Endif
+		Endif
+	Next f
+
+	//-------------------------------------------------------------------------------------
+	// Realiza as validações das informações do evento S-2240 que serão enviadas ao Governo
+	//-------------------------------------------------------------------------------------
+	/*If lRet .And. lFim
+		lRet := fEpiS2240( .F. ) //Valida os dados a serem enviados
+	EndIf*/
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NG125GRAV
+Grava os dados na TNX
+
+@type    function
+@author  Andre Perez Alvarez
+@since   04/08/2007
+@sample  NG125GRAV( 'TNX', 1 )
+
+@param   cAlias, Caractere, Alias do arquivo
+@param   nOpcao, Numérico, Opcao selecionada no menu
+
+@return  Lógico, Sempre Verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function NG125GRAV( cAlias, nOpcao )
+
+	Local i, j
+
+	//Coloca os deletados por primeiro
+	ASORT(aCols,,, { |x, y| x[Len(x)] .And. !y[Len(y)] } )
+	For i:=1 To Len(aCols)
+		If !aCols[i][Len(aCols[i])] .And. !Empty(aCols[i][nCODEPI])
+			dbSelectArea("TNX")
+			dbSetOrder(nIndTNX)
+			If dbSeek(xFilial('TNX')+cSeekTNX+aCols[i][nCODEPI])
+				RecLock("TNX",.F.)
+				lAltera := .T.
+			Else
+				RecLock("TNX",.T.)
+				lAltera := .F.
+			Endif
+			For j:=1 to FCount()
+				If "_NOMAGE"$Upper(FieldName(j)) .Or. "_NOMEPI"$Upper(FieldName(j))
+					Loop
+				Endif
+
+				If "_FILIAL"$Upper(FieldName(j))
+					FieldPut(j, xFilial("TNX"))
+				ElseIf "_NUMRIS"$Upper(FieldName(j))
+					FieldPut(j, TN0->TN0_NUMRIS)
+				ElseIf "_AGENTE"$Upper(FieldName(j))
+					FieldPut(j, TN0->TN0_AGENTE)
+				ElseIf "_CLIENT"$Upper(FieldName(j))
+					FieldPut(j, SA1->A1_COD)
+				ElseIf "_LOJA"$Upper(FieldName(j))
+					FieldPut(j, SA1->A1_LOJA)
+				Else
+					If (nPos := aScan(aHeader, {|x| AllTrim(Upper(x[2])) == AllTrim(Upper(FieldName(j))) })) > 0
+						FieldPut(j, aCols[i][nPos])
+					Endif
+				Endif
+			Next j
+			MsUnlock("TNX")
+		ElseIf !Empty(aCols[i][nCODEPI])
+			dbSelectArea("TNX")
+			dbSetOrder(nIndTNX)
+			If dbSeek(xFilial('TNX')+cSeekTNX+aCols[i][nCODEPI])
+				RecLock("TNX",.F.)
+				dbDelete()
+				MsUnlock("TNX")
+			Endif
+		Endif
+	Next i
+
+	dbSelectArea("TNX")
+	dbSetOrder(nIndTNX)
+	dbSeek(cSeekTNX)
+	While !Eof() .And. &cCondTNX//"TNX->TNX_FILIAL+TNX->TNX_NUMRIS == xFilial("TNX")+TN0->TN0_NUMRIS
+		If aScan( aCols,{|x| x[nCODEPI] == TNX->TNX_EPI .And. !x[Len(x)]}) == 0
+			RecLock("TNX",.F.)
+			dbDelete()
+			MsUnlock("TNX")
+		Endif
+		dbSelectArea("TNX")
+		dbSkip()
+	EndDo
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT125BUT
+description
+@type    function
+@author  Autor Andre Perez Alvarez
+@since   18/07/2007
+@sample  MDT125BUT( 'MC', .T. )
+
+@param   cTipoEPI, Caractere, Tipo da tabela genérica 2 que indica o
+tipo EPI
+@param   lSX5, Lógico, Indica se o parâmetro cTipoEPI não está vazio
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Static Function MDT125BUT( cTipoEPI, lSX5 )
+
+	Local aArea := GetArea()
+	Local aAreaSB1 := SB1->(GetArea())
+	Local oDlgF
+	Local oFont
+	Local oMARK1
+	Local oTempTable
+	Local nSizeSB1 := If((TAMSX3("B1_DESC")[1]) < 1,20,(TAMSX3("B1_DESC")[1]))
+	Local nSizeCod := If((TAMSX3("B1_COD")[1]) < 1,20,(TAMSX3("B1_COD")[1]))
+	Local oPnlPai
+	Local oPnlDesc
+	Local cAlsTmp := GetNextAlias()
+
+	Private cMarca := GetMark()
+
+	lInverte:= .F.
+
+	lQuery := .T.
+
+	dbSelectArea("TNX")
+
+	aDBF := {}
+	AADD(aDBF,{ "B1_OK"   , "C" ,02      , 0 })
+	AADD(aDBF,{ "B1_COD"  , "C" ,nSizeCod, 0 })
+	AADD(aDBF,{ "B1_DESC" , "C" ,nSizeSB1, 0 })
+
+	aTRB1 := {}
+	AADD(aTRB1,{ "B1_OK"  ,NIL," "    ,})
+	AADD(aTRB1,{ "B1_COD" ,NIL,STR0013,})  //"Codigo"
+	AADD(aTRB1,{ "B1_DESC",NIL,STR0014,})  //"Descrição do Epi"
+
+	oTempTable := FWTemporaryTable():New( cAlsTmp , aDBF )
+	oTempTable:AddIndex( "1", {"B1_COD"} )
+	oTempTable:Create()
+
+	Processa({|lEnd| MDT125RET( cTipoEPI, lSX5 , cAlsTmp )},STR0024,STR0025)//"Buscando EPI"##"Aguarde"
+
+	dbselectarea( cAlsTmp )
+	dbgotop()
+	If ( cAlsTmp )->(Reccount()) <= 0
+		Msgstop(STR0015,STR0016)  //"Não existem EPI's cadastrados." //"ATENÇÃO"
+	Else
+
+		nOpt := 2
+
+		DEFINE FONT oFont NAME "Arial" SIZE 0,-12
+		DEFINE MSDIALOG oDlgF TITLE OemToAnsi(STR0008) From 150,0 To 690,565 PIXEL OF oMainWnd //"EPI's"
+
+			oPnlPai := TPanel():New( , , , oDlgF , , , , , , , , .F. , .F. )
+			//oPnlPai := TPanel():New(0, 0, Nil, oDlgF, Nil, .T., .F., Nil, Nil, 0, 0, .F., .F. )
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+				oPnlDesc := TPanel():New(0, 0, Nil, oPnlPai, Nil, .T., .F., Nil, Nil, , 45, .F., .F. )
+				oPnlDesc:Align	:= CONTROL_ALIGN_TOP
+
+					@ 05,05 TO 40,280 PIXEL OF oPnlDesc
+					@ 15,15 SAY STR0017 SIZE 200,10 of oPnlDesc PIXEL FONT oFont //"Estes são os EPI's cadastrados no sistema."
+					@ 25,15 SAY STR0018 SIZE 200,10 of oPnlDesc PIXEL FONT oFont //"Selecione aqueles que são necessários para este risco."
+
+				oMARK1 := MsSelect():NEW( cAlsTmp ,"B1_OK",,aTRB1,@lINVERTE,@cMARCA, {45,5,254,281}, , , oPnlPai)
+				oMARK1:oBROWSE:ALIGN		:= CONTROL_ALIGN_ALLCLIENT
+				oMARK1:bMARK 				:= {|| MDT125MK(cMarca,lInverte)}
+				oMARK1:oBROWSE:lHASMARK 	:= .T.
+				oMARK1:oBROWSE:lCANALLMARK 	:= .T.
+				oMARK1:oBROWSE:bALLMARK 	:= {|| MDTA125INV(cMarca, cAlsTmp) }
+
+		ACTIVATE MSDIALOG oDlgF ON INIT EnchoiceBar(oDlgF,{|| nOpt := 1,If(MDT125OK(oMARK1, cAlsTmp),oDlgf:End(), nil)},{|| nOpt := 2,oDlgf:End()}) Centered
+
+		If nOpt == 1
+			Processa({|lEnd| MDT125CPY(cAlsTmp)})
+		Endif
+	EndIf
+
+	oTempTable:Delete()
+	RestArea(aAreaSB1)
+	RestArea(aArea)
+	lRefresh := .T.
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT125MK
+Inverte seleção
+@type    function
+@author  Andre Perez Alvarez
+@since   19/07/2007
+@sample  MDT125MK('XX', .T.)
+
+@param   cMarca, Caractere, Marca do browse
+@param   lInverte, Lógico, Se iverte a macação
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function MDT125MK( cMarca, lInverte )
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDTA125INV
+Inverte a marcacao do browse
+
+@type    function
+@author  Andre Perez Alvarez
+@since   19/07/2007
+@sample  MDTA125INV( 'XX', 'ALD4512200' )
+
+@param   cMarca, Caractere, Marca do browse
+@param   cAlsTmp, Caractere, Alias da tabela temporária
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Function MDTA125INV( cMarca, cAlsTmp )
+
+	Local aArea := GetArea()
+
+	Dbselectarea( cAlsTmp )
+	Dbgotop()
+	While ( cAlsTmp )->( !EoF() )
+		RecLock( cAlsTmp , .F. )
+		( cAlsTmp )->B1_OK := IF(B1_OK  == "  ",cMARCA,"  ")
+		( cAlsTmp )->( MsUnLock() )
+		( cAlsTmp )->( dbSkip() )
+	End
+
+	RestArea(aArea)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT125CPY
+Copia os EPI'selecionados no markbrowse para o a GetDados
+
+@type    function
+@author  Andre Perez Alvarez
+@since   20/07/2007
+@sample  MDT125CPY( 'ALD4512200' )
+@param   cAlsTmp, Caractere, Alias da tabela temporária
+
+@return  Lógico, Sempre verdadeiro
+/*/
+//-------------------------------------------------------------------
+Static Function MDT125CPY( cAlsTmp )
+
+	Local nCols
+	Local cCampo  := ''
+	Local cNivCpo := ''
+	Local cUsado  := ''
+	Local aTamCpo := {}
+	Local nCps    := 0
+	Local cContx  := ''
+	Local cRelac  := ''
+	Local cTipo   := ''
+	Local aColsAux := BlankGetd(aHeader)[ 1 ]
+
+	Private nPosCodi := aScan( aHeader,{|x| Trim(Upper(x[2])) == "TNX_EPI"})
+
+	dbSelectArea( cAlsTmp )
+	ProcRegua(RecCount())
+	Set Filter To !Empty(( cAlsTmp )->B1_OK)
+	dbGoTop()
+
+	While ( cAlsTmp )->( !EoF() )
+
+
+		IncProc()
+		//Se não houver uma linha vazia no acols
+		If Len( aCols ) <> 1 .Or. !Empty(aCols[ Len( aCols ), 1 ])
+			aAdd( aCols , aClone( aColsAux ) )
+		EndIf
+
+		For nCps := 1 To Len(aHeader)
+
+			cCampo  :=  AllTrim( aHeader[ nCps, 2 ] )
+			cRelac  := GetSx3Cache( cCampo, "X3_RELACAO" )
+
+			If cCampo == "TNX_EPI"
+				aCols[ Len( aCols ) , nCps ] := ( cAlsTmp )->B1_COD
+			ElseIf cCampo == "TNX_NOMEPI"
+				aCols[ Len( aCols ) , nCps ] := ( cAlsTmp )->B1_DESC
+			ElseIf ExistIni(cCampo)
+				aCols[ Len( aCols ) , nCps ] := InitPad(cRelac)
+			EndIf
+		Next nCps
+
+		dbselectarea( cAlsTmp )
+		( cAlsTmp )->( dbSkip() )
+	End
+
+	aSort(aCols,,,{|x,y| If(Empty(x[1]), x[1] > y[1], x[1] < y[1] ) })
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT115RI
+Monta um browse com os riscos do cliente
+
+@type    function
+@author  Andre Perez Alvarez
+@since   25/09/2007
+@sample  MDT115RI()
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function MDT115RI()
+
+	Local aArea	:= GetArea()
+	Local oldROTINA := aCLONE(aROTINA)
+	Local oldCad := cCadastro
+	cCliMdtPs := SA1->A1_COD+SA1->A1_LOJA
+
+	aRotina :=  { { STR0001, "AxPesqui" , 0, 1 }, ;  //"Pesquisar"
+				  { STR0002, "NGCAD01"	, 0, 2 }, ;  //"Visualizar"
+				  { STR0008, "MDT125EPI", 0, 4 }  }  //"EPI's"
+
+	// Define o cabecalho da tela de atualizacoes
+	Private cCadastro := OemtoAnsi(STR0007)  //"Riscos"
+
+	// Endereca a funcao de BROWSE
+	DbSelectArea("TN0")
+	Set Filter To TN0->(TN0_CODCLI+TN0_LOJACL) == cCliMdtps
+	DbSetOrder(1)
+	mBrowse( 6, 1,22,75,"TN0")
+
+	DbSelectArea("TN0")
+	Set Filter To
+
+	aROTINA := aCLONE(oldROTINA)
+	RestArea(aArea)
+	cCadastro := oldCad
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fIndTipTNX
+Validacao do campo Tipo no cadastro de EPI x Risco
+
+@type    function
+@author  Andre E. Perez Alvarez
+@since   03/12/2008
+@sample  fIndTipTNX( 1 )
+@param   cTNX_TIPO, Caractere, Tipo do EPI( 1-Obrigatório ou 2-Alterantivo )
+@param   cTIPO,
+
+@return  Nil, Sempre Nulo
+/*/
+//-------------------------------------------------------------------
+Function fIndTipTNX( cTNX_TIPO )
+
+	Local nPOS := aSCAN(aHEADER, {|x| AllTrim(Upper(X[2])) == "TNX_FAMIL" })
+
+	If cTNX_TIPO == "1"
+		aCols[n,nPOS] := ""
+	Endif
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT125OK
+Verificar se possui no minimo uma ordem selecionada.
+
+@type    function
+@author  Jean Pytter da Costa
+@since   14/03/14
+
+@param   oBrwMrk, Objeto, Objeto do MarkBrowse
+@param   cAlsTmp, Caractere, Alias da tabela temporária
+
+@return  Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDT125OK( oBrwMrk, cAlsTmp )
+
+	Local lRet := .F.
+
+	dbSelectArea( cAlsTmp )
+	dbGoTop()
+	While ( cAlsTmp )->( !Eof() )
+		If !Empty(( cAlsTmp )->B1_OK)
+			lRet := .T.
+			Exit
+		EndIf
+		( cAlsTmp )->( dbSkip() )
+	End
+
+	If !lRet
+		ShowHelpDlg( STR0021 ,{ STR0022 } , 1 ,{ STR0023 } , 2 )//"ATENÇÃO"##"Não é possível confirmar sem nenhum EPI selecionado."##"Selecione no minímo um EPI."
+	EndIf
+
+	dbSelectArea( cAlsTmp )
+	dbGoTop()
+	oBrwMrk:oBrowse:SetFocus() // Define foco no markbrowse
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT125RET
+Funcao para retornar todos os EPIS.
+
+@type    function
+@sample  MDT125RET( cTipoEPI, lSX5, cAlsTmp )
+@author  Jean Pytter da Costa
+@since   14/03/14
+
+@param   cTipoEPI, Caractere, Tipo da tabela genérica 2 que indica o
+tipo EPI
+@param   lSX5, Lógico, Indica se o parâmetro cTipoEPI não está vazio
+@param   cAlsTmp, Caractere, Alias da tabela temporária
+
+@return  Nil, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Static Function MDT125RET( cTipoEPI, lSX5, cAlsTmp )
+
+	Local nPosCod := 1
+	Local aArea   := GetArea()
+	Local cAlsSB1 := GetNextAlias()
+	Local nTipEPI
+	Local cCodTip := '%%'
+	Local cStrEPI := ''
+	Local aTipEPI := Strtokarr2( cTipoEPI, ";")
+
+	nPosCodEp := aScan( aHeader,{|x| Trim(Upper(x[2])) == "TNX_EPI"})
+
+	If lSX5
+		For nTipEPI := 1 To Len( aTipEPI )
+			If nTipEPI <> 1
+				cStrEPI += ','
+			EndIf
+			cStrEPI += "'" + aTipEPI[nTipEPI] + "'"
+		Next nTipEPI
+		cCodTip := '% AND SB1.B1_TIPO IN (' + cStrEPI + ') %'
+	EndIf
+
+	BeginSQL Alias cAlsSB1
+		SELECT SB1.B1_COD, SB1.B1_DESC
+			FROM %table:SB1% SB1
+			INNER JOIN %table:TN3% TN3 ON
+				TN3.TN3_FILIAL = %xFilial:TN3% AND TN3.TN3_CODEPI = SB1.B1_COD
+			WHERE
+				SB1.B1_MSBLQL <> '1' AND
+				SB1.B1_FILIAL = %xFilial:SB1%
+				%exp:cCodTip%
+		GROUP BY SB1.B1_COD, SB1.B1_DESC
+	EndSQL
+
+	dbSelectArea( cAlsSB1 )
+	While ( cAlsSB1 )->( !EoF() )
+		If aScan( aCols , {|x| x[ nPosCodEp ] == ( cAlsSB1 )->B1_COD  } ) == 0
+			RecLock( cAlsTmp, .T. )
+			( cAlsTmp )->B1_OK   := IIf( aScan( aCols , {|x| x[nPosCodEp] == ( cAlsSB1 )->B1_COD } ) > 0, cMarca , " " )
+			( cAlsTmp )->B1_COD  := ( cAlsSB1 )->B1_COD
+			( cAlsTmp )->B1_DESC := ( cAlsSB1 )->B1_DESC
+			( cAlsTmp )->(MsUnLock())
+		EndIf
+		( cAlsSB1 )->(dbSkip())
+	EndDo
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDTA125When( nCpo )
+Função When da tabela TNX
+
+@type    function
+@sample  MDTA125When( 1 )
+@param   nCpo, Numérico, Indica qual campo fará a comparação do When.
+@author  Guilherme Benkendorf
+@since   12/05/2014
+@Obs     nCpo - 1 - TNX_FAMIL
+
+@return  lRet, Lógico, Sempre Nulo
+/*/
+//---------------------------------------------------------------------
+Function MDTA125When( nCpo )
+
+	Local lRet := .T.
+	Local nTIPO:= If( Type("aHeader") == "A", aSCAN(aHEADER, {|x| AllTrim(Upper( X[2] ) )  == "TNX_TIPO" } ), 0  )
+
+	If nCpo == 1
+		If nTipo <> 0
+			lRet := aCols[n][nTIPO] <> '1'
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fEpiS2240
+Função para validar o envio do evento S-2240 ao TAF, na pós validação
+do cadastro valida os dados e após a gravação envia ao TAF
+
+@type Function
+
+@sample fEpiS2240( .T. )
+
+@param lValid, Lógico, indica se fará a validação dos dados ou o envio
+
+@author  Luis Fellipy Bett
+@since   05/08/2019
+/*/
+//-------------------------------------------------------------------
+Static Function fEpiS2240( lEnvio )
+
+	Local aAreaTN0	:= TN0->( GetArea() )
+	Local lRet		:= .T.
+	Local aFuncs	:= {}
+	Local aCampos	:= {}
+	Local oTempFunc
+
+	//Define por padrão como sendo envio de informações
+	Default lEnvio := .T.
+
+	//Monta a tabela temporária
+	aCampos := {	{ "TMPA_MATRI", "C", TAMSX3( "RA_MAT" )[ 1 ], 0 }, ;
+					{ "TMPA_NOMFU", "C", TAMSX3( "RA_NOME" )[ 1 ], 0 }, ;
+					{ "TMPA_DTINI", "D", 8, 0 }, ;
+					{ "TMPA_DTFIM", "D", 8, 0 }, ;
+					{ "TMPA_TAREF", "C", TAMSX3( "TN5_NOMTAR" )[ 1 ], 0 }, ;
+					{ "TMPA_CCUST", "C", TAMSX3( "CTT_DESC01" )[ 1 ], 0 }, ;
+					{ "TMPA_FUNCA", "C", TAMSX3( "RJ_DESC" )[ 1 ], 0 }, ;
+					{ "TMPA_NVFIL", "C", TAMSX3( "RA_FILIAL" )[ 1 ], 0 }, ;
+					{ "TMPA_DEPTO", "C", TAMSX3( "TM0_DEPTO" )[ 1 ], 0 } }
+
+	oTempFunc := FWTemporaryTable():New( "TMPA", aCampos )
+	oTempFunc:AddIndex( "1", { "TMPA_NOMFU" }  )
+	oTempFunc:Create()
+
+	RegToMemory( "TN0" )
+
+	MDT180BFUN()
+
+	dbSelectArea( "TMPA" )
+	dbGoTop()
+	While TMPA->( !Eof() )
+		If aScan( aFuncs, { |x| x[1] == TMPA->TMPA_MATRI } ) == 0
+			aAdd( aFuncs, { TMPA->TMPA_MATRI, , TN0->TN0_NUMRIS } )
+		EndIf
+		TMPA->( dbSkip() )
+	End
+
+	oTempFunc:Delete() //Deleta a tabela temporária
+
+	If Len( aFuncs ) > 0 //Se houverem funcionários expostos
+		lRet := MDTIntEsoc( "S-2240", 4, , aFuncs, lEnvio ) //Envia informações ao Governo
+	EndIf
+
+	RestArea( aAreaTN0 )
+
+Return lRet

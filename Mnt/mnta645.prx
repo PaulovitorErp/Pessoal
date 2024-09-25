@@ -1,0 +1,1783 @@
+#INCLUDE "MNTA645.ch"
+#include "protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA645
+Conciliação automática das notas fiscais
+
+@author Heverson Vitoreti
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNTA645()
+
+	//+---------------------------------------------------------------------------+
+	//| Armazena variaveis p/ devolucao (NGRIGHTCLICK) 							  |
+	//+---------------------------------------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local oTmpTbl
+	Local aArea		  := GetArea()
+	Local nSizeFil 	  := FwSizeFilial()
+	Local nValUniD	:= TAMSX3("TQN_VALUNI")[1]
+	Local nValUniC	:= TAMSX3("TQN_VALUNI")[2]
+	Local nPreNegD	:= TAMSX3("TQH_PRENEG")[1]
+	Local nPreNegC	:= TAMSX3("TQH_PRENEG")[2]
+	Local nValAbaD	:= TAMSX3("TQN_VALTOT")[1]
+	Local nValAbaC	:= TAMSX3("TQN_VALTOT")[2]
+	Local nQuanAbaD	:= TAMSX3("TQN_QUANT")[1]
+	Local nQuanAbaC	:= TAMSX3("TQN_QUANT")[2]
+	Local nPlaca	:= TAMSX3("TQN_PLACA")[1]
+	Local nHodom	:= TAMSX3("TQN_HODOM")[1]
+	Local nHodom2	:= TAMSX3("TQN_POSCO2")[1]
+	Local nPosto	:= TAMSX3("TQN_POSTO")[1]
+	Local nCNPJ		:= TAMSX3("TQN_CNPJ")[1]
+	Local nNOME		:= TAMSX3("DA4_NOME")[1]
+	Local nCCusto	:= TAMSX3("TQN_CCUSTO")[1]
+	Local nCentra	:= TAMSX3("TQN_CENTRA")[1]
+	Local nProd		:= TAMSX3("B1_COD")[1]
+	Local nItemCta	:= TAMSX3("T9_ITEMCTA")[1]
+	Local nProd		:= TAMSX3("B1_COD")[1]
+	Local nClasse	:= TAMSX3("CTH_CLVL")[1]
+	Local nNabast	:= TAMSX3("TQN_NABAST")[1]
+	Local nNotaF	:= TAMSX3("TQN_NOTFIS")[1]
+
+	Private oMenu
+	Private cAliTRB1   := GetNextAlias()
+	Private lSegCont   := .T.
+	Private aSize	   := MsAdvSize(,.F.,420)
+
+	//Variável que confirma se existe o campo na tabela
+	Private lTQN_NUMSC7 := TQN->( FieldPos("TQN_NUMSC7") ) > 0
+	Private cCadastro 	:= OemtoAnsi(STR0001) //"Conciliação de NF's Automática"
+
+	Private lVirada		:= .F. //Variavel private usada para virada de contador
+
+	aDBFB := {}
+	aAdd(aDBFB,{"ASSI"     ,"C", 2,0})
+	aAdd(aDBFB,{"NOTAFISC" ,"C",nNotaF,0})
+	aAdd(aDBFB,{"VLABA"    ,"N",nValAbaD,nValAbaC})
+	aAdd(aDBFB,{"VLUNIT"   ,"N",nValUniD,nValUniC})
+	aAdd(aDBFB,{"VLNEG"    ,"N",nPreNegD,nPreNegC})
+	aAdd(aDBFB,{"LITROS"   ,"N",nQuanAbaD,nQuanAbaC})
+	aAdd(aDBFB,{"PLACA"    ,"C",nPlaca,0})
+	aAdd(aDBFB,{"DTABAS"   ,"D", 8,0})
+	aAdd(aDBFB,{"HRABAS"   ,"C", 5,0})
+	aAdd(aDBFB,{"KM"       ,"N",nHodom,0})
+	aAdd(aDBFB,{"DA4_NOME" ,"C",nNOME,0})
+	aAdd(aDBFB,{"FROTA"	   ,"C",16,0})
+	aAdd(aDBFB,{"CCUSTO"   ,"C",nCCusto,0})
+	aAdd(aDBFB,{"CTRAB"    ,"C",nCentra,0})
+	aAdd(aDBFB,{"ITEMCTA"  ,"C",nItemCta,0})
+	aAdd(aDBFB,{"CLASSE"   ,"C",nClasse,0})
+	aAdd(aDBFB,{"PROD"     ,"C",nProd,0})
+	aAdd(aDBFB,{"NABAST"   ,"C",nNabast,0})
+	aAdd(aDBFB,{"CNPJ"	   ,"C",nCNPJ,0})
+	aAdd(aDBFB,{"FILIAL"   ,"C",nSizeFil,0})
+	aAdd(aDBFB,{"POSTO"    ,"C",nPosto,0})
+	aAdd(aDBFB,{"FILBEM"   ,"C",nSizeFil,0})
+	If lSegCont
+		aAdd(aDBFB,{"KM2"       ,"N",nHodom2,0})
+	EndIf
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl:= FWTemporaryTable():New( cAliTRB1, aDBFB )
+	//Adiciona os Indices
+	oTmpTbl:AddIndex( "Ind01" ,{"NABAST"})
+	oTmpTbl:AddIndex( "Ind02" ,{"DTABAS"}  )
+	oTmpTbl:AddIndex( "Ind03" , {"FILIAL","FROTA","DTABAS","HRABAS"} )
+	//Cria a tabela temporaria
+	oTmpTbl:Create()
+
+	MNTA645PTE()
+
+	oTmpTbl:Delete()
+
+	//+---------------------------------------------------------------------+
+	//| Devolve variaveis armazenadas (NGRIGHTCLICK) 						|
+	//+---------------------------------------------------------------------+
+	RestArea( aArea )
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645C2
+Testa a igualdade dos valores.
+
+@author Heverson Vitoreti
+
+@param nValor	, Numérico, Valor à conciliar.
+@param nQtLitros, Numérico, Quantidade de litros.
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645C2(nValor, nQtLitros)
+
+	Local lRETVH := .T.
+
+	If MV_Par01 <> nValor .Or. MV_Par02 <> nQtLitros
+		lRETVH := .F.
+		Help(' ',1,STR0014 ,,STR0016,2,0,,,,,, {STR0112}) //"ATENÇÃO"###"Valor incorreto."###"Corrija os valores."
+	EndIf
+
+Return lRETVH
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645INI
+Monta o arquivo temporario inicial mostrado no browse.
+
+@param dDeData	, Date	  , De Data.
+@param dAteData	, Date	  , Até Data.
+@param cCodPos	, Caracter, Código do posto.
+@param cLoja	, Caracter, Loja utilizada.
+@param cCNPJ	, Caracter, CNPJ utilizado.
+@param cComb	, Caracter, Códigod o combustível.
+@param nQtLitros, Numérico, Quantidade de litros.
+@param nValorNF	, Numérico, Valor da nota fiscal.
+@param lRefaz	, Lógico  , Indica se vai carregar novamente o conteúdo.
+
+@author Heverson Vitoreti
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645INI(dDeData, dAteData, cCodPos, cLoja, cCNPJ, cComb, nQtLitros, nValorNF, lRefaz )
+
+	Local lMNT656VL	 := ExistBlock("MNT656VL")
+	Local cAliasQry  := GetNextAlias()
+	Local dDtTQH     := StoD("")
+	Local lHasData   := .F.
+	Local lAferiHod	 := .F.
+	Local xAferiHod  := {}
+
+	Private aMark    	  := {}
+	Private lInverte 	  := .F.
+	Private cMarca   	  := GetMark()
+	Private aCols    	  := {}
+	Private n        	  := 1
+	Private nCont    	  := " "
+	Private oMark
+	Private dDtTQH
+
+	Default lRefaz 	 := .F.
+
+	//Limpa o conteúdo caso já tenha trazido resultado
+	If lRefaz .Or. (cAliTRB1)->(RecCount()) > 0
+		dbselectArea(cAliTRB1)
+		Zap
+		//Limpa caso tenha algum registro marcado
+		nTotalCL := 000.00
+		nTotalC  := 000.00
+		nSelec   := 000.000
+	EndIf
+
+	DbselectArea("TQN")
+	ProcRegua(TQN->(reccount()))
+	If Mv_Par12 = 1
+		If Empty(cCodPos) .And. !Empty(cCNPJ)
+			DbselectArea("TQN")
+			DbSetorder(13)
+			If DbSeek(cCNPJ)
+				While !EoF() .and. TQN->TQN_CNPJ == cCNPJ
+					IncProc()
+					If TQN->TQN_AUTO == "1"   //Abastecimento Automatico
+
+						If TQN->TQN_DTABAS < dDeData .OR. TQN->TQN_DTABAS > dAteData
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+						If !Empty(TQN->TQN_NOTFIS)
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If !Empty(TQN->TQN_DTCON)
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If !Empty(cComb)
+							If cComb <> TQN->TQN_CODCOM
+								DbSelectArea("TQN")
+								DbSkip()
+								Loop
+							EndIf
+						EndIf
+
+						DbSelectArea("TQM")
+						DbSetOrder(01)
+						DbSeek(xFilial("TQM")+cComb)
+						If TQM->TQM_CODCOM <> cComb
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If lMNT656VL //Verifica se nao deve atualizar estoque e odometro
+							xAferiHod := ExecBlock( 'MNT656VL', .F., .F., { TQN->TQN_FROTA } )
+							lAferiHod := IIf( ValType(xAferiHod) == 'A', xAferiHod[1], xAferiHod)
+							If lAferiHod
+								dbSelectArea("TQN")
+								dbSkip()
+								Loop
+							EndIf
+						EndIf
+
+						If !Empty(cCodPos) .and. Empty(cLoja)
+							DbSelectArea("TQF")
+							DbSetOrder(1)
+							If DbSeek(xFilial("TQF")+cCodPos)
+								cLoja := TQF->TQF_LOJA
+							EndIf
+						EndIf
+
+						If !Empty(cCNPJ) .and. (Empty(cLoja) .or. Empty(cCodPos))
+							DbSelectArea("TQF")
+							DbSetOrder(2)
+							If DbSeek(xFilial("TQF")+cCNPJ)
+
+								If Empty(cCodPos)
+									cCodPos := TQF->TQF_CODIGO
+								EndIf
+
+								If Empty(cLoja)
+									cLoja   := TQF->TQF_LOJA
+								EndIf
+
+							EndIf
+						EndIf
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+cCodPos+cLoja)
+							If TQF->TQF_TIPPOS == '2'
+								DbSelectArea("TQN")
+								DbSkip()
+								Loop
+							EndIf
+						EndIf
+						RecLock((cAliTRB1), .T.)
+
+						(cAliTRB1)->VLABA  := TQN->TQN_VALTOT
+						(cAliTRB1)->VLUNIT := TQN->TQN_VALUNI
+						(cAliTRB1)->LITROS := TQN->TQN_QUANT
+						(cAliTRB1)->PLACA  := TQN->TQN_PLACA
+						(cAliTRB1)->KM     := TQN->TQN_HODOM
+						(cAliTRB1)->DTABAS := TQN->TQN_DTABAS
+						(cAliTRB1)->HRABAS := TQN->TQN_HRABAS
+						(cAliTRB1)->FROTA  := TQN->TQN_FROTA
+						(cAliTRB1)->NABAST := TQN->TQN_NABAST
+						(cAliTRB1)->CNPJ   := TQN->TQN_CNPJ
+						(cAliTRB1)->FILIAL := TQN->TQN_FILIAL
+						(cAliTRB1)->FILBEM := If(NGSX2MODO("TQN")=="E" .And. NGSX2MODO("ST9")=="E",TQN->TQN_FILIAL,xFilial("ST9"))
+						If lSegCont
+							(cAliTRB1)->KM2 := TQN->TQN_POSCO2
+						EndIf
+
+						DbSelectArea("DA4")
+						DbSetOrder(1)
+						If DbSeek(xFilial("DA4")+TQN->TQN_CODMOT)
+							(cAliTRB1)->DA4_NOME := DA4->DA4_NOME
+						EndIf
+
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+							(cAliTRB1)->POSTO := TQF->TQF_NREDUZ
+						EndIf
+
+						DbSelectArea("TQH")
+						DbSetOrder(1)
+						DbSeek(xFilial("TQH")+cCodPos+cLoja+cComb)
+						dDtTQH := TQH->TQH_DTNEG
+						Do While !Eof() .and. xFilial("TQH") == TQH->TQH_FILIAL .and.;
+						TQH->TQH_CODPOS == cCodPos .and.;
+						TQH->TQH_LOJA   == cLoja   .and.;
+						TQH->TQH_CODCOM == cComb
+
+							If dDtTQH <= TQH->TQH_DTNEG
+								If TQH->TQH_DTNEG <= (cAliTRB1)->DTABAS
+									(cAliTRB1)->VLNEG := TQH->TQH_PRENEG
+									dDtTQH := TQH->TQH_DTNEG
+								EndIf
+							EndIf
+
+							DbSelectArea("TQH")
+							DbSkip()
+							Loop
+						EndDo
+
+						MsUnLock(cAliTRB1)
+					EndIf
+					DbselectArea("TQN")
+					DbSkip()
+				End
+			Else
+				MsgInfo(STR0049,STR0014) //"Não há registros relacionados ao CNPJ informado."###"ATENÇÃO"
+			EndIf
+		Else
+			DbselectArea("TQN")
+			DbSetorder(10)
+			DbSeek(cCodPos+cLoja+DtoS(dDeData),.T.)
+			While !EoF() .and. TQN->TQN_POSTO == cCodPos .and.;
+			TQN->TQN_LOJA == cLoja  .and.;
+			TQN->TQN_DTABAS <= dAteData
+				IncProc()
+				If TQN->TQN_AUTO == "1"   //Abastecimento Automatico
+
+					If !Empty(cCNPJ)
+						If TQN->TQN_CNPJ <> cCNPJ
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					If !Empty(TQN->TQN_NOTFIS)
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If !Empty(TQN->TQN_DTCON)
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If !Empty(cComb)
+						If cComb <> TQN->TQN_CODCOM
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					DbSelectArea("TQM")
+					DbSetOrder(01)
+					DbSeek(xFilial("TQM")+cComb)
+					If TQM->TQM_CODCOM <> cComb
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If lMNT656VL //Verifica se nao deve atualizar estoque e odometro
+						xAferiHod := ExecBlock( 'MNT656VL', .F., .F., { TQN->TQN_FROTA } )
+						lAferiHod := IIf( ValType(xAferiHod) == 'A', xAferiHod[1], xAferiHod)
+						If lAferiHod
+							dbSelectArea("TQN")
+							dbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					If !Empty(cCodPos) .and. Empty(cLoja)
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+cCodPos)
+							cLoja := TQF->TQF_LOJA
+						EndIf
+					EndIf
+
+					If !Empty(cCNPJ) .and. (Empty(cLoja) .or. Empty(cCodPos))
+						DbSelectArea("TQF")
+						DbSetOrder(2)
+						If DbSeek(xFilial("TQF")+cCNPJ)
+
+							If Empty(cCodPos)
+								cCodPos := TQF->TQF_CODIGO
+							EndIf
+
+							If Empty(cLoja)
+								cLoja   := TQF->TQF_LOJA
+							EndIf
+
+						EndIf
+					EndIf
+					DbSelectArea("TQF")
+					DbSetOrder(1)
+					If DbSeek(xFilial("TQF")+cCodPos+cLoja)
+						If TQF->TQF_TIPPOS == '2'
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+					RecLock((cAliTRB1), .T.)
+
+					(cAliTRB1)->VLABA  := TQN->TQN_VALTOT
+					(cAliTRB1)->VLUNIT := TQN->TQN_VALUNI
+					(cAliTRB1)->LITROS := TQN->TQN_QUANT
+					(cAliTRB1)->PLACA  := TQN->TQN_PLACA
+					(cAliTRB1)->KM     := TQN->TQN_HODOM
+					(cAliTRB1)->DTABAS := TQN->TQN_DTABAS
+					(cAliTRB1)->HRABAS := TQN->TQN_HRABAS
+					(cAliTRB1)->FROTA  := TQN->TQN_FROTA
+					(cAliTRB1)->NABAST := TQN->TQN_NABAST
+					(cAliTRB1)->CNPJ   := TQN->TQN_CNPJ
+					(cAliTRB1)->FILIAL := TQN->TQN_FILIAL
+					(cAliTRB1)->FILBEM := If(NGSX2MODO("TQN")=="E" .And. NGSX2MODO("ST9")=="E",TQN->TQN_FILIAL,xFilial("ST9"))
+					If lSegCont
+						(cAliTRB1)->KM2 := TQN->TQN_POSCO2
+					EndIf
+
+					DbSelectArea("DA4")
+					DbSetOrder(1)
+					If DbSeek(xFilial("DA4")+TQN->TQN_CODMOT)
+						(cAliTRB1)->DA4_NOME := DA4->DA4_NOME
+					EndIf
+
+					DbSelectArea("TQF")
+					DbSetOrder(1)
+					If DbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+						(cAliTRB1)->POSTO := TQF->TQF_NREDUZ
+					EndIf
+
+					DbSelectArea("TQH")
+					DbSetOrder(1)
+					DbSeek(xFilial("TQH")+cCodPos+cLoja+cComb)
+					dDtTQH := TQH->TQH_DTNEG
+					Do While !Eof() .and. xFilial("TQH") == TQH->TQH_FILIAL .and.;
+					TQH->TQH_CODPOS == cCodPos .and.;
+					TQH->TQH_LOJA   == cLoja   .and.;
+					TQH->TQH_CODCOM == cComb
+
+						If dDtTQH <= TQH->TQH_DTNEG
+							If TQH->TQH_DTNEG <= (cAliTRB1)->DTABAS
+								(cAliTRB1)->VLNEG := TQH->TQH_PRENEG
+								dDtTQH := TQH->TQH_DTNEG
+							EndIf
+						EndIf
+
+						DbSelectArea("TQH")
+						DbSkip()
+						Loop
+					EndDo
+
+					MsUnLock(cAliTRB1)
+				EndIf
+				DbselectArea("TQN")
+				DbSkip()
+			End
+		EndIf
+	Else
+		If Empty(cCodPos) .And. !Empty(cCNPJ)
+			DbselectArea("TQN")
+			DbSetorder(12)
+			If DbSeek(xFilial("TQN")+cCNPJ)
+				While !EoF() .and. TQN->TQN_FILIAL == xFilial("TQN")	.and.;
+				TQN->TQN_CNPJ == cCNPJ
+					IncProc()
+					If TQN->TQN_AUTO == "1"   //Abastecimento Automatico
+						IF TQN->TQN_DTABAS < dDeData .OR. TQN->TQN_DTABAS > dAteData
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If !Empty(TQN->TQN_NOTFIS)
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If !Empty(TQN->TQN_DTCON)
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If !Empty(cComb)
+							If cComb <> TQN->TQN_CODCOM
+								DbSelectArea("TQN")
+								DbSkip()
+								Loop
+							EndIf
+						EndIf
+
+						DbSelectArea("TQM")
+						DbSetOrder(01)
+						DbSeek(xFilial("TQM")+cComb)
+						If TQM->TQM_CODCOM <> cComb
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+
+						If lMNT656VL //Verifica se nao deve atualizar estoque e odometro
+							xAferiHod := ExecBlock( 'MNT656VL', .F., .F., { TQN->TQN_FROTA } )
+							lAferiHod := IIf( ValType(xAferiHod) == 'A', xAferiHod[1], xAferiHod)
+							If lAferiHod
+								dbSelectArea("TQN")
+								dbSkip()
+								Loop
+							EndIf
+						EndIf
+
+						If !Empty(cCodPos) .and. Empty(cLoja)
+							DbSelectArea("TQF")
+							DbSetOrder(1)
+							If DbSeek(xFilial("TQF")+cCodPos)
+								cLoja := TQF->TQF_LOJA
+							EndIf
+						EndIf
+
+						If !Empty(cCNPJ) .and. (Empty(cLoja) .or. Empty(cCodPos))
+							DbSelectArea("TQF")
+							DbSetOrder(2)
+							If DbSeek(xFilial("TQF")+cCNPJ)
+
+								If Empty(cCodPos)
+									cCodPos := TQF->TQF_CODIGO
+								EndIf
+
+								If Empty(cLoja)
+									cLoja   := TQF->TQF_LOJA
+								EndIf
+
+							EndIf
+						EndIf
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+cCodPos+cLoja)
+							If TQF->TQF_TIPPOS == '2'
+								DbSelectArea("TQN")
+								DbSkip()
+								Loop
+							EndIf
+						EndIf
+						RecLock((cAliTRB1), .T.)
+
+						(cAliTRB1)->VLABA  := TQN->TQN_VALTOT
+						(cAliTRB1)->VLUNIT := TQN->TQN_VALUNI
+						(cAliTRB1)->LITROS := TQN->TQN_QUANT
+						(cAliTRB1)->PLACA  := TQN->TQN_PLACA
+						(cAliTRB1)->KM     := TQN->TQN_HODOM
+						(cAliTRB1)->DTABAS := TQN->TQN_DTABAS
+						(cAliTRB1)->HRABAS := TQN->TQN_HRABAS
+						(cAliTRB1)->FROTA  := TQN->TQN_FROTA
+						(cAliTRB1)->NABAST := TQN->TQN_NABAST
+						(cAliTRB1)->CNPJ   := TQN->TQN_CNPJ
+						(cAliTRB1)->FILIAL := TQN->TQN_FILIAL
+						(cAliTRB1)->FILBEM := If(NGSX2MODO("TQN")=="E" .And. NGSX2MODO("ST9")=="E",TQN->TQN_FILIAL,xFilial("ST9"))
+						If lSegCont
+							(cAliTRB1)->KM2 := TQN->TQN_POSCO2
+						EndIf
+
+						DbSelectArea("DA4")
+						DbSetOrder(1)
+						If DbSeek(xFilial("DA4")+TQN->TQN_CODMOT)
+							(cAliTRB1)->DA4_NOME := DA4->DA4_NOME
+						EndIf
+
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+							(cAliTRB1)->POSTO := TQF->TQF_NREDUZ
+						EndIf
+
+						DbSelectArea("TQH")
+						DbSetOrder(1)
+						DbSeek(xFilial("TQH")+cCodPos+cLoja+cComb)
+						dDtTQH := TQH->TQH_DTNEG
+						Do While !Eof() .and. xFilial("TQH") == TQH->TQH_FILIAL .and.;
+						TQH->TQH_CODPOS == cCodPos .and.;
+						TQH->TQH_LOJA   == cLoja   .and.;
+						TQH->TQH_CODCOM == cComb
+
+							If dDtTQH <= TQH->TQH_DTNEG
+								If TQH->TQH_DTNEG <= (cAliTRB1)->DTABAS
+									(cAliTRB1)->VLNEG := TQH->TQH_PRENEG
+									dDtTQH := TQH->TQH_DTNEG
+								EndIf
+							EndIf
+
+							DbSelectArea("TQH")
+							DbSkip()
+							Loop
+						EndDo
+						MsUnLock(cAliTRB1)
+					EndIf
+					DbselectArea("TQN")
+					DbSkip()
+				End
+			Else
+				MsgInfo(STR0049,STR0014) //"Não há registros relacionados ao CNPJ informado."###"ATENÇÃO"
+			EndIf
+		Else
+			dbselectArea("TQN")
+			dbSetorder(03) //TQN_FILIAL+TQN_POSTO+TQN_LOJA+DTOS(TQN_DTABAS)+TQN_HRABAS
+			dbSeek(xFilial("TQN")+cCodPos+cLoja+DtoS(dDeData),.T.)
+			While !EoF() .and. TQN->TQN_FILIAL == xFilial("TQN")	.and.;
+				TQN->TQN_POSTO == cCodPos			.and.;
+				TQN->TQN_LOJA  == cLoja				.and.;
+				TQN->TQN_DTABAS <= dAteData
+				IncProc()
+				If TQN->TQN_AUTO == "1"   //Abastecimento Automatico
+					If !Empty(cCNPJ)
+						If TQN->TQN_CNPJ <> cCNPJ
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					If !Empty(TQN->TQN_NOTFIS)
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If !Empty(TQN->TQN_DTCON)
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If !Empty(cComb)
+						If cComb <> TQN->TQN_CODCOM
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					DbSelectArea("TQM")
+					DbSetOrder(01)
+					DbSeek(xFilial("TQM")+cComb)
+					If TQM->TQM_CODCOM <> cComb
+						DbSelectArea("TQN")
+						DbSkip()
+						Loop
+					EndIf
+
+					If lMNT656VL //Verifica se nao deve atualizar estoque e hodometro
+						xAferiHod := ExecBlock( 'MNT656VL', .F., .F., { TQN->TQN_FROTA } )
+						lAferiHod := IIf( ValType(xAferiHod) == 'A', xAferiHod[1], xAferiHod)
+						If lAferiHod
+							dbSelectArea("TQN")
+							dbSkip()
+							Loop
+						EndIf
+					EndIf
+
+					If !Empty(cCodPos) .and. Empty(cLoja)
+						DbSelectArea("TQF")
+						DbSetOrder(1)
+						If DbSeek(xFilial("TQF")+cCodPos)
+							cLoja := TQF->TQF_LOJA
+						EndIf
+					EndIf
+
+					If !Empty(cCNPJ) .and. (Empty(cLoja) .or. Empty(cCodPos))
+						DbSelectArea("TQF")
+						DbSetOrder(2)
+						If DbSeek(xFilial("TQF")+cCNPJ)
+							If Empty(cCodPos)
+								cCodPos := TQF->TQF_CODIGO
+							EndIf
+							If Empty(cLoja)
+								cLoja   := TQF->TQF_LOJA
+							EndIf
+						EndIf
+					EndIf
+					DbSelectArea("TQF")
+					DbSetOrder(1)
+					If DbSeek(xFilial("TQF")+cCodPos+cLoja)
+						If TQF->TQF_TIPPOS == '2'
+							DbSelectArea("TQN")
+							DbSkip()
+							Loop
+						EndIf
+					EndIf
+					RecLock((cAliTRB1), .T.)
+
+					(cAliTRB1)->VLABA  := TQN->TQN_VALTOT
+					(cAliTRB1)->VLUNIT := TQN->TQN_VALUNI
+					(cAliTRB1)->LITROS := TQN->TQN_QUANT
+					(cAliTRB1)->PLACA  := TQN->TQN_PLACA
+					(cAliTRB1)->KM     := TQN->TQN_HODOM
+					(cAliTRB1)->DTABAS := TQN->TQN_DTABAS
+					(cAliTRB1)->HRABAS := TQN->TQN_HRABAS
+					(cAliTRB1)->FROTA  := TQN->TQN_FROTA
+					(cAliTRB1)->NABAST := TQN->TQN_NABAST
+					(cAliTRB1)->CNPJ   := TQN->TQN_CNPJ
+					(cAliTRB1)->FILIAL := TQN->TQN_FILIAL
+					(cAliTRB1)->FILBEM := If(NGSX2MODO("TQN")=="E" .And. NGSX2MODO("ST9")=="E",TQN->TQN_FILIAL,xFilial("ST9"))
+					If lSegCont
+						(cAliTRB1)->KM2 := TQN->TQN_POSCO2
+					EndIf
+
+					DbSelectArea("DA4")
+					DbSetOrder(1)
+					If DbSeek(xFilial("DA4")+TQN->TQN_CODMOT)
+						(cAliTRB1)->DA4_NOME := DA4->DA4_NOME
+					EndIf
+
+					DbSelectArea("TQF")
+					DbSetOrder(1)
+					If DbSeek(xFilial("TQF")+TQN->TQN_POSTO+TQN->TQN_LOJA)
+						(cAliTRB1)->POSTO := TQF->TQF_NREDUZ
+					EndIf
+
+					DbSelectArea("TQH")
+					DbSetOrder(1)
+					DbSeek(xFilial("TQH")+cCodPos+cLoja+cComb)
+					dDtTQH := TQH->TQH_DTNEG
+					Do While !Eof() .and. xFilial("TQH") == TQH->TQH_FILIAL .and.;
+					TQH->TQH_CODPOS == cCodPos .and.;
+					TQH->TQH_LOJA   == cLoja   .and.;
+					TQH->TQH_CODCOM == cComb
+
+						If dDtTQH <= TQH->TQH_DTNEG
+							If TQH->TQH_DTNEG <= (cAliTRB1)->DTABAS
+								(cAliTRB1)->VLNEG := TQH->TQH_PRENEG
+								dDtTQH := TQH->TQH_DTNEG
+							EndIf
+						EndIf
+
+						DbSelectArea("TQH")
+						DbSkip()
+						Loop
+					EndDo
+
+					MsUnLock(cAliTRB1)
+				EndIf
+				DbselectArea("TQN")
+				DbSkip()
+			EndDo
+		EndIf
+	EndIf
+	DbSelectArea(cAliTRB1)
+	If Reccount() == 0
+		MsgInfo(STR0050,STR0014) //"Nao existem dados para montar a tela de Conciliação Automática."###"ATENÇÃO"
+	Else
+		MNA645MO(nQtLitros, nValorNF)
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNA645MO
+Mostra a tela de conciliaçao de NF's
+
+@param nQtLitros, Numérico, Quantidade de litros.
+@param nValorNF , Numérico, Valor da nota fiscal.
+
+@author Heverson Vitoreti
+@since 06/02/06
+@version P12
+
+@return .T.
+/*/
+//------------------------------------------------------------------------------
+Function MNA645MO(nQtLitros, nValorNF)
+
+	Local aArea                := GetArea()
+	Private aMark    		   := {}
+	Private nTotalI            := 000.00
+	Private nTotalIL           := 000.00
+	Private oTotalC,  nTotalC  := 000.00
+	Private oTotalCL, nTotalCL := 000.00
+	Private oSelec,   nSelec   := 000.000
+	Private oMenu
+
+	aAdd(aMark,{"ASSI"     ,NIL," "                 ,        })
+	aAdd(aMark,{"VLABA"    ,NIL,STR0017  ,X3Picture( 'TQN_VALTOT' ) }) //"Valor Abastecido"
+	aAdd(aMark,{"VLUNIT"   ,NIL,STR0018  ,X3Picture( 'TQN_VALUNI' ) }) //"Valor Unitario"
+	aAdd(aMark,{"VLNEG"    ,NIL,STR0019  ,X3Picture( 'TQH_PRENEG' ) }) //"Valor Negociado"
+	aAdd(aMark,{"LITROS"   ,NIL,STR0020  ,X3Picture( 'TQN_QUANT' )  }) //"Litros"
+	aAdd(aMark,{"PLACA"    ,NIL,STR0021  ,"@!"               }) //"Placa"
+	aAdd(aMark,{"DTABAS"   ,NIL,STR0022  ,"@99/99/99"        }) //"Data Abastecimento"
+	aAdd(aMark,{"HRABAS"   ,NIL,STR0023  ,"@99:99" 		     }) //"Hora Abastecimento"
+	aAdd(aMark,{"KM"       ,NIL,STR0024  ,X3Picture( 'TQN_HODOM' )  }) //"KM"
+	aAdd(aMark,{"DA4_NOME",NIL,STR0025  ,"@!"               }) //"Motorista"
+	aAdd(aMark,{"FROTA"    ,NIL,STR0047  ,"@!"               }) //"Frota"
+	aAdd(aMark,{"POSTO"    ,NIL,STR0048  ,"@!"               }) //"Nome Fantasia"
+	If lSegCont
+		aAdd(aMark,{"KM2"       ,NIL,STR0062	    ,X3Picture( 'TQN_POSCO2' ) })  //"Seg.Cont."
+	EndIf
+
+	nTotalI  := nValorNF
+	nTotalIL := nQtLitros
+
+	DbSelectarea(cAliTRB1)
+	DbGotop()
+
+	Define DIALOG oDlg1 FROM 7,10 TO 37,135 TITLE STR0001 //"Conciliaçao de NF's Automatica"
+
+	@ 04,010 Button STR0026  Of oDlg1 Size 40,09 Pixel Action (MNA645PE()) //"Pesquisar"
+	@ 04,055 Button STR0027  Of oDlg1 Size 40,09 Pixel Action (MNA645VI()) //"Visualizar"
+
+	oMark := MsSelect():New((cAliTRB1),"ASSI",,aMark,@lInverte,@cMarca,{16,8,195,490})
+	oMark:oBrowse:lHasMark = .t.
+	oMark:oBrowse:lCanAllMark := .t.
+	oMark:bMark := { || MNA645MA(cMarca) }
+	oMark:oBrowse:bAllMark := { || Processa({ || MNA645VE(cMarca) }) }
+
+	@ 200,010 Say STR0028      Size 55,10 Of oDlg1 Pixel color CLR_BLUE //"Total Informado"
+	@ 200,050 Say nTotalI      Size 50,10 Of oDlg1 Pixel Picture '@E 99,999,999,999.999'
+
+	@ 200,100 Say STR0020      Size 55,10 Of oDlg1 Pixel color CLR_BLUE //"Litros"
+	@ 200,140 Say nTotalIL     Size 40,10 Of oDlg1 Pixel Picture '@E 99,999.999'
+
+	@ 200,190 Say STR0029      Size 55,10 Of oDlg1 Pixel color CLR_BLUE //"Total Calculado"
+	@ 200,230 Say oTotalC      Var nTotalC  Size 50,10 Of oDlg1 Pixel Picture '@E 99,999,999,999.999'
+
+	@ 200,300 Say STR0020      Size 55,10 Of oDlg1 Pixel color CLR_BLUE //"Litros"
+	@ 200,320 Say oTotalCL     Var nTotalCL Size 40,10 Of oDlg1 Pixel Picture '@E 99,999.999'
+
+	@ 200,360 Say STR0030      Size 55,10 Of oDlg1 Pixel Color CLR_BLUE //"Items Selecionados"
+	@ 200,410 Say oSelec       Var nSelec   Size 40,10 Of oDlg1 Pixel Picture '@E 999,999'
+
+	@ 200,450 Button STR0031   Size 40,09 Of oDlg1 Pixel Action (MNA645CN(nTotalI, nTotalIL,; //"Conciliar"
+	nTotalC, nTotalCL))
+	@ 210,450 Button STR0032   Size 40,09 Of oDlg1 Pixel Action (MNA645CR()) //"Corrigir"
+
+	NGPOPUP(asMenu,@oMenu)
+	oDlg1:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg1)}
+
+	ACTIVATE DIALOG oDlg1 centered
+
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNA645MA
+Marca a linha e atualiza os dados no rodape da tela
+
+@param cMarca, Caracter, Determina a marcação.
+
+@author Heverson Vitoreti
+@since 06/02/06
+@version P12
+
+@return .T.
+/*/
+//------------------------------------------------------------------------------
+Function MNA645MA(cMarca)
+
+	If IsMark( 'ASSI', cMarca, lInverte )
+		nVlAba  := (cAliTRB1)->VLABA
+		nLitros := (cAliTRB1)->LITROS
+		nRecno  := Recno()
+		nSelec  := 0
+
+		DbSelectArea(cAliTRB1)
+		DbGotop()
+		Do While !Eof()
+			If !Empty( (cAliTRB1)->ASSI )
+				nSelec ++
+			EndIf
+			Dbskip()
+		EndDo
+
+		DbGoTo(nRecno)
+		nTotalC  += nVlAba
+		nTotalCL += nLitros
+		oMark:oBrowse:Refresh()
+		oTotalC:Refresh()
+		oTotalCL:Refresh()
+		oSelec:Refresh()
+	Else
+
+		nSelec--
+		nTotalC  -= (cAliTRB1)->VLABA
+		nTotalCL -= (cAliTRB1)->LITROS
+		oTotalC:Refresh()
+		oTotalCL:Refresh()
+		oSelec:Refresh()
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645VI
+Visualiza consulta.
+
+@author Heverson Vitoreti
+
+@param nQtLitros - Quantidade de Litros.
+	   nValorNF  - Valor das Notas Fiscais.
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645VI()
+
+	dbSelectArea("TQN")
+	dbSetOrder(01)
+	dbSeek((cAliTRB1)->FILIAL+(cAliTRB1)->FROTA+DtoS((cAliTRB1)->DTABAS)+(cAliTRB1)->HRABAS)
+	NGCAD01("TQN",Recno(),1)
+
+	dbSelectArea(cAliTRB1)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645CN
+Conciliaçao das NF's.
+
+@author Heverson Vitoreti
+
+@param nTotalI 	- Valor Total Informado.
+	   nTotalIL - Quantidade Total informada.
+	   nTotalC 	- Valor Total Calculado.
+	   nTotalCL - Quantidade Total Calculada.
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645CN(nTotalI, nTotalIL, nTotalC, nTotalCL)
+
+	Local nLimMaxQ := nTotalI + GetMv("MV_NGTOLVL")
+	Local nLimMinQ := nTotalI - GetMv("MV_NGTOLVL")
+	Local nLimMaxL := nTotalIL + GetMv("MV_NGTOLVL")
+	Local nLimMinL := nTotalIL - GetMv("MV_NGTOLVL")
+	Local aItC7   := {}
+	Local aSC7	  := {}
+	Local z       := 0
+	Local x       := 0
+	Local y 	  := 0
+	Local cItemCta
+	Local cCusto := ""
+	Local lMNTA6451 := ExistBlock("MNTA6451") //Ponto de entrada para informar centro de custo.
+	Local nConcilia := 0
+	Local lRet 	  := .T.
+
+	If (nTotalC > nLimMaxQ .Or. nTotalC < nLimMinQ)
+		Help(" ",1,STR0014,,STR0051,3,1) //"ATENÇÃO"###"O Total Calculado está diferente do Total Informado!"
+		lRet := .F.
+	ElseIf (nTotalCL > nLimMaxL .Or. nTotalCL < nLimMinL)
+		Help(" ",1,STR0014,,"O Total de Litros calculado está diferente dos Litros Informados.",3,1) //"ATENÇÃO"###"O Total Calculado está diferente do Total Informado!"
+		lRet := .F.
+	EndIf
+
+	If lRet .And. Empty(MV_PAR03)
+		MsgInfo(STR0066) //"O código do Posto não foi informado."
+		lRet := .F.
+	EndIf
+
+	If lRet .And. lMNTA6451 //Caso possua ponto de entrada.
+		cCusto := ExecBlock("MNTA6451",.F.,.F.)
+	EndIf
+
+	If lRet
+		dbSelectArea(cAliTRB1)
+		dbGoTop()
+		While !EoF()
+
+			dbSelectArea("TQN")
+			dbSetOrder(4)
+			If dbSeek((cAliTRB1)->FILIAL+(cAliTRB1)->NABAST+(cAliTRB1)->CNPJ+DtoS((cAliTRB1)->DTABAS)+(cAliTRB1)->HRABAS)
+
+				If Empty((cAliTRB1)->ASSI)
+					dbSelectArea(cAliTRB1)
+					dbSkip()
+					Loop
+				EndIf
+
+			EndIf
+
+			dbSelectArea("ST9")
+			dbSetOrder(1)
+			If dbSeek ((cAliTRB1)->FILIAL+(cAliTRB1)->FROTA)
+				If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+					cItemCta := NGSEEK("ST9",TQN->TQN_FROTA,1,"T9_ITEMCTA")
+				EndIf
+			EndIf
+
+			If GetNewPar("MV_NGMNTFI","N") == "S" .Or. GetNewPar("MV_NGMNTFI","N") == "P"
+				dbSelectArea("SB1")
+				dbSetOrder(1)
+				dbSeek(xFilial("SB1")+MV_PAR13)
+				aAdd(aSC7,{SB1->B1_COD,SB1->B1_UM,TQN->TQN_QUANT,TQN->TQN_VALUNI,TQN->TQN_POSTO,TQN->TQN_LOJA,MV_PAR14,TQN->TQN_FILIAL,;
+				IIf( lMNTA6451 .And. !Empty(cCusto) , cCusto , TQN->TQN_CCUSTO ),cItemCta,Mv_Par15,TQN->(RecNo())})
+			EndIf
+
+			dbSelectArea(cAliTRB1)
+			dbSkip()
+		EndDo
+	EndIf
+
+	If lRet .And. GetNewPar("MV_NGMNTFI","N") == "S" .Or. GetNewPar("MV_NGMNTFI","N") == "P"
+		aSort( aSC7,,, { |x,y| x[5]+X[6] < y[5]+Y[6] } )
+
+		For x := 1 To Len(aSC7)
+			nPos := aScan( aItC7, { |y| y[1]+AllTrim(Str(y[4])) == aSC7[x][1]+AllTrim(Str(aSC7[x][4])) } )
+			If nPos > 0
+				aItC7[nPos][3] += aSC7[x][3]
+				aAdd(aItC7[nPos][6],aSC7[x][12])
+			Else
+				aAdd(aItC7,{aSC7[x][1],aSC7[x][2],aSC7[x][3],aSC7[x][4],aSC7[x][9],{aSC7[x][12]},aSC7[x][10],aSC7[x][11]})
+			EndIf
+		Next x
+
+		If Len(aSC7) > 0
+			lRet := NgGeraSC7(TQN->TQN_POSTO,TQN->TQN_LOJA,MV_PAR14,aSC7[1][8],aItC7,"MNTA645")
+		EndIf
+
+		//Com a confirmação do Pedido de Compras são gravados os campos na TQN para
+		//manter o vínculo entre os registros de abastecimento e Pedido de Compra (SC7/TQN)
+		If lRet
+			For y := 1 To Len(aItC7)
+				For z := 1 To Len(aItC7[y][6])
+					dbSelectArea("TQN")
+					dbSetOrder(1)
+					dbGoTo(aItC7[y][6][z])
+
+					dbSelectArea(cAliTRB1)
+					dbSetOrder(3) //"FILIAL" + "FROTA" + "DTABAS" + "HRABAS"
+					If dbSeek(TQN->TQN_FILIAL+TQN->TQN_FROTA+DTOS(TQN->TQN_DTABAS)+TQN->TQN_HRABAS)
+						RecLock("TQN",.F.)
+						TQN->TQN_DTCON  := dDataBase
+						TQN->TQN_NOTFIS := cNotaFisc
+						TQN->TQN_DTEMIS := dDtEmNF
+						TQN->TQN_DTPGMT := dDtPagto
+						TQN->TQN_CCUSTO := (cAliTRB1)->CCUSTO
+						TQN->TQN_CENTRA := (cAliTRB1)->CTRAB
+						If lTQN_NUMSC7
+							TQN->TQN_NUMSC7 := SC7->C7_NUM
+							TQN->TQN_ITEMSC := SC7->C7_ITEM
+						EndIf
+						TQN->( MsUnLock() )
+						nConcilia++
+					EndIf
+				Next z
+			Next y
+		EndIf
+		MsgInfo(STR0052+AllTrim(Str(nConcilia))+STR0053) //"Conciliação de "###" Nota(´s) Fiscal(´s) Concluída(´s) com Sucesso!"
+		lRet := .T.
+	EndIf
+
+	oDlg1:End()
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645CR
+Abre a tela de correçao de dados .
+
+@author Heverson Vitoreti
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645CR()
+
+	Local nCrVlNeg     := 000.00
+	Local cCrPlaca     := ""
+	Local dCrDtAbas    := StoD("")
+	Local nCrKM        := 000000
+	Local cCrMot       := ""
+	Local nCrKM2       := 0
+	Private nCrVlUnit  := 000.00
+	Private nCrLitros  := 000000
+	Private nCrVlAbast := 000.00
+	Private oMenu
+	Private oDlg2
+	Private aSize := MsAdvSize(.F.,.F.,430)
+	Private oPanelAll
+
+	nCrVlAbast := (cAliTRB1)->VLABA
+	nCrVlUnit  := (cAliTRB1)->VLUNIT
+	nCrVlNeg   := (cAliTRB1)->VLNEG
+	nCrLitros  := (cAliTRB1)->LITROS
+	cCrPlaca   := (cAliTRB1)->PLACA
+	dCrDtAbas  := (cAliTRB1)->DTABAS
+	nCrKM      := (cAliTRB1)->KM
+	cCrMot     := (cAliTRB1)->DA4_NOME
+	If lSegCont
+		nCrKM2      := (cAliTRB1)->KM2
+		//FindFunction remover na release GetRPORelease() >= '12.1.027'
+		If FindFunction("MNTCont2")
+			TIPOACOM2 := MNTCont2((cAliTRB1)->FILIAL, (cAliTRB1)->FROTA )
+		Else
+			dbSelectArea("TPE")
+			dbSetOrder(1)
+			TIPOACOM2 := DbSeek( If( NGSX2MODO("TPE") == "E", (cAliTRB1)->FILIAL, xFilial("TPE") ) + (cAliTRB1)->FROTA )
+		EndIf
+	EndIf
+
+	Define DIALOG oDlg2 FROM aSize[7]/48,0 To aSize[6]/36,aSize[5]/20 TITLE STR0032 //"Corrigir"
+	//Panel da Tela
+	oPanelAll := TPanel():New(0, 0, Nil, oDlg2, Nil, .T., .F., Nil, Nil, 0, 0, .F., .F. )
+	oPanelAll:Align := CONTROL_ALIGN_ALLCLIENT
+
+	//Panel dos Botões
+	oPanelBot := TPanel():New(0, 0, Nil, oPanelAll, Nil, .T., .F., Nil, Nil, 0, 0, .F., .F. )
+	oPanelBot:Align := CONTROL_ALIGN_ALLCLIENT
+
+	@  18,025 Say STR0034      Size 55,10 Of oPanelBot Pixel //"Vl. Abast."
+	@  16,065 MsGet nCrVlAbast Size 52,10 Of oPanelBot Pixel Picture '@E 99,999.999' valid MNA645VC(1) HASBUTTON
+
+	@  19,135 Say STR0035      Size 55,10 Of oPanelBot Pixel //"Vl. Unit."
+	@  16,170 MsGet nCrVlUnit  Size 52,10 Of oPanelBot Pixel Picture '@E 9,999.999' valid MNA645VC(2) HASBUTTON
+
+	@  34,025 Say STR0024      Size 55,10 Of oPanelBot Pixel //"KM"
+	@  32,065 MsGet nCrKM      Size 40,10 Of oPanelBot Pixel Picture X3Picture( 'TQN_HODOM' ) Valid NGCHKALTKM((cAliTRB1)->FROTA,nCrKM,1,(cAliTRB1)->DTABAS,(cAliTRB1)->HRABAS,(cAliTRB1)->FILBEM)
+
+	@  35,135 Say STR0020      Size 55,10 Of oPanelBot Pixel //"Litros"
+	@  32,170 MsGet nCrLitros  Size 52,10 Of oPanelBot Pixel Picture '@E 99,999.999' valid MNA645VC(2) HASBUTTON
+
+	@  50,025 Say STR0021      Size 55,10 Of oPanelBot Pixel //"Placa"
+	@  48,065 MsGet cCrPlaca   Size 40,10 Of oPanelBot Pixel Picture '@!' valid MNA645VC(3,cCrPlaca) When .F.
+
+	@  51,135 Say STR0036      Size 55,10 Of oPanelBot Pixel //"Data Abast."
+	@  48,170 MsGet dCrDtAbas  Size 52,10 Of oPanelBot Pixel Picture '99/99/99' valid ( !Empty(dCrDtAbas) .And. VALDT(dCrDtAbas) ) HASBUTTON
+
+	If lSegCont
+		@  66,025 Say STR0063       Size 55,10 Of oPanelBot Pixel   //"Seg.Contador"
+		@  64,065 MsGet nCrKM2      Size 40,10 Of oPanelBot Pixel Picture X3Picture( 'TQN_POSCO2' ) When TIPOACOM2 ;
+		Valid NGCHKALTKM((cAliTRB1)->FROTA,nCrKM2,2,(cAliTRB1)->DTABAS,(cAliTRB1)->HRABAS,(cAliTRB1)->FILBEM)
+	EndIf
+
+	NGPOPUP(asMenu,@oMenu)
+	oDlg2:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg2)}
+
+	ACTIVATE DIALOG oDlg2 On Init EnchoiceBar(oDlg2,{||nOpcao:=1,If(!MNA645CO(nCrVlAbast, nCrVlUnit, nCrVlNeg,;
+	nCrLitros, cCrPlaca, dCrDtAbas, nCrKM,;
+	cCrMot,nCrKM2),nOpcao := 0,oDlg2:End())},{|| oDlg2:End()},,,,,.F.,.F.,.F.) Centered
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645CO
+Corrige os dados nas tabelas
+
+@param nCrVlAbast	, Numérico	, Valor do abastecimento.
+@param nCrVlUnit	, Numérico	, Valor unitário.
+@param nCrVlNeg		, Numérico	, Valor de negociação.
+@param nCrLitros	, Numérico	, Número de litros.
+@param cCrPlaca		, Caracter	, Número da placa.
+@param dCrDtAbas	, Date		, Data do abastecimento.
+@param nCrKM		, Numérico	, Número de quilometros.
+@param cCrMot		, Caracter	, Motorista.
+@param nCrKM2		, Numérico	, Quantidade de quilômetros.
+
+@author Heverson Vitoreti
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645CO(nCrVlAbast,nCrVlUnit,nCrVlNeg,nCrLitros,cCrPlaca,dCrDtAbas,nCrKM,cCrMot,nCrKM2)
+
+	Local lAtuKm := .F.
+	Private vDadoAtu := {}
+
+	If !Empty( (cAliTRB1)->ASSI )
+		nTotalC  -= (cAliTRB1)->VLABA
+		nTotalCL -= (cAliTRB1)->LITROS
+	EndIf
+
+	dbSelectArea("TQN")
+	dbSetOrder(2)
+	If dbSeek((cAliTRB1)->FILIAL+DtoS((cAliTRB1)->DTABAS)+(cAliTRB1)->HRABAS)
+
+		Do while !EoF() .And. (cAliTRB1)->FILIAL == TQN->TQN_FILIAL .And. TQN->TQN_DTABAS == (cAliTRB1)->DTABAS .And.;
+			TQN->TQN_HRABAS == (cAliTRB1)->HRABAS
+
+			IF TQN->TQN_PLACA == (cAliTRB1)->PLACA .And. TQN->TQN_HODOM == (cAliTRB1)->KM .And. (cAliTRB1)->FROTA  == TQN->TQN_FROTA
+
+				If !lSegCont
+					vDadoAtu := {IF(NGSX2MODO("STP")=="E",TQN->TQN_FILIAL,xFilial("STP")),TQN->TQN_FROTA,DTOS(TQN->TQN_DTABAS),TQN->TQN_HRABAS,TQN->TQN_HODOM,TQN->TQN_QUANT,TQN->TQN_NUMSEQ,TQN->TQN_NOTFIS}
+				Else
+					vDadoAtu := {IF(NGSX2MODO("STP")=="E",TQN->TQN_FILIAL,xFilial("STP")),TQN->TQN_FROTA,DTOS(TQN->TQN_DTABAS),TQN->TQN_HRABAS,TQN->TQN_HODOM,TQN->TQN_QUANT,TQN->TQN_NUMSEQ,TQN->TQN_NOTFIS,TQN->TQN_POSCO2}
+				EndIf
+
+				RecLock("TQN",.F.)
+				TQN->TQN_VALTOT := nCrVlAbast
+				TQN->TQN_VALUNI := nCrVlUnit
+				TQN->TQN_QUANT  := nCrLitros
+				TQN->TQN_PLACA  := cCrPlaca
+				TQN->TQN_DTABAS := dCrDtAbas
+				If	TQN->TQN_HODOM  <> nCrKM
+					TQN->TQN_HODOM  := nCrKM
+					lAtuKm := .T.
+				EndIf
+				If lSegCont
+					If TQN->TQN_POSCO2  <> nCrKM2
+						TQN->TQN_POSCO2  := nCrKM2
+						lAtuKm := .T.
+					EndIf
+				EndIf
+				MsUnLock("TQN")
+
+				RecLock((cAliTRB1),.F.)
+				(cAliTRB1)->VLABA  := nCrVlAbast
+				(cAliTRB1)->VLUNIT := nCrVlUnit
+				(cAliTRB1)->LITROS := nCrLitros
+				(cAliTRB1)->PLACA  := cCrPlaca
+				(cAliTRB1)->DTABAS := dCrDtAbas
+				(cAliTRB1)->KM     := nCrKM
+				If lSegCont
+					(cAliTRB1)->KM2  := nCrKM2
+				EndIf
+				MsUnLock(cAliTRB1)
+
+				If lAtuKm
+					NGATUKMS(TQN->TQN_FROTA,TQN->TQN_DTABAS,TQN->TQN_HRABAS,TQN->TQN_HODOM,If(lSegCont,TQN->TQN_POSCO2,0),(cAliTRB1)->FILBEM)
+				EndIf
+
+			EndIf
+			dbSelectArea("TQN")
+			dbSkip()
+		End
+
+	EndIf
+
+	oDlg2:End()
+
+	If !Empty((cAliTRB1)->ASSI)
+		nTotalC  += (cAliTRB1)->VLABA
+		nTotalCL += (cAliTRB1)->LITROS
+	Else
+		//Atualiza os dados dos abastecimentos após a correção
+		oMark:oBrowse:Refresh()
+	EndIf
+	//Atualiza o objeto e os totais em tela
+	oTotalC:Refresh()
+	oTotalCL:Refresh()
+	oSelec:Refresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645VC
+Validações e cálculos.
+
+@author Heverson Vitoreti
+
+@param nID 		 - Validações;
+				   	1-Litros Abastecidos
+				   	2-Valor Abastecido
+				   	3-Valida Placa.
+	   cCrPlaca  - Código da Placa.
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645VC(nID,cCrPlaca)
+
+	If nID == 1
+		nCrLitros := nCrVlAbast/nCrVlUnit
+	EndIf
+
+	If nID == 2
+		nCrVlAbast := nCrLitros*nCrVlUnit
+	EndIf
+
+	If nID == 3
+		dbSelectArea("ST9")
+		dbSetOrder(14)
+		If !dbSeek(cCrPlaca)
+			HELP(" ",1,STR0014,,STR0054,3,1) //"ATENÇÃO"###"Placa Inválida."
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645PE
+Faz a pesquisa nos registros.
+
+@author Evaldo Cevinscki Jr.
+
+@since 21/03/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645PE()
+
+	Local dPeDtAbas := StoD("")
+	Private oDlg3
+	Private oMenu
+
+	Define Dialog oDlg3 From 7,10 To 12,40 Title STR0037 //"Pesquisa"
+
+	@  06, 05 Say    STR0022   Size 55,10 Of oDlg3 Pixel //"Data Abastecimento"
+	@  04, 60 MsGet  dPeDtAbas Size 48,10 Of oDlg3 Pixel Picture "99/99/9999" HASBUTTON
+	@  20, 60 Button STR0038   Size 47,09 Of oDlg3 Pixel Action (MNA645POS(dPeDtAbas)) //"OK"
+
+	NGPOPUP(asMenu,@oMenu)
+	oDlg3:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg3)}
+
+	Activate Dialog oDlg3
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNA645POS
+Posiciona no registro.
+
+@author Heverson Vitoreti.
+
+@param dPeDtAbas - Data para posicionar o registro.
+
+@since 06/02/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNA645POS(dPeDtAbas)
+
+	Default dPeDtAbas := StoD("")
+
+	If !Empty(dPeDtAbas)
+		dbSelectArea(cAliTRB1)
+		dbSetOrder(2)
+		dbSeek(dPeDtAbas,.T.)
+		oMark:oBrowse:Refresh()
+	EndIf
+
+	oDlg3:End()
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNA645VE
+Inverte a marcacao
+
+@param cMarca, Caracter, Identificado de marcação.
+
+@author Thiago Olis Machado
+@since 05/05/2006
+@version P12
+
+@return Nil
+/*/
+//------------------------------------------------------------------------------
+Function MNA645VE(cMarca)
+
+	Dbselectarea(cAliTRB1)
+	DbGotop()
+	Procregua(LastRec())
+	While !Eof()
+		IncProc(STR0055+(cAliTRB1)->NABAST) //"Marcando e/ou Desmarcando Abastecimento "
+		RecLock((cAliTRB1),.F.)
+		If (cAliTRB1)->ASSI = "  "
+			(cAliTRB1)->ASSI := cMarca
+			nSelec ++
+			nTotalC  += (cAliTRB1)->VLABA
+			nTotalCL += (cAliTRB1)->LITROS
+			oMark:oBrowse:Refresh()
+			oTotalC:Refresh()
+			oTotalCL:Refresh()
+			oSelec:Refresh()
+		Else
+			nSelec --
+			(cAliTRB1)->ASSI := "  "
+			nTotalC  -= (cAliTRB1)->VLABA
+			nTotalCL -= (cAliTRB1)->LITROS
+			oTotalC:Refresh()
+			oTotalCL:Refresh()
+			oSelec:Refresh()
+		EndIf
+
+		MsUnLock(cAliTRB1)
+		DbSkip()
+	End
+	DbGotop()
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MA645CGC
+Valida o CNPJ na pergunta.
+
+@author Heverson Vitoreti.
+
+@return lRet, Lógico, Determina se a validação encontrou alguma inconsistência.
+/*/
+//---------------------------------------------------------------------
+Function MA645CGC()
+
+	Local lRet := .T.
+
+	If !Empty(Mv_Par05)
+		lRet := Cgc(Mv_Par05)
+		If lRet
+			dbSelectArea('TQF')
+			dbSetOrder(02) //TQF_FILIAL+TQF_CNPJ
+			If dbSeek( FwxFilial('TQF') + MV_PAR05 )
+
+				MV_PAR03 := TQF->TQF_CODIGO
+				MV_PAR04 := TQF->TQF_LOJA
+
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT645POS
+Limpa o campo CNPJ.
+
+@author Evaldo Cevinscki Jr..
+
+@since 21/03/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT645POS()
+
+	If Empty(MV_PAR03)
+		MV_PAR05 := Space(TAMSX3("TQF_CNPJ")[1])
+		MV_PAR04 := Space(TAMSX3("TQF_LOJA")[1])
+	Else
+		If ExistCpo('TQF',MV_PAR03+MV_PAR04)
+			MV_PAR04 := TQF->TQF_LOJA
+			MV_PAR05 := TQF->TQF_CNPJ
+		EndIf
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT645LOJA
+Valida o parametro de Loja.
+
+@author Soraia de Carvalho.
+
+@since 07/06/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT645LOJA()
+
+	If !Empty(MV_PAR03) .And. Empty(MV_PAR04)
+
+		MsgStop(STR0056) //"Informe o código da loja"
+		Return .F.
+
+	Elseif !Empty( MV_PAR04 )
+		
+		dbSelectArea("TQF")
+		dbSetOrder(01)
+		dbSeek(xFilial("TQF")+MV_PAR03+MV_PAR04)
+		MV_PAR05 := TQF->TQF_CNPJ
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT645DT
+Valida o parametro ate data.
+
+@author Soraia de Carvalho.
+
+@param nPar - Validações;
+			 1-Data Final
+			 2-Data Emissão
+			 3-Data Pagamento.
+
+@since 25/07/06
+@version 1.0
+@return .T.
+/*/
+//---------------------------------------------------------------------
+Function MNT645DT(nPar)
+
+	Local lRet := .T.
+
+	If nPar = 1
+		If MV_PAR02 < MV_PAR01
+			MsgStop(STR0057) //"Data final não pode ser inferior à data inicial!"
+			lRet := .F.
+		EndIf
+		If MV_PAR02 > dDataBase .And. lRet
+			MsgStop(STR0058) //"Até Data não pode ser maior que a data atual!"
+			lRet := .F.
+		EndIf
+	ElseIf nPar = 2
+		If MV_PAR07 < MV_PAR02
+			MsgStop(STR0059) //"Data de emissão nf não pode ser menor que maior data de abastecimento(Até Data)!"
+			lRet := .F.
+		EndIf
+		If MV_PAR07 > dDataBase .And. lRet
+			MsgStop(STR0060) //"Data de emissão nf não pode ser maior que a data atual!"
+			lRet := .F.
+		EndIf
+	ElseIf nPar = 3
+		If MV_PAR10 < MV_PAR07
+			MsgStop(STR0061) //"Data de pagamento não pode ser menor que a data de emissão da nota fiscal!"
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA645PTE
+Montagem da primeira tela.
+@type function
+
+@author Diego de Oliveira
+@since 21/05/18
+@version P12
+
+@return .T.
+/*/
+//------------------------------------------------------------------------------
+Static Function MNTA645PTE()
+
+	//Campos que complementam a tela de Pedidos de Compra
+	Local aFixe   := {{STR0113,"C7_NUM"},{STR0114,"C7_EMISSAO"},{STR0115,"C7_FORNECE"}} //"Número do PC"###"Data Emissão"###"Fornecedor"
+
+	Local lRet     := .T.
+	Local aItC7    := {}
+	Local aButtons := {}
+
+	//Bloco de confirmação da tela
+	Local aCoors := FWGetDialogSize( oMainWnd )
+
+	Private oBrowseInf, oBrowse
+	Private oDlgPrinc, oBrowseUp, oFWLayer
+
+	Define MsDialog oDlgPrinc Title cCadastro From aCoors[1],aCoors[2] To aCoors[3],aCoors[4] OF oMainWnd Pixel  //"Conciliação de NF's Automática"
+	oDlgPrinc:lEscClose  := .F.
+
+	// Cria o conteiner onde serão colocados os browses
+	oFWLayer := FWLayer():New()
+	oFWLayer:Init( oDlgPrinc, .F., .T. )
+
+	// Define Painel Superior
+	oFWLayer:AddLine( 'UP', 55, .F. )
+	oFWLayer:AddCollumn( 'ALL', 100, .T., 'UP' )
+	oPanelUp := oFWLayer:GetColPanel( 'ALL', 'UP' )
+
+	// FWmBrowse Superior
+	oBrowseUp:= FWMBrowse():New()
+	oBrowseUp:SetOwner( oPanelUp )
+	oBrowseUp:SetDescription( STR0090 ) //"Pedidos de Compra"
+	oBrowseUp:SetMenuDef( 'MNTA645' )
+	oBrowseUp:SetSeeAll( .F. )
+	oBrowseUp:SetDoubleClick({|x| SetAltera(.F.), SetInclui(.F.),SC7->C7_NUM, Processa( { |lEnd|  MATA121("SC7",RecNo(),2) }) })
+	oBrowseUp:SetFilterDefault("C7_ORIGEM == 'MNTA645' .And. C7_QUJE==0 .And. C7_QTDACLA==0")
+	oBrowseUp:SetFields( aFixe )
+	oBrowseUp:SetAlias( 'SC7' )
+	oBrowseUp:SetProfileID( '1' )
+	oBrowseUp:DisableDetails()
+	oBrowseUp:SetChgAll(.F.)
+	oBrowseUp:Activate()
+
+	// Painel Inferior
+	oFWLayer:AddLine( 'DOWN', 45, .F. )
+	oFWLayer:AddCollumn( 'LEFT' ,  100, .T., 'DOWN' )
+	oPanel := oFWLayer:GetColPanel( 'LEFT' , 'DOWN' )
+
+	oBrowse:= FWMBrowse():New()
+	oBrowse:SetOwner( oPanel )
+	oBrowse:SetDescription( "Abastecimentos" ) //"Abastecimentos"
+	oBrowse:SetMenuDef('')
+	oBrowse:DisableDetails()
+	oBrowse:SetDoubleClick({|x| SetAltera(.F.), SetInclui(.F.),TQN->TQN_NUMSC7, Processa( { |lEnd| NGCAD01("TQN",Recno(),2)} ) })
+	oBrowse:SetAlias( 'TQN' )
+	oBrowse:SetFilterDefault("TQN->TQN_NUMSC7 != '' ")
+	oBrowse:SetProfileID( '2' )
+	oBrowse:SetChgAll(.F.)
+	oBrowse:Activate()
+
+	// Relacionamento entre os Painéis
+	oRelacSC7:= FWBrwRelation():New()
+	oRelacSC7:AddRelation( oBrowseUp  , oBrowse , {  { 'TQN_FILIAL', 'xFilial( "TQN" )' } , { 'SC7->C7_FILIAL', 'xFilial( "SC7" )' },  { 'TQN_NUMSC7' , 'C7_NUM'  } } )
+	oRelacSC7:Activate()
+
+	Activate MsDialog oDlgPrinc Center
+
+Return
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fChangeFil
+Função de troca de linha.
+
+@author Diego de Oliveira
+@since 22/05/18
+@version P12
+
+@return Nil.
+/*/
+//------------------------------------------------------------------------------
+Static Function fChangeFil()
+
+	oBrowseInf:SetFilter( "TQN->TQN_NUMSC7", SC7->C7_NUM, SC7->C7_NUM )
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA645STE
+Montagem da segunda tela.
+@type function
+
+@author Diego de Oliveira
+@since 09/05/18
+@version P12
+
+@return .T.
+/*/
+//------------------------------------------------------------------------------
+Function MNTA645STE()
+
+	Local nSizeFil 	  := FwSizeFilial()
+
+	//Variáveis do Pergunte
+	Local cPerg     := PadR("MNA645", Len(Posicione("SX1", 1, "MNA645", "X1_GRUPO")))
+	Local dDeData   := StoD("")
+	Local dAteData  := StoD("")
+	Local cCodPos   := Space(TamSX3("TQN_POSTO")[1])
+	Local cLoja     := Space(TamSX3("TQN_LOJA")[1])
+	Local cCNPJ     := Space(TamSX3("TQN_CNPJ")[1])
+	Local cComb     := Space(TamSX3("TQN_CODCOM")[1])
+	Local nQtLitros := 000000
+
+	If GetNewPar("MV_NGMNTFI","N") == "S" .Or. GetNewPar("MV_NGMNTFI","N") == "P"
+		cPerg := "MNA645FI"
+	EndIf
+
+	If Pergunte(cPerg,.T.)
+
+		dDeData   := Mv_Par01
+		dAteData  := Mv_Par02
+		cCodPos   := Mv_Par03
+		cLoja     := Mv_Par04
+		cCNPJ     := Mv_Par05
+		cNotaFisc := Mv_Par06
+		dDtEmNF   := Mv_Par07
+		nValorNF  := Mv_Par08
+		nQtLitros := Mv_Par09
+		dDtPagto  := Mv_Par10
+		cComb     := Mv_Par11
+
+		Processa({|lEnd| MNA645INI(dDeData, dAteData, cCodPos, cLoja, cCNPJ, cComb, nQtLitros, nValorNF)})
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fBotExc645
+Função do botão de exclusão.
+
+@author Diego de Oliveira
+@since 29/05/18
+@version P12
+
+@return Nil.
+/*/
+//------------------------------------------------------------------------------
+Function fBotExc645()
+
+	Local lRet       := .F.
+	Local cAliasTQN := GetNextAlias()
+
+	//Condição para permitir exclusão somente se estiver com MNTUTIL_OS atualizado
+	If FindFunction( 'NgVldRpo' ) .And. NgVldRpo( { { 'MNTUTIL_OS.prw', cToD( '20/02/2020' ), '11:08' } } )
+
+		If MsgNoYes(STR0116+; //"Serão deletados os vínculos entre o(s) abastecimento(s) e o Pedido de Compras"
+			Space(1)+SC7->C7_NUM+Space(1)+STR0117,STR0118) //". Deseja continuar?"###"Atenção"
+			//Botão de Exclusão
+			Processa( { |lEnd| lRet := NgGeraSC7(SC7->C7_FORNECE,SC7->C7_LOJA,;
+				SC7->C7_COND,TQN->TQN_FILIAL,;
+				{{SC7->C7_PRODUTO,; //Formato do Array [1] Produto
+				SC7->C7_UM,;        //[2] Unidade de Medida
+				SC7->C7_QUANT,;     //[3] Quantidade
+				SC7->C7_PRECO}};    //[4] Preco Unitario
+				,"MNTA645",5 ) } )
+
+			If lRet
+				BeginSQL Alias cAliasTQN
+
+					SELECT
+						TQN_FROTA,
+						TQN_DTABAS,
+						TQN_HRABAS
+					FROM %table:TQN% TQN
+					WHERE TQN_AUTO = '1'
+						AND TQN_DTCON  = %exp:DtoS(SC7->C7_EMISSAO)%
+						AND TQN_POSTO  = %exp:SC7->C7_FORNECE%
+						AND TQN_LOJA   = %exp:SC7->C7_LOJA%
+						AND TQN_NUMSC7 = %exp:SC7->C7_NUM%
+						AND TQN_FILIAL = %xFilial:TQN%
+						AND %NotDel%
+						ORDER BY TQN_DTABAS
+				EndSQL
+
+				dbSelectArea("TQN")
+				dbSetOrder(1) //TQN_FILIAL+TQN_FROTA+DTOS(TQN_DTABAS)+TQN_HRABAS
+				dbSelectArea(cAliasTQN)
+				While !EoF()
+					If TQN->(dbSeek(xFilial("TQN") + (cAliasTQN)->TQN_FROTA + (cAliasTQN)->TQN_DTABAS + (cAliasTQN)->TQN_HRABAS ))
+						//Limpa os dados do Pedido de Compra no registro de Abastecimento
+						RecLock("TQN",.F.)
+						TQN->TQN_DTCON  := StoD("")
+						TQN->TQN_NOTFIS := Space(Len(TQN->TQN_NOTFIS))
+						TQN->TQN_DTPGMT := StoD("")
+						TQN->TQN_DTEMIS := StoD("")
+						If lTQN_NUMSC7
+							TQN->TQN_NUMSC7 := Space(Len(SC7->C7_NUM))
+							TQN->TQN_ITEMSC := Space(Len(SC7->C7_ITEM))
+						EndIf
+						TQN->( MsUnLock() )
+					EndIf
+
+					dbSelectArea(cAliasTQN)
+					dbSkip()
+				EndDo
+				( cAliasTQN )->( dbCloseArea() )
+				MsgInfo(STR0081+Space(1)+AllTrim(SC7->C7_NUM)+Space(1)+STR0093) //"Pedido de compra "###" excluído."
+			EndIf
+		EndIf
+	Else
+		//"Desta forma solicita-se a atualização de algumas rotinas de acordo com o processo descrito no ticket 1555862 e issue DNG-1983."
+		Help(' ',1,STR0118 ,,STR0119,2,0,,,,,, STR0120) //"Atenção"###"Esta rotina passou recentemente por uma grande atualização em seu processo."
+	EndIf
+
+	oBrowseUp:Refresh()
+	oBrowseUp:ChangeTopBot(.T.)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu.
+
+@author Diego de Oliveira
+@since 13/08/18
+
+@return aRotina array com o Menu
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Private aRotina := {}
+
+		aRotina := {{STR0091, "fBotExc645()" ,0,5},; 	   //"Excluir"
+					{STR0121, "MNTA645STE()" ,0,3,0,.F.}}  //"Incluir Conc."
+
+Return aRotina

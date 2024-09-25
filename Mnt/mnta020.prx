@@ -1,0 +1,773 @@
+#INCLUDE "MNTA020.ch"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA020
+Cadastro de Funcionários da Manutenção
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA020()
+
+	Local oBrowse
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 35, 95 )
+
+		oBrowse := FWMBrowse():New()
+		oBrowse:setMainProc("MNTA020")          //Setando menu principal, porque a rotina pode ser chamada por outras rotinas
+		oBrowse:SetAlias("ST1")					// Alias da tabela utilizada
+		oBrowse:SetMenuDef("MNTA020")			// Nome do fonte onde esta a função MenuDef
+		oBrowse:SetDescription(STR0010)  	    // Descrição do browse //"Cadastro de Funcionarios"
+		oBrowse:Activate()
+
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Opções de menu
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return aRotina - Estrutura
+	[n,1] Nome a aparecer no cabecalho
+	[n,2] Nome da Rotina associada
+	[n,3] Reservado
+	[n,4] Tipo de Transação a ser efetuada:
+		1 - Pesquisa e Posiciona em um Banco de Dados
+		2 - Simplesmente Mostra os Campos
+		3 - Inclui registros no Bancos de Dados
+		4 - Altera o registro corrente
+		5 - Remove o registro corrente do Banco de Dados
+		6 - Alteração sem inclusão de registros
+		7 - Cópia
+		8 - Imprimir
+	[n,5] Nivel de acesso
+	[n,6] Habilita Menu Funcional
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+//Inicializa MenuDef com todas as opções
+Return FWMVCMenu( 'MNTA020' )
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Regras de Modelagem da gravacao
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+	// Cria a estrutura a ser usada no Modelo de Dados
+	Local oStructST1 := FWFormStruct( 1, 'ST1' )
+	Local oStructST2 := FWFormStruct( 1, 'ST2' )
+	Local oModel
+
+	//Retira campo obrigatório do Model, já que não será apresentado
+	oStructST2:RemoveField( 'T2_CODFUNC' )
+
+	// Cria o objeto do Modelo de Dados
+	oModel := MPFormModel():New('MNTA020', {|oModel| PreValida(oModel) } ,{|oModel| ValidInfo(oModel)}, {|oModel| CommitInfo(oModel) }, /*bCancel*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por campo
+	oModel:AddFields( 'MNTA020_ST1', /*cOwner*/, oStructST1, /*bPreValidacao*/, /*bPosValidacao*/, /*bCarga*/ )
+
+	// Adiciona ao modelo uma estrutura de formulário de edição por grid
+	oModel:AddGrid( 'MNTA020_ST2', 'MNTA020_ST1', oStructST2, /*bLinePre*/, /*bLinePost*/, /*bPreVal*/, /*bPosVal*/, /*BLoad*/ )
+
+	// Faz relaciomaneto entre os compomentes do model
+	oModel:SetRelation( 'MNTA020_ST2', { { 'T2_FILIAL', 'xFilial( "ST2" )' }, { 'T2_CODFUNC', 'T1_CODFUNC' } }, ST2->(IndexKey(1)) )
+
+	// Liga o controle de nao repeticao de linha
+	oModel:GetModel( 'MNTA020_ST2' ):SetUniqueLine( { 'T2_ESPECIA' } )
+
+	// Indica que é opcional ter dados informados na Grid
+	oModel:GetModel( 'MNTA020_ST2' ):SetOptional(.T.)
+
+	// Adiciona a descricao do Modelo de Dados
+	oModel:SetDescription( STR0010 )
+
+	// Adiciona a descricao do Componente do Modelo de Dados
+	oModel:GetModel('MNTA020_ST1' ):SetDescription( STR0021 ) // "Dados do Funcionário"
+	oModel:GetModel('MNTA020_ST2' ):SetDescription( STR0022 ) // "Dados da especialidade do funcionário"
+
+	oModel:SetVldActivate({|oModel|fActiveMod(oModel)})
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Regras de Interface com o Usuario
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+	Local oModel     := FWLoadModel( 'MNTA020' ) //Cria um objeto de Modelo de Dados baseado no ModelDef do fonte informado
+	Local oStructST1 := FWFormStruct( 2, 'ST1' )
+	Local oStructST2 := FWFormStruct( 2, 'ST2' )
+	Local lINTRG     := SuperGetMV( 'MV_NGMNTRH', .F., 'N'  ) != 'N'
+	// Cria o objeto de View
+	oView := FWFormView():New()
+
+	// Define qual o Modelo de dados será utilizado
+	oView:SetModel( oModel )
+
+	//Adiciona no nosso View um controle do tipo FormFields(antiga enchoice)
+	oView:AddField( 'VIEW_ST1', oStructST1, 'MNTA020_ST1' )
+
+	// Valida se tem integração com o RH
+	If !lINTRG
+        
+		//Faz o ajuste da propriedade e tira a consulta padrão quando não é integrado ao RH
+		oStructST1:SetProperty( "T1_CODFUNC" , MVC_VIEW_LOOKUP, "   " )
+
+	EndIf
+
+	//Adiciona um titulo para o formulário
+	oView:EnableTitleView( 'VIEW_ST1' ,STR0023 ) // "Dados do Funcionário"
+
+	//Adiciona no nosso View um controle do tipo FormGrid(antiga newgetdados)
+	oView:AddGrid(  'VIEW_ST2', oStructST2, 'MNTA020_ST2' )
+
+	//Adiciona um titulo para o grid
+	oView:EnableTitleView('VIEW_ST2' , STR0024 ) // "Dados das especialidades do funcionário"
+
+	// Criar um "box" horizontal para receber algum elemento da view
+	oView:CreateHorizontalBox( 'SUPERIOR', 40 )
+	oView:CreateHorizontalBox( 'INFERIOR', 60 )
+
+	// Relaciona o ID da View com o "box" para exibicao
+	oView:SetOwnerView( 'VIEW_ST1', 'SUPERIOR' )
+	oView:SetOwnerView( 'VIEW_ST2', 'INFERIOR' )
+
+	//Remove o campo repetido em tela
+	oStructST1:RemoveField( 'T1_TIPOFUN' )
+	oStructST2:RemoveField( 'T2_CODFUNC' )
+	oStructST2:RemoveField( 'T2_NOMFUNC' )
+
+	//Remove campos de custeio de mão de obra.
+	If SuperGetMV( 'MV_NGMNTES', .F., 'S' ) <> 'S' .And. ST1->( FieldPos( 'T1_PRODMO' ) ) > 0
+		oStructST1:RemoveField( 'T1_PRODMO'  )
+		oStructST1:RemoveField( 'T1_DESCPRO' )
+	EndIf
+
+	//Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} PreValida
+Pre validação para abertura do cadastro
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function PreValida( oModel )
+
+	If oModel:GetOperation() == 4 .And. AllTrim(GetMv("MV_NGMNTRH")) = "S"
+		dbSelectArea("SRA")
+		dbSetOrder(01)
+		If dbSeek(xFilial("SRA")+ST1->T1_CODFUNC) .And. SRA->RA_SITFOLH = "D"
+
+			Return MsgYesNo(STR0012 + Chr(13) + ; //"Funcionario nao habilidado junto a folha"
+	           				STR0013 + Chr(13) + STR0034+; //"Situacao:"
+							Chr(13)+Chr(13)+STR0015+"?",STR0014) //"Continuar" ## "NAO CONFORMIDADE"
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ValidInfo
+Validação ao confirmar tela
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ValidInfo(oModel)
+
+	Local aRet := {}
+	Local lRet := .T.
+
+	If oModel:GetOperation() != MODEL_OPERATION_DELETE
+		If M->T1_DISPONI == "N" .And. Empty(oModel:GetValue("MNTA020_ST1", "T1_DTFIMDI"))
+			MsgStop(STR0019) //"Deverá ser informado a data fim da disponibilidade do funcionário."
+			lRet := .F.
+		ElseIf M->T1_DISPONI == "S" .And. !Empty(oModel:GetValue("MNTA020_ST1", "T1_DTFIMDI"))
+			MsgStop(STR0020) //"Se funcionário consta com Disponibil. = Sim, não deve ser informada a Dt.Fim Disp."
+			lRet := .F.
+		EndIf
+	EndIf
+
+	//Se for alterar para indisponível verifica se funcionário está com alguma etapa em aberto iniciada pela rotina de apontamento de MDO - MNTA422
+	If lRet .And. M->T1_DISPONI == "N" .And. oModel:GetOperation() == 4
+		If FindFunction("NGVLDSTL3")
+			aRet := NGVLDSTL3(M->T1_CODFUNC)
+
+			If Len(aRet) > 0
+				MsgStop(STR0025 + chr(13) + ; //"Funcionário em execução de tarefas. O mesmo não poderá ficar indisponível e nem ser excluído até a conslusão da atividade:"
+						STR0026 + Alltrim(aRet[1]) + chr(13) + ;//"Ordem.........: "
+						STR0027 + Alltrim(aRet[3]) + " - " + Alltrim(aRet[6]) + chr(13)+ ;//"Tarefa..........: "
+						STR0028 + Alltrim(aRet[4]) + " - " + Alltrim(aRet[7]) + chr(13) ) //"Etapa...........: "
+				lRet := .F.
+			EndIf
+		Endif
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} CommitInfo
+Confirmação da tela de cadastro
+@type Static
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+
+@sample CommitInfo(oModel)
+
+@param	oModel, Objeto, Objeto modelo.
+@return lRet  , Lógico, .T.
+/*/
+//---------------------------------------------------------------------------
+Static Function CommitInfo( oModel )
+
+	Local cCodProd := ''
+	Local lPrdM    := IIf( ST1->( FieldPos( 'T1_PRODMO' ) ) > 0, !Empty( oModel:GetValue( 'MNTA020_ST1', 'T1_PRODMO' ) ), .F. )
+
+	If oModel:GetOperation() <> 5 .And. !lPrdM
+
+		cCodProd := SubStr( 'MOD' + AllTrim( oModel:GetValue( 'MNTA020_ST1', 'T1_CCUSTO' ) ), 1, Len(SB1->B1_COD) )
+
+		//Verifica se deve implantar o produto funcionario
+		dbSelectArea("SB1")
+		dbSetOrder(1)
+		If !dbSeek( xFilial("SB1") + cCodProd )
+			RecLock("SB1",.T.)
+			SB1->B1_FILIAL := xFilial("SB1")
+			SB1->B1_COD    := cCodProd
+			SB1->B1_DESC   := STR0011 + AllTrim( oModel:GetValue( 'MNTA020_ST1', 'T1_CCUSTO' ) ) //MAO DE OBRA DO CENTRO DE CUSTO
+			SB1->B1_TIPO   := "MO"
+			SB1->B1_UM     := 'HR'
+			SB1->B1_LOCPAD := '01'
+			MsUnlock()
+			NGAtuErp("SB1", "INSERT")
+		EndIf
+
+		//Atualiza o campo totalizador dos empenhos
+		dbSelectArea("SB2")
+		dbSetOrder(01)
+		If !dbSeek( xFilial("SB2") + cCodProd )
+			CriaSB2(cCodProd,"01")
+
+			RecLock("SB2",.F.)
+			SB2->B2_CM1 := oModel:GetValue( 'MNTA020_ST1', 'T1_SALARIO' )
+			MsUnlock()
+			NGAtuErp("SB2", "INSERT")
+		EndIf
+	EndIf
+
+	//Grava dados do Model
+	FwFormCommit(oModel)
+
+Return .T.
+
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGIMPFUN
+Alimenta campos relacionados ao RH
+
+@author Vitor Emanuel Batista
+@since 17/02/2012
+@version P11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function NGIMPFUN()
+
+	Local lRet     := .T.
+	Local cNGMNTRH := AllTrim(GetMv("MV_NGMNTRH"))
+	Local lInDic   := !Empty( Posicione( 'SX7', 1, 'T1_CODFUNC' + '001', 'X7_REGRA' ) ) // Gatilhos já inclusos no dicionário. Deve ser removido após a realese 12.1.33
+	Local lNGINTER := SuperGetMV( 'MV_NGINTER', .F., 'N' ) == 'M'
+	 
+	If cNGMNTRH $ "SX" .Or. lNGINTER
+		dbSelectArea("SRA")
+		dbSetOrder(01)
+		If dbSeek(xFilial("SRA")+M->T1_CODFUNC)
+			If NGCADICBASE("RA_FUNMAN","A","SRA",.F.)
+				If SRA->RA_FUNMAN <> "1"
+					MsgInfo(STR0016,STR0014) //"Funcionário não está cadastrado como funcionário da Manutenção."
+					lRet := .F.
+				EndIf
+			EndIf
+
+			If lRet
+
+				If SRA->RA_SITFOLH = "D"
+					dbSelectArea("SX5")
+					dbSetOrder(01)
+					If dbSeek(xFilial("SX5")+"31"+SRA->RA_SITFOLH)
+						MsgInfo(STR0012+Chr(13)+STR0013+Chr(13)+STR0034,STR0014) //"DEMITIDO"
+					EndIf
+					lRet := .F.
+				EndIf
+
+				If lRet .And. !lInDic
+
+					M->T1_NOME	  := SUBSTR(SRA->RA_NOME,1,TamSX3('T1_NOME')[1]) //Nome do funcionário
+					M->T1_CCUSTO  := SRA->RA_CC		                             //Código do centro de custo
+					M->T1_SALARIO := SRA->RA_SALARIO
+					M->T1_CRACHA  := SRA->RA_CRACHA
+					M->T1_TIPOFUN := "S"
+					nACRESSH      := GetMv("MV_NGRHMKP")
+					nSalario      := 0
+					nSalMes       := 0
+					nSalDia       := 0
+					nSalHora      := 0
+					Normal        := 0
+					Descanso      := 0
+
+					//Calcula Salario Mes , Dia , Hora do Funcionario
+					If FindFunction('fSalario') .And. FindFunction('CompMes')
+						CompMes(@Normal,@Descanso,MesAno(dDataBase))
+						fSalario(@nSalario,@nSalHora,@nSalDia,@nSalMes)
+						nACRESSF := 1+(nACRESSH/100)
+						M->T1_SALARIO := If(nACRESSH = 0,nSalHora,nSalHora * nACRESSF)
+					EndIf
+				EndIf
+
+			EndIf
+		Else
+			If cNGMNTRH == "X"
+
+				If !lInDic
+					M->T1_NOME    := ""
+					M->T1_CCUSTO  := ""
+					M->T1_NOMCUST := ""
+					M->T1_TURNO   := ""
+					M->T1_NOMTURN := ""
+					M->T1_SALARIO := 0
+					M->T1_CRACHA  := ""
+					M->T1_TIPOFUN := "N"
+				EndIf
+
+			Else
+				lRet := .F.
+				MsgInfo(STR0035,STR0014) //"Funcionário não existente no cadastro do RH."###"Atenção"
+			EndIf
+		EndIf
+
+	ElseIf !lInDic
+
+		M->T1_TIPOFUN := "N"
+	
+	EndIf
+
+	If lRet .And. Len(AllTrim(M->T1_CCUSTO))+3 > Len(SB1->B1_COD)
+		MsgInfo(STR0017+;                //"Para que o produto seja cadastrado corretamente na tabela de Saldos em Estoque(SB2) e/ou Produtos(SB1), o campo centro custo "
+			    STR0018+Chr(13),STR0014) //"deve possuir no máximo 12 caracteres."
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT20VLFUN
+Trava campos Nome e Centro de Custo,se funcionarios contido na (SRA).
+Tabela de Funcionarios da Manutenção
+
+@author Guilherme Freudenburg
+@since 04/04/13
+/*/
+//---------------------------------------------------------------------
+Function MNT20VLFUN()
+
+	Local lRet := .T.
+	Local cParam := AllTrim(SUPERGETMV("MV_NGMNTRH"))
+
+	If cParam == 'S'
+		lRet := .F.
+	ElseIf cParam == 'X'
+		NGDBAREAORDE("SRA", 01)
+		If DbSeek(xFilial("SRA")+M->T1_CODFUNC)
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT020VAL
+Valida os campos da tela
+@type function
+
+@author Roger Rodrigues
+@since 18/04/12
+
+@param  [cReadVar], Caracter, Nome do campo que será validado.
+@return lRet      , Lógico, Define se o conteudo do campo é valido ou não.
+/*/
+//---------------------------------------------------------------------
+Function MNT020VAL( cReadVar )
+
+	Local aArea      := GetArea()
+	Local cValue     := ''
+	Local lRet       := .T.
+	Local lIntegRM   := SuperGetMV( 'MV_NGINTER', .F., 'N' ) == 'M'
+	Local oModel     := FWModelActive()
+	Local oModelST1  := oModel:GetModel( 'MNTA020_ST1' )
+	Local lMvc       := !(oModelST1 == Nil)
+
+	Do Case
+		Case cReadVar == 'T1_CODUSU'
+
+			If !Empty(M->T1_CODUSU)
+				//Posiciona no usuario
+				PswOrder(1)
+				If PswSeek(M->T1_CODUSU,.T.)
+					M->T1_CODUSU := Substr(PswRet(1)[1,1], 1, 6)
+					M->T1_NOMUSU := UsrRetName(M->T1_CODUSU)
+				Else
+					lRet := .F.
+					Help(" ",1,"REGNOIS")
+				Endif
+			Else
+				M->T1_CODUSU := Space(TAMSX3("T1_CODUSU")[1])
+				M->T1_NOMUSU := Space(TAMSX3("T1_NOMUSU")[1])
+			EndIf
+
+		Case cReadVar == 'T1_PRODMO'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_PRODMO' )
+			Else
+				cValue := M->T1_PRODMO
+			EndIf
+
+			If !Empty( cValue )
+				
+				If !ExistCPO( 'SB1', cValue )
+					lRet := .F.
+				ElseIf !lIntegRM .And. !IsProdMod( cValue )
+					lRet := .F.
+					Help('', 1, STR0029,, STR0036, 2,; //O produto não possui centro de custo para custeio ou o parâmetro MV_PRODMOD encontra-se desabilitado. ##
+						0,,,,,, { STR0037 } ) //Verifique se o produto possui o campo B1_CCCUSTO preenchido e se o parâmetro MV_PRODMOD encontra-se habilitado.
+				EndIf
+
+			EndIf
+
+		Case cReadVar == 'T1_CODFUNC'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_CODFUNC' )
+			Else
+				cValue := M->T1_CODFUNC
+			EndIf
+
+			If !Empty( cValue )
+
+				lRet := EXISTCHAV( 'ST1', cValue     ) .And. NGIMPFUN()
+
+			EndIf
+
+		Case cReadVar == 'T1_CCUSTO'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_CCUSTO' )
+			Else
+				cValue := M->T1_CCUSTO
+			EndIf
+
+			If !Empty( cValue )
+
+				lRet := CTB105CC()
+
+			EndIf
+
+		Case cReadVar == 'T1_TURNO'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_TURNO' )
+			Else
+				cValue := M->T1_TURNO
+			EndIf
+
+			If !Empty( cValue )
+
+				lRet := EXISTCPO( 'SH7', cValue )
+
+			EndIf
+
+		Case cReadVar == 'T1_DISPONI'
+
+			lRet := PERTENCE('SN')
+
+		Case cReadVar == 'T1_SALARIO'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_SALARIO' )
+			Else
+				cValue := M->T1_SALARIO
+			EndIf
+
+
+			If !Empty( cValue )
+
+				lRet := Positivo()
+
+			EndIf
+
+		Case cReadVar == 'T1_CONTRAT'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_CONTRAT' )
+			Else
+				cValue := M->T1_CONTRAT
+			EndIf
+
+			If !Empty( cValue )
+
+				lRet := EXISTCPO('TP3',cValue)
+
+			EndIf
+
+		Case cReadVar == 'T1_TIPOFUN'
+
+			lRet := PERTENCE('SN')
+
+		Case cReadVar == 'T1_EQUIPE'
+
+			If lMvc
+				cValue := oModelST1:GetValue( 'T1_EQUIPE' )
+			Else
+				cValue := M->T1_EQUIPE
+			EndIf
+
+			If !Empty( cValue )
+
+				lRet := ExistCpo( 'TP4', cValue )
+
+			EndIf
+
+		Case cReadVar == 'T1_TIPATE'
+
+			lRet := PERTENCE('123')
+
+	End Case
+
+	RestArea(aArea)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT020REL
+Relacao dos campos da tela
+
+@author Roger Rodrigues
+@since 18/04/12
+@version P11
+@return xRetorno
+/*/
+//---------------------------------------------------------------------
+Function MNT020REL(cCampo)
+
+	Local xRetorno := Space(TAMSX3(cCampo)[1])
+
+	If cCampo == 'T1_NOMUSU'
+		If !Empty(M->T1_CODUSU)
+			xRetorno := UsrRetName(M->T1_CODUSU)
+		Endif
+
+	ElseIf cCampo = 'T1_TIPATE'
+
+		xRetorno := '3'
+
+	Endif
+
+Return xRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA020GAT
+Gatilho dos campos em tela.
+@type function
+
+@author Alexandre Santos
+@since 18/05/2021
+
+@sample MNTA020GAT( 'T1_CODFUNC', 'T1_SALARIO' )
+
+@param cDomin    , string, Campo que aciona o gatilho.
+@param cCDomin   , string, Campo que recebe as informações do gatilho.
+@return undefined, Conteúdo que será gatilhado. 
+/*/
+//---------------------------------------------------------------------
+Function MNTA020GAT( cDomin, cCDomin )
+
+	Local aAreaAll := GetArea()
+	Local aAreaSRA := SRA->( GetArea() )
+	Local lIntGPE  := SuperGetMV( 'MV_NGMNTRH', .F., 'N' ) $ 'S#X'
+	Local lFound   := .F.
+	Local lCall800 := IsInCallStack("MNTA800")
+	Local xRet
+	Local nSalario := 0
+	Local nSalMes  := 0
+	Local nSalDia  := 0
+	Local nSalHora := 0
+	Local Normal   := 0
+	Local Descanso := 0
+	Local nACRESSH := 0 
+	Local nACRESSF := 0
+	Local nT1_NOME := 0
+
+	If cDomin == 'T1_CODFUNC'
+
+		If lCall800
+			
+			dbSelectArea( 'ST1' )
+			dbSetOrder( 1 ) // T1_FILIAL + T1_CODFUNC
+			lFound := msSeek( xFilial( 'ST1' ) + M->T1_CODFUNC )
+
+		Else
+			
+			dbSelectArea( 'SRA' )
+			dbSetOrder( 1 ) // RA_FILIAL + RA_MAT
+			lFound := msSeek( xFilial( 'SRA' ) + M->T1_CODFUNC )
+		
+		EndIf
+
+		Do Case
+			
+			Case cCDomin == 'T1_CCUSTO' .And. lIntGPE .And. lFound
+				
+				xRet := IIf( lCall800, ST1->T1_CCUSTO, SRA->RA_CC )
+
+			Case cCDomin == 'T1_CRACHA' .And. lIntGPE .And. lFound
+				
+				xRet := IIf( lCall800, ST1->T1_CRACHA, SRA->RA_CRACHA )
+
+			Case cCDomin == 'T1_NOME' .And. lFound
+
+				nT1_NOME := FwTamSX3( 'T1_NOME' )[1]
+
+				If lIntGPE
+
+					xRet := SubStr( SRA->RA_NOME, 1, nT1_NOME )
+
+				Else
+
+					xRet := IIf( lCall800, SubStr( ST1->T1_NOME, 1, nT1_NOME ), Space( nT1_NOME ) )
+
+				EndIf
+
+			Case cCDomin == 'T1_TIPOFUN'
+				
+				xRet := IIf( lIntGPE, IIf( lFound, 'S', 'N' ), 'N' )
+
+			Case cCDomin == 'T1_SALARIO' .And. lIntGPE .And. lFound
+				
+				xRet := IIf( lCall800, ST1->T1_SALARIO, SRA->RA_SALARIO )
+
+				// Calcula Salario Mês, Dia ou Hora do Funcionário.
+				If FindFunction( 'fSalario' ) .And. FindFunction( 'CompMes' )
+
+					nACRESSH := SuperGetMV( 'MV_NGRHMKP', .F., 0 )
+					
+					CompMes( @Normal, @Descanso, MesAno( dDataBase ) )
+					fSalario( @nSalario, @nSalHora, @nSalDia, @nSalMes )
+					nACRESSF := 1 + ( nACRESSH / 100 )
+					
+					xRet := IIf( nACRESSH == 0, nSalHora, nSalHora * nACRESSF )
+				
+				EndIf
+
+		End Case
+
+	EndIf
+
+	RestArea( aAreaSRA )
+	RestArea( aAreaAll )
+
+Return xRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fActiveMod
+Verifica se o funcionario corrente possui vinculo com alguma equipe,
+impedindo sua exclusão.
+@type static
+
+@author Alexandre Santos
+@since 04/01/2017
+
+@param 	oModel	, Objeto, Modelo de dados
+@return lRet	, Lógico, Confirma se o funcionario pertence a alguma com equipe.
+/*/
+//---------------------------------------------------------------------
+Static Function fActiveMod(oModel)
+
+	Local lRet := .T.
+
+	//EXCLUSÃO
+	If oModel:GetOperation() == 5
+		dbSelectArea("ST1")
+		dbSetOrder(1)
+		If dbSeek(xFilial("ST1") + T1_CODFUNC)
+			lRet := IIf(Empty(ST1->T1_EQUIPE),.T.,.F.)
+		EndIf
+	EndIf
+
+	If !lRet
+		Help(" ",1,STR0029,,STR0033,3,1) //"ATENÇÃO"###"Funcionário relacionado a um equipe, o mesmo não poderá ser excluído."
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA020Whe
+Função que centraliza os WHEN da tabela ST1.
+@type function
+
+@author Alexandre Santos
+@since 20/12/2017
+
+@param cField, string, Campo a ser validado.
+@return lRet , boolen, Indica se o campo deve ser aberto a edição.
+/*/
+//---------------------------------------------------------------------
+Function MNTA020Whe( cField )
+
+	Local lRet := .T.
+
+	Do Case
+
+		Case cField == 'T1_PRODMO'
+
+			// O Campo somente deve ser aberto quando o parâmetro estiver habilitado.
+			lRet := SuperGetMV( 'MV_PRODMOD', .F., .F. )
+
+	End Case
+	
+Return lRet

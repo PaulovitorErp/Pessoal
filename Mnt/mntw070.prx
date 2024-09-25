@@ -1,0 +1,300 @@
+#INCLUDE "MNTW070.ch"
+#INCLUDE "RWMAKE.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TOPCONN.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW070
+Programa geracao de workflow de APD de Sinistro
+
+@type function
+
+@source MNTW070.prw
+
+@author Marcos Wagner Junior
+@since 28/03/2007
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Rodrigo Luan Backes
+	@since 05/09/2016
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample MNTW070()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW070()
+
+	Local lUPD87 := NGCADICBASE("TSK_TIPUSE","A","TSK",.F.)
+
+	Local lAMBIE   := .F.
+	Local cIniFile := GetAdv97()
+	Local cCodEmp  := ""
+	Private cCodFil  := ""
+	Private cEmailSin := AllTrim(GetMv("MV_NGRESIN"))
+
+	If lUPD87
+		cEmailSin := NgEmailWF("4","MNTW070")
+	EndIf
+
+	MNTW070WO()
+Return  .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW070WO
+Workflow de APD de Sinistro
+
+@type function
+
+@source MNTW070.prx
+
+@author Marcos Wagner Junior
+@since 28/03/2007
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Rodrigo Luan Backes
+	@since 05/09/2016
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample MNTW070WO()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW070WO()
+
+	Local lRetu		:= .T.
+	Local cMailMsg	:= ""
+	Local cAssunto	:= ""
+
+	Local cSmtp			:= GetNewPar("MV_RELSERV", "") 	//Servidor SMTP
+	Local cConta		:= GetNewPar("MV_RELAUSR","") 	// Usuário para autenticação no servidor de e-mail
+	Local cCntEmail		:= GetNewPar("MV_RELACNT","")	// Conta de e-mail do usuário no servidor de e-mail
+	Local lAutentica	:= GetNewPar("MV_RELAUTH",.F.)	// Autenticação (Sim/Não)
+	Local nSmtpPort		:= GetNewPar("MV_PORSMTP",0)	// Porta Servidor SMTP
+
+	Local lUPD87		:= NGCADICBASE("TSK_TIPUSE","A","TSK",.F.)
+
+	//Variável declarada com o conteúdo do parâmetro relacionado ao WF e para evitar inconsistência
+	Local cEMAIL_All 	:= AllTrim(SuperGetMv("MV_NGRESIN",.F.," "))
+
+	If (nPos := At(":",cSmtp)) <> 0
+		nSmtpPort	:= Val( SubStr( cSmtp, nPos+1, Len( cSmtp ) ) )
+		cSmtp		:= SubStr( cSmtp, 1, nPos-1 )
+	EndIf
+
+	Dbselectarea("TRH")
+	Dbsetorder(01)
+	If DbSeek(xFilial("TRH")+M->TRS_NUMSIN)
+		cDescricao := AllTrim(SubStr( Posicione("SX5", 1, xFilial("SX5")+"CX"+TRH->TRH_CAUPRE, "X5Descri()"), 1, 40 ))
+		cDesc := STR0011 + MNTW070MOT() + STR0012 //"O motorista Sr. "###" envolveu-se em um acidente de trânsito: <br><br><br>"
+		cDesc += STR0013+SubStr(DTOS(TRH->TRH_DTACID),7,2)+"/"+SubStr(DTOS(TRH->TRH_DTACID),5,2)+"/"+SubStr(DTOS(TRH->TRH_DTACID),1,4) //"No dia "
+		cDesc += " às "+TRH->TRH_HRACID
+		cDesc += STR0014+TRH->TRH_LOCAL //"<br> Local: "
+		cDesc += STR0015+AllTrim(TRH->TRH_CIDACI)+"/"+TRH->TRH_UFACID //"<br> Município: "
+		cDesc += STR0016+TRH->TRH_CODBEM+STR0017+TRH->TRH_PLACA //"<br> Frota: "###", Placa: "
+		cDesc += STR0018+AllTrim(cDescricao)+".<br><br>" //"<br> A causa real definida pelo Departamento Jurídico foi: "
+		cDesc += STR0019+If(NGCADICBASE('TRH_MMDAN2','A','TRH',.F.),;
+			                 NGMEMOSYP(TRH->TRH_MMSYP),TRH->TRH_DESCRI) //"Descrição dos fatos conforme narrativa do motorista: "
+	Else
+		cDesc := ''
+	Endif
+
+	cEmail		:= ''
+	nCont		:= 0
+	cRetFilial	:= MNTW070FIL()
+	dbSelectArea("TSK")
+	dbSetOrder(01)
+	If dbSeek(xFilial("TSK")+cRetFilial)
+		While !Eof() .AND. xFilial("TSK") = TSK->TSK_FILIAL .And. TSK->TSK_FILMS = cRetFilial
+			If TSK->TSK_PROCES = '4' .OR. TSK->TSK_PROCES = '6'
+				If nCont = 0
+					cEmail := AllTrim(NGSEEK('SRA',TSK->TSK_CODFUN,1,'RA_EMAIL'))
+				Else
+					cEmail := IIf( !(AllTrim(NGSEEK('SRA',TSK->TSK_CODFUN,1,'RA_EMAIL')) $ cEmail) ,cEmail + ';' + AllTrim(NGSEEK('SRA',TSK->TSK_CODFUN,1,'RA_EMAIL')), cEmail )
+				Endif
+				nCont++
+			Endif
+			dbSkip()
+		End
+	Endif
+	If Empty(cEmail)
+		cEmail := cEmailSin
+	Else
+		cEmail := IIf( !(cEmail $ cEmailSin), cEmail + ";" + cEmailSin, cEmailSin )
+	Endif
+
+	cMailMsg := '<html>'
+	cMailMsg += '<head>'
+	cMailMsg += '<meta http-equiv="Content-Language" content="pt-br">
+	cMailMsg += '<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+	cMailMsg += '<meta name="GENERATOR" content="Microsoft FrontPage 4.0">
+	cMailMsg += '<meta name="ProgId" content="FrontPage.Editor.Document">
+	cMailMsg += '<title>APD Ref. Acidente De Trânsito</title>
+	cMailMsg += '</head>
+	cMailMsg += '<body bgcolor="#FFFFFF">
+	cMailMsg += '<div align="left">
+	cMailMsg += '<table border=0 WIDTH=100% cellpadding="2">
+	cMailMsg += '<tr>
+	cMailMsg += '	<td bgcolor="#C0C0C0" align="left"><b><font face="Arial" size="2">APD REF. ACIDENTE DE TRÂNSITO</font></b></td>
+	cMailMsg += '</tr>
+	cMailMsg += '</u>
+	cMailMsg += '<tr>
+	cMailMsg += '	<td bgcolor="#EEEEEE" align="left"><font face="Arial" size="1">'+cDesc+'</font></td>
+	cMailMsg += '</tr>
+	cMailMsg += '</table>
+	cMailMsg += '</div>
+	cMailMsg += '<U>
+	cMailMsg += '<br><hr>
+	cMailMsg += '</body>
+	cMailMsg += '</html>
+
+	cAssunto := dtoc(MsDate())+STR0021 //" - APD de Sinistro"
+
+	If lUPD87 .And. !Empty(cEmail)
+		cEMAIL_All := cEmail
+	ElseIf !Empty(cCntEmail) .And. !(AllTrim(cCntEmail) $ cEMAIL_All)
+		cEMAIL_All :=  cCntEmail + ";" + cEMAIL_All
+	Else
+		If Empty(cEMAIL_All)
+			ShowHelpDlg(STR0025, {STR0029 + STR0026 + (IIF(lUPD87, STR0027 + ".", "."))}, 2, {STR0028}, 1)//"Destinatário do E-mail não informado."##" Favor, verificar parâmetro MV_RELACNT"##" ou se o funcionário possui E-mail cadastrado no sistema."##"Envio de E-mail cancelado!"
+		EndIf
+	EndIf
+
+	If Empty(cSmtp)
+		MsgInfo(STR0030 + STR0028) //"Servidor SMTP não informado! Favor, verificar parâmetro MV_RELSERV."##" Envio do e-mail cancelado!"
+		Return .F.
+	EndIf
+
+	If lAutentica .And. Empty(cConta)
+		MsgInfo(STR0023 + STR0024 + STR0028) //"Verifique os parâmetros de configuração: "##"MV_RELAUSR e MV_RELAUTH."##" Envio do e-mail cancelado!"
+		Return .F.
+	EndIf
+
+	//Função de envio de WorkFlow
+	lRetu := NGSendMail( , cEMAIL_All, , , cAssunto, , cMailMsg )
+
+	If lRetu
+		MsgInfo(STR0022) //"Workflow enviado!"
+	EndIf
+
+Return lRetu
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW070MOT
+Busca o nome do Motorista
+
+@type function
+
+@source MNTW070.prx
+
+@author Marcos Wagner Junior
+@since 28/03/2007
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Rodrigo Luan Backes
+	@since 05/09/2016
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample MNTW070MOT()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW070MOT()
+
+	Local cMotorista := ""
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT DA4.DA4_NOME"
+	cQuery += " FROM " + RetSqlName("ST9") + " ST9," + RetSqlName("DTR") + " DTR," + RetSqlName("DTQ") + " DTQ,";
+		+ RetSqlName("DUP") + " DUP," + RetSqlName("DA4") + " DA4"
+	cQuery += " WHERE ST9.T9_CODBEM  = '" + TRH->TRH_CODBEM + "'"
+	cQuery += " AND   ST9.T9_FILIAL  = '" + xFilial("ST9") + "'"
+	cQuery += " AND   DTQ.DTQ_VIAGEM = DTR.DTR_VIAGEM "
+	cQuery += " AND   DTQ.DTQ_VIAGEM = DUP.DUP_VIAGEM "
+	cQuery += " AND   ST9.T9_CODTMS  = DTR.DTR_CODVEI "
+	cQuery += " AND   DUP.DUP_CODMOT = DA4.DA4_COD "
+	cQuery += " AND   DTQ.DTQ_STATUS <> '3'"
+	cQuery += " AND   DTQ.DTQ_STATUS <> '5'"
+	cQuery += " AND   DTQ.DTQ_STATUS <> '9'"
+	cQuery += " AND   DTR.D_E_L_E_T_ <> '*' "
+	cQuery += " AND   DTQ.D_E_L_E_T_ <> '*' "
+	cQuery += " AND   ST9.D_E_L_E_T_ <> '*' "
+	cQuery += " AND   DUP.D_E_L_E_T_ <> '*' "
+	cQuery += " AND   DA4.D_E_L_E_T_ <> '*' "
+	cQuery += " ORDER BY DTQ.DTQ_DATINI, DTQ.DTQ_HORINI "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	dbGoTop()
+
+	If !Eof()
+		While !Eof()
+			cMotorista := (cAliasQry)->DA4_NOME
+			dbSkip()
+		End
+		(cAliasQry)->(dbCloseArea())
+	Endif
+
+Return cMotorista
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTW070FIL
+Busca a Filial da Frota
+
+@type function
+
+@source MNTW070.prx
+
+@author Marcos Wagner Junior
+@since 28/03/2007
+
+	Nota: Atualizado para utilização da função de envio de workflow
+	NGSendMail() pois o antigo processo TMailMessage() estava gerando
+	problemas recorrentes.
+	@author Rodrigo Luan Backes
+	@since 05/09/2016
+	@author Bruno Lobo de Souza
+	@since 05/09/2016
+	S.S.: 028780
+
+@sample MNTW070FIL()
+
+@return Lógico
+/*/
+//---------------------------------------------------------------------
+Function MNTW070FIL()
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT DA3.DA3_FILBAS"
+	cQuery += " FROM " + RetSqlName("DA3") + " DA3"
+	cQuery += " WHERE DA3.DA3_COD    = '" + TRH->TRH_CODBEM + "'"
+	cQuery += " AND   DA3.DA3_FILIAL = '"+xFilial("DA3")+"'"
+	cQuery += " AND   DA3.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	dbGoTop()
+
+	If !Eof()
+		While !Eof()
+			cFilBase := (cAliasQry)->DA3_FILBAS
+			dbSkip()
+		End
+		(cAliasQry)->(dbCloseArea())
+		Return cFilBase
+	Endif
+
+Return ''

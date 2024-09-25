@@ -1,0 +1,854 @@
+#include 'msobject.ch'
+#include 'totvs.framework.treports.integratedprovider.th'
+
+namespace totvs.protheus.PneusSmartViewBusinessObject
+
+STATIC _TQS_FILIAL   := 1
+STATIC _T9V_CODBEM   := 2 
+STATIC _T9V_CODFAMI := 3 
+STATIC _T9V_TIPMOD  := 4 
+STATIC _TQ1_QTDPNE  := 5 
+STATIC _TSZV_DESSER := 6
+STATIC _TQS_EIXO    := 7 
+STATIC _TQS_TIPEIX  := 8 
+STATIC _TC_LOCALIZ  := 9 
+STATIC _TC_COMPONE  := 10  
+STATIC _T9_CODBEM   := 11 
+STATIC _T9_NOME     := 12 
+STATIC _T9_CODFAMI  := 13
+STATIC _T9_TIPMOD   := 14
+STATIC _T9_CONTACU  := 15
+STATIC _T6_NOME     := 16 
+STATIC _TQS_MEDIDA  := 17 
+STATIC _TQS_BANDAA  := 18 
+STATIC _TQS_SULCAT  := 19 
+STATIC _TQS_DESENH  := 20
+STATIC _TQS_DOT     := 21 
+STATIC _TQR_DESMOD  := 22 
+STATIC _TQT_DESMED  := 23 
+STATIC _TPS_NOME    := 24 
+STATIC _CTTV_OPERAC := 25  
+STATIC _TQRV_DESMOD := 26
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PneusSmartViewBusinessObject
+Objeto de Negócio de Multas
+Tabelas: STC, ST9, ST6, TQS, TQT, TQR, TPS, CTT, TSZ, TQ1.
+@type Classe
+ 
+@author João Ricardo Santini Zandoná
+@since 15/08/2023
+@version P11
+@return Nil
+/*/
+//-------------------------------------------------------------------
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team='SIGAGFR', tables='STC, TQ1', name='PneusSmartViewBusinessObject', country='ALL', initialRelease='12.1.2310')
+class PneusSmartViewBusinessObject from totvs.framework.treports.integratedprovider.IntegratedProvider
+    
+    public method new() as object
+    public method getAreas() as array
+    public method getDescription() as character
+    public method getData() as object
+    public method getSchema() as object
+    public method zeraDados() as array
+    public method mntAppend() as object
+    public method mntOfsc() as array
+    public method mntLGPD() as array
+    public method mntGeraReg() as object
+    public method mntTypePar() as array
+
+endclass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Método Construtor do Objeto de Negócio
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 15/08/2023
+@version P11
+@return objeto, Retorna o próprio objeto
+/*/
+//-------------------------------------------------------------------
+method new() as object class PneusSmartViewBusinessObject
+    _Super:new()
+    self:setDisplayName('Pneus')
+    self:SetPergunte('MNR555')
+return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDescription
+Descrição do Objeto de Negócio
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+@return caractere, Conteúdo da descrição do Objeto de Negócios
+/*/
+//-------------------------------------------------------------------
+method getDescription() as character class PneusSmartViewBusinessObject
+return 'Tabelas: STC, ST9, ST6, TQS, TQT, TQR, TPS, CTT, TSZ, TQ1'
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getAreas
+Áreas do menu que o Objeto de Negócio deve ficar
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+@return array, Retorna um array contendo as sessões do Menu em que o Objeto de Negócio deve aparecer
+/*/
+//-------------------------------------------------------------------
+method getAreas() as array class PneusSmartViewBusinessObject
+return {'Pneu', 'Pneus'}
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetData
+Método responsável pela montagem da Massa de dados enviada ao TReports
+@type Método
+
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@param nPage, numerico, Número da página atual
+@param oFilter, objeto, Filtros aplicados pelo usuário
+
+@return objeto, Retorna o próprio objeto
+/*/
+//-------------------------------------------------------------------
+method getData(nPage as numeric, oFilter as object) as object class PneusSmartViewBusinessObject
+    
+    Local cQuery     as character   //Query Principal
+    Local cAlias     as character   
+    Local cQueryTQ1  as character   //Query para pegar posições sem Pneu
+    Local cAliasTQ1  as character
+    Local nSkip      as numeric
+    Local nSemPneu   as numeric
+    Local lParam7    := .F.
+    Local aLastPne   := {} // Informações do último Pneu
+    Local aLocsEixo  := {} // Variável utilizada para armazenar Localizações e Eixo já utilizados do mesmo Veículo
+    Local aParComboB := {}
+    Local aDados     := self:zeraDados()
+    Local aOfusc     := self:mntOfsc(aDados)
+    Local cIsNull    := ' '
+    Local cGetDB     := TcGetDb()
+
+    If cGetDB == "ORACLE"
+		cIsNull := "NVL"
+	ElseIf "DB2" $ cGetDB .Or. cGetDB == "POSTGRES"
+		cIsNull := "COALESCE"
+	Else
+		cIsNull := "ISNULL"
+	EndIf
+
+    jParams := oFilter:getParameters() // metodo para retorno do json dos parâmetros
+
+    aParComboB := self:mntTypePar({'08','09'}, jParams)
+
+    // Caso o parâmetro MV_PAR07 seja diferente de Todos quer dizer que o campo PARAM7 da Query deve ser considerado
+    // na exibição dos registros
+    lParam7 := !Empty(jParams['MV_PAR07', 1]) .And. jParams['MV_PAR07', 1] <> '04'
+
+    // Query que puxa os Pneus a partir dos parâmetros informados
+    cQuery := "SELECT PNEUS.* FROM ( "
+    cQuery += "SELECT TQS.TQS_FILIAL,"
+    cQuery += cIsNull+"(STC.TC_LOCALIZ, '') AS TC_LOCALIZ, "
+    cQuery += cIsNull+"(STC.TC_COMPONE, '') AS TC_COMPONE, " 
+    cQuery += "ST9.T9_CODBEM, "
+    cQuery += "ST9.T9_NOME, "
+    cQuery += "ST9.T9_CODFAMI, "
+    cQuery += "ST9.T9_TIPMOD, "
+    cQuery += "ST9.T9_CONTACU, "
+    cQuery += "ST6.T6_NOME, "
+    cQuery += "TQS.TQS_MEDIDA, "
+    cQuery += "CASE WHEN TQS.TQS_EIXO = 'R' THEN 'RESERVA' "
+    cQuery += "   ELSE TQS.TQS_EIXO END AS TQS_EIXO, "
+    cQuery += "TQS.TQS_TIPEIX, "
+    cQuery += "TQS.TQS_BANDAA, "
+    cQuery += "TQS.TQS_SULCAT, "
+    cQuery += "TQS.TQS_DESENH, "
+    cQuery += "TQS.TQS_DOT, "
+    cQuery += "TQR.TQR_DESMOD, "
+    cQuery += "TQT.TQT_DESMED, "
+    cQuery += "TPS.TPS_NOME, "
+    cQuery += "CTTV.CTT_OPERAC AS CTTV_OPERAC, " 
+    cQuery += cIsNull+"(TSZV.TSZ_DESSER, '') AS TSZV_DESSER, "
+    cQuery += "ST9V.T9_CODBEM AS T9V_CODBEM, "
+    cQuery += "ST9V.T9_CODFAMI AS T9V_CODFAMI, "
+    cQuery += "ST9V.T9_TIPMOD AS T9V_TIPMOD, "
+    cQuery += cIsNull+"(TQ1.TQ1_QTDPNE, 0) AS TQ1_QTDPNE, "
+    cQuery += "TQRV.TQR_DESMOD AS TQRV_DESMOD, "
+    cQuery += cIsNull+"((SELECT COUNT(TQS1.TQS_FILIAL) FROM " + RetSQLName('TQS') + " TQS1"
+    cQuery += " WHERE TQS1.TQS_PLACA = TQS.TQS_PLACA "
+   
+    If !Empty(jParams['MV_PAR07', 1])
+        
+        If jParams['MV_PAR07', 1] == '01'
+
+            cQuery += " AND TQS1.TQS_BANDAA <> '1' AND (TQS1.TQS_TIPEIX = '3' OR TQS1.TQS_TIPEIX = '4') "
+        
+        ElseIf jParams['MV_PAR07', 1] == '02'
+       
+            cQuery += " AND TQS1.TQS_BANDAA = '1' AND (TQS1.TQS_TIPEIX <> '3' AND TQS1.TQS_TIPEIX <> '4') "
+
+        ElseIf jParams['MV_PAR07', 1] == '03'
+       
+            cQuery += " AND TQS1.TQS_EIXO IN "
+            cQuery +=    " (SELECT TQS3.TQS_EIXO FROM " + RetSQLName('TQS') + " TQS3 "
+            cQuery +=      " WHERE TQS3.TQS_FILIAL = TQS1.TQS_FILIAL "
+            cQuery +=      " AND TQS3.TQS_PLACA = TQS1.TQS_PLACA "
+            cQuery +=      " AND (TQS3.TQS_EIXO = TQS1.TQS_EIXO AND "
+            cQuery +=      " TQS3.TQS_POSIC <> TQS1.TQS_POSIC) "
+            cQuery +=      " AND TQS3.TQS_MEDIDA <> TQS1.TQS_MEDIDA "
+            cQuery +=      " AND TQS3.D_E_L_E_T_ = ' ')"
+        
+        EndIf
+   
+    EndIf
+
+    cQuery += " AND TQS1.D_E_L_E_T_ = ' '"
+    cQuery += " GROUP BY TQS1.TQS_PLACA), 0) AS PARAM7 "
+    cQuery += "FROM " + RetSQLName('TQS') + " TQS "
+    cQuery += "INNER JOIN " + RetSQLName('ST9') + " ST9 ON "
+    cQuery +=   NGMODCOMP('ST9','TQS','=', , ,'ST9.T9_FILIAL', 'TQS.TQS_FILIAL') + " "
+    cQuery +=   "AND ST9.T9_CODBEM = TQS.TQS_CODBEM "
+    cQuery +=   "AND ST9.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('ST6') + " ST6 ON "
+    cQuery +=   NGMODCOMP('ST6','ST9','=', , ,'ST6.T6_FILIAL', 'ST9.T9_FILIAL') + " "
+    cQuery +=   "AND ST6.T6_CODFAMI = ST9.T9_CODFAMI "
+    cQuery +=   "AND ST6.D_E_L_E_T_ = ' ' "
+
+    If aParComboB[2] == 1
+        cQuery += "LEFT"
+    Else
+        cQuery += "INNER"
+    EndIf
+
+    cQuery += " JOIN " + RetSQLName('STC') + " STC ON "
+    cQuery +=   NGMODCOMP('STC','TQS','=', , ,'STC.TC_FILIAL', 'TQS.TQS_FILIAL') + " "
+    cQuery +=   "AND STC.TC_COMPONE = TQS.TQS_CODBEM "
+    cQuery +=   "AND STC.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('TQR') + " TQR ON "
+    cQuery +=   NGMODCOMP('TQR','ST9','=', , ,'TQR.TQR_FILIAL', 'ST9.T9_FILIAL') + " "
+    cQuery +=   "AND TQR.TQR_TIPMOD = ST9.T9_TIPMOD "
+    cQuery +=   "AND TQR.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('TQT') + " TQT ON "
+    cQuery +=   NGMODCOMP('TQT','TQS','=', , ,'TQT.TQT_FILIAL', 'TQS.TQS_FILIAL') + " "
+    cQuery +=   "AND TQT.TQT_MEDIDA = TQS.TQS_MEDIDA "
+    cQuery +=   "AND TQT.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('TPS') + " TPS ON "
+    cQuery +=   NGMODCOMP('TPS','TQS','=', , ,'TPS.TPS_FILIAL', 'TQS.TQS_FILIAL') + " "
+    cQuery +=   "AND TPS.TPS_CODLOC = TQS.TQS_POSIC "
+    cQuery +=   "AND TPS.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('ST9') + " ST9V ON "
+    cQuery +=   NGMODCOMP('ST9','TQS','=', , ,'ST9V.T9_FILIAL', 'TQS.TQS_FILIAL') + " "
+    cQuery +=   "AND ST9V.T9_PLACA = TQS.TQS_PLACA "
+    cQuery +=   "AND ST9V.D_E_L_E_T_ = ' ' "
+    
+    If !Empty(jParams['MV_PAR05', 1]) .Or. !Empty(jParams['MV_PAR06', 1])
+       
+        cQuery += " AND ST9V.T9_CODBEM BETWEEN '" + ArrTokStr(jParams['MV_PAR05']) + "' AND '" + ArrTokStr(jParams['MV_PAR06'])+"' "
+   
+    EndIf
+    If !Empty(jParams['MV_PAR03', 1]) .Or. !Empty(jParams['MV_PAR04', 1])
+   
+        cQuery += " AND ST9V.T9_CODFAMI BETWEEN '" + ArrTokStr(jParams['MV_PAR03']) + "' AND '" + ArrTokStr(jParams['MV_PAR04'])+"' "
+    
+    EndIf
+    
+    cQuery += "INNER JOIN " + RetSQLName('TQR') + " TQRV ON "
+    cQuery +=   NGMODCOMP('TQR','ST9','=', , ,'TQRV.TQR_FILIAL', 'ST9.T9_FILIAL') + " "
+    cQuery +=   "AND TQRV.TQR_TIPMOD = ST9V.T9_TIPMOD "
+    cQuery +=   "AND TQRV.D_E_L_E_T_ = ' ' "
+    cQuery += "INNER JOIN " + RetSQLName('CTT') + " CTTV ON "
+    cQuery +=   NGMODCOMP('CTT','ST9','=', , ,'CTTV.CTT_FILIAL', 'ST9V.T9_FILIAL') + " "
+    cQuery +=   "AND CTTV.CTT_CUSTO = ST9V.T9_CCUSTO "
+    cQuery +=   "AND CTTV.D_E_L_E_T_ = ' ' "
+    cQuery += "LEFT JOIN " + RetSQLName('TQ1') + " TQ1 ON "
+    cQuery +=   "TQ1.TQ1_DESENH = ST9V.T9_CODFAMI "
+    cQuery +=   "AND TQ1.TQ1_TIPMOD = ST9V.T9_TIPMOD "
+    cQuery +=   "AND LTRIM(RTRIM(TQ1.TQ1_EIXO)) = CASE WHEN TQS.TQS_EIXO = 'R' THEN 'RESERVA' ELSE LTRIM(RTRIM(TQS.TQS_EIXO)) END "
+    cQuery +=   "AND TQ1.TQ1_TIPEIX = TQS.TQS_TIPEIX "
+    cQuery +=   "AND TQ1.D_E_L_E_T_ = ' ' "
+    cQuery += "LEFT JOIN " + RetSQLName('TSZ') + " TSZV ON "
+    cQuery +=   NGMODCOMP('TSZ','ST9','=', , ,'TSZV.TSZ_FILIAL', 'ST9V.T9_FILIAL') + " "
+    cQuery +=   "AND TSZV.TSZ_CODSER = CTTV.CTT_OPERAC "
+    cQuery +=   "AND TSZV.D_E_L_E_T_ = ' ' "
+    cQuery += "WHERE "
+    cQuery +=   "TQS.D_E_L_E_T_ = ' ' "
+    cQuery += "AND TQS.TQS_PLACA <> ' ' "
+
+    If !Empty(jParams['MV_PAR01', 1]) .Or. !Empty(jParams['MV_PAR02', 1])
+    
+        cQuery += "AND TQS.TQS_FILIAL BETWEEN '" + ArrTokStr(jParams['MV_PAR01']) + "' AND '" + ArrTokStr(jParams['MV_PAR02'])+"' "
+    
+    EndIf
+    
+    cQuery += ") PNEUS "
+    
+    If lParam7
+    
+        cQuery += " WHERE PNEUS.PARAM7 > 0 "
+    
+    EndIf
+    
+    cQuery += " ORDER BY PNEUS.TQS_FILIAL, PNEUS.T9V_CODBEM "
+    
+    cQuery := ChangeQuery(cQuery)
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If nPage == 1
+  
+        (cAlias)->(dbGoTop())
+   
+    Else
+    
+        //Encontra a quantidade de itens que irá pular de acordo com a página atual
+        nSkip := ((nPage - 1) * self:getPageSize())      
+    
+        (cAlias)->(dbSkip(nSkip))
+   
+    EndIf
+
+    While !(cAlias)->(Eof())
+
+        // Inicia a variável aDados
+        aDados := self:zeraDados()
+        
+        If ((!lParam7) .Or. (cAlias)->PARAM7 >= 1)
+
+            If (cAlias)->TQ1_QTDPNE > 1
+             
+                aAdd(aLocsEixo, (cAlias)->TC_LOCALIZ+AllTrim((cAlias)->TQS_EIXO))
+            
+            EndIf
+
+            aLastPne := {(cAlias)->TQS_FILIAL,;
+                         (cAlias)->T9V_CODBEM,;
+                         (cAlias)->T9V_CODFAMI,;
+                         (cAlias)->T9V_TIPMOD,;
+                         (cAlias)->TQ1_QTDPNE,;
+                         (cAlias)->TSZV_DESSER,;
+                         (cAlias)->TQS_EIXO,;
+                         (cAlias)->TQS_TIPEIX}
+            
+            aDados[_TC_LOCALIZ,  len(aDados[_TC_LOCALIZ])]  := (cAlias)->TC_LOCALIZ 
+            aDados[_TC_COMPONE,  len(aDados[_TC_COMPONE])]  := (cAlias)->TC_COMPONE  
+            aDados[_T9_CODBEM,   len(aDados[_T9_CODBEM])]   := (cAlias)->T9_CODBEM 
+            aDados[_T9_NOME,     len(aDados[_T9_NOME])]     := (cAlias)->T9_NOME 
+            aDados[_T9_CODFAMI,  len(aDados[_T9_CODFAMI])]  := (cAlias)->T9_CODFAMI
+            aDados[_T9_TIPMOD,   len(aDados[_T9_TIPMOD])]   := (cAlias)->T9_TIPMOD
+            aDados[_T9_CONTACU,  len(aDados[_T9_CONTACU])]  := (cAlias)->T9_CONTACU
+            aDados[_T6_NOME,     len(aDados[_T6_NOME])]     := (cAlias)->T6_NOME 
+            aDados[_TQS_FILIAL,  len(aDados[_TQS_FILIAL])]  := (cAlias)->TQS_FILIAL
+            aDados[_TQS_MEDIDA,  len(aDados[_TQS_MEDIDA])]  := (cAlias)->TQS_MEDIDA 
+            aDados[_TQS_EIXO,    len(aDados[_TQS_EIXO])]    := (cAlias)->TQS_EIXO 
+            aDados[_TQS_TIPEIX,  len(aDados[_TQS_TIPEIX])]  := (cAlias)->TQS_TIPEIX 
+            aDados[_TQS_BANDAA,  len(aDados[_TQS_BANDAA])]  := (cAlias)->TQS_BANDAA 
+            aDados[_TQS_SULCAT,  len(aDados[_TQS_SULCAT])]  := TRANSFORM((cAlias)->TQS_SULCAT, "@E 999.99")
+            aDados[_TQS_DESENH,  len(aDados[_TQS_DESENH])]  := (cAlias)->TQS_DESENH
+            aDados[_TQS_DOT,     len(aDados[_TQS_DOT])]     := (cAlias)->TQS_DOT 
+            aDados[_TQR_DESMOD,  len(aDados[_TQR_DESMOD])]  := (cAlias)->TQR_DESMOD 
+            aDados[_TQT_DESMED,  len(aDados[_TQT_DESMED])]  := (cAlias)->TQT_DESMED 
+            aDados[_TPS_NOME,    len(aDados[_TPS_NOME])]    := (cAlias)->TPS_NOME 
+            aDados[_CTTV_OPERAC, len(aDados[_CTTV_OPERAC])] := (cAlias)->CTTV_OPERAC  
+            aDados[_TSZV_DESSER, len(aDados[_TSZV_DESSER])] := (cAlias)->TSZV_DESSER
+            aDados[_T9V_CODBEM,  len(aDados[_T9V_CODBEM])]  := (cAlias)->T9V_CODBEM 
+            aDados[_T9V_CODFAMI, len(aDados[_T9V_CODFAMI])] := (cAlias)->T9V_CODFAMI 
+            aDados[_T9V_TIPMOD,  len(aDados[_T9V_TIPMOD])]  := (cAlias)->T9V_TIPMOD 
+            aDados[_TQ1_QTDPNE,  len(aDados[_TQ1_QTDPNE])]  := (cAlias)->TQ1_QTDPNE 
+            aDados[_TQRV_DESMOD, len(aDados[_TQRV_DESMOD])] := (cAlias)->TQRV_DESMOD
+
+            aDados := self:mntLGPD(aDados, aOfusc)
+            self:mntAppend(aDados)
+
+            (cAlias)->(dbSkip())
+            
+            // Trecho utilizado para preencher posições da estrutura que não possuem pneu
+            // Como os registros vem da Query ordenados por bem e eixo o trecho que preenche as posições
+            // vazias só deve ser executado quando houver mudança de Bem ou de Eixo e a estrutura possuir
+            // mais de um Pneu
+            If (aLastPne[_T9V_CODBEM] != (cAlias)->T9V_CODBEM) .And. aLastPne[_TQ1_QTDPNE] > 1
+                
+                If ((Empty(jParams['MV_PAR07', 1]) .Or. jParams['MV_PAR07', 1] $ '03/04') .And. (Empty(aParComboB[1]) .Or. aParComboB[1] == 2)) // Considera localizações sem Pneu (Parâmetros)
+
+                    cQueryTQ1 := "SELECT TQ1_EIXO, TQ1_TIPEIX, TQ1_LOCPN1, TQ1_FAMIL1, TQ1_LOCPN2, TQ1_FAMIL2, "
+                    cQueryTQ1 += "TQ1_LOCPN3, TQ1_FAMIL3, TQ1_LOCPN4, TQ1_FAMIL4, TQ1_LOCPN5, TQ1_FAMIL5 " 
+                    cQueryTQ1 += "TQ1_LOCPN6, TQ1_FAMIL6, TQ1_LOCPN7, TQ1_FAMIL7, TQ1_LOCPN8, TQ1_FAMIL8 " 
+                    cQueryTQ1 += "TQ1_LOCPN9, TQ1_FAMIL9, TQ1_LOCPN0, TQ1_FAMIL0 "
+                    cQueryTQ1 += "FROM " + RetSqlName( 'TQ1' ) + " TQ1 "
+                    cQueryTQ1 += "WHERE "
+                    cQueryTQ1 +=   NGMODCOMP('TQ1','TQS','=', , aLastPne[_TQS_FILIAL],'TQ1.TQ1_FILIAL', 'TQS_FILIAL') + " "
+                    cQueryTQ1 +=   " AND TQ1.TQ1_DESENH = "+ ValToSQL(aLastPne[_T9V_CODFAMI])
+                    cQueryTQ1 +=   " AND TQ1.TQ1_TIPMOD = "+ ValToSQL(aLastPne[_T9V_TIPMOD])
+                    
+                    cQueryTQ1 +=   " AND TQ1.D_E_L_E_T_ = ' '"
+
+                    cQueryTQ1 := ChangeQuery( cQueryTQ1 )
+
+                    // O número de Posições sem Pneu nesse Eixo é igual ao número de Pneus - o número de Localizações registradas
+                    nSemPneu := (aLastPne[_TQ1_QTDPNE] - Len(aLocsEixo))
+                    
+                    cAliasTQ1 := MPSysOpenQuery(cQueryTQ1)
+
+                    While (cAliasTQ1)->(!Eof())
+
+                        // Inicia novamente a variável para armazenar os registros de Posições sem Pneu
+                        aDados := self:zeraDados()
+
+                        // Verifica as localizações que são utilizadas e não possuem Pneu segundo a aLocsEixo
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN1) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN1 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN1, (cAliasTQ1)->TQ1_FAMIL1)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN1+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        Endif
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN2) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN2 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN2, (cAliasTQ1)->TQ1_FAMIL2)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN2+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                           
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN3) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN3 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN3, (cAliasTQ1)->TQ1_FAMIL3)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN3+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN4) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN4 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN4, (cAliasTQ1)->TQ1_FAMIL4)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN4+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN5) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN5 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN5, (cAliasTQ1)->TQ1_FAMIL5)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN5+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN6) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN6 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAliasTQ1)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAliasTQ1)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN6, (cAliasTQ1)->TQ1_FAMIL6)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN6+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN7) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN7 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+
+                                aLastPne[_TQS_EIXO] := (cAlias)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAlias)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN7, (cAliasTQ1)->TQ1_FAMIL7)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN7+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN8) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN8 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAlias)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAlias)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN8, (cAliasTQ1)->TQ1_FAMIL8)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN8+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN9) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN9 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+
+                                aLastPne[_TQS_EIXO] := (cAlias)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAlias)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN9, (cAliasTQ1)->TQ1_FAMIL9)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN9+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf
+
+                        If !Empty((cAliasTQ1)->TQ1_LOCPN0) .And. aScan(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN0 + AllTrim((cAliasTQ1)->TQ1_EIXO)) == 0
+                                
+                                aLastPne[_TQS_EIXO] := (cAlias)->TQ1_EIXO 
+                                aLastPne[_TQS_TIPEIX]  := (cAlias)->TQ1_TIPEIX
+                                self:mntGeraReg(aLastPne, aOfusc, (cAliasTQ1)->TQ1_LOCPN0, (cAliasTQ1)->TQ1_FAMIL0)
+                                
+                                // Adiciona a Localização adicionada no Array de Posições que possuem Pneu
+                                aAdd(aLocsEixo, (cAliasTQ1)->TQ1_LOCPN0+AllTrim((cAliasTQ1)->TQ1_EIXO))
+                        EndIf        
+                        
+                        (cAliasTQ1)->(dbSkip())
+
+                    ENDDO
+
+                    (cAliasTQ1)->( dbCloseArea() )
+                
+                EndIf
+
+                // Zera devido a troca de Veículo ou Eixo
+                aLocsEixo := {}
+
+            EndIf
+        
+        Else
+            
+            (cAlias)->(dbSkip())
+
+            // Zera devido a troca de Veículo ou Eixo
+            aLocsEixo := {}
+
+        EndIf
+
+    Enddo
+    
+    //Se não for o último registro indica que terá próxima página
+    self:setHasNext((cAlias)->(!Eof())) 
+
+    (cAlias)->( dbCloseArea() )
+    
+    FWFreeArray(aLastPne)
+    FWFreeArray(aLocsEixo)
+    FWFreeArray(aDados)
+    FWFreeArray(aOfusc)
+    
+return self:oData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mntTypePar
+Método responsável por validar o tipo dos parâmetros de Combobox conforme a SX1
+Devido a um BUG no SmartView os parâmetros Combobox acabam vindo com tipo caractere
+quando deveriam ser numérico
+@type Método
+
+@author João Ricardo Santini Zandoná
+@since 06/12/2023
+@version P11
+
+@param aPars, array, Array contendo todos o campo X1_ORDEM dos parâmetros combobox
+utilizados no Objeto de Negócio 
+@param jParams, json, Traz os parâmetros e seus respectivos valores
+
+@return array, Array contendo o mesmo número de posições do aPars porém respectivamente
+com os valores dos parâmetros com a tipagem correta
+/*/
+//-------------------------------------------------------------------
+method mntTypePar(aPars as array, jParams as json) as array class PneusSmartViewBusinessObject
+
+    Local aReturn := {}
+    Local cTipo   := ''
+    Local cPar    := ''
+    Local nI      := 1
+
+    While nI <= len(aPars)
+        cTipo := Posicione("SX1",1,'MNR555    '+aPars[nI],"X1_TIPO")
+        cPar := 'MV_PAR'+aPars[nI]
+        If cTipo <> ValType(jParams[cPar, 1])
+            If cTipo == 'N'
+                aAdd(aReturn, Val(jParams[cPar, 1]))
+            EndIf
+        EndIf
+        If nI <> len(aReturn)
+            aAdd(aReturn, jParams[cPar, 1])
+        EndIf
+        nI := nI + 1
+    Enddo
+
+Return aReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mntAppend
+Método responsável pelo envio dos dados para o TReports
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@param aDados, array, Array contendo o nome dos campos e o seu valor
+
+@return
+/*/
+//-------------------------------------------------------------------
+method mntAppend(aDados as array) as object class PneusSmartViewBusinessObject
+
+    self:appendData({'TQS_FILIAL': aDados[_TQS_FILIAL, len(aDados[_TQS_FILIAL])],;
+        'TC_LOCALIZ': aDados[_TC_LOCALIZ, len(aDados[_TC_LOCALIZ])] ,;
+        'TC_COMPONE': aDados[_TC_COMPONE, len(aDados[_TC_COMPONE])],;  
+        'T9_CODBEM': aDados[_T9_CODBEM, len(aDados[_T9_CODBEM])],; 
+        'T9_NOME': aDados[_T9_NOME, len(aDados[_T9_NOME])],; 
+        'T9_CODFAMI': aDados[_T9_CODFAMI, len(aDados[_T9_CODFAMI])],;
+        'T9_TIPMOD': aDados[_T9_TIPMOD, len(aDados[_T9_TIPMOD])],;
+        'T9_CONTACU': aDados[_T9_CONTACU, len(aDados[_T9_CONTACU])],;
+        'T6_NOME': aDados[_T6_NOME, len(aDados[_T6_NOME])],; 
+        'TQS_MEDIDA': aDados[_TQS_MEDIDA, len(aDados[_TQS_MEDIDA])],;
+        'TQS_EIXO': aDados[_TQS_EIXO, len(aDados[_TQS_EIXO])],;
+        'TQS_TIPEIX': aDados[_TQS_TIPEIX, len(aDados[_TQS_TIPEIX])],; 
+        'TQS_BANDAA': aDados[_TQS_BANDAA, len(aDados[_TQS_BANDAA])],;
+        'TQS_SULCAT': aDados[_TQS_SULCAT, len(aDados[_TQS_SULCAT])],;
+        'TQS_DESENH': aDados[_TQS_DESENH, len(aDados[_TQS_DESENH])],;
+        'TQS_DOT': aDados[_TQS_DOT, len(aDados[_TQS_DOT])],; 
+        'TQR_DESMOD': aDados[_TQR_DESMOD, len(aDados[_TQR_DESMOD])],; 
+        'TQT_DESMED': aDados[_TQT_DESMED, len(aDados[_TQT_DESMED])],; 
+        'TPS_NOME': aDados[_TPS_NOME, len(aDados[_TPS_NOME])],; 
+        'CTTV_OPERAC': aDados[_CTTV_OPERAC, len(aDados[_CTTV_OPERAC])],;  
+        'TSZV_DESSER': aDados[_TSZV_DESSER, len(aDados[_TSZV_DESSER])],;
+        'T9V_CODBEM': aDados[_T9V_CODBEM, len(aDados[_T9V_CODBEM])],;
+        'T9V_CODFAMI': aDados[_T9V_CODFAMI, len(aDados[_T9V_CODFAMI])],; 
+        'T9V_TIPMOD': aDados[_T9V_TIPMOD, len(aDados[_T9V_TIPMOD])],; 
+        'TQ1_QTDPNE': aDados[_TQ1_QTDPNE, len(aDados[_TQ1_QTDPNE])],; 
+        'TQRV_DESMOD': aDados[_TQRV_DESMOD, len(aDados[_TQRV_DESMOD])]})
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getSchema
+Método responsável por informar as características dos campos
+@type Método
+
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@return objeto, Retorna a si mesmo
+/*/
+//-------------------------------------------------------------------
+method getSchema() as object class PneusSmartViewBusinessObject
+ 
+self:addProperty('TQS_FILIAL',  FWSX3Util():GetDescription( 'TQS_FILIAL' ),  'string', FWX3Titulo( 'TQS_FILIAL' ),'TQS_FILIAL')
+self:addProperty('TC_LOCALIZ',  FWSX3Util():GetDescription( 'TC_LOCALIZ' ),  'string', FWX3Titulo( 'TC_LOCALIZ' ),'TC_LOCALIZ')
+self:addProperty('TC_COMPONE',  FWSX3Util():GetDescription( 'TC_COMPONE' ),  'string', FWX3Titulo( 'TC_COMPONE' ),'TC_COMPONE')  
+self:addProperty('T9_CODBEM',   FWSX3Util():GetDescription( 'T9_CODBEM' ),   'string', FWX3Titulo( 'T9_CODBEM' ),'T9_CODBEM') 
+self:addProperty('T9_NOME',     FWSX3Util():GetDescription( 'T9_NOME' ),     'string', FWX3Titulo( 'T9_NOME' ),'T9_NOME')
+self:addProperty('T9_CODFAMI',  FWSX3Util():GetDescription( 'T9_CODFAMI' ),  'string', FWX3Titulo( 'T9_CODFAMI' ),'T9_CODFAMI')
+self:addProperty('T9_TIPMOD',   FWSX3Util():GetDescription( 'T9_TIPMOD' ),   'string', FWX3Titulo( 'T9_TIPMOD' ),'T9_TIPMOD')
+self:addProperty('T9_CONTACU',  FWSX3Util():GetDescription( 'T9_CONTACU' ),  'string', FWX3Titulo( 'T9_CONTACU' ),'T9_CONTACU')
+self:addProperty('T6_NOME',     FWSX3Util():GetDescription( 'T6_NOME' ),     'string', FWX3Titulo( 'T6_NOME' ),'T6_NOME')
+self:addProperty('TQS_MEDIDA',  FWSX3Util():GetDescription( 'TQS_MEDIDA' ),  'string', FWX3Titulo( 'TQS_MEDIDA' ),'TQS_MEDIDA')
+self:addProperty('TQS_EIXO',    FWSX3Util():GetDescription( 'TQS_EIXO' ),    'string', FWX3Titulo( 'TQS_EIXO' ),'TQS_EIXO')
+self:addProperty('TQS_TIPEIX',  FWSX3Util():GetDescription( 'TQS_TIPEIX' ),  'string', FWX3Titulo( 'TQS_TIPEIX' ),'TQS_TIPEIX')
+self:addProperty('TQS_BANDAA',  FWSX3Util():GetDescription( 'TQS_BANDAA' ),  'string', FWX3Titulo( 'TQS_BANDAA' ),'TQS_BANDAA')
+self:addProperty('TQS_SULCAT',  FWSX3Util():GetDescription( 'TQS_SULCAT' ),  'string', FWX3Titulo( 'TQS_SULCAT' ),'TQS_SULCAT')
+self:addProperty('TQS_DESENH',  FWSX3Util():GetDescription( 'TQS_DESENH' ),  'string', FWX3Titulo( 'TQS_DESENH' ),'TQS_DESENH')
+self:addProperty('TQS_DOT',     FWSX3Util():GetDescription( 'TQS_DOT' ),     'string', FWX3Titulo( 'TQS_DOT' ),'TQS_DOT') 
+self:addProperty('TQR_DESMOD',  FWSX3Util():GetDescription( 'TQR_DESMOD' ),  'string', FWX3Titulo( 'TQR_DESMOD' ),'TQR_DESMOD') 
+self:addProperty('TQT_DESMED',  FWSX3Util():GetDescription( 'TQT_DESMED' ),  'string', FWX3Titulo( 'TQT_DESMED' ),'TQT_DESMED')
+self:addProperty('TPS_NOME',    FWSX3Util():GetDescription( 'TPS_NOME' ),    'string', FWX3Titulo( 'TPS_NOME' ),'TPS_NOME') 
+self:addProperty('CTTV_OPERAC', FWSX3Util():GetDescription( 'CTT_OPERAC' ), 'string', FWX3Titulo( 'CTT_OPERAC' ) + '- Pai','CTTV_OPERAC') 
+self:addProperty('TSZV_DESSER', FWSX3Util():GetDescription( 'TSZ_DESSER' ), 'string', FWX3Titulo( 'TSZ_DESSER' ) + '- Pai','TSZV_DESSER')
+self:addProperty('T9V_CODBEM',  FWSX3Util():GetDescription( 'T9_CODBEM' ),   'string', FWX3Titulo( 'T9_CODBEM' ) + '- Pai','T9V_CODBEM')
+self:addProperty('T9V_CODFAMI', FWSX3Util():GetDescription( 'T9_CODFAMI' ), 'string', FWX3Titulo( 'T9_CODFAMI' )+'- Pai','T9V_CODFAMI')
+self:addProperty('T9V_TIPMOD',  FWSX3Util():GetDescription( 'T9_TIPMOD' ),  'string', FWX3Titulo( 'T9_TIPMOD' )+'- Pai','T9V_TIPMOD') 
+self:addProperty('TQ1_QTDPNE',  FWSX3Util():GetDescription( 'TQ1_QTDPNE' ),  'string', FWX3Titulo( 'TQ1_QTDPNE' ),'TQ1_QTDPNE')
+self:addProperty('TQRV_DESMOD', FWSX3Util():GetDescription( 'TQR_DESMOD' ), 'string', FWX3Titulo( 'TQR_DESMOD' )+'- Pai','TQRV_DESMOD')
+ 
+return self:oSchema
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} zeraDados
+Método responsável por reiniciar o valor do array aDados
+ESTRUTURA DO ARRAY aDados [Primeira posição nome do campo, segunda posição valor do campo]
+Caso o valor do campo seja montado a partir de mais campos na primeira posição é o apelido 
+do campo montado, e na última posição o valor, nas posições intermediárias os campos que 
+são usados para montar o valor
+
+@type Método
+
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@return array, Retorna o array aDados com as posições iniciais
+/*/
+//-------------------------------------------------------------------
+method zeraDados() as array class PneusSmartViewBusinessObject
+
+    Local aDados := {{'TQS_FILIAL', ''},;
+                    {'T9V_CODBEM', ''},;
+                    {'T9V_CODFAMI', 'T9_CODFAMI', ''},;
+                    {'T9V_TIPMOD', 'T9_TIPMOD', ''},;
+                    {'TQ1_QTDPNE', ''},;
+                    {'TSZV_DESSER', 'TSZ_DESSER', ''},;
+                    {'TQS_EIXO', ''},;
+                    {'TQS_TIPEIX', ''},;
+                    {'TC_LOCALIZ', ''},;
+                    {'TC_COMPONE', ''},;
+                    {'T9_CODBEM', ''},;
+                    {'T9_NOME', ''},;
+                    {'T9_CODFAMI', ''},;
+                    {'T9_TIPMOD', ''},;
+                    {'T9_CONTACU', ''},;
+                    {'T6_NOME', ''},;
+                    {'TQS_MEDIDA', ''},;
+                    {'TQS_BANDAA', ''},;
+                    {'TQS_SULCAT', ''},;
+                    {'TQS_DESENH', ''},;
+                    {'TQS_DOT', ''},;
+                    {'TQR_DESMOD', ''},;
+                    {'TQT_DESMED', ''},;
+                    {'TPS_NOME', ''},;
+                    {'CTTV_OPERAC', 'CTT_OPERAC', ''},;
+                    {'TQRV_DESMOD', 'TQR_DESMOD',''}}
+
+Return aDados
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mntOfsc
+Método responsável por receber o array aDados e retornar quais campos
+o usuário tem acesso.
+O método é necessário pois existem campos que são montados a partir de
+mais de um campo, então nesses casos caso o usuário não possa visualizar um
+dos campos o campo final montado não pode ser exibido.
+
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@param aDados, array, Array contendo o nome dos campos e o seu valor
+A estrutuda do array a dados pode ser {'NomeDoCampo', valorDoCampo} ou
+{'NomeDoCampo', 'CampoMontagem1', 'CampoMontagem2', ..., 'valorDoCampo'}
+o array pode possur inúmeras posições intermediárias desde que o primeiro
+valor seja o nome ou apelido do campo e a última posição seja o valor.
+
+@return array, Array contendo todos os campos que devem ser validados pelo LGPD
+/*/
+//-------------------------------------------------------------------
+method mntOfsc(aDados) as array class PneusSmartViewBusinessObject
+
+    Local nX as numeric 
+    Local nI as numeric
+    Local aCampos := {}
+    
+    for nX := 1 to len(aDados)
+        If len(aDados[nX]) == 2
+            aAdd(aCampos, aDados[nX, 1])
+        Else
+            for nI := 1 to len(aDados[nX])
+                If nI != 1 .And. nI != len(aDados[nX])
+                    aAdd(aCampos, aDados[nX, nI])
+                EndIf
+            Next nI
+        EndIf
+    next nX
+
+    aCampos := FwProtectedDataUtil():UsrAccessPDField( __CUSERID, aCampos)
+
+return aCampos
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mntLGPD
+Método responsável por aplicar a regra de Proteção de dados dos campos
+(LGPD)
+
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 13/09/2023
+@version P11
+
+@param aDados, array, Array contendo o nome dos campos e o seu valor
+@param aOfusc, array, Array contendo os campos que podem ser visualizados pelo usuário
+
+@return array, Array contendo todos os dados recebidos já tratados
+/*/
+//-------------------------------------------------------------------
+method mntLGPD(aDados as array, aOfusc as array) as array class PneusSmartViewBusinessObject
+
+    Local nX as numeric
+    Local nI as numeric
+
+    // Realiza o tratamento de LGPD
+    For nX := 1 To len(aDados)
+        
+        If len(aDados[nX]) == 2
+
+            If aScan(aOfusc, aDados[nX, 1]) == 0
+        
+                aDados[nX, 2] := FwProtectedDataUtil():ValueAsteriskToAnonymize(aDados[nX, 2])
+            
+            EndIf
+
+        Else
+
+            // Loop de validação para os campos que possuem valores de montagem intermediários
+            for nI := 1 to len(aDados[nX])
+                If nI != 1 .And. nI != len(aDados[nX])
+                    If aScan(aOfusc, aDados[nX, nI]) == 0
+        
+                        aDados[nX, 2] := FwProtectedDataUtil():ValueAsteriskToAnonymize(aDados[nX, 2])
+                    
+                    EndIf
+                EndIf
+            Next nI
+
+        EndIf
+    
+    Next nX
+
+Return aDados
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mntGeraReg
+Método responsável por gerar registros de Posições na estrutura sem Pneu
+
+@type Método
+ 
+@author João Ricardo Santini Zandoná
+@since 14/09/2023
+@version P11
+
+@param aLastPne, array, Informações da posição a ser registrada
+@param aOfusc,   array, Campos que podem ser exibidos
+@param cLoc, caractere, Localização da Posição
+@param cFami, caractere, Familia da posição
+
+@return
+/*/
+//-------------------------------------------------------------------
+method mntGeraReg(aLastPne as array, aOfusc as array, cLoc as character, cFami as character) as object class PneusSmartViewBusinessObject
+     
+    Local aDados := self:zeraDados()
+
+    aDados[_TQS_FILIAL,  len(aDados[_TQS_FILIAL] )]  := aLastPne[_TQS_FILIAL]
+    aDados[_T9V_CODBEM,  len(aDados[_T9V_CODBEM] )]  := aLastPne[_T9V_CODBEM]
+    aDados[_TC_COMPONE,  len(aDados[_TC_COMPONE] )]  := 'Sem Pneu'
+    aDados[_T9V_CODFAMI, len(aDados[_T9V_CODFAMI] )] := aLastPne[_T9V_CODFAMI]
+    aDados[_T9V_TIPMOD,  len(aDados[_T9V_TIPMOD] )]  := aLastPne[_T9V_TIPMOD]
+    aDados[_TQ1_QTDPNE,  len(aDados[_TQ1_QTDPNE] )]  := aLastPne[_TQ1_QTDPNE]
+    aDados[_TSZV_DESSER, len(aDados[_TSZV_DESSER] )] := aLastPne[_TSZV_DESSER]
+    aDados[_TQS_EIXO,    len(aDados[_TQS_EIXO] )]    := aLastPne[_TQS_EIXO]
+    aDados[_TQS_TIPEIX,  len(aDados[_TQS_TIPEIX] )]  := aLastPne[_TQS_TIPEIX]
+    aDados[_TC_LOCALIZ, len(aDados[_TC_LOCALIZ])]    := cLoc
+    aDados[_T9_CODFAMI, len(aDados[_T9_CODFAMI])]    := cFami
+
+    aDados := self:mntLGPD(aDados, aOfusc)
+    // Appenda o registro
+    self:mntAppend(aDados)
+
+return

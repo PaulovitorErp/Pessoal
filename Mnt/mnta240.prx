@@ -1,0 +1,1543 @@
+#Include "MNTA240.CH"
+#Include "PROTHEUS.CH"
+#Include 'FWMVCDef.ch'
+#Include "DbTree.ch"
+
+#Define _cTAREFA "TAREFA"
+#Define _cGRUPO  "GRUPO"
+#Define _cETAPA  "ETAPA"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA240
+Programa de Tarefa Genéricas
+@author Inacio luiz Kolling
+@since  21/10/2008
+@version 2.0
+@obs Fonte Reescrito para MVC
+@author Douglas Constancio
+@since 16/01/2018
+/*/
+//-------------------------------------------------------------------
+Function MNTA240()
+
+	//Guarda conteudo e declara variaveis padroes
+	Local aNGBEGINPRM := {}
+
+	Local aArea   := GetArea()
+	Local cFunBkp := FunName()
+	Local lRet    := .T.
+	Local oBrowse
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		aNGBEGINPRM := NGBEGINPRM(,"MNTA240", {"TT9"})
+
+		Private aRotina := {}
+
+		SetFunName("MNTA240")
+
+		If GetNewPar("MV_NGTARGE","2") <> "1"
+			//"De acordo com o parâmetro MV_NGTARGE, a Empresa/Filial não utiliza conceito de Tarefa Genérica."
+			Help(,, STR0012,, STR0010, 1, 0)
+			lRet := .F.
+		EndIf
+
+		If lRet
+			//Grava a tarefa padrao vindo da manutencao
+			NGGTARPADRA("0", STR0008)
+
+			oBrowse := FWMBrowse():New()
+			oBrowse:SetAlias("TT9")
+			oBrowse:SetDescription(STR0006)
+			oBrowse:SetMenuDef("MNTA240")
+			oBrowse:Activate()
+		EndIf
+
+		SetFunName(cFunBkp)
+		RestArea(aArea)
+
+		//Retorna conteudo de variaveis padroes
+		NGRETURNPRM(aNGBEGINPRM)
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC).
+@author Douglas Constancio
+@since 16/01/2018
+@return aRotina array com o Menu MVC
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+    Local lPyme   := IIf(Type("__lPyme") <> "U",__lPyme, .F.)
+
+    aRotina := {}
+
+    //Adicionando opções
+    ADD OPTION aRotina TITLE STR0002 ACTION 'VIEWDEF.MNTA240' OPERATION MODEL_OPERATION_VIEW   ACCESS 0 //OPERATION 1
+    ADD OPTION aRotina TITLE STR0003 ACTION 'VIEWDEF.MNTA240' OPERATION MODEL_OPERATION_INSERT ACCESS 0 //OPERATION 3
+    ADD OPTION aRotina TITLE STR0004 ACTION 'MNTA240AE(4)'     OPERATION MODEL_OPERATION_UPDATE ACCESS 0 //OPERATION 4
+    ADD OPTION aRotina TITLE STR0005 ACTION 'MNTA240AE(5)'     OPERATION MODEL_OPERATION_DELETE ACCESS 3 //OPERATION 5
+    ADD OPTION aRotina TITLE STR0036 ACTION 'MNTA240GR(TT9->TT9_TAREFA)' OPERATION 4 ACCESS 0           //"Grupos x Etapas"
+
+    If !lPyme
+        ADD OPTION aRotina TITLE STR0007 ACTION 'MsDocument' OPERATION 4 ACCESS 0 //"Conhecimento"
+	EndIf
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+@author Douglas Constancio
+@since 16/01/2018
+@return oModel objeto do Modelo MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ModelDef()
+
+    Local oModel := Nil
+
+    Local oStTT9 := FWFormStruct(1, "TT9")
+
+    //Instanciando o modelo
+    oModel := MPFormModel():New("MNTA240",, {|oModel| ValidInfo(oModel)},,)
+    oModel:AddFields("TT9MASTER",,oStTT9)
+    oModel:SetPrimaryKey({'TT9_FILIAL', 'TT9_TAREFA'})
+    oModel:SetDescription(STR0006)
+    oModel:GetModel("TT9MASTER"):SetDescription("Formulário do Cadastro " + STR0006)
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição da View (padrão MVC).
+@author Douglas Constancio
+@since 16/01/2017
+@return oView objeto da View MVC
+/*/
+//---------------------------------------------------------------------
+Static Function ViewDef()
+
+    Local oModel := FWLoadModel("MNTA240")
+    Local oStTT9 := FWFormStruct(2, "TT9")
+    Local oView  := Nil
+
+    //Criando a view que será o retorno da função e setando o modelo da rotina
+    oView := FWFormView():New()
+    oView:SetModel(oModel)
+    oView:AddField("MNTA240", oStTT9, "TT9MASTER")
+    oView:CreateHorizontalBox("TELA", 100)
+    oView:SetOwnerView("MNTA240", "TELA")
+
+    //Inclusão de itens nas Ações Relacionadas de acordo com O NGRightClick
+    NGMVCUserBtn(oView)
+
+Return oView
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ValidInfo
+Validação ao confirmar tela
+
+@author Douglas Constancio
+@since 16/01/2018
+@version 1.0
+@return lRet Lógico
+/*/
+//---------------------------------------------------------------------
+Static Function ValidInfo(oModel)
+
+    Local aArea     := GetArea()
+    Local lRet      := .T.
+
+    // Aplica validações de Alteração
+    If oModel:GetOperation() == MODEL_OPERATION_UPDATE
+        lRet := MNT240GRAV()
+    EndIf
+
+    RestArea(aArea)
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA240AE
+Valida a Alteracao e exclusao da Tarefa Generica
+@author  Vitor Emanuel Batista
+@since   20/10/2009
+@version 2.0
+@use MNTA240
+@parameters nOpcx - Numero da operação (4/5)            -Obrigatório
+/*/
+//-------------------------------------------------------------------
+Function MNTA240AE(nOpcx)
+
+    Local lRet   := .T.
+
+	If Trim(TT9->TT9_TAREFA) == '0'
+		Help(,, STR0012,, STR0011, 1, 0) //"Não é permitido Alterar ou Excluir a Tarefa 0"
+        lRet := .F.
+	EndIf
+
+    If lRet .And. nOpcx == 4 .And. NGVTART5(TT9->TT9_TAREFA, .F.)
+        If !MsgYesNo(STR0013 + CRLF + STR0014)
+            //"Existem manutenções que utilizam esta Tarefa Genérica. Todas as manutenções serão alteradas."
+            //"Dependendo da quantidade de registro este processo poderá demorar. Confirmar?"
+            lRet := .F.
+        EndIf
+    EndIf
+
+    If lRet
+	    FWExecView(STR0006, 'MNTA240', nOpcx)
+    EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT240GRAV
+Ao alterar a descricao sera replicado nas Tarefas da Manutenção
+@author  Vitor Emanuel Batista
+@since   20/10/2009
+@version 2.0
+@use MNTA240
+/*/
+//-------------------------------------------------------------------
+Static Function MNT240GRAV()
+
+    Local aArea    := GetArea()
+    Local oModel   := FWModelActive()
+
+    Local cCodTare := oModel:GetValue('TT9MASTER', 'TT9_TAREFA')
+    Local cDescTar := oModel:GetValue('TT9MASTER', 'TT9_DESCRI')
+    Local cModoTT9 := NGSX2MODO("TT9")
+	Local cModoST5 := NGSX2MODO("ST5")
+	Local cModoTP5 := NGSX2MODO("TP5")
+
+	If oModel:GetOperation() == MODEL_OPERATION_UPDATE
+		If (cDescTar <> TT9->TT9_DESCRI)
+
+			cQuery := " UPDATE " + RetSqlName("ST5")
+			cQuery += " SET T5_DESCRIC = " + ValToSql(cDescTar)
+			cQuery += " WHERE T5_TAREFA = " + ValToSql(cCodTare) + " AND D_E_L_E_T_ <> '*'"
+			If !(cModoTT9 == "C" .And. cModoST5 == "E")
+				cQuery += " AND T5_FILIAL = " + ValToSql(xFilial("ST5"))
+			EndIf
+
+            If TcSqlExec(cQuery) <> 0
+				UserException(TCSQLError())
+			Endif
+
+			cQuery := " UPDATE " + RetSqlName("TP5")
+			cQuery += " SET TP5_DESCRI = " + ValToSql(cDescTar)
+			cQuery += " WHERE TP5_TAREFA = " + ValToSql(cCodTare) + " AND D_E_L_E_T_ <> '*'"
+			If !(cModoTT9 == "C" .And. cModoTP5 == "E")
+				cQuery += " AND TP5_FILIAL = " + ValToSql(xFilial("TP5"))
+			EndIf
+
+            If TcSqlExec(cQuery) <> 0
+				UserException(TCSQLError())
+			Endif
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTA240GR
+Funcao que chama a tela para manutenção de grupos e etapas da tarefa,
+em formato de árvore lógica.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+@Param cParam    - Código da tarefa a ser considerada como item pai da árvore
+       lConsulta - Indica se será utilizada no formato de consulta personalizada
+
+@return aRet[1]: Se o usuário confirmou a tela ou não (.T. ou .F.)
+        aRet[2]: Item posicionado quando o usuário confirma ou fecha a tela
+/*/
+//-------------------------------------------------------------------------------
+Function MNTA240GR(cParam, lConsulta)
+
+	Local oTmpTbl1
+	Local oTmpTbl2
+	Local aRet		:= Array(2)
+	Local aTVR		:= {}
+	Local aTVS		:= {}
+	Local aIndTVR	:= {}
+	Local aIndTVS	:= {}
+	Local lContinua	:= .T.
+
+	Private cTarefa	:= cParam
+	Private cTRB1	:= GetNextAlias()
+	Private cTRB2	:= GetNextAlias()
+    Private lConPer
+	Private oPnlBar
+    Private oPnlTree
+	Private oBtnIgru
+    Private oBtnAgru
+    Private oBtnEgru
+    Private oBtnIET
+    Private oBtnAET
+    Private oBtnEET
+
+	Default lConsulta := .F.
+
+	lConPer := lConsulta
+
+	If !AliasInDic("TVR")
+		//"Atenção" # "Campos essenciais desta opção não estão no Dicionário de dados"
+        //"Entre em contado com o administrador do sistema."
+        Help(,, STR0012,, STR0031 + " " + STR0032, 1, 0)
+        lContinua := .F.
+	EndIf
+
+	If Alltrim(cParam) == "0"
+        //"Atenção" # "A Tarefa genérica não permite especificação de Grupos e Etapas"
+        //"Favor selecionar outra tarefa"
+		Help(,, STR0012,, STR0034 + " " + STR0033, 1, 0)
+        lContinua := .F.
+	EndIf
+
+	If lContinua
+		//TRB da TVR
+		aAdd(aTVR, {"TVR_FILIAL", "C", TAMSX3("TVR_FILIAL")[1]   , TAMSX3("TVR_FILIAL")[2] })
+		aAdd(aTVR, {"TVR_TAREFA", "C", TAMSX3("TVR_TAREFA")[1]   , TAMSX3("TVR_TAREFA")[2] })
+		aAdd(aTVR, {"TVR_GRUPO" , "C", TAMSX3("TVR_GRUPO")[1] + 1, TAMSX3("TVR_GRUPO")[2]  })
+		aAdd(aTVR, {"TVR_NOME"  , "C", TAMSX3("TVR_NOME")[1]     , TAMSX3("TVR_NOME")[2]   })
+		aAdd(aTVR, {"EXC","C", 1, 0})
+
+		//TRB da TVS
+		aAdd(aTVS, {"TVS_FILIAL", "C", TAMSX3("TVS_FILIAL")[1]   , TAMSX3("TVS_FILIAL")[2] })
+		aAdd(aTVS, {"TVS_TAREFA", "C", TAMSX3("TVS_TAREFA")[1]   , TAMSX3("TVS_TAREFA")[2] })
+		aAdd(aTVS, {"TVS_GRUPO" , "C", TAMSX3("TVS_GRUPO")[1] + 1, TAMSX3("TVS_GRUPO")[2]  })
+		aAdd(aTVS, {"TVS_ETAPA" , "C", TAMSX3("TVS_ETAPA")[1] + 1, TAMSX3("TVS_ETAPA")[2]  })
+		aAdd(aTVS, {"EXC","C", 1, 0})
+
+        aIndTVR := {{"TVR_TAREFA", "TVR_GRUPO", "EXC"},;
+                    {"EXC","TVR_TAREFA","TVR_GRUPO"}}
+
+        aIndTVS := {{"TVS_TAREFA","TVS_GRUPO","TVS_ETAPA","EXC"},;
+					{"EXC","TVS_TAREFA","TVS_GRUPO"},;
+					{"TVS_TAREFA","TVS_ETAPA","EXC"}}
+
+        oTmpTbl1 := FWTemporaryTable():New(cTRB1, aTVR)
+		oTmpTbl1:AddIndex("Ind01", aIndTVR[1])
+		oTmpTbl1:AddIndex("Ind02", aIndTVR[2])
+		oTmpTbl1:Create()
+
+		oTmpTbl2 := FWTemporaryTable():New(cTRB2, aTVS)
+		oTmpTbl2:AddIndex("Ind01", aIndTVS[1])
+		oTmpTbl2:AddIndex("Ind02", aIndTVS[2])
+		oTmpTbl2:AddIndex("Ind03", aIndTVS[3])
+		oTmpTbl2:Create()
+
+		//Monta a árvore
+		aRet := fMontaTree()
+
+		oTmpTbl1:Delete()
+		oTmpTbl2:Delete()
+	EndIf
+
+Return aRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMontaTree
+Funcao que carrega a tela para manutenção de grupos e etapas da tarefa
+em formato de árvore lógica.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fMontaTree()
+
+    Local aRet    := {}
+    Local cRet    := cTarefa
+	Local lOk     := .F.
+    Local lOutros := .F.
+	Local oDlg
+    Local oPanel
+
+	Private aNGBUTTON := {}
+
+	aAdd(aNgButton,{STR0017,{||IIf(lOutros := CONPAD1(Nil, Nil, Nil, "TPA", Nil, Nil, .F.),(cRet := TPA->TPA_ETAPA ,lOk := .t., oDlg:End()), (lOk := .F.,oTree:Enable(),cRet := ""))},STR0017,STR0017})
+
+	DEFINE MSDIALOG oDlg TITLE STR0035 From 15,20 To 50,78 OF oMainWnd Style DS_MODALFRAME
+
+		If !lConPer
+			//Cria o Painel para a Barra lateral
+			oPnlBar := TPanel():New(900,900,,oDlg,,,,,RGB(67,70,87),12,12,.F.,.F.)
+			oPnlBar:Align := CONTROL_ALIGN_LEFT
+
+			//Botoes do Painel criado acima
+			oBtnIgru  := TBtnBmp():NewBar("ng_ico_incluir","ng_ico_incluir",,,,{|| oTree:Disable(),fCadGrupo(3,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0018,,,,,"") //"Incluir Grupo"
+			oBtnIgru:Align := CONTROL_ALIGN_TOP
+			oBtnIgru:lVisible := .T.
+
+			oBtnAgru  := TBtnBmp():NewBar("ng_os_troca","ng_os_troca",,,,{|| oTree:Disable(),fCadGrupo(4,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0019,,,,,"") //"Alterar Grupo"
+			oBtnAgru:Align := CONTROL_ALIGN_TOP
+			oBtnAgru:lVisible := .F.
+
+			oBtnEgru  := TBtnBmp():NewBar("ng_ico_excluir","ng_ico_excluir",,,,{|| oTree:Disable(),fCadGrupo(5,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0020,,,,,"") //"Remover Grupo"
+			oBtnEgru:Align := CONTROL_ALIGN_TOP
+			oBtnEgru:lVisible := .F.
+
+			oBtnIET  := TBtnBmp():NewBar("ng_ico_incluir","ng_ico_incluir",,,,{|| oTree:Disable(),fEtapas(3,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0021,,,,,"") //"Incluir Etapa"
+			oBtnIET:Align  := CONTROL_ALIGN_TOP
+			oBtnIET:lVisible := .F.
+
+			oBtnAET  := TBtnBmp():NewBar("ng_os_troca","ng_os_troca",,,,{|| oTree:Disable(),fEtapas(4,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0022,,,,,"") //"Alterar Etapa"
+			oBtnAET:Align  := CONTROL_ALIGN_TOP
+			oBtnAET:lVisible := .F.
+
+			oBtnEET  := TBtnBmp():NewBar("ng_ico_excluir","ng_ico_excluir",,,,{|| oTree:Disable(),fEtapas(5,oTree:GetCargo()),oTree:Enable() },,oPnlBar,,,STR0023,,,,,"") //"Remover Etapa"
+			oBtnEET:Align  := CONTROL_ALIGN_TOP
+			oBtnEET:lVisible := .F.
+		EndIf
+
+		//Cria o Painel para a Tree
+		oPnlTree := TPanel():New(0,0,,oPanel,,,,,RGB(67,70,87),80,80,.F.,.F.)
+		oPnlTree:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPnlLeg := TPanel():New(0,0,,oPnlTree,,,,,RGB(211,211,211),12,12,.F.,.F.)
+			oPnlLeg:Align := CONTROL_ALIGN_BOTTOM
+
+				oLegTarefa := TBitmap():New(01,01,10,10,"FOLDER7",,.t.,oPnlLeg,,,.F.,.F.,,,.F.,,.T.,,.F.)
+				@ 03,15  Say STR0026 Of oPnlLeg COLOR CLR_HBLUE,CLR_WHITE Pixel //"Tarefas"
+
+				oLegGrupo  := TBitmap():New(01,60,10,10,"FOLDER10",,.t.,oPnlLeg,,,.F.,.F.,,,.F.,,.T.,,.F.)
+				@ 03,75  Say STR0024   Of oPnlLeg COLOR CLR_HBLUE,CLR_WHITE Pixel //"Grupos"
+
+				oLegEtapa := TBitmap():New(01,120,10,10,"FOLDER12",,.t.,oPnlLeg,,,.F.,.F.,,,.F.,,.T.,,.F.)
+				@ 03,135 Say STR0029  Of oPnlLeg COLOR CLR_HBLUE,CLR_WHITE Pixel //"Etapas"
+
+				//Cria a Tree
+				oTree := DbTree():New(0,0,0,0,oPnlTree,,,.T.)
+
+				oTree:Align := CONTROL_ALIGN_ALLCLIENT
+
+				//Opções do Clique da Direita
+				oTree:bRClicked  := {|oPnlTree,nX,nY| If(!lConPer, fClickDir(oPnlTree,nX,nY,oTree), .T.)}
+
+				//Opções da barra lateral
+				oTree:bChange:= {|| IIf(!lConPer, fChangeBtn(), .T.), cRet := fRetCons()}
+
+				oTree:SetScroll(2, .T.)
+
+				cNomeTar := NGSEEK('TT9', cTarefa, 1, 'TT9->TT9_DESCRI')
+				oTree:AddItem(Padr(Alltrim(cTarefa) + " - " + Alltrim(cNomeTar),90), Padr(cTarefa,7), "FOLDER7" ,"FOLDER8",,,1)
+
+				//Carrega a Tree
+				fInitTree()
+
+				oTree:EndTree()
+
+		//Cria o Painel para a Tree
+		oPnlBott := TPanel():New(0,0,,oPanel,,,,,RGB(67,70,87),20,20,.F.,.F.)
+		oPnlBott:Align := CONTROL_ALIGN_BOTTOM
+
+			/*Barra inferior com os botões OK/Cancelar*/
+			If lConper
+				@ 4,110 BUTTON OemToAnsi("Outros") SIZE 036,012 Pixel Of oPnlBott Action( IIf(lOutros := CONPAD1(Nil, Nil, Nil, "TPA", Nil, Nil, .F.), (cRet := TPA->TPA_ETAPA ,lOk := .T., oDlg:End()), (lOk := .F.,oTree:Enable(),cRet := "")))
+			EndIf
+			@ 4,150 BUTTON OemToAnsi("OK") SIZE 036,012 Pixel OF oPnlBott ACTION( IIf(!lConPer, IIf(fRecTree(),oDlg:End(),.F.), IIf(fValTipo(cRet),oDlg:End(), .F.)), oTree:Enable(), lOk := .T.)
+			@ 4,190 BUTTON OemToAnsi("Cancelar") SIZE 036,012 Pixel OF oPnlBott ACTION( lOk := .F.,cRet := "",oDlg:End() )
+
+	Activate MsDialog oDlg Centered
+
+	aAdd(aRet, lOk)
+	If lOutros
+		aAdd(aRet, cRet)
+	Else
+		aAdd(aRet, SubStr(cRet, 2))
+	EndIf
+
+Return aRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fClickDir
+Funcao que carrega as opções do click da direita conforme o item selecio-
+nado.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fClickDir(oObject, nX, nY, oTree)
+
+    Local cIdent  := fVerifIt(oTree:GetCargo())
+	local lTarefa := (cIdent == _cTAREFA)
+	Local lGrupo  := (cIdent == _cGRUPO)
+	Local lEtapa  := (cIdent == _cETAPA)
+
+	MENU oMnuTree POPUP
+
+	If lTarefa
+		MENUITEM STR0018 ACTION oObject:Disable(),fCadGrupo(3,oTree:GetCargo()),oObject:Enable() Resource "ng_ico_incluir" //"Incluir Grupo"
+	EndIf
+
+	If lGrupo
+		MENUITEM STR0019 ACTION oObject:Disable(),fCadGrupo(4,oTree:GetCargo()),oObject:Enable() Resource "ng_os_troca" //"Alterar Grupo"
+		MENUITEM STR0020 ACTION oObject:Disable(),fCadGrupo(5,oTree:GetCargo()),oObject:Enable() Resource "ng_ico_excluir" //"Remover Grupo"
+		MENUITEM STR0021 ACTION oObject:Disable(),fEtapas(3,oTree:GetCargo())  ,oObject:Enable() Resource "ng_ico_incluir" //"Incluir Etapa"
+	EndIf
+
+	If lEtapa
+		MENUITEM STR0022 ACTION oObject:Disable(),fEtapas(4,oTree:GetCargo()),oObject:Enable() Resource "ng_os_troca" //"Alterar Etapa"
+		MENUITEM STR0023 ACTION oObject:Disable(),fEtapas(5,oTree:GetCargo()),oObject:Enable() Resource "ng_ico_excluir" //"Remover Etapa"
+	EndIf
+
+	ENDMENU
+
+	oMnuTree:Activate( nX-oObject:Owner():nLeft-25, nY-oObject:Owner():nTop-oTree:nTop-125, oTree )
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVerifIt
+Funcao que verifica se o item selecionado é uma Tarefa, um Grupo ou uma
+Etapa.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fVerifIt(cCargo)
+
+    Local cRet := ""
+
+	If Alltrim(cCargo) = Alltrim(cTarefa)
+		cRet := _cTAREFA
+	Else
+		If SubStr(cCargo,1,1) == "G"
+			cRet := _cGRUPO
+		ElseIf SubStr(cCargo,1,1) == "E"
+			cRet := _cETAPA
+		EndIf
+	EndIf
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fEtapas
+Funcao que mantém as informações relacionadas às Etapas.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fEtapas(nOpc, cCargo)
+
+    Local aVarTrb2  := {"cFil", "cTarefa", "cGrupo", "cEtapa", "cDelet"}
+	Local cDelet    := ""
+	Local lCONDP    := .F.
+    Local nFor
+
+	cFil     := xFilial("TVS")
+	cEtapa   := ""
+	cGrupo   := ""
+
+	//Encontra o código do grupo posicionado
+	If nOpc == 3
+		cGrupo := cCargo
+	Else
+		dbSelectArea(cTRB2)
+		dbSetOrder(3)
+		If dbSeek(TT9->TT9_TAREFA + cCargo ) .And. (cTRB2)->EXC <> "*"
+			cGrupo :=  (cTRB2)->TVS_GRUPO
+		EndIf
+	EndIf
+
+	If nOpc != 5
+		//consulta padrão para escolha da etapa
+		lCONDP := CONPAD1(NIL,NIL,NIL,"TPA",NIL,NIL,.F.)
+
+		If lCONDP .And. ExistCpo("TPA",TPA->TPA_ETAPA) .And. fValidTree(TPA->TPA_ETAPA, nOpc)
+
+			//Se for alteração deleta o item da árvore
+			If oTree:TreeSeek(cCargo) .And. nOpc == 4
+
+				oTree:BeginUpdate()
+				oTree:DelItem()
+				oTree:EndUpdate()
+
+				//exclui o registro da TRB
+				dbSelectArea(cTRB2)
+				dbSetOrder(1)
+
+				If dbSeek(cTarefa + cGrupo + cCargo)
+					Reclock(cTRB1, .F.)
+					(cTRB2)->EXC := "*"
+					MsUnlock()
+				EndIf
+
+			EndIf
+
+			cEtapa := TPA->TPA_ETAPA
+			cNome  := TPA->TPA_DESCRI
+
+			dbSelectArea(cTRB2)
+			dbSetOrder(1)
+			RecLock(cTRB2, .T.)
+
+			For nFor := 1 To FCount()
+				cCampo := cTRB2+"->"+FieldName(nFor)
+
+				If "EXC" $ cCampo
+					Loop
+				EndIf
+
+				If "_FILIAL"$cCampo
+					&(cCampo) := xFilial("TPA")
+				Else
+					cMemoria := aVarTrb2[nFor]
+					If cMemoria == "cEtapa"
+						cAux := "E"
+					Else
+						cAux := ""
+					EndIf
+
+					&(cCampo) := cAux + &(cMemoria)
+				EndIf
+
+			Next nFor
+
+			If oTree:TreeSeek(cGrupo)
+				oTree:AddItem(SubStr(Alltrim((cTRB2)->TVS_ETAPA),2) + " - " + Alltrim(cNome), (cTRB2)->TVS_ETAPA, "FOLDER12","FOLDER13",,,2)
+				oTree:TreeSeek(cEtapa)
+			EndIf
+
+			MsUnlock()
+
+		EndIf
+	Else // Exclui item da árvore e da TRB
+		If oTree:TreeSeek(cCargo)
+			oTree:BeginUpdate()
+			oTree:DelItem()
+			oTree:EndUpdate()
+
+			dbSelectArea(cTRB2)
+			dbSetOrder(1)
+			If dbSeek(cTarefa + cGrupo + cCargo)
+				Reclock(cTRB1, .F.)
+				(cTRB2)->EXC := "*"
+				MsUnlock()
+			EndIf
+		EndIf
+	EndIf
+
+	fChangeBtn()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCadGrupo
+Funcao que apresenta a tela de cadastro dos grupos.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fCadGrupo(nOpt, cCargo)
+
+	Local oDlg
+    Local oPanel
+	Local lOk       := .F.
+	Local nFor
+	Local cMemoria  := ""
+	Local cCampo    := ""
+	Local cDelet    := ""
+	Local cAlias    := "TVR"
+	Local cCargoNew
+    Local cNome
+	Local cGrupoAnt := "" //Variável para controlar o grupo na inicialização da tela
+	Local cGrupoAtu := Space(TAMSX3("TVR_GRUPO")[1]) //Variável de controle do campo em tela
+	Local aVarTrb1  := {"cFil", "cTarefa", "cGrupo", "cNomGrup", "cDelet"}
+
+	Private cFil := xFilial("TVR")
+
+	Private cGrupo   := Space(TAMSX3("TVR_GRUPO")[1]) //Variável de controle do campo em TRB
+	Private cNomGrup := Space(TAMSX3("TVR_NOME")[1])
+
+	//Armazena dados do registro para alteração ou exclusão
+	If nOpt != 3
+		dbSelectArea(cTRB1)
+		dbSetOrder(1)
+		If dbSeek(cTarefa + cCargo )
+			For nFor := 1 To FCount()
+				cMemoria := cTRB1+"->"+FieldName(nFor)
+				&(aVarTrb1[nFor]) := &(cMemoria)
+			Next nFor
+		EndIf
+		cGrupoAtu := SubStr(cGrupo,2)
+	EndIf
+
+	cGrupoAnt := cGrupo
+
+	oDlg := FWDialogModal():New()
+	oDlg:SetBackground(.T.)
+	oDlg:SetTitle(STR0024)  //Grupos
+	oDlg:SetEscClose(.T.)   //Permite fechar a tela com o ESC
+	oDlg:SetSize(120,180)   //Cria a tela maximizada (chamar sempre antes do CreateDialog)
+	oDlg:EnableFormBar(.T.)
+	oDlg:CreateDialog()     //Cria a janela (cria os paineis)
+
+	//Adicionando botões
+	oDlg:AddButton( STR0015,{|| lOk:= .T., IIf(fValidTree("G" + cGrupoAtu, nOpt, cGrupoAnt ), oDlg:Deactivate(), lOk := .F.) }, STR0015     , , .T., .F., .T., )//"Continuar"
+	oDlg:AddButton( STR0016,{|| lOk:= .F., oDlg:Deactivate() }, STR0016, , .T., .F., .T., ) //"Fechar"
+
+	oPanel := oDlg:GetPanelMain()
+
+	@ 07,05 Say STR0025 Of oPanel COLOR CLR_HBLUE,CLR_WHITE Pixel //"Tarefa"
+	@ 05,45 MsGet cTarefa SIZE 036,09 Picture "@!" Of oPanel WHEN .F. Pixel
+
+	@ 25,05 Say STR0027 Of oPanel COLOR CLR_HBLUE,CLR_WHITE Pixel //"Cód. Grupo"
+	@ 23,45 MsGet cGrupoAtu SIZE 036,09 Picture "@!" Of oPanel WHEN nOpt == 3 Pixel
+
+	@ 43,05 Say STR0028 Of oPanel COLOR CLR_HBLUE,CLR_WHITE Pixel //"Nome Grupo"
+	@ 41,45 MsGet cNomGrup SIZE 126,09 Picture "@!" Of oPanel WHEN nOpt <> 5 Pixel
+
+	//Ativando a Janela
+	oDlg:Activate()
+
+	cGrupo := "G" + cGrupoAtu
+
+	//Gravando os dados
+	If lOk
+		If oTree:TreeSeek(cCargo)
+			If nOpt == 4
+
+				If Alltrim(cGrupoAnt) == Alltrim(cGrupo)
+					oTree:ChangePrompt((cGrupoAtu + cNomGrup),cCargo)
+				Else
+					oTree:BeginUpdate()
+					oTree:DelItem()
+					oTree:EndUpdate()
+				EndIf
+
+			ElseIf nOpt == 5
+
+                //Atualiza TRB1
+				dbSelectArea(cTRB1)
+				dbSetOrder(1)
+				If dbSeek(cTarefa + cGrupo)
+
+					Reclock(cTRB1, .F.)
+					(cTRB1)->EXC := "*"
+					MsUnlock()
+				EndIf
+
+                //Atualiza TRB2
+				dbSelectArea(cTRB2)
+				dbSetOrder(1)
+				If dbSeek(cTarefa + cGrupo )
+					While !EoF() .And. Alltrim((cTRB2)->TVS_GRUPO) == Alltrim(cGrupo)
+
+						Reclock(cTRB2, .F.)
+						(cTRB2)->EXC := "*"
+						MsUnlock()
+
+						dbSelectArea(cTRB2)
+						dbSkip()
+					EndDo
+				EndIf
+
+				oTree:BeginUpdate()
+				oTree:DelItem()
+				oTree:EndUpdate()
+			EndIf
+
+		EndIf
+
+		dbSelectArea(cTRB1)
+		dbSetOrder(1)
+		If cGrupoAnt == cGrupo
+			If dbSeek(cTarefa + cGrupo)
+				RecLock(cTRB1, .F.)
+			EndIf
+		Else
+			RecLock(cTRB1, .T.)
+		EndIf
+
+		If nOpt != 5
+			For nFor := 1 To FCount()
+				cCampo := cTRB1+"->"+FieldName(nFor)
+				cMemoria := aVarTrb1[nFor]
+
+				If "EXC" $ cCampo
+					Loop
+				EndIf
+
+				If "_FILIAL"$cCampo
+					&(cCampo) := xFilial(cAlias)
+				Else
+					&(cCampo) := &(cMemoria)
+				EndIf
+			Next nFor
+
+			cCargoNew := (cTRB1)->TVR_GRUPO
+			cNome := (cTRB1)->TVR_NOME
+
+			If oTree:TreeSeek(Padr(cTarefa,7)) .And. (cGrupoAnt != cGrupo)
+				oTree:AddItem(SubStr(Alltrim(cCargoNew),2) + " - " + Alltrim(cNome),cCargoNew, "FOLDER10","FOLDER11",,,2)
+				oTree:TreeSeek(cCargoNew)
+			EndIf
+		EndIf
+
+		MsUnlock()
+	EndIf
+
+	fChangeBtn()
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fInitTree
+Funcao que carrega a árvore na inicialização.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fInitTree()
+
+    Local cCargo := oTree:GetCargo()
+	Local cCampo
+    Local nFor
+
+	dbSelectArea("TVR")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TVR") + cTarefa) .And. oTree:TreeSeek(cCargo)
+		While !EoF() .And. xFilial("TVR") == TVR->TVR_FILIAL .And. (TVR->TVR_TAREFA == cTarefa)
+
+			dbSelectArea(cTRB1)
+			dbSetOrder(1)
+			RecLock(cTRB1, .T.)
+
+			For nFor := 1 To FCount()
+				cCampo := cTRB1+"->"+FieldName(nFor)
+
+				If "EXC" $ cCampo
+					Loop
+				EndIf
+
+				If "_FILIAL"$cCampo
+					&(cCampo) := xFilial("TVR")
+				Else
+
+					If "_GRUPO" $ cCampo
+						cAux := "G"
+					Else
+						cAux := ""
+					EndIf
+
+					cMemoria := "TVR->"+FieldName(nFor)
+					&(cCampo) := cAux + &(cMemoria)
+				EndIf
+
+			Next nFor
+
+			MsUnlock()
+
+			cGrupoTmp := SubStr((cTRB1)->TVR_GRUPO,2)
+
+			oTree:AddItem(Alltrim(cGrupoTmp) + " - " + Alltrim((cTRB1)->TVR_NOME),(cTRB1)->TVR_GRUPO, "FOLDER10","FOLDER11",,,2)
+			oTree:TreeSeek((cTRB1)->TVR_GRUPO)
+
+			aArea := GetArea()
+
+			dbSelectArea("TVS")
+			dbSetOrder(1)
+			If dbSeek(xFilial("TVS") + cTarefa + cGrupoTmp)
+				While !EoF() .And. xFilial("TVS") == TVS->TVS_FILIAL .And. TVS->TVS_TAREFA == cTarefa .And. TVS->TVS_GRUPO == cGrupoTmp
+
+					dbSelectArea(cTRB2)
+					dbSetOrder(1)
+					RecLock(cTRB2, .T.)
+
+					For nFor := 1 To FCount()
+						cCampo := cTRB2+"->"+FieldName(nFor)
+
+						If "EXC" $ cCampo
+							Loop
+						EndIf
+
+						If "_FILIAL"$cCampo
+							&(cCampo) := xFilial("TVS")
+						Else
+							If "_GRUPO" $ cCampo
+								cAux := "G"
+							ElseIf  "_ETAPA" $ cCampo
+								cAux := "E"
+							Else
+								cAux := ""
+							EndIf
+
+							cMemoria := "TVS->"+FieldName(nFor)
+							&(cCampo) := cAux + &(cMemoria)
+
+						EndIf
+
+					Next nFor
+
+					MsUnlock()
+
+					cNomeET := NGSEEK("TPA", TVS->TVS_ETAPA, 1, "TPA_DESCRI")
+
+					oTree:AddItem(SubStr(Alltrim((cTRB2)->TVS_ETAPA),2) + " - " + Alltrim(cNomeET), (cTRB2)->TVS_ETAPA, "FOLDER12","FOLDER13",,,2)
+					oTree:TreeSeek((cTRB2)->TVS_ETAPA)
+
+					oTree:TreeSeek((cTRB1)->TVR_GRUPO)
+					oTree:PtCollapse()
+
+					Exit
+
+					dbSelectArea("TVS")
+					dbSkip()
+				EndDo
+			EndIf
+
+            oTree:TreeSeek(cCargo)
+			RestArea(aArea)
+
+            dbSelectArea("TVR")
+			dbSkip()
+		EndDo
+	EndIf
+
+	oTree:TreeSeek(cCargo)
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRecTree
+Funcao que atualiza as tabelas TVR/TVS de acordo com os dados da árvore.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fRecTree()
+
+	Local nFor
+	Local cTempGru
+	Local cTempEta
+
+	dbSelectArea(cTRB1)
+	dbSetOrder(2)
+	dbGoBottom()
+	While !(cTRB1)->(BoF())
+
+		If Empty((cTRB1)->TVR_TAREFA) .Or. Empty((cTRB1)->TVR_GRUPO)
+			dbSelectArea(cTRB1)
+			dbSkip(-1)
+			loop
+		EndIf
+
+		cTempGru := SubStr((cTRB1)->TVR_GRUPO,2)
+
+		dbSelectArea("TVR")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TVR") + (cTRB1)->TVR_TAREFA + cTempGru)
+			RecLock("TVR", .F.)
+		Else
+			//para evitar que grave registro que só existe na TRB e deletado (ou seja, foi criado e em seguida deletado)
+			If (cTRB1)->EXC == "*"
+				dbSelectArea(cTRB1)
+				dbSkip(-1)
+				Loop
+			Else
+				RecLock("TVR", .T.)
+			EndIf
+
+		EndIf
+
+		If (cTRB1)->EXC == "*"
+			dbDelete()
+		Else
+			For nFor := 1 To FCount()
+				cCampo := "TVR->"+FieldName(nFor)
+
+				If "EXC" $ cCampo
+					Loop
+				EndIf
+
+				If "_FILIAL"$cCampo
+					&(cCampo) := xFilial("TVR")
+				Else
+					cMemoria := cTRB1+"->"+FieldName(nFor)
+
+					If "_GRUPO" $ cMemoria
+						&(cCampo) := SubStr(&(cMemoria),2)
+					Else
+						&(cCampo) := &(cMemoria)
+					EndIf
+
+				EndIf
+			Next nFor
+		EndIf
+
+		MsUnlock()
+
+		dbSelectArea(cTRB1)
+		dbSkip(-1)
+	EndDo
+
+	dbSelectArea(cTRB2)
+	dbSetOrder(2)
+	dbGoBottom()
+	While !(cTRB2)->(BoF())
+
+		If Empty((cTRB2)->TVS_TAREFA) .Or. Empty((cTRB2)->TVS_GRUPO)
+			dbSelectArea(cTRB2)
+			dbSkip(-1)
+			loop
+		EndIf
+
+		cTempGru := SubStr((cTRB2)->TVS_GRUPO,2)
+		cTempEta := SubStr((cTRB2)->TVS_ETAPA,2)
+
+		dbSelectArea("TVS")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TVS") + (cTRB2)->TVS_TAREFA + cTempGru + cTempEta)
+			RecLock("TVS", .F.)
+		Else
+			//para evitar que grave registro que só existe na TRB e deletado (ou seja, foi criado e em seguida deletado)
+			If (cTRB2)->EXC == "*"
+				dbSelectArea(cTRB2)
+				dbSkip(-1)
+				Loop
+			Else
+				RecLock("TVS", .T.)
+			EndIf
+		EndIf
+
+		If (cTRB2)->EXC == "*"
+			dbDelete()
+		Else
+			For nFor := 1 To FCount()
+				cCampo := "TVS->"+FieldName(nFor)
+
+				If "EXC" $ cCampo
+					Loop
+				EndIf
+
+				If "_FILIAL"$cCampo
+					&(cCampo) := xFilial("TVS")
+				Else
+					cMemoria := cTRB2+"->"+FieldName(nFor)
+
+					If ("_GRUPO" $ cMemoria) .Or. ("_ETAPA" $ cMemoria)
+						&(cCampo) := SubStr(&(cMemoria),2)
+					Else
+						&(cCampo) := &(cMemoria)
+					EndIf
+
+				EndIf
+			Next nFor
+		EndIf
+
+		MsUnlock()
+
+		dbSelectArea(cTRB2)
+		dbSkip(-1)
+	EndDo
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fChangeBtn
+Funcao que controla a visibilidade dos botões contidos na barra lateral
+da Árvore de grupos.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fChangeBtn()
+
+    Local cIdent  := fVerifIt(oTree:GetCargo())
+	local lTarefa := IIf(!lConPer,(cIdent == _cTAREFA), .F.)
+	Local lGrupo  := IIf(!lConPer,(cIdent == _cGRUPO) , .F.)
+	Local lEtapa  := IIf(!lConPer,(cIdent == _cETAPA) , .F.)
+
+	oBtnIgru:lVisible := lTarefa
+	oBtnAgru:lVisible := lGrupo
+	oBtnEgru:lVisible := lGrupo
+	oBtnIET:lVisible  := lGrupo
+	oBtnAET:lVisible  := lEtapa
+	oBtnEET:lVisible  := lEtapa
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValidTree
+Funcao que controla a valida se o grupo/etapa já consta na árvore
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fValidTree(cParam, nOpcx, cGrupoAnt)
+
+	Local cIdent    := fVerifIt(cParam)
+	Local lGrupo    := (cIdent == _cGRUPO)
+	Local lRet      := .T.
+	Local nTamCampo := IIf(lGrupo, TamSX3("TVR_GRUPO")[1],TamSX3("TPA_ETAPA")[1])
+
+	Default cGrupoAnt := ""
+
+	//Verificar se o campo foi preenchido.
+	If Empty(SubStr(cParam,2)) .And. Len(SubStr(cParam,2)) == nTamCampo
+		Help(" ",1,"VAZIO")
+		lRet := .F.
+	Else
+		If lGrupo
+			dbSelectArea(cTRB1)
+			dbSetOrder(1)
+			If dbSeek(TT9->TT9_TAREFA+cParam) .And. nOpcx <> 5 .And. cParam <> cGrupoAnt .And. (cTRB1)->EXC <> '*'
+				Help(" ",1,"JAGRAVADO")
+				lRet:= .F.
+			EndIf
+		Else
+			dbSelectArea(cTRB2)
+			dbSetOrder(3)
+			If dbSeek(TT9->TT9_TAREFA + "E" + cParam) .And. nOpcx <> 5 .And. (cTRB2)->EXC <> '*'
+				Help(" ",1,"JAGRAVADO")
+				lRet:= .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fRetCons
+Funcao que atualiza a variável de controle utilizada no modo Consulta
+personalizada e carrega os filhos da estrutura.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fRetCons()
+
+	Local cRet := ""
+	Local nFor := 0
+
+	cRet := oTree:GetCargo()
+	cGrupoTmp := SubStr(cRet,2,6)
+
+    dbSelectArea("TVS")
+	dbSetOrder(1)
+	If dbSeek( xFilial("TVS") + cTarefa + cGrupoTmp )
+
+		If SubStr( cRet, 1, 1 ) != 'E' .Or. !( oTree:TreeSeek( cRet ) )
+
+			While !EoF() .And. xFilial("TVS") == TVS->TVS_FILIAL .And. TVS->TVS_TAREFA == cTarefa .And. TVS->TVS_GRUPO == cGrupoTmp
+
+				dbSelectArea(cTRB2)
+				dbSetOrder(1)
+				If !dbSeek( cTarefa + cRet + "E" + TVS->TVS_ETAPA )
+					RecLock(cTRB2, .T.)
+
+					For nFor := 1 To FCount()
+						cCampo := cTRB2+"->"+FieldName(nFor)
+
+						If "DELETE" $ cCampo
+							Loop
+						EndIf
+
+						If "EXC" $ cCampo
+							Loop
+						EndIf
+
+						If "_FILIAL"$cCampo
+							&(cCampo) := xFilial("TVS")
+						Else
+							If "_GRUPO" $ cCampo
+								cAux := "G"
+							ElseIf  "_ETAPA" $ cCampo
+								cAux := "E"
+							Else
+								cAux := ""
+							EndIf
+
+							cMemoria := "TVS->"+FieldName(nFor)
+							&(cCampo) := cAux + &(cMemoria)
+
+						EndIf
+
+					Next nFor
+
+					MsUnlock()
+
+					cNomeET := NGSEEK("TPA", TVS->TVS_ETAPA, 1, "TPA_DESCRI")
+
+					oTree:AddItem(SubStr(Alltrim((cTRB2)->TVS_ETAPA),2) + " - " + Alltrim(cNomeET), (cTRB2)->TVS_ETAPA, "FOLDER12","FOLDER13",,,2)
+					oTree:TreeSeek((cTRB2)->TVS_ETAPA)
+
+					oTree:TreeSeek(cRet)
+
+				EndIf
+
+				dbSelectArea("TVS")
+				dbSkip()
+			
+			EndDo
+
+		EndIf
+	
+	EndIf
+
+Return cRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValTipo
+Funcao para validação do tipo selecionado quando a árvore é apresentada
+no formato de consulta personalizada.
+
+@author William Rozin Gaspar
+@since 07/10/2014
+@version P12
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Static Function fValTipo(cParam)
+
+    Local lRet := .T.
+
+	If fVerifIt(cParam) <> _cETAPA
+        Help(,, STR0012,, STR0030, 1, 0) //"O nível selecionado não corresponde a uma Etapa!"
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGCONTARC
+Função para criar o retorno do F3
+Integração SIGAMNT - ESTI
+
+@author William Rozin Gaspar
+@since 10/09/2014
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function NGCONTARC()
+
+	Local aArea      := GetArea()
+	Local cEtapaCpo  := ReadVar()
+	Local cTabela 	 := Posicione("SX3", 2, Substr(cEtapaCpo,At(">",cEtapaCpo)+1,10) , "X3_ARQUIVO")
+	Local cTarefaCpo := PrefixoCpo(cTabela) + "_TAREFA"
+	Local aCONDP 	 := {}
+	Local lCONDP 	 := .F.
+	Local nPosTar	 := 0
+	Local nPosEta	 := 0
+	Local cEtapa	 := ""
+
+	If Type("aHeader") == "A" .And. Type("aCols")  == "A" .And. aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == cTarefaCpo }) > 0
+		nPosTar:= aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == cTarefaCpo })
+		nPosEta:= aSCAN(aHEADER,{|x| TRIM(UPPER(x[2])) == Substr(cEtapaCpo,At(">",cEtapaCpo)+1,10) })
+
+		cTarefa := aCols[n][nPosTar]
+		cEtapa  := aCols[n][nPosEta]
+	Else
+		cTarefa := &("M->" + cTarefaCpo)
+		cEtapa  := &cEtapaCpo
+	EndIf
+
+	dbSelectArea("TVS")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TVS") + cTarefa)
+		aCONDP := MNTA240GR(cTarefa, .T.)
+		lCONDP := aCONDP[1]
+		If lCONDP
+			&cEtapaCpo := aCONDP[2]
+		EndIf
+	Else
+		lCONDP := CONPAD1(Nil, Nil, Nil, "TPA", Nil, Nil, .F.)
+	EndIf
+
+	RestArea(aArea)
+
+Return lCONDP
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGCONTARR
+Função para criar o retorno do F3
+
+@author William Rozin Gaspar
+@since 10/09/2014
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function NGCONTARR()
+
+Return &(ReadVar())
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} Mnta240Vld
+Validações dos campos da tarefa genérica.
+@type function
+
+@author Alexandre Santos
+@since 27/07/2023
+
+@param  cField , string, Campo que terá seu contaúdo validado.
+@return boolean, Indica se o conteúdo foi validado.
+/*/
+//---------------------------------------------------------------------
+Function Mnta240Vld( cField )
+
+	Local cAlsTT9 := ''
+	Local cQryTT9 := ''
+	Local cCaract := ''
+	Local oModel  := FWModelActive()
+	Local lRet    := .T.
+
+	If cField == 'TT9_CARACT'
+
+		If oModel:GetOperation() == MODEL_OPERATION_UPDATE .And. !Empty( TT9->TT9_CARACT ) .And.;
+			FWFldGet( 'TT9_CARACT' ) != TT9->TT9_CARACT .And. FWFldGet( 'TT9_CARACT' ) != '4'
+
+			/*----------------------------------------------------------------+
+			| Valid. se a tarefa possui relacionamento com alguma manutenção. |
+			+----------------------------------------------------------------*/
+			If TT9->TT9_CARACT == '1' .Or.;
+				( TT9->TT9_CARACT == '4' .And. FWFldGet( 'TT9_CARACT' ) != '1' )
+
+				cAlsTT9 := GetNextAlias()
+
+				cQryTT9 := 	"SELECT " 
+				cQryTT9 += 		"1 "
+				cQryTT9 += 	"FROM " 
+				cQryTT9 += 		RetSQLName( 'ST5' ) + " ST5 "
+				cQryTT9 += 	"WHERE "
+				cQryTT9 += 		"ST5.T5_FILIAL = " + ValToSQL( FWxFilial( 'ST5' ) ) + " AND "
+				cQryTT9 += 		"ST5.T5_TAREFA = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 		"ST5.D_E_L_E_T_ = ' ' "
+
+				cQryTT9 += 	"UNION " 
+
+				cQryTT9 += 	"SELECT " 
+				cQryTT9 += 		"1 "
+				cQryTT9 += 	"FROM " 
+				cQryTT9 += 		RetSQLName( 'TP5' ) + " TP5 "
+				cQryTT9 += 	"WHERE "
+				cQryTT9 += 		"TP5.TP5_FILIAL = " + ValToSQL( FWxFilial( 'TP5' ) ) + " AND "
+				cQryTT9 += 		"TP5.TP5_TAREFA = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 		"TP5.D_E_L_E_T_ = ' ' "
+
+				dbUseArea( .T., 'TOPCONN', TcGenQry( , , ChangeQuery( cQryTT9 ) ), cAlsTT9, .T., .T. )
+
+				If (cAlsTT9)->( !EoF() )
+
+					Help( , , 'TT9_CARACT', , STR0039 +; // Atenção ## Não será possível alterar a característica da tarefa,
+						STR0040 + Chr( 10 ) + Chr( 13 ) +; // visto que esta tarefa possui algum dos vinculos:
+						STR0038 + Chr( 10 ) +; // Tarefas da Manutenção - ST5
+						STR0041, 6, 0 ) // Tarefas da Manutenção Padrão - TP5 
+
+					lRet := .F.
+
+				EndIf
+
+				(cAlsTT9)->( dbCloseArea() )
+
+			EndIf
+			
+			If lRet
+			
+				cAlsTT9 := GetNextAlias()
+
+				/*------------------------------------------------------+
+				| Define quais caracteristicas da tarefa será validada. |
+				+------------------------------------------------------*/
+				Do Case
+				
+					Case TT9->TT9_CARACT == '1' // Preventiva
+
+						cCaract += "'P'"
+
+					Case TT9->TT9_CARACT == '2' // Corretiva
+
+						cCaract += "'C'"
+
+					Case TT9->TT9_CARACT == '3' // Outros
+
+						cCaract += "'O'"
+
+					Case TT9->TT9_CARACT == '4' // Todos
+
+						If FWFldGet( 'TT9_CARACT' ) != '1'
+
+							cCaract += "'P'"
+
+						EndIf
+
+						If FWFldGet( 'TT9_CARACT' ) != '2'
+
+							If !Empty( cCaract )
+
+								cCaract += ", "
+
+							EndIf
+
+							cCaract += "'C'"
+
+						EndIf
+
+						If FWFldGet( 'TT9_CARACT' ) != '3'
+
+							If !Empty( cCaract )
+
+								cCaract += ", "
+
+							EndIf
+
+							cCaract += "'O'"
+
+						EndIf
+
+				End Case
+				
+				/*----------------------------------------------------------------------+
+				| Valid. se a tarefa possui relacionamento com alguma ordem de serviço. |
+				+----------------------------------------------------------------------*/
+				cQryTT9 := 	"SELECT " 
+				cQryTT9 += 		"1 "
+				cQryTT9 += 	"FROM " 
+				cQryTT9 += 		RetSQLName( 'STJ' ) + " STJ "
+				cQryTT9 += 	"INNER JOIN "
+				cQryTT9 += 		RetSQLName( 'ST4' ) + " ST4 ON "
+				cQryTT9 += 			"ST4.T4_FILIAL  = " + ValToSQL( FWxFilial( 'ST4' ) ) + " AND "
+				cQryTT9 += 			"ST4.T4_SERVICO = STJ.TJ_SERVICO AND "
+				cQryTT9 += 			"ST4.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"INNER JOIN "
+				cQryTT9 += 		RetSQLName( 'STE' ) + " STE ON "
+				cQryTT9 += 			"STE.TE_FILIAL  = " + ValToSQL( FWxFilial( 'STE' ) ) + " AND "
+				cQryTT9 += 			"STE.TE_TIPOMAN = ST4.T4_TIPOMAN       AND "
+				cQryTT9 += 			"STE.TE_CARACTE IN ( " + cCaract + " ) AND "
+				cQryTT9 += 			"STE.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STL' ) + " STL ON "
+				cQryTT9 += 			"STL.TL_FILIAL  = " + ValToSQL( FWxFilial( 'STL' ) ) + " AND "
+				cQryTT9 += 			"STL.TL_ORDEM   = STJ.TJ_ORDEM AND "
+				cQryTT9 += 			"STL.TL_PLANO   = STJ.TJ_PLANO AND "
+				cQryTT9 += 			"STL.TL_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STL.D_E_L_E_T_ = ' '
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STQ' ) + " STQ ON "
+				cQryTT9 += 			"STQ.TQ_FILIAL  = " + ValToSQL( FWxFilial( 'STQ' ) ) + " AND "
+				cQryTT9 += 			"STQ.TQ_ORDEM   = STJ.TJ_ORDEM AND "
+				cQryTT9 += 			"STQ.TQ_PLANO   = STJ.TJ_PLANO AND "
+				cQryTT9 += 			"STQ.TQ_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STQ.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STN' ) + " STN ON "
+				cQryTT9 += 			"STN.TN_FILIAL  = " + ValToSQL( FWxFilial( 'STN' ) ) + " AND "
+				cQryTT9 += 			"STN.TN_ORDEM   = STJ.TJ_ORDEM AND "
+				cQryTT9 += 			"STN.TN_PLANO   = STJ.TJ_PLANO AND "
+				cQryTT9 += 			"STN.TN_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STN.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"WHERE "
+				cQryTT9 += 		"STJ.TJ_FILIAL  = " + ValToSQL( FWxFilial( 'STN' ) ) + " AND "
+				cQryTT9 += 		"( 	 STQ.TQ_TAREFA IS NOT NULL OR "
+				cQryTT9 += 			"STL.TL_TAREFA IS NOT NULL OR "
+				cQryTT9 += 			"STN.TN_TAREFA IS NOT NULL ) AND " 
+				cQryTT9 += 		"STJ.D_E_L_E_T_ = ' ' "
+
+				cQryTT9 += 	"UNION "
+
+				cQryTT9 += 	"SELECT " 
+				cQryTT9 += 		"1 "
+				cQryTT9 += 	"FROM " 
+				cQryTT9 += 		RetSQLName( 'STS' ) + " STS "
+				cQryTT9 += 	"INNER JOIN "
+				cQryTT9 += 		RetSQLName( 'ST4' ) + " ST4 ON "
+				cQryTT9 += 			"ST4.T4_FILIAL  = " + ValToSQL( FWxFilial( 'ST4' ) ) + " AND "
+				cQryTT9 += 			"ST4.T4_SERVICO = STS.TS_SERVICO AND "
+				cQryTT9 += 			"ST4.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"INNER JOIN "
+				cQryTT9 += 		RetSQLName( 'STE' ) + " STE ON "
+				cQryTT9 += 			"STE.TE_FILIAL  = " + ValToSQL( FWxFilial( 'STE' ) ) + " AND "
+				cQryTT9 += 			"STE.TE_TIPOMAN = ST4.T4_TIPOMAN       AND "
+				cQryTT9 += 			"STE.TE_CARACTE IN ( " + cCaract + " ) AND "
+				cQryTT9 += 			"STE.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STT' ) + " STT ON "
+				cQryTT9 += 			"STT.TT_FILIAL  = " + ValToSQL( FWxFilial( 'STT' ) ) + " AND "
+				cQryTT9 += 			"STT.TT_ORDEM   = STS.TS_ORDEM AND "
+				cQryTT9 += 			"STT.TT_PLANO   = STS.TS_PLANO AND "
+				cQryTT9 += 			"STT.TT_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STT.D_E_L_E_T_ = ' '
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STX' ) + " STX ON "
+				cQryTT9 += 			"STX.TX_FILIAL  = " + ValToSQL( FWxFilial( 'STX' ) ) + " AND "
+				cQryTT9 += 			"STX.TX_ORDEM   = STS.TS_ORDEM AND "
+				cQryTT9 += 			"STX.TX_PLANO   = STS.TS_PLANO AND "
+				cQryTT9 += 			"STX.TX_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STX.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"LEFT JOIN "
+				cQryTT9 += 		RetSQLName( 'STU' ) + " STU ON "
+				cQryTT9 += 			"STU.TU_FILIAL  = " + ValToSQL( FWxFilial( 'STU' ) ) + " AND "
+				cQryTT9 += 			"STU.TU_ORDEM   = STS.TS_ORDEM AND "
+				cQryTT9 += 			"STU.TU_PLANO   = STS.TS_PLANO AND "
+				cQryTT9 += 			"STU.TU_TAREFA  = " + ValToSQL( TT9->TT9_TAREFA )    + " AND "
+				cQryTT9 += 			"STU.D_E_L_E_T_ = ' ' "
+				cQryTT9 += 	"WHERE "
+				cQryTT9 += 		"STS.TS_FILIAL  = " + ValToSQL( FWxFilial( 'STS' ) ) + " AND "
+				cQryTT9 += 		"( STX.TX_TAREFA IS NOT NULL OR "
+				cQryTT9 += 		  "STT.TT_TAREFA IS NOT NULL OR "
+				cQryTT9 += 		  "STU.TU_TAREFA IS NOT NULL ) AND " 
+				cQryTT9 += 		"STS.D_E_L_E_T_ = ' ' "
+
+				dbUseArea( .T., 'TOPCONN', TcGenQry( , , ChangeQuery( cQryTT9 ) ), cAlsTT9, .T., .T. )
+
+				If (cAlsTT9)->( !EoF() )
+
+					Help( , , 'TT9_CARACT', , STR0039 +; // Atenção ## Não será possível alterar a característica da tarefa,
+						STR0040 + Chr( 10 ) + Chr( 13 ) +; // visto que esta tarefa possui algum dos vinculos:
+						STR0042 + Chr( 10 ) +; // Insumos - STL
+						STR0043 + Chr( 10 ) +; // Etapas - STQ
+						STR0044 + Chr( 10 ) +; // Ocorrências - STN
+						STR0045 + Chr( 10 ) +; // Histórico de Insumos - STT
+						STR0046 + Chr( 10 ) +; // Histórico de Etapas - STX
+						STR0047, 10, 0 ) // Histórico de Ocorrências - STU
+
+					lRet := .F.
+
+				EndIf
+
+				(cAlsTT9)->( dbCloseArea() )
+
+			EndIf
+
+		EndIf
+
+	EndIf
+	
+Return lRet

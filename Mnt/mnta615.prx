@@ -1,0 +1,1440 @@
+#INCLUDE "MNTA615.ch"
+#include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA615 - Cadastro de Posto Interno e Tanques
+
+@source SIGAMNT
+@author Evaldo Cevinscki Jr.
+@since 09/01/2006
+@version P11
+@return True
+/*/
+//---------------------------------------------------------------------
+Function MNTA615()
+
+	Local aNGBEGINPRM := {}
+
+	If FindFunction( 'MNTAmIIn' ) .And. !MNTAmIIn( 95 )
+		Return .F.
+	EndIf
+
+	aNGBEGINPRM := NGBEGINPRM()
+
+	Private bNgGrava
+	Private cALIAS
+	Private aRotina   := MenuDef()
+	Private cCadastro := OemtoAnsi(STR0004)  //"Posto Interno c/ Tanques e Bombas"
+	Private aChkDel   := {}
+	Private lAtivo    := .F.
+	Private aVarnao   := {}
+	Private lOk       := .F.
+	Private cVar1     := " "
+
+	dbSelectArea("TQF")
+	dbSetOrder(1)
+	dbGoTop()
+	cFilMbrTQF := "TQF_FILIAL = '" + xFilial('TQF')+"' And TQF_TIPPOS = '2'"
+
+	If ExistBlock("MNTA6153")
+		cFilMbrTQF := ExecBlock("MNTA6153",.F.,.F., {cFilMbrTQF})
+	EndIf
+
+	MBROWSE(6,1,22,75,"TQF",,,,,,,,,,,,,,cFilMbrTQF)
+	Set Key VK_F9 To
+	dbSelectArea("TQF")
+	Set Filter TO
+	dbSetOrder(1)
+	dbSeek(xFILIAL("TQF"))
+
+	//Retorna conteudo de variaveis padroes
+	NGRETURNPRM(aNGBEGINPRM)
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT615TB
+
+Programa para cadastrar Tanques e Bombas de Postos Internos
+
+@source SIGAMNT
+@author Evaldo Cevinscki Jr.
+@since 09/01/2006
+@version P11
+@return True
+/*/
+//---------------------------------------------------------------------
+Function MNT615TB(cAlias,nRecno,nOpcx)
+
+	Local cTitulo   := cCadastro  // Titulo da janela
+	Local oDlg      := Nil
+	Local Ni        := 0
+	Local cGet      := ""
+	Local nControl  := 0
+	Local nOK       := 0
+	Local lGetd     := .T.
+	Local aPages    := {}
+	Local aTitles   := {}
+	Local aVar      := {}
+	Local lVisual   := .T.
+	Local oFont     := TFont():New("Arial",12,12,,.F.,,.F.,,.F.,.F.)
+	Local oFont01   := TFont():New("Times New Roman",10,10,,.F.,,.F.,,.F.,.F.)
+	Local l615Del   := .F.
+	Local aNoFields := {}
+	Local oSize     := FwDefSize():New(.T.)
+	Local nLinIniTl := oSize:aWindSize[1] // Linha  inicial da tela
+	Local nColIniTl := oSize:aWindSize[2] // Coluna inicial da tela
+	Local nLinFimTl := oSize:aWindSize[3] // Linha  final   da tela
+	Local nColFimTl := oSize:aWindSize[4] // Coluna final   da tela
+
+	Private oEnc01,oGet01,oGet02,oMenu
+	Private oGet,aHeader,nItens,oMark
+	Private nTQJTANQUE, nTQJBOMBA, nTQITANQUE, nTQJDTCONT, nTQJHRCONT
+	Private aSvATela  := {}
+	Private aSvAGets  := {}
+	Private aTela     := {}
+	Private aSvATela1 := {}
+	Private aSvAGets1 := {}
+	Private aSvATela2 := {}
+	Private aSvAGets2 := {}
+	Private aLocal    := {}
+	Private aSvHeader := {{},{}}
+	Private aSvCols   := {{},{}}
+	Private aALCols   := {{},{}}
+	Private aOLCols   := {{},{}}
+	Private primvez   := .F.
+	Private aOldCols  := {}
+
+	aAdd(aTitles,OemToAnsi(STR0006))    //"Tanques"
+	aAdd(aPages,"Header 1")
+	nControl++
+	aAdd(aTitles,OemToAnsi(STR0007)) //"Bombas"
+	aAdd(aPages,"Header 2")
+	nControl++
+
+	If nOpcx == 3
+		If TQF->TQF_ATIVO == "2"
+			HELP(" ",1,STR0008,,STR0011,3,1)//"ATENÇÃO"##"Posto inativo."
+			Return .F.
+		EndIf
+		Inclui := .T.
+	EndIf
+
+	Define MsDialog oDlg Title cTitulo From nLinIniTl,nColIniTl TO nLinFimTl,nColFimTl Of oMainWnd STYLE nOR(WS_VISIBLE,WS_POPUP)
+
+		oPanelTot       := TPanel():Create(oDlg,0,0,,,.F.,,,CLR_WHITE,0,0)
+		oPanelTot:Align := CONTROL_ALIGN_ALLCLIENT
+
+		oDlg:lMaximized    := .T.
+		oFolder            := TFolder():New(6.5,0,aTitles,aPages,oPanelTot,,,,.F.,.F.,332,225,)
+		oFolder:bChange    := {|| ChangeGet()}
+		oFolder:bSetOption := {|| CheckCols() }
+		oFolder:Align      := CONTROL_ALIGN_ALLCLIENT
+
+		oFolder:aDialogs[1]:oFont := oDlg:oFont
+		oFolder:aDialogs[2]:oFont := oDlg:oFont
+
+		//Folder 02
+		dbSelectArea("TQJ")
+		dbSetOrder(1)
+
+		aHeader := {}
+		aCols   := {}
+
+		aAdd(aNoFields, 'TQJ_CODPOS')
+		aAdd(aNoFields, 'TQJ_NREDUZ')
+		aAdd(aNoFields, 'TQJ_LOJA')
+
+		cQuery := "SELECT * "
+		cQuery += "  FROM " + RetSqlName("TQJ") + " TQJ"
+		cQuery += " WHERE TQJ.TQJ_FILIAL = '" + xFilial("TQJ")  + "'"
+		cQuery += "   AND TQJ.TQJ_CODPOS = '" + TQF->TQF_CODIGO + "'"
+		cQuery += "   AND TQJ.TQJ_LOJA   = '" + TQF->TQF_LOJA   + "'"
+		cQuery += "   AND TQJ.D_E_L_E_T_ = ' '"
+		FillGetDados( 4, "TQJ", 1, xFilial("TQJ")+TQF->TQF_CODIGO+TQF->TQF_LOJA, {|| "TQJ->TQJ_FILIAL+TQJ->TQJ_CODPOS+TQJ->TQJ_LOJA "}, {|| .T.},aNoFields,,,cQuery)
+		aOldCols := aClone(aCols)
+
+		dbSelectArea("TQJ")
+		dbGoBottom()
+		dbSkip()
+
+		If Empty(aCols)
+			aCols := BlankGetd(aHeader)
+		EndIf
+
+		aSVHEADER[2] := aCLONE(aHEADER)
+		aSVCOLS[2]   := aCLONE(aCOLS)
+		aALCOLS[2]   := aCLONE(aCOLS)
+		nTQJTANQUE   := aSCAN(aSVHEADER[2],{|x| x[2] == 'TQJ_TANQUE'})
+		nTQJBOMBA    := aSCAN(aSVHEADER[2],{|x| x[2] == 'TQJ_BOMBA '})
+		nTQJDTCONT   := aSCAN(aSVHEADER[2],{|x| x[2] == 'TQJ_DTCONT'})
+		nTQJHRCONT   := aSCAN(aSVHEADER[2],{|x| x[2] == 'TQJ_HRCONT'})
+
+		n      := Len(aCols)
+		oGet02 := MsNewGetDados():New( 005, 005, 190, 327, GD_INSERT + GD_UPDATE + GD_DELETE, 'MNT615LIN( 2 )',;
+			'MNT615LIN( 2 )', , , , 9999, , , 'MNT615TANQ( 1 )', oFolder:aDialogs[2], aHeader, aCols )
+		oGet02:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+		oGet02:oBrowse:Default()
+		oGet02:oBrowse:Refresh()
+
+		//Folder 01
+		dbSelectArea("TQI")
+		dbSetOrder(1)
+
+		aHeader := {}
+		aCols   := {}
+
+		aAdd(aNoFields, 'TQI_CODPOS')
+		aAdd(aNoFields, 'TQI_LOJA')
+		cQuery := "SELECT * "
+		cQuery += "  FROM " + RetSqlName("TQI")+" TQI"
+		cQuery += " WHERE TQI.TQI_FILIAL = '" + xFilial("TQI")  + "'"
+		cQuery += "   AND TQI.TQI_CODPOS = '" + TQF->TQF_CODIGO + "'"
+		cQuery += "   AND TQI.TQI_LOJA   = '" + TQF->TQF_LOJA   + "'"
+		cQuery += "   AND TQI.D_E_L_E_T_ = ' '"
+		FillGetDados( 4, "TQI", 1, xFilial("TQI")+TQF->TQF_CODIGO+TQF->TQF_LOJA, {|| "TQI->TQI_FILIAL+TQI->TQI_CODPOS+TQI->TQI_LOJA "}, {|| .T.},aNoFields,,,cQuery)
+
+		dbSelectArea("TQI")
+		dbGoBottom()
+		dbSkip()
+
+		If Empty(aCols)
+			aCols := BlankGetd(aHeader)
+			l615Del := .T.
+			Primvez := .T.
+		EndIf
+
+		aSVHEADER[1] := aCLONE(aHEADER)
+		aSVCOLS[1]   := aCLONE(aCOLS)
+		aALCOLS[1]   := aCLONE(aCOLS)
+		aOLCOLS[1]   := aCLONE(aCOLS)
+
+		n      := Len(aCols)
+		oGet01 := MsGetDados():New(005, 005, 190, 327,nOpcx,"MNT615LIN(1)","MNT615LIN(1)",,lGetd,,1,,,,,,"MNT615ADEL",oFolder:aDialogs[1])
+		oGet01:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+		oGet01:oBrowse:Default()
+		oGet01:oBrowse:Refresh()
+
+		nTQITANQUE := aSCAN(aSVHEADER[1],{|x| x[2] == 'TQI_TANQUE'})
+
+		aCAMPOSN := {"TQF_CIDADE","TQF_BAIRRO","TQF_ESTADO","TQF_TIPPOS","TQF_CONVEN","TQF_ATIVO","TQF_CODFIL",;
+					 "TQF_CONTAT","TQF_FUNCAO","TQF_DTCAD","TQF_DTDESA","TQF_DTRECA","TQF_CNPJ","TQF_POSTO"}
+
+		aCHOICE := NGCAMPNSX3("TQF",aCAMPOSN)
+		aTela   := {}
+		aGets   := {}
+
+		dbSelectArea("TQF")
+		RegToMemory("TQF",(nOpcx == 3))
+
+		oEnc01              := MsMGet():New("TQF",nRecno,1,,,,aChoice,{14,0,100,330},,,,,,oPanelTot,,,.F.,"aSvATela")
+		oEnc01:oBox:Align   := CONTROL_ALIGN_TOP
+		oENC01:OBOX:LACTIVE := .T.
+
+		aSvATela := aClone(aTela)
+		aSvAGets := aClone(aGets)
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg:bRClicked := { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+	Activate Dialog oDlg On Init (EnchoiceBar(oDlg,{|| lOk:=.T.,If(MNT615OBRI(cALIAS,nOpcx),oDlg:End(),lOk := .F.)},{|| lOk:= .F.,oDlg:End()})) Centered
+
+	If !lOk
+		If l615Del
+			Mnt615Del()
+		EndIf
+
+		//Correcao de problemas de gravacao
+		//Somente alterar e/ou retirar com Absoluta certeza.
+		For Ni := 1 To Len(aSVCOLS[1])
+			lDelTa := .T.
+			cTanQu := GdFieldGet("TQI_TANQUE",Ni,Nil,aSvHeader[1],aSVCols[1])
+			If Atail(aSVCOLS[1,Ni])
+			Else
+				If NGIFDBSEEK("TQJ",TQF->TQF_CODIGO+TQF->TQF_LOJA+cTanQu,1)
+					While !Eof() .And. TQJ->TQJ_FILIAL = Xfilial("TQJ") .And. TQJ->TQJ_CODPOS = TQF->TQF_CODIGO;
+					             .And. TQJ->TQJ_LOJA   = TQF->TQF_LOJA  .And. TQJ->TQJ_TANQUE = cTanQu
+						lDelTa := .F.
+						DbSkip()
+					End
+				EndIf
+			EndIf
+
+			If lDelTa
+				If NGIFDBSEEK("TQJ",TQF->TQF_CODIGO+TQF->TQF_LOJA+cTanQu,1)
+					While !Eof() .And. TQJ->TQJ_FILIAL = Xfilial("TQJ") .And. TQJ->TQJ_CODPOS = TQF->TQF_CODIGO;
+					             .And. TQJ->TQJ_LOJA   = TQF->TQF_LOJA  .And. TQJ->TQJ_TANQUE = cTanQu
+						NGDELETAREG("TQJ")
+						DbSkip()
+					End
+				EndIf
+				If NGIFDBSEEK("TQI",TQF->TQF_CODIGO+TQF->TQF_LOJA+cTanQu,1)
+					NGDELETAREG("TQI")
+				EndIf
+			EndIf
+		Next Ni
+	Else
+		cVar1   := "oGET02"
+		aCols   := aClone( oGet02:aCols )
+		aHeader := aClone( oGet02:aHeader )
+		MNT615GRAVA(cALIAS,nOpcx)
+	EndIf
+
+	If ExistBlock("MNTA6152")
+		ExecBlock("MNTA6152",.F.,.F.,{lOk,nOpcX})
+	EndIf
+
+	dbSelectArea("TQF")
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT615OBRI  ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³10/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Faz validacoes dos campos obrigatorios                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMNT                                                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         Atualizacoes Sofridas Desde a Construcao Inicial.               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615OBRI(cALIAS,nOpcx)
+Local aOldArea := GetArea() // Guarda variaveis de alias e indice
+Local j
+Local lRet := .T.
+cVar1 := If(oFolder:nOption = 1,"oGET01","oGET02")
+nCols := If(oFolder:nOption = 1,1,2)
+
+NGSAIGET( nCols )
+aHeader := aClone( IIf( nCols != 2, aSvHeader[nCols], oGet02:aHeader ) )
+aCols   := aClone( IIf( nCols != 2, aSvCols[nCols]  , oGet02:aCols ) )
+
+&cVar1:ForceRefresh()
+n       := Len(aCols)
+
+If cVar1 == "oGET01"
+	For j := 1 to Len(aCols)
+		If !aCols[j][Len(aHeader)+1]
+			If Empty(GdFieldGet("TQI_CODCOM",j)) //Empty(aCols[j][2])
+				Help(" ",1,STR0008,,STR0012,3,1)//"ATENÇÃO"##"Código do Combustível  do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+			If Empty(GdFieldGet("TQI_PRODUT",j)) //Empty(aCols[j][3])
+				Help(" ",1,STR0008,,STR0013,3,1)//"ATENÇÃO"##"Produto do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+			If Empty(GdFieldGet("TQI_FABRIC",j)) //Empty(aCols[j][4])
+				Help(" ",1,STR0008,,STR0014,3,1)//"ATENÇÃO"##"Fabricante do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+			If Empty(GdFieldGet("TQI_INSTAL",j)) //Empty(aCols[j][7])
+				Help(" ",1,STR0008,,STR0015,3,1)//"ATENÇÃO"##"Tipo de Instalação do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+			cTanque := GdFieldGet("TQI_TANQUE",j) //aCols[j][1]
+		   	nPos := aScan(aSVCOLS[2],{|x| x[1] == cTanque })
+	   		//Validação de local de estoque evitando erro na baixa de estoque de abastecimento
+		   	If nPos = 0
+		   		//Validação de local de estoque evitando erro na baixa de estoque de abastecimento
+				dbSelectArea("NNR")
+				dbSetOrder(1)
+				If !dbSeek(xFilial("NNR") + cTanque)
+					MsgStop(STR0038) //"Local de estoque não cadastrado."
+					oGET01:oBROWSE:REFRESH()
+					Return
+				EndIf
+			EndIf
+	   		If nPos = 0
+				Help(" ",1,STR0008,,STR0022+cTanque+STR0023,3,1)//"ATENÇÃO"##"Para o tanque "##" deverá ser informado pelo menos uma bomba."
+				n:= 1
+				RETURN .F.
+			EndIf
+		EndIf
+	Next j
+
+Else
+
+	For j := 1 to Len(aSVCols[1])
+
+		If !aSVCols[1][j][Len(aSVHeader[1])+1]
+
+			If Empty(GdFieldGet("TQI_CODCOM",j,Nil,aSvHeader[1],aSVCols[1])) //Empty(aSVCols[1][j][2])
+				Help(" ",1,STR0008,,STR0012,3,1)//"ATENÇÃO"##"Código do Combustível  do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+
+			If Empty(GdFieldGet("TQI_PRODUT",j,Nil,aSvHeader[1],aSVCols[1])) //Empty(aSVCols[1][j][3])
+				Help(" ",1,STR0008,,STR0013,3,1)//"ATENÇÃO"##"Produto do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+
+			If Empty(GdFieldGet("TQI_FABRIC",j,Nil,aSvHeader[1],aSVCols[1])) //Empty(aSVCols[1][j][4])
+				Help(" ",1,STR0008,,STR0014,3,1)//"ATENÇÃO"##"Fabricante do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+
+			If Empty(GdFieldGet("TQI_INSTAL",j,Nil,aSvHeader[1],aSVCols[1])) //Empty(aSVCols[1][j][7])
+				Help(" ",1,STR0008,,STR0015,3,1)//"ATENÇÃO"##"Tipo de Instalação do Tanque não foi informado."
+				RETURN .F.
+			EndIf
+
+			cTanque := GdFieldGet("TQI_TANQUE",j,Nil,aSvHeader[1],aSVCols[1]) //aSVCols[1][j][1]
+
+			nPos := aScan( aCols, { |x| x[1] == cTanque } )
+
+			If nPos == 0
+
+				Help(" ",1,STR0008,,STR0022+cTanque+STR0023,3,1)//"ATENÇÃO"##
+				n:= 1
+
+				RETURN .F.
+
+			EndIf
+
+		EndIf
+
+	Next j
+
+ENDIF
+
+If cVar1 == "oGET02"
+	For j := 1 to Len( oGet02:aCols )
+		If !oGet02:aCols[j,Len( oGet02:aHeader ) + 1]
+			If Empty( GdFieldGet( "TQJ_TANQUE", j, .F., oGet02:aHeader, oGet02:aCols ) ) //Empty(aCols[j][1])
+				Help(" ",1,STR0008,,STR0016,3,1)//"ATENÇÃO"##"Código do Tanque da Bomba não foi informado."
+				lRet := .F.
+			EndIf
+			If lRet .AND. Empty(GdFieldGet("TQJ_BOMBA", j, .F., oGet02:aHeader, oGet02:aCols ) ) //Empty(aCols[j][2])
+				Help(" ",1,STR0008,,STR0017,3,1)//"ATENÇÃO"##"Código da Bomba não foi informado."
+				lRet := .F.
+			EndIf
+			If lRet .AND. Empty(GdFieldGet("TQJ_FABRIC", j, .F., oGet02:aHeader, oGet02:aCols ) ) //Empty(aCols[j][3])
+				Help(" ",1,STR0008,,STR0018,3,1)//"ATENÇÃO"##"Fabricante da Bomba não foi informado."
+				lRet := .F.
+			EndIf
+			If lRet .AND. Empty(GdFieldGet("TQJ_MOTIVO", j, .F., oGet02:aHeader, oGet02:aCols ) ) //Empty(aCols[j][9])
+				Help(" ",1,STR0008,,STR0019,3,1)//"ATENÇÃO"##"Campo Motivo não foi informado."
+				lRet := .F.
+			EndIf
+			If lRet .AND. Empty(GdFieldGet("TQJ_DTCONT", j,.F., oGet02:aHeader, oGet02:aCols ) )
+				Help(" ",1,STR0008,,RetTitSX3("TQJ_DTCONT")+" não foi informado.",3,1)
+				lRet := .F.
+			EndIf
+			If lRet .AND. Empty(GdFieldGet("TQJ_HRCONT", j, .F., oGet02:aHeader, oGet02:aCols ) )
+				Help(" ",1,STR0008,,RetTitSX3("TQJ_HRCONT")+" não foi informado.",3,1)
+				lRet := .F.
+			EndIf
+			If lRet .AND. GdFieldPos( "TQJ_LIMCON", oGet02:aHeader ) > 0
+				If Empty(GdFieldGet("TQJ_LIMCON", j, .F., oGet02:aHeader, oGet02:aCols ) )
+					Help(" ",1,STR0008,,RetTitSX3("TQJ_LIMCON")+" não foi informado.",3,1)
+					lRet := .F.
+				EndIf
+			EndIf
+			If !lRet
+				oGET02:oBROWSE:REFRESH()
+				RETURN .F.
+			EndIf
+		EndIf
+	Next j
+	For j := 1 to Len(aSVCols[1])
+		If !aSVCols[1][j][Len(aSVHeader[1])+1]
+			cTanque := GdFieldGet("TQI_TANQUE",j,Nil,aSvHeader[1],aSVCols[1]) //aSVCols[1][j][1]
+			nPos := aScan(aCOLS,{|x| ( x[1] == cTanque ) .and. (!x[len(aHeader)+1]) })
+		    If nPos = 0
+		    	Help(" ",1,STR0008,,STR0022+cTanque+STR0023,3,1)//"ATENÇÃO"##
+				n:= 1
+				RETURN .F.
+			EndIf
+		EndIf
+	Next j
+Else
+	For j := 1 to Len(aSVCols[2])
+		If !aSVCols[2][j][Len(aSVHeader[2])+1]
+            lRet    := .F.
+            cTan  := GdFieldGet("TQJ_TANQUE",J,Nil,aSvHeader[2],aSVCols[2])
+            cBom  := GdFieldGet("TQJ_BOMBA" ,J,Nil,aSvHeader[2],aSVCols[2])
+            cFab  := GdFieldGet("TQJ_FABRIC",J,Nil,aSvHeader[2],aSVCols[2])
+            dCon  := GdFieldGet("TQJ_DTCONT",J,Nil,aSvHeader[2],aSVCols[2])
+            cHCo  := GdFieldGet("TQJ_HRCONT",J,Nil,aSvHeader[2],aSVCols[2])
+
+            If !Empty(cTan) .Or. !Empty(cBom) .Or. !Empty(cFab) .Or.;
+               dCon <> Ctod('  /  /  ') .Or. cHCo <> Space(5)
+               lRet := .T.
+            EndIf
+
+            If !lRet
+               If GdFieldPos("TQJ_LIMCON",aSvHeader[2]) > 0
+                  If !Empty(GdFieldGet("TQJ_LIMCON",j,Nil,aSvHeader[2],aSVCols[2]))
+                     lRet := .T.
+                  EndIf
+               EndIf
+            EndIf
+
+            If lRet
+               If Empty(GdFieldGet("TQJ_TANQUE",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,STR0016,3,1)//"ATENÇÃO"##"Código do Tanque da Bomba não foi informado."
+                   RETURN .F.
+               EndIf
+               If Empty(GdFieldGet("TQJ_BOMBA",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,STR0017,3,1)//"ATENÇÃO"##"Código da Bomba não foi informado."
+                   RETURN .F.
+               EndIf
+               If Empty(GdFieldGet("TQJ_FABRIC",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,STR0018,3,1)//"ATENÇÃO"##"Fabricante da Bomba não foi informado."
+                   RETURN .F.
+               EndIf
+               If Empty(GdFieldGet("TQJ_MOTIVO",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,STR0019,3,1)//"ATENÇÃO"##"Campo Motivo não foi informado."
+                   RETURN .F.
+               EndIf
+               If Empty(GdFieldGet("TQJ_DTCONT",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,RetTitSX3("TQJ_DTCONT")+" não foi informado.",3,1)
+                   RETURN .F.
+               EndIf
+               If Empty(GdFieldGet("TQJ_HRCONT",j,Nil,aSvHeader[2],aSVCols[2]))
+                   Help(" ",1,STR0008,,RetTitSX3("TQJ_HRCONT")+" não foi informado.",3,1)
+                   RETURN .F.
+               EndIf
+               If GdFieldPos("TQJ_LIMCON",aSvHeader[2]) > 0
+                   If Empty(GdFieldGet("TQJ_LIMCON",j,Nil,aSvHeader[2],aSVCols[2]))
+                       Help(" ",1,STR0008,,RetTitSX3("TQJ_LIMCON")+" não foi informado.",3,1)
+                       RETURN .F.
+                   EndIf
+               EndIf
+			EndIf
+		EndIf
+	Next j
+	For j := 1 to Len(aCols)
+		If !aCols[j][Len(aHeader)+1]
+			cTanque := If(cVar1 == "oGET01",GdFieldGet("TQI_TANQUE",j),GdFieldGet("TQJ_TANQUE",j)) //aCols[j][1]
+			nPos := aScan(aSVCOLS[2],{|x| ( x[1] == cTanque ) .and. (!x[len(aSVHeader[2])+1]) })
+		   If nPos = 0
+				Help(" ",1,STR0008,,STR0022+cTanque+STR0023,3,1)//"ATENÇÃO"##
+				n:= 1
+				RETURN .F.
+			EndIf
+		EndIf
+    Next j
+ENDIF
+
+If ExistBlock("MNTA6151")
+	lRetPE := ExecBlock("MNTA6151",.F.,.F.)
+	If !lRetPE
+		RETURN .F.
+	EndIf
+EndIf
+
+NGGRAVATAN()
+RestArea(aOldArea)
+Return .T.
+
+/*/
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³NGGRAVATAN ³Autor ³ Evaldo Cevinscki Jr   ³ Data ³ 11/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Funcao para gravacao dos dados no aCols,referente ao tanque.³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGGRAVATAN()
+Local nx,nMaxArray,cTAR,cTIP,lRET := .T.,i,j
+Local lDel := .F.
+Local lGrava := .T.
+dbSelectArea("TQI")
+dbSetOrder(1)
+If GdFieldPos("TQI_TANQUE") == 0 //aHEADER[1][2] != "TQI_TANQUE"
+   aHEADER := aCLONE(aSVHEADER[1])
+   aCOLS   := aCLONE(aSVCOLS[1])
+EndIf
+nMaxArray := LEN(aCOLS)
+
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³ Verifica se nao foi excluido nenhum registro e grava ³
+//³ as novas inclusoes e alteracoes efetuadas            ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+For nx := 1 TO nMaxArray
+   If !Empty(aCOLS[nx][1])
+      If aCOLS[nx][LEN(aCOLS[nx])]
+         dbSelectArea("TQI")
+         If dbSeek(xFILIAL("TQI")+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQI_TANQUE",nx)+GdFieldGet("TQI_CODCOM",nx))
+               RecLock("TQI",.F.)
+               Dbdelete()
+               MsUnLock("TQI")
+         EndIf
+         Loop
+      EndIf
+
+      dbSelectArea("TQI")
+      dbSetOrder(1)
+      If dbSeek(xFILIAL("TQI")+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQI_TANQUE",nx)+GdFieldGet("TQI_CODCOM",nx))
+         RecLock("TQI",.F.)
+         lGrava := .T.
+      ElseIf If(nx <= Len(aOLCOLS[1]),dbSeek(xFILIAL("TQI")+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQI_TANQUE",nx,Nil,Nil,aOLCOLS[1])+GdFieldGet("TQI_CODCOM",nx,Nil,Nil,aOLCOLS[1])),.F.)
+         RecLock("TQI",.F.)
+         lGrava := .T.
+      Else
+      	If !Empty(aCOLS[nx][2])
+         	RecLock("TQI",.T.)
+         	TQI->TQI_FILIAL  := xFILIAL("TQI")
+         	TQI->TQI_CODPOS  := TQF->TQF_CODIGO
+         	TQI->TQI_LOJA    := TQF->TQF_LOJA
+	      Else
+	      	lGrava := .F.
+      	ENDIF
+      ENDIF
+      If lGrava
+	      For i := 1 TO FCOUNT()
+	         xx := aSCAN(aHEADER,{|x| AllTrim(x[2]) == AllTrim(FIELDNAME(i))})
+	         If xx > 0
+	            vv   := "TQI->"+FIELDNAME(i)
+	            &vv. := aCOLS[nx][xx]
+	         EndIf
+	      Next i
+	      MsUnLock("TQI")
+	   EndIf
+   EndIf
+Next nx
+
+aSVHEADER[1] := aCLONE(aHEADER)
+aSVCOLS[1]   := aCLONE(aCOLS)
+aOLCOLS[1]   := aCLONE(aCOLS)
+n            := len(aCOLS)
+oGET01:oBROWSE:REFRESH()
+dbSelectArea("TQI")
+
+Return
+
+/*/
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ GRAVABOM  ³Autor ³ Evaldo Cevinscki Jr   ³ Data ³ 11/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Funcao para gravacao dos dados no aCols,referente a BOMBA.  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function GRAVABOM()
+
+	dbSelectArea("TQJ")
+	dbSetOrder(1)
+
+	If aHEADER[1][2] != "TQJ_TANQUE"
+
+		aHEADER := aClone( aSVHEADER[1] )
+		aCOLS   := aClone( aSVCOLS[1] )
+
+	EndIf
+
+	aSVHEADER[2] := aClone( oGet02:aHeader )
+	aSVCOLS[2]   := aClone( oGet02:aCols )
+	n            := oGet02:nAt
+
+	oGET02:oBROWSE:REFRESH()
+
+	dbSelectArea("TQJ")
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT615GRAVA ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³10/01/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Grava as informacoes.                                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Tabelas   ³TQF    - Postos                                               ³±±
+±±³          ³TQI    - Tanques                                              ³±±
+±±³          ³TQJ    - Bombas                                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMNT                                                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         Atualizacoes Sofridas Desde a Construcao Inicial.               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                            ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615GRAVA(cALIAS,nOpcx)
+Local j, lDelete
+Local lIncluiTQJ := .F.
+Local n, nPos := 0
+
+//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+//³Manipula a tabela TQJ³
+//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+If cVar1 = "oGET02"
+	For j := 1 to Len(aCols)
+		lDelete := .F.
+		dbSelectArea('TQJ')
+		dbSetOrder(1)
+		If DbSeek(xFilial('TQJ')+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQJ_TANQUE",j)+GdFieldGet("TQJ_BOMBA",j))
+		   RecLock('TQJ',.F.)
+		   lDelete := .T.
+		ElseIf If(j <= Len(aALCols[2]),DbSeek(xFilial('TQJ')+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQJ_TANQUE",j,Nil,Nil,aALCOLS[2])+GdFieldGet("TQJ_BOMBA",j,Nil,Nil,aALCOLS[2])),.F.)
+		   RecLock('TQJ',.F.)
+		   lDelete := .T.
+		Else
+			If !aCols[j][Len(aCols[j])]
+				RecLock('TQJ',.T.)
+				lIncluiTQJ := .T.
+			EndIf
+		EndIf
+		If !Empty(GdFieldGet("TQJ_TANQUE",j))
+		   If !aCols[j][Len(aCols[j])]
+
+				TQJ->TQJ_FILIAL := xFilial('TQJ')
+				TQJ->TQJ_CODPOS := TQF->TQF_CODIGO
+				TQJ->TQJ_LOJA   := TQF->TQF_LOJA
+				For n := 1 TO FCOUNT() // Percorre a quantidade de campos existentes na tabela TQJ.
+					nPos := aSCAN(aHEADER,{|x| AllTrim(x[2]) == AllTrim(FIELDNAME(n))}) //Verifica se existe o campo no aHeader.
+					If nPos > 0 //Se encontrar no Header.
+						vv   := "TQJ->"+FIELDNAME(n) //Identifica o campo, atribuindo para a variável.
+						&vv. := aCOLS[j][nPos] //Pega a referência do campo e atribui o conteúdo.
+					EndIf
+				Next n
+				MsUnLock('TQJ')
+
+				dbSelectArea("TTV")
+				dbSetOrder(1)
+				If !dbSeek(xFilial("TTV")+TQJ->TQJ_CODPOS+TQJ->TQJ_LOJA+TQJ->TQJ_TANQUE+TQJ->TQJ_BOMBA)
+					//Inclui Historico do contador da Bomba
+					NGIncTTV(TQJ->TQJ_CODPOS,TQJ->TQJ_LOJA,TQJ->TQJ_TANQUE,TQJ->TQJ_BOMBA,TQJ->TQJ_DTCONT,TQJ->TQJ_HRCONT,"3",TQJ->TQJ_CONINI)
+				Else
+					If TTV->TTV_DATA != TQJ->TQJ_DTCONT .Or. TTV->TTV_HORA != TQJ->TQJ_HRCONT
+						RecLock("TTV",.F.)
+						TTV->TTV_DATA := TQJ->TQJ_DTCONT
+						TTV->TTV_HORA := TQJ->TQJ_HRCONT
+						MsUnLock()
+					EndIf
+					If TTV->TTV_POSINI != TQJ->TQJ_CONINI
+						NGAltTTVQnt(TQJ->TQJ_CODPOS,TQJ->TQJ_LOJA,TQJ->TQJ_TANQUE,TQJ->TQJ_BOMBA,TQJ->TQJ_DTCONT,TQJ->TQJ_HRCONT,'3',TQJ->TQJ_CONINI)
+					EndIf
+				EndIf
+			Else
+				If lDelete
+					DbDelete()
+					MsUnLock('TQJ')
+
+					//Deleta histórico do contador da Bomba
+					dbSelectArea("TTV")
+					dbSetOrder(1)
+					dbSeek(xFilial("TTV")+TQF->TQF_CODIGO+TQF->TQF_LOJA+GdFieldGet("TQJ_TANQUE",j)+GdFieldGet("TQJ_BOMBA",j))
+					While !Eof() .And. xFilial("TTV") == TTV->TTV_FILIAL .And. TTV->TTV_POSTO == TQF->TQF_CODIGO .And.;
+							TTV->TTV_LOJA == TQF->TQF_LOJA .And. TTV->TTV_TANQUE == GdFieldGet("TQJ_TANQUE",j) .And.;
+							TTV->TTV_BOMBA == GdFieldGet("TQJ_BOMBA",j)
+						RecLock("TTV",.F.)
+						dbDelete()
+						MsUnLock()
+					dbSelectArea("TTV")
+					dbSkip()
+					EndDo
+				EndIf
+			EndIf
+		EndIf
+	Next j
+ENDIF
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT615LIN ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³16/01/200.³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Valida a linha digitada no GetDados do Tanque               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         Atualizacoes Sofridas Desde a Construcao Inicial.             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                          ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615LIN(nTAB)
+
+	Local lRet        := .T.
+
+	//Nao deletar, variaveis usadas na funcao NGVALABAST
+	Private nPOSDATAB := 0
+	Private nPOSHORAB := 0
+
+	// Validações oGet01 - Tanque
+	If nTAB == 1
+		aSVHEADER[1] := aCLONE(aHEADER)
+		aSVCOLS[1]   := aCLONE(aCOLS)
+
+	// Validações oGet02 - Bomba
+	ElseIf nTAB == 2
+
+		aSVHEADER[2] := aClone( oGet02:aHeader )
+		aSVCOLS[2]   := aClone( oGet02:aCols )
+
+		nPOSDATAB := nTQJDTCONT
+		nPOSHORAB := nTQJHRCONT
+
+		lRet := NGVALABAST( TQF->TQF_CODIGO, TQF->TQF_LOJA, GDFieldGet( 'TQJ_TANQUE' ), GDFieldGet( 'TQJ_BOMBA' ),;
+			GDFieldGet( 'TQJ_DTCONT' ), GDFieldGet( 'TQJ_HRCONT' ), .T., .F. )
+
+	EndIf
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT615GET  ³Autor ³ Deivys Joenck         ³ Data ³ 14/08/01 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Retorna aCols e aHeader quando se foca a GETDADOS          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA120                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615GET(nG)
+	Local cVAR := "oGET"+STRZERO(nG,2)
+
+	If oFolder:nOption >= 1
+		nControl := ((oFolder:nOption) )
+	Else
+		nControl := nG
+	EndIf
+
+	aHeader := aClone( IIf( nControl != 2, aSvHeader[nControl], oGet02:aHeader ) )
+	aCols   := aClone( IIf( nControl != 2, aSvCols[nControl]  , oGet02:aCols ) )
+	n       := Len(aCOLS)
+
+	oFOLDER:REFRESH()
+	&cVAR:oBROWSE:REFRESH()
+
+	If cVar = "oGET01"
+		oGet01:oBrowse:Refresh()
+	Elseif cVar = "oGET02"
+		oGet02:oBrowse:Refresh()
+	EndIf
+
+	nCONTROGD := nG
+	
+Return
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³MNT615BOMBA³Autor ³ Evaldo Cevinscki Jr.  ³ Data ³ 11/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Validacao das Bombas de Combustiveis                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615BOMBA()
+
+	nQtd := 0
+
+	nPos    := GdFieldPos( 'TQJ_TANQUE' )
+	nPos1   := GdFieldPos( 'TQJ_BOMBA'  )
+
+	cTanque := GDFieldGet( 'TQJ_TANQUE' )
+	cBomba  := M->TQJ_BOMBA // Precisa ser a memória, pois a validação é feita no registro antes do mesmo estar gravado no aCols
+
+	If nPos > 0 .and. nPos1 > 0
+	aEval( oGet02:aCols, { |x| nQtd += iif( ! x[Len( oGet02:aHeader )+1] .And. x[nPos]+x[nPos1] == cTanque+cBomba, 1, 0 ) } )
+	EndIf
+
+	If nQtd > 0
+		Help(" ",1,"JAGRAVADO")
+		Return .F.
+	EndIf
+
+
+	If ( Len( aSVCols[2] ) >= oGet02:nAt .And. cTanque + cBomba != aSVCols[2,oGet02:nAt,nTQJTANQUE] +;
+		aSVCols[2,oGet02:nAt,nTQJBOMBA] ) .Or. oGet02:aCols[oGet02:nAt,Len( oGet02:aHeader )+1]
+
+		If !MNTCHKTTV( TQF->TQF_CODIGO, TQF->TQF_LOJA, aSVCols[2,oGet02:nAt,nTQJTANQUE], aSVCols[2,oGet02:nAt,nTQJBOMBA] )
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³Mnt615Seq  ³Autor ³ Evaldo Cevinscki Jr.  ³ Data ³ 11/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Validacao da autonumeracao do codigo dos tanques           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function Mnt615Seq()
+
+	//Remover após a 12.1.18
+
+	/*Local nSeq := 0, nSeq1 := 0 , nUlt := 0,i,lCols := .F.
+
+	dbSelectArea("TQI")
+	dbSetOrder(2)
+	If !DbSeek(xfilial("TQI"))
+		If Empty(aCols[1][1])
+		nSeq := 1
+		Else
+			nSeq := Val(aCols[Len(aCols)-1][1])+1
+		EndIf
+	Else
+		While !Eof() .And. TQI->TQI_FILIAL == xFilial("TQI")
+			nUlt := Val(TQI->TQI_TANQUE)
+
+			dbSelectArea("TQI")
+			DbSkip()
+		End
+		nSeq := nUlt + 1
+	EndIf
+	For i:=1 To Len(aCols)-1
+		nSeq1 := Val(aCols[i][1])
+		lCols := .T.
+	Next i
+	If lCols
+		nSeq1++
+	EndIf
+	nSeq := Max(nSeq1,nSeq)
+
+	If Empty(aCols[1][1])
+		aCols[1][1] := StrZero(nseq,2)
+	EndIf
+	lRefresh := .T.*/
+
+Return " "//StrZero(nseq,2)
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³Mnt615Del  ³Autor ³ Evaldo Cevinscki Jr.  ³ Data ³ 11/01/06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Deleta dados da getdados quando sai pelo botao cancela     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function Mnt615Del()
+
+dbSelectArea("TQJ")
+dbSetOrder(1)
+dbSeek(xFILIAL("TQJ")+TQF->TQF_CODIGO+TQF->TQF_LOJA+TQI->TQI_TANQUE)
+While !Eof() .And. TQJ->TQJ_FILIAL == xFILIAL("TQJ") .And.;
+   TQJ->TQJ_CODPOS == TQF->TQF_CODIGO .And. TQJ->TQJ_LOJA == TQF->TQF_LOJA .AND. TQJ->TQJ_TANQUE == aCOLS[1][1]
+   RecLock("TQJ",.F.)
+   Dbdelete()
+   MsUnLock("TQJ")
+   dbSkip()
+End
+
+dbSelectArea("TQI")
+dbSetOrder(1)
+dbSeek(xFILIAL("TQI")+TQF->TQF_CODIGO+TQF->TQF_LOJA)
+While !Eof() .And. TQI->TQI_FILIAL == xFILIAL("TQI") .And.;
+   TQI->TQI_CODPOS == TQF->TQF_CODIGO .And. TQI->TQI_LOJA == TQF->TQF_LOJA
+   RecLock("TQI",.F.)
+   Dbdelete()
+   MsUnLock("TQI")
+   dbSkip()
+End
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT615PESQ³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³ 17.03.06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Pesquisa Postos - Tanques/Bombas                            ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615PESQ()
+Local nINDOLD := 0
+dbSelectArea('TQF')
+nINDOLD := Indexord()
+AxPESQUI('TQF',Recno(),1)
+dbSelectArea('TQF')
+dbSetOrder(nINDOLD)
+Return .T.
+
+//--------------------------------------------------------------------
+/*/{Protheus.doc} MNT615VALT
+Valida o campo capacidade maxima para que seja maior do que a nominal.
+@type function
+ 
+@author Evaldo Cevinscki Jr.
+@since 17/03/2006
+@version P10 R4
+ 
+@param nOp, numérico, Indica de qual campo requisitou a validação
+	1 = TQI_CAPMAX
+	2 = TQI_CAMNOM 
+ 
+@return .T.
+/*/
+//--------------------------------------------------------------------
+Function MNT615VALT(nOp)
+
+Local nPosCapNom := aSCAN( aSVHEADER[1],{ |x| x[2] == 'TQI_CAPNOM' } )
+Local nPosCapMax := aSCAN( aSVHEADER[1],{ |x| x[2] == 'TQI_CAPMAX' } ) 
+
+DEFAULT nOp := 2 //Caso cliente não tenha aplicado pacote da 12.1.2210
+
+If ( nOp == 1 .AND. aCols[n][nPosCapMax] < M->TQI_CAPNOM ) .OR. ( nOp == 2 .AND. aCols[n][nPosCapNom] > M->TQI_CAPMAX )
+
+   Help(" ",1,STR0008,,STR0020,3,1)//"ATENÇÃO"##"Capacidade máxima não pode ser inferior a capacidade nominal."
+
+   Return .F.
+
+EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT615ADEL³ Autor ³ Evaldo Cevinscki Jr.  ³ Data ³ 17.03.06 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Capacidade delecao                                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615ADEL()
+
+	Local cTanque := ''
+
+	If n <= Len(aSVCOLS[2])
+		
+		If !aCols[n][Len(aHeader)+1]
+			cTanque := aCols[n][1]
+			nPos := aScan(aSVCOLS[2],{|x| x[1] == cTanque .and. (!x[len(aSVHeader[2])+1])})
+			If nPos > 0
+				MsgStop(STR0024)//"Exclusão do tanque não permitida, já existe bomba cadastrada para esse tanque."
+				Return .F.
+			EndIf
+		EndIf
+
+		If !MNT615INTA(1)
+			Return .F.
+		EndIf
+		cTanque := aCols[n][1]
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MenuDef  ³ Autor ³ Rafael Diogo Richter  ³ Data ³02/02/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Utilizacao de Menu Funcional.                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ SigaMNT                                                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³    1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³         ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Programador ³ Data   ³ F.O  ³  Motivo da Alteracao                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³            ³        ³      ³                                          ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MenuDef()
+Local aRotina := {{STR0001 ,"MNT615PESQ" , 0 , 1},; //"Pesquisar"
+                  {STR0002 , "NGCAD01"   , 0 , 2},; //"Visualizar"
+                  {STR0003 , "MNT615TB"  , 0 , 4}}  //"Tanques/Bombas"
+Return aRotina
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT615CONT³ Autor ³Vitor Emanuel Batista  ³ Data ³09/09/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Validacao do campo TQJ_CONINI                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615CONT()
+
+If ALTERA
+	If GdFieldGet("TQJ_CONINI",n) != M->TQJ_CONINI
+		dbSelectArea("TQJ")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQJ")+TQI->TQI_CODPOS+TQI->TQI_LOJA+GdFieldGet("TQJ_TANQUE",n)+GdFieldGet("TQJ_BOMBA",n))
+			If M->TQJ_CONINI != TQJ->TQJ_CONINI
+				dbSelectArea("TTV")
+				dbSetOrder(1)
+				If dbSeek(xFilial("TTV")+TQI->TQI_CODPOS+TQI->TQI_LOJA)
+					If NGVDHBomba(TQI->TQI_CODPOS,TQI->TQI_LOJA,TQJ->TQJ_TANQUE,TQJ->TQJ_BOMBA,TQJ->TQJ_DTCONT,TQJ->TQJ_HRCONT,"'2','3'")
+						ShowHelpDlg(STR0008,{STR0025},3,; //"Alteração não permitida pois já existe Aferição de Bomba com data/hora superior ao contador inicial."
+													{STR0026},3) //"Exclua as Aferições cadastradas com data/hora superior a este abastecimento."
+						Return .F.
+					EndIf
+					TTV->(dbSkip())
+					If xFilial("TTV")+TQI->TQI_CODPOS+TQI->TQI_LOJA+TQJ->TQJ_TANQUE+TQJ->TQJ_BOMBA == TTV->TTV_FILIAL+TTV->TTV_POSTO+TTV->TTV_LOJA+TTV->TTV_TANQUE+TTV->TTV_BOMBA
+						If !MsgYesNo(STR0027+CRLF+; //"A alteração do Contador Inicial influenciará nos demais registros do histórico de contador desta Bomba. "
+										STR0028+CRLF+; //"O processo poderá ser demorado dependendo da quantidade de registros no Histórico."
+										STR0029) //"Confirmar?"
+							Return .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+EndIf
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT615VDTHR³Autor ³Vitor Emanuel Batista  ³ Data ³09/09/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Validacao do campo TQJ_DTCONT e TQJ_HRCONT                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615VDTHR()
+
+	Local dData
+	Local cHora
+
+	If ALTERA
+		If "M->TQJ_DTCONT" == ReadVar()
+			dData := M->TQJ_DTCONT
+			cHora := GdFieldGet("TQJ_HRCONT",n)
+		Else
+			dData := GdFieldGet("TQJ_DTCONT",n)
+			cHora := M->TQJ_HRCONT
+		EndIf
+
+		dbSelectArea("TQJ")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQJ") + TQF->TQF_CODIGO + TQF->TQF_LOJA + GdFieldGet("TQJ_TANQUE",n) + GdFieldGet("TQJ_BOMBA",n))
+			dbSelectArea("TTV")
+			dbSetOrder(1)
+			If dbSeek(xFilial( "TTV" ) + TQF->TQF_CODIGO + TQF->TQF_LOJA + TQJ->TQJ_TANQUE + TQJ->TQJ_BOMBA)
+				dbSkip()
+				If xFilial("TTV")+TQF->TQF_CODIGO+TQF->TQF_LOJA+TQJ->TQJ_TANQUE+TQJ->TQJ_BOMBA == TTV->TTV_FILIAL+TTV->TTV_POSTO+TTV->TTV_LOJA+TTV->TTV_TANQUE+TTV->TTV_BOMBA
+					If TTV->TTV_DATA < dData .Or. (TTV->TTV_DATA == dData .And. TTV->TTV_HORA < cHora) //cHora+DTOS(dData) >= TTV->TTV_HORA+DTOS(TTV->TTV_DATA)
+						
+						ShowHelpDlg(STR0008,{STR0030},3,{STR0031},3) // "Alteração não permitida pois já existe Abastecimento, Saída, e/ou Transferência de combustível 
+																	 // cadastrada com data/hora inferior ao contador inicial informado."
+																	 // "Avalie qual o registro de Abastecimento, Saída, e/ou Transferência de combustível cadastrado 
+																	 // com data/hora inferior ao contador incial, e exclua o registro."
+						Return .F.
+
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³ MNTCHKTTV ³Autor ³ Marcos Wagner Junior  ³ Data ³08/12/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³ Verifica se o tanque/bomba nao tem historico               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNTCHKTTV(_cPosto,_cLoja,_cTanque,_cBomba)
+Local lRet := .T.
+Local aOldArea := GetArea()
+Local cQryAlias := "", cQuery := ""
+
+
+	If NGIFDBSEEK("TTV",_cPosto+_cLoja+_cTanque+_cBomba,1)
+		//Verifica se houve algum abastecimento apos a inclusao da bomba
+		cQryAlias := GetNextAlias()
+		cQuery := "SELECT COUNT(*) TOTAL"
+		cQuery += " FROM " + RetSQLName("TTV")
+		cQuery += "    WHERE TTV_POSTO = '" +_cPosto+ "' AND TTV_LOJA = '" +_cLoja+ "' "
+		cQuery += "    AND TTV_TANQUE = '" +_cTanque+ "' AND TTV_BOMBA = '" +_cBomba+ "' "
+		cQuery += "    AND (TTV_DATA || TTV_HORA >= '" +DtoS(TTV->TTV_DATA) + TTV->TTV_HORA+ "' )
+		cQuery += "    AND TTV_FILIAL = '" +xFilial("TTV")+ "' AND D_E_L_E_T_ = ''  "
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), cQryAlias, .F., .T.)
+
+		dbSelectArea(cQryAlias)
+		dbgotop()
+		While !Eof()
+			If (cQryAlias)->TOTAL > 1
+				MsgStop(STR0032) //"Bomba já possui histórico e não poderá ser alterada/excluída!"
+				lRet := .F.
+				Exit
+			EndIf
+			dbSelectArea(cQryAlias)
+			dbSkip()
+		End
+	EndIf
+
+RestArea(aOldArea)
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³MNT615TANQ ³Autor ³ Marcos Wagner Junior  ³ Data ³08/12/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³ Verifica se o tanque/bomba nao tem historico               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA615                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function MNT615TANQ(nPar)
+
+	Local lRet     := .T.
+	Local aOldArea := GetArea()
+
+	cTanque := GDFieldGet( 'TQJ_TANQUE' )
+	cBomba  := GDFieldGet( 'TQJ_BOMBA'  )
+
+	If ( Len( aSVCols[2] ) >= oGet02:nAt ) .And. ( ( cTanque+cBomba != aSVCols[2,oGet02:nAt,nTQJTANQUE] +;
+		aSVCols[2,oGet02:nAt,nTQJBOMBA] ) .Or. IIf( nPar == 1, .T., oGet02:aCols[oGet02:nAt,Len( aHeader ) + 1] ) )
+
+			lRet := MNTCHKTTV( TQF->TQF_CODIGO, TQF->TQF_LOJA, aSVCols[2,oGet02:nAt,nTQJTANQUE], aSVCols[2,oGet02:nAt,nTQJBOMBA] )
+
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} MNT615INTA
+Verifica se o tanque/bomba nao tem historico
+
+@param nPar, Numérico, Determina a chamada da função (1=Fonte, 2=Campo).
+
+@author Marcos Wagner Junior
+@since 08/12/2009
+@version P12
+
+@return lRet, Lógico, Retorna a verificação.
+/*/
+//------------------------------------------------------------------------------
+Function MNT615INTA(nPar)
+
+	Local lRet       := .T.
+	Local aOldArea   := GetArea()
+	Local nPos       := GdFieldPos("TQI_TANQUE")
+	Local cTanque    := IIF( nPar == 1 , aCols[ n , nPos ] , M->TQI_TANQUE )
+	Local cChaveTanq := xFilial("TQI") + TQF->TQF_CODIGO + TQF->TQF_LOJA + cTanque
+
+	If nPar <> 1
+		//Valida tanque
+		dbSelectArea("TQI")
+		dbSetOrder(1)
+		If dbSeek(cChaveTanq)
+			MsgStop(STR0040, STR0008) //"Não é permitido incluir tanques iguais para o mesmo posto." ### "Atenção"
+			lRet := .F.
+		EndIf
+
+		//Realiza a verificação se o tanque possui alguma bomba cadastrada e a mesma não deve estar deletada.
+		If lRet .And. aSCan(aSVCols[ 2 ] , {|x| AllTrim( x[ nPos ] ) == Alltrim( aCols[ n , nPos ]) .And. !( x[ Len( x ) ] ) .And. !Empty(x[ nPos ]) }) > 0 //Caso possua alguma bomba que utilize o tanque antigo.
+			Help(" ",1,STR0008,,STR0039,3,1) //Atenção##"Alteração do tanque não permitida, já existe bomba cadastrada para esse tanque."
+			lRet := .F.
+		EndIf
+		//Validação de local de estoque evitando erro na baixa de estoque de abastecimento
+		If lRet
+			dbSelectArea("NNR")
+			dbSetOrder(1)
+			If !dbSeek(xFilial("NNR") + cTanque)
+				MsgStop(STR0038) //"Local de estoque não cadastrado."
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If lRet
+		If n <= Len(aSVCols[1])
+			If (Len(aSVCols[1]) >= n) .AND. ((cTanque != aSVCols[1][n][nTQITANQUE]) .OR. IIF(nPar==1,.T.,aCols[n][Len(aHeader)+1]))
+				If !MNTCHKTTV(TQF->TQF_CODIGO,TQF->TQF_LOJA,aSVCols[1][n][nTQITANQUE],"")
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aOldArea)
+
+Return lRet
+
+//----------------------------------------------------------------------
+/*/{Protheus.doc} Mna615Wh
+When campo TQJ_CONINI
+
+@author Bruno Lobo de Souza
+@since 26/05/2015
+@version MP11
+@return Nil
+/*/
+//----------------------------------------------------------------------
+Function Mna615Wh()
+
+	Local lRet	:= .T.
+	Local aArea	:= GetArea()
+
+	If GdFieldPos( 'TQJ_CONINI' ) > 0
+
+		dbSelectArea( "TQJ" )
+		dbSetOrder( 1 )
+		lRet := !dbSeek( xFilial( 'TQJ' ) + TQF->TQF_CODIGO + TQF->TQF_LOJA + GDFieldGet( 'TQJ_TANQUE' ) + GDFieldGet( 'TQJ_BOMBA' ) )
+
+	EndIf
+
+	RestArea( aArea )
+
+	Return lRet
+//----------------------------------------------------------------
+/*/{Protheus.doc} ChangeGet()
+Realiza backup do aCols modificado e carrega novo aCols de acordo
+com mudança de Aba.
+
+@author Tainã Alberto Cardoso
+@since	31/03/2016
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function ChangeGet()
+
+	Do Case
+		Case oFolder:nOption == 1
+
+			MNT615GET(1)
+
+		Case oFolder:nOption == 2
+
+			MNT615GET(2)
+	EndCase
+
+Return Nil
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} CheckCols()
+Verifica se o aCols atual está de acordo com o que será validado
+no linOk.
+
+@author Tainã Alberto Cardoso
+@since	31/03/2016
+@return Nil Nulo
+/*/
+//----------------------------------------------------------------
+Static Function CheckCols()
+
+	Local lRet := .T.
+
+	Do Case
+		Case oFolder:nOption == 2
+
+			lRet := GRAVABOM()
+
+		Case oFolder:nOption == 1
+
+			lRet := NGGRAVATAN()
+
+	EndCase
+Return lRet
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} MNT615PROD()
+Valida o produto digitado
+
+@author Tainã Alberto Cardoso
+@since	31/08/2016
+@return Lógico
+/*/
+//----------------------------------------------------------------
+Function MNT615PROD()
+
+	Local lRet := .T.
+
+	If !EXISTCPO('SB1',M->TQI_PRODUT)
+		lRet := .F.
+	Else
+		If SB1->B1_RASTRO <> "N" .And. !Empty(SB1->B1_RASTRO)
+			MsgStop(STR0037) //"Não é possivel infomar um produto que utiliza rastro ou lote/sublote."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet

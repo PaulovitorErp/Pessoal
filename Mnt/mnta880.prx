@@ -1,0 +1,568 @@
+#INCLUDE "Mnta880.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA880
+Reabre uma O.S. encerrada
+
+@author Elisangela Costa
+@since 06/04/2004
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA880()
+
+	Local aSTLPR := {},ni := 0
+	Local lSOLICI := NGCADICBASE("TT7_SOLICI","A","TT7",.F.)
+	Local lObsPra 	:= NGCADICBASE("TQB_OBSPRA","A","TQB",.F.)
+	Local cQuerySTP := ""
+	Local cAliasSTP := ""
+	Local cQuerySUB := ""
+	Local cAliasSUB := ""
+	Local i         := 0
+	Local cBaseA  	:= ""
+	Local cItemA  	:= ""
+	Local cDescrA 	:= ""
+	Local nValorA 	:= 0
+	Local lRet    	:= .T.
+	Local nPosCont1 := 0
+	Local cHrCont1  := ''
+	Local nPosCont2 := 0
+	Local cHrCont2  := ''
+	Local cQueryTPP := ""
+	Local cAliasTPP := ""
+	Local cFuncBkp  := FunName()
+
+	Private  cSeRefor  := Alltrim(GETMV("MV_NGSEREF")) //Parametro indica serviço do tipo de Reforma de Pneus
+	Private  aServRef 	:= StrTokArr( cSeRefor, ';' ) 
+	Private  cSerCons  := Alltrim(GETMV("MV_NGSECON")) //Parametro indica serviço do tipo de Conserto de Pneus
+	Private  aServCon 	:= StrTokArr( cSerCons, ';' ) 
+	Private lMsErroAuto := .F.
+
+	SetFunName( 'MNTA880' )
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		If ( lRet := Pergunte( 'MNT880', .T. ) )
+
+			cCODPR := If(FindFunction("NGProdMNT"), NGProdMNT("M")[1], SubStr(GetMV("MV_PRODMNT"),1,Len(SD3->D3_COD) ) ) //Ira verificar apenas o primeiro Produto Manutencao do parametro
+			cOP    := Alltrim(MV_PAR01 + "OS001" )
+			cOP    := cOP+Space(Len(SD3->D3_OP)-Len(cOp))
+
+			If ExistBlock( 'MNTA8802' )
+
+				lRet := ExecBlock( 'MNTA8802', .F., .F., { MV_PAR01 } )
+
+			EndIf
+
+			If lRet .And. NGIFDBSEEK("STJ",MV_PAR01,1,.f.) .And. STJ->TJ_SITUACA = "L" .And. STJ->TJ_TERMINO = "S"
+
+				// Valores armazenados pois são utilizados na deleção do antigo registro de contador na STP / TPP
+				nPosCont1 := STJ->TJ_POSCONT
+				cHrCont1  := STJ->TJ_HORACO1
+				nPosCont2 := STJ->TJ_POSCON2
+				cHrCont2  := STJ->TJ_HORACO2
+
+				//-----------------------------------------------------------------------------------
+				//verifica se a OS ja teve seu custo apropriado na integracao via mensagem unica
+				//-----------------------------------------------------------------------------------
+				If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"
+
+					If STJ->TJ_APROPRI == '1'
+
+						ApMsgInfo(STR0008) //"A OS selecionada já foi apropriada pela integração via mensagem única. Não é possível reabrir a OS."
+						
+						Return .F.
+
+					Else
+						//-----------------------------------------------------------------------------------
+						//verifica se contador (1/2) ja foi apropriado na integracao via mensagem unica
+						//-----------------------------------------------------------------------------------
+						If MNA385APR(STJ->TJ_CODBEM,STJ->TJ_DTORIGI,STJ->TJ_HORACO1,1)
+							
+							ApMsgInfo(STR0009) //"Existem registros de apropriacao do contador 1 posteriores a data da OS selecionada. Nâo é possível reabrir a OS."
+							
+							Return .F.
+
+						EndIf
+
+						If MNA385APR(STJ->TJ_CODBEM,STJ->TJ_DTORIGI,STJ->TJ_HORACO1,2)
+							
+							ApMsgInfo(STR0010) //"Existem registros de apropriacao do contador 2 posteriores a data da OS selecionada. Nâo é possível reabrir a OS."
+							
+							Return .F.
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+				//faz reabertura no backoffice
+				If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"
+
+					If STJ->TJ_FATURA == "1" //faturado
+
+						MsgInfo(STR0011+cValToChar(STJ->TJ_ORDEM)+STR0012+; //"A Ordem de Serviço " ##
+							STR0013,STR0004) //"pois já foi faturada no backoffice." ## "Atenção"
+						
+						Return .F.
+
+					EndIf
+
+				EndIf
+
+				//Verificar se foi enviado o custo da O.S. para o ativo fixo
+				If STJ->TJ_VALATF == 'S'
+
+					DbSelectArea("ST9")
+					DbSetOrder(1)
+					If DbSeek( xFilial("ST9") + STJ->TJ_CODBEM )
+
+						cBaseA  := SubStr(ST9->T9_CODIMOB,1,10)
+						cItemA  := SubStr(ST9->T9_CODIMOB,11,14)
+						nValorA := STJ->TJ_CUSTMDO + STJ->TJ_CUSTMAT + STJ->TJ_CUSTMAA + STJ->TJ_CUSTMAS + STJ->TJ_CUSTTER + STJ->TJ_CUSTFER
+						cDescrA := Posicione( 'ST4', 1, xFilial( 'ST4' ) + STJ->TJ_SERVICO, 'T4_NOME' )
+
+						//Cancelar o custo enviado ao ativo fixo.
+						MSExecAuto({|s, t, u, v, w, x, y, z| AF150Amp(s, t, u, v, w, x, y, z)},,,5,cBaseA,cItemA,nValorA,cDescrA,.T.)
+
+						If lMsErroAuto
+
+							MostraErro()
+
+							Return .F.
+
+						EndIf
+
+					EndIf
+
+				EndIf
+
+				//-------------------------------------------------------------
+				
+				RecLock("STJ",.F.)
+
+				STJ->TJ_TERMINO := "N"
+
+				// Ajuste do Primeiro Contador na STJ
+				If !Empty(cHrCont1) .And. nPosCont1 > 0
+
+					cAliasSTP := GetNextAlias()
+					cQuerySTP := "SELECT STP.TP_POSCONT, STP.TP_HORA FROM " + RetSQLName("STP") + " STP "
+					cQuerySTP += "WHERE STP.TP_FILIAL = " + ValToSQL(FWxFilial('STP', STJ->TJ_FILIAL)) 
+					cQuerySTP += " AND STP.TP_CODBEM = " + ValToSQL(STJ->TJ_CODBEM)
+					cQuerySTP += " AND STP.TP_DTULTAC = " + ValToSQL(STJ->TJ_DTORIGI)
+					cQuerySTP += " AND STP.TP_HORA <> " + ValToSQL(STJ->TJ_HORACO1)
+					cQuerySTP += " AND STP.TP_TIPOLAN = 'C'"
+					cQuerySTP += " AND STP.D_E_L_E_T_ = ' ' "
+					cQuerySTP += " ORDER BY STP.TP_DTULTAC || STP.TP_HORA DESC"
+					cQuerySTP := ChangeQuery(cQuerySTP)
+					dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuerySTP), cAliasSTP, .F., .T.)
+
+					STJ->TJ_TERMINO := "N"
+
+					If (cAliasSTP)->(!Eof())
+
+						STJ->TJ_POSCONT	:= (cAliasSTP)->TP_POSCONT
+						STJ->TJ_HORACO1 := (cAliasSTP)->TP_HORA
+
+					EndIf
+
+					(cAliasSTP)->( dbCloseArea() )
+
+					// Ajuste do Segundo Contador na STJ
+					If !Empty(cHrCont2) .And. nPosCont2 > 0
+
+						cAliasTPP := GetNextAlias()
+						cQueryTPP := "SELECT TPP.TPP_POSCON, TPP.TPP_HORA FROM " + RetSQLName("TPP") + " TPP "
+						cQueryTPP += "WHERE TPP.TPP_FILIAL = " + ValToSQL(FWxFilial('TPP', STJ->TJ_FILIAL))
+						cQueryTPP += " AND TPP.TPP_CODBEM = " + ValToSQL(STJ->TJ_CODBEM)
+						cQueryTPP += " AND TPP.TPP_DTULTA = " + ValToSQL(STJ->TJ_DTORIGI)
+						cQueryTPP += " AND TPP.TPP_HORA <>" + ValToSQL(STJ->TJ_HORACO2)
+						cQueryTPP += " AND TPP.TPP_TIPOLA = 'C'"
+						cQueryTPP += " AND TPP.D_E_L_E_T_ = ' ' "
+						cQueryTPP += " ORDER BY TPP.TPP_DTULTA || TPP.TPP_HORA DESC"
+						cQueryTPP := ChangeQuery(cQueryTPP)
+						dbUseArea( .T., "TOPCONN", TCGenQry(,,cQueryTPP), cAliasTPP, .F., .T.)
+
+						If (cAliasTPP)->(!Eof())
+
+							STJ->TJ_POSCON2 := (cAliasTPP)->TPP_POSCON
+							STJ->TJ_HORACO2 := (cAliasTPP)->TPP_HORA
+
+						EndIf
+
+						(cAliasTPP)->( dbCloseArea() )
+
+					EndIf
+
+				EndIf
+
+				MsUnlock("STJ")
+
+				//-------------------------------------------------------------
+
+				If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"
+					
+					lOk := NGMUMntOrd(STJ->(RecNo()),3,,,.T.)
+
+					If !lOk
+
+						RecLock( 'STJ', .F. )
+							STJ->TJ_TERMINO := 'S'
+						MsUnlock()
+
+						Return .F.
+
+					EndIf
+
+				EndIf
+
+				If NGIFDBSEEK("STF",STJ->TJ_CODBEM+STJ->TJ_SERVICO+STJ->TJ_SEQRELA,1,.f.)
+					RecLock("STF",.F.)
+					STF->TF_QUANTOS --
+					If STF->TF_QUANTOS < 0
+						STF->TF_QUANTOS := 0
+					EndIf
+					STF->(MsUnLock())
+				EndIf
+
+				IF STF->TF_DTULTMA == STJ->TJ_DTMRFIM
+					//|-------------------------------------------------------------|
+					//| Query responsável por buscar todas as manutenções			|
+					//|-------------------------------------------------------------|
+					cAliasSTP := GetNextAlias()
+					cQuerySTP := "SELECT COUNT(*) AS NMANUT FROM " + RetSQLName("STJ") + " STJ "
+					cQuerySTP += " WHERE STJ.D_E_L_E_T_ <> '*' "
+					cQuerySTP += " 	AND STJ.TJ_FILIAL = '" + xFilial("STJ") + "' "
+					cQuerySTP += " 	AND STJ.TJ_CODBEM = '" + STJ->TJ_CODBEM + "' "
+					cQuerySTP += " 	AND STJ.TJ_SERVICO = '" + STJ->TJ_SERVICO + "' "
+					cQuerySTP += " 	AND STJ.TJ_SEQRELA = '" + STJ->TJ_SEQRELA + "' "
+					cQuerySTP += " 	AND STJ.TJ_TERMINO = 'S'"
+					cQuerySTP += " 	AND STJ.TJ_SITUACA = 'L'"
+					cQuerySTP += " 	AND STJ.TJ_ORDEM != '" + STJ->TJ_ORDEM + "' "
+					cQuerySTP += " 	AND STJ.TJ_DTMRFIM >= '" + DTOS(STF->TF_DTULTMA) + "' "
+					cQuerySTP := ChangeQuery(cQuerySTP)
+					dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuerySTP), cAliasSTP, .F., .T.)
+
+					If (cAliasSTP)->NMANUT == 0 //Caso possua uma manutenção superior a atual.
+						RecLock("STF",.F.)
+						STF->TF_DTULTMA := STJ->TJ_DTULTMA //Ultima data da manutenção.
+						STF->TF_CONMANU := STJ->TJ_COULTMA //Ultimo contador da manutenção.
+						STF->(MsUnLock())
+					EndIf
+
+					(cAliasSTP)->( dbCloseArea() )
+				EndIf
+
+				If !Empty(STF->TF_SUBSTIT)
+
+					aSubsti := MNTSepSeq(STJ->TJ_SUBSTIT)
+					For i := 1 To Len(aSubsti)
+						cSubsti := aSubsti[i]
+
+						//|-------------------------------------------------------------|
+						//| Query responsável por buscar manutenções substituídas		|
+						//|-------------------------------------------------------------|
+						cAliasSUB := GetNextAlias()
+						cQuerySUB := "SELECT TJ_SEQRELA, TJ_CODBEM , TJ_SERVICO , TJ_ORDEM, TJ_DTULTMA, TJ_COULTMA "
+						cQuerySUB += " FROM " + RetSQLName("STJ") + " STJ "
+						cQuerySUB += " WHERE STJ.D_E_L_E_T_ <> '*' "
+						cQuerySUB += " 	AND STJ.TJ_FILIAL = '" + xFilial("STJ") + "' "
+						cQuerySUB += " 	AND STJ.TJ_CODBEM = '" + STJ->TJ_CODBEM + "' "
+						cQuerySUB += " 	AND STJ.TJ_SERVICO = '" + STJ->TJ_SERVICO + "' "
+						cQuerySUB += " 	AND STJ.TJ_SEQRELA = '" + cSubsti + "' "
+						cQuerySUB += " 	AND STJ.TJ_TERMINO = 'N'"
+						cQuerySUB += " 	AND STJ.TJ_SITUACA = 'C'"
+						cQuerySUB += " 	AND STJ.TJ_DTMRFIM <= '" + DToS(STF->TF_DTULTMA) + "' "
+						cQuerySUB := ChangeQuery(cQuerySUB)
+						dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuerySUB), cAliasSUB, .F., .T.)
+
+						If NGIFDBSEEK("STF",(cAliasSUB)->TJ_CODBEM+(cAliasSUB)->TJ_SERVICO+(cAliasSUB)->TJ_SEQRELA,1,.F.)
+							RecLock("STF",.F.)
+							STF->TF_DTULTMA := StoD((cAliasSUB)->TJ_DTULTMA) //Ultima data da manutenção.
+							STF->TF_CONMANU := (cAliasSUB)->TJ_COULTMA //Ultimo contador da manutenção.
+							STF->(MsUnLock())
+						EndIf
+
+						(cAliasSUB)->( dbCloseArea() )
+					Next i
+				EndIf
+
+				If ExistBlock("MNTA8801")
+					ExecBlock("MNTA8801",.F.,.F.)
+				EndIf
+				
+				//Exclui os lancamentos de contador 1 e 2
+				If !Empty(cHrCont1) .And. nPosCont1 > 0
+					MNT470EXCO(STJ->TJ_CODBEM,STJ->TJ_DTMRFIM,cHrCont1,1)
+				EndIf
+
+				If !Empty(cHrCont2) .And. nPosCont2 > 0
+					MNT470EXCO(STJ->TJ_CODBEM,STJ->TJ_DTMRFIM,cHrCont2,2)
+				EndIf
+
+				//Limpa os campos data/hora alimentados ao encerrar OS
+				If NGIFDBSEEK("STJ",MV_PAR01,1,.F.) .And. STJ->TJ_SITUACA = "L"
+					RecLock("STJ",.F.)
+					STJ->TJ_DTPRINI := CTOD('')
+					STJ->TJ_HOPRINI := ""
+					STJ->TJ_DTPRFIM := CTOD('')
+					STJ->TJ_HOPRFIM := ""
+					STJ->TJ_DTMRINI := CTOD('')
+					STJ->TJ_HOMRINI := ""
+					STJ->TJ_DTMRFIM := CTOD('')
+					STJ->TJ_HOMRFIM := ""
+					STJ->TJ_VALATF  := ''
+					STJ->(MsUnLock())
+				EndIf
+			
+				/*------------------------------------------------------------+
+				| Limpa campos de integração relacionados aos insumos da O.S. |
+				+------------------------------------------------------------*/
+				fCleanSTL( STJ->TJ_ORDEM, STJ->TJ_PLANO )
+
+				If NGIFDBSEEK( 'SC2', cOP, 1, .F. )
+					
+					RecLock("SC2",.F.)
+					
+						Replace C2_DATRF With CtoD( '' )
+					
+					MsUnlock()
+
+					dbSelectArea( 'SB2' )
+					dbSetOrder( 1 )
+					If msSeek( FWxFilial( 'SB2' ) + SC2->C2_PRODUTO + SC2->C2_LOCAL )
+
+						RecLock( 'SB2', .F. )
+						
+							SB2->B2_SALPEDI += SC2->C2_QUANT
+					
+						MsUnlock()
+
+					EndIf
+				
+				EndIf
+
+				NGIFDBSEEK("SD3",cOP,1,.F.)
+				While !Eof() .And. SD3->D3_FILIAL == xFILIAL("SD3") .And. SD3->D3_OP == cOP
+					If SD3->D3_CF == "PR0" .Or. SD3->D3_COD = cCODPR
+
+						/*
+						Nao deve ser chamado a mensagem de integracao
+						pois este produto nao é integrado com o Backoffice
+						//-------------------------------------
+						//INTEGRACAO POR MENSAGEM UNICA
+						//-------------------------------------
+						If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+							NGMUCanReq(SD3->(RecNo()),"SD3")
+						EndIf
+
+						*/
+						//exclui movimentacao no SD3
+						NGDELETAREG("SD3")
+					EndIf
+					NGDBSELSKIP("SD3")
+				End
+				// Verifica se esta permitindo gerar multiplas OS's
+				If lSOLICI .And. AllTrim(GetNewPar("MV_NGMULOS","N")) == "S"
+					//Reabre a SS
+					dbSelectArea("TT7")
+					dbSetOrder(2)
+					dbSeek(xFilial("TT7")+mv_par01)
+					While TT7->(!Eof()) .and. Alltrim(TT7->TT7_ORDEM) == Alltrim(mv_par01)
+						If TT7->TT7_TERMIN <> 'N'
+							RecLock("TT7",.F.)
+							TT7->TT7_TERMIN := "N"
+							MsUnLock()
+							dbSelectArea("TQB")
+							dbSetOrder(1)
+							If dbSeek(xFilial("TQB")+TT7->TT7_SOLICI)
+								RecLock("TQB",.F.)
+								TQB->TQB_SOLUCA := "D"
+								TQB->TQB_DTFECH := CTOD('')
+								TQB->TQB_HOFECH := ""
+								TQB->TQB_TEMPO  := ""
+								TQB->TQB_CODMSO := ""
+								TQB->TQB_PSAP   := ""
+								TQB->TQB_PSAN   := ""
+								If lObsPra
+									TQB->TQB_OBSPRA := ""
+									TQB->TQB_OBSATE := ""
+								EndIf
+								MsUnLock()
+							EndIf
+							dbSelectArea("TT7")
+						EndIf
+						TT7->(dbSkip())
+					End
+				Else
+					DbSelectArea("TQB")
+					DbSetOrder(4)
+					If DbSeek(xFilial("TQB")+mv_par01)
+						RecLock("TQB",.F.)
+						TQB->TQB_SOLUCA := "D"
+						TQB->TQB_DTFECH := CTOD('')
+						TQB->TQB_HOFECH := ""
+						TQB->TQB_TEMPO  := ""
+						TQB->TQB_CODMSO := ""
+						TQB->TQB_PSAP   := ""
+						TQB->TQB_PSAN   := ""
+						If lObsPra
+							TQB->TQB_OBSPRA := ""
+							TQB->TQB_OBSATE := ""
+						EndIf
+						MsUnLock()
+					EndIf
+				EndIf
+
+				If GetMv("MV_NGMNTES") = "S"
+					If NGIFDBSEEK("STL",STJ->TJ_ORDEM+STJ->TJ_PLANO,1,.F.)
+						While !Eof() .And. STL->TL_FILIAL = Xfilial("STL") .And.;
+								STL->TL_ORDEM = STJ->TJ_ORDEM .And. STL->TL_PLANO = STJ->TJ_PLANO
+							If STL->TL_TIPOREG = "P"
+								nPosA := Ascan(aSTLPR,{|x| x[1]+x[2] == STL->TL_CODIGO+STL->TL_LOCAL})
+								If nPosA = 0
+									Aadd(aSTLPR,{STL->TL_CODIGO,STL->TL_LOCAL,0,0})
+									nPosA := Len(aSTLPR)
+								Endif
+								nColA := If(Alltrim(STL->TL_SEQRELA) = "0",3,4)
+								aSTLPR[nPosA,nColA] += STL->TL_QUANTID
+							Endif
+							Dbskip()
+						End
+						For ni := 1 To Len(aSTLPR)
+							If aSTLPR[ni,4] < aSTLPR[ni,3]  .And. NGIFDBSEEK("SD4",aSTLPR[ni,1]+STJ->TJ_ORDEM+"OS001",1,.F.)
+								RecLock("SD4",.F.)
+								SD4->D4_QUANT := aSTLPR[ni,3]-aSTLPR[ni,4]
+								SD4->(MsUnlock())
+								If NGIFDBSEEK("SB2",aSTLPR[ni,1]+aSTLPR[ni,2],1,.F.)
+									RecLock("SB2",.F.)
+									SB2->B2_QEMP += aSTLPR[ni,3]-aSTLPR[ni,4]
+									SB2->(MsUnlock())
+								Endif
+							Endif
+						Next ni
+					EndIf
+					MsgInfo(STR0002+" "+Alltrim(MV_PAR01)+" "+STR0003+".")
+				EndIf
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+	SetFunName( cFuncBkp )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT880CHKP
+Valida o MV_PAR01
+
+@author Elisangela Costa
+@since 10/02/2006
+@version MP11
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNT880CHKP()
+
+
+	If !ExistCpo("STJ",MV_PAR01,1)
+		Return .F.
+	EndIf
+	If NGIFDBSEEK("STJ",MV_PAR01,1,.f.) .And. (STJ->TJ_SITUACA <> "L" .Or. STJ->TJ_TERMINO <> "S")
+		MsgStop(STR0001) //"Informe uma ordem de servico finalizada."
+		Return .F.
+	EndIf
+	dbSelectArea( "ST9" )
+	dbSetOrder( 01 ) //T9_FILIAL+T9_CODBEM
+	If dbSeek( xFilial( "ST9" ) + STJ->TJ_CODBEM )
+		If ST9->T9_SITBEM == "I" //Se o Bem estiver Inativo.
+			MsgAlert( STR0014, STR0015 ) // "O Bem está inativo, dessa forma não será possível reabrir a ordem de serviço."
+			Return .F.
+		EndIf
+	EndIf
+
+	If GetMv("MV_NGMNTES") = "S" .And. !Empty(STJ->TJ_DTMRFIM) .And. !NGCHKMESFE(STJ->TJ_DTMRFIM,"P")
+		Return .f.
+	Endif
+
+	//-------------------------------------------------------------------------------
+	// Valida tipo de serviço da O.S. que não pode ser nem tipo Ref. de Pneu e nem
+	// do tipo Cons. de Pneu de acordo com os respectivos parametros.
+	//-------------------------------------------------------------------------------
+	If NGIFDBSEEK("STJ",MV_PAR01,1,.F.) .And. ( aScan(aServRef, {|x| x == AllTrim(STJ->TJ_SERVICO)}) > 0 .Or. aScan(aServCon, {|x| x == AllTrim(STJ->TJ_SERVICO)}) > 0 )
+		ShowHelpDlg(STR0004,{STR0007},; //"Atenção"###"Não é possível realizar a abertura de Ordem de Serviço de tipo de serviço de Reforma ou Conserto de Pneus de acordo com os parâmetros MV_NGSEREF e MV_NGSECON respectivamente."
+										1,{STR0006}) //"Informe outra ordem de serviço."
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCleanSTL
+Limpa campos de integração relacionados aos insumos da O.S.
+@type function
+
+@author Alexandre Santos
+@since 10/11/2021
+
+@param cOrder, string, Número da O.S.
+@param cPlan , string, Número do Plano de Manutenção.
+@return 
+/*/
+//---------------------------------------------------------------------
+Static Function fCleanSTL( cOrder, cPlan )
+
+	Local aAreaSTL := STL->( GetArea() )
+	Local cAlsSTL  := GetNextAlias()
+
+	BeginSQL Alias cAlsSTL
+
+		SELECT
+			STL.R_E_C_N_O_
+		FROM
+			%table:STL% STL
+		INNER JOIN
+			%table:SC1% SC1 ON
+				SC1.C1_FILIAL  = %xFilial:SC1% AND
+				SC1.C1_NUM     = STL.TL_NUMSC  AND
+				SC1.C1_ITEM    = STL.TL_ITEMSC AND
+				SC1.C1_COTACAO = ' '           AND 
+				SC1.C1_PEDIDO  = ' '           
+		WHERE
+			STL.TL_FILIAL = %xFilial:STL% AND
+			STL.TL_ORDEM  = %exp:cOrder%  AND
+			STL.TL_PLANO  = %exp:cPlan%   AND
+			STL.TL_NUMSC  <> ' ' AND
+			STL.TL_ITEMSC <> ' ' AND
+			STL.%NotDel%
+
+	EndSQL
+
+	While (cAlsSTL)->( !EoF() )
+
+		dbSelectArea( 'STL' )
+		dbGoTo( (cAlsSTL)->R_E_C_N_O_ )
+
+		RecLock( 'STL', .F. )
+
+		STL->TL_NUMSC  := ''
+		STL->TL_ITEMSC := ''
+
+		MsUnLock()
+
+		(cAlsSTL)->( dbSkip() )
+
+	End
+
+	(cAlsSTL)->( dbCloseArea() )
+
+	RestArea( aAreaSTL )
+	
+Return

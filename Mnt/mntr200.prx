@@ -1,0 +1,731 @@
+#INCLUDE "MNTR200.CH"
+#INCLUDE "PROTHEUS.CH"
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTR200
+Historico das Etapas Executadas
+
+@author Deivys Joenck
+@since 23/08/01
+@return Nil
+@version p11/p12
+/*/
+//--------------------------------------------------------------------------------
+FUNCTION MNTR200()
+
+	//-----------------------------------------------
+	// Armazena variaveis p/ devolucao (NGRIGHTCLICK)
+	//-----------------------------------------------
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local WNREL			:= "MNTR200"
+	Local LIMITE		:= 232
+	Local cDESC1		:= STR0001 //"Relatorio de Historico das Etapas Executadas no Bem."
+	Local cDESC2		:= STR0002 //"O usuario pode selecionar quais os campos que deverao ser mostrados,"
+	Local cDESC3		:= STR0003 //"bem como informar parametros de selecao para a impressao."
+	Local cSTRING		:= "STJ"
+
+	Private NOMEPROG	:= "MNTR200"
+	Private TAMANHO		:= "G"
+	Private aRETURN		:= {STR0004,1,STR0005,1,2,1,"",1}   //"Zebrado"###"Administracao"
+	Private TITULO		:= STR0006 //"Etapas Executadas no Periodo"
+	Private nTIPO		:= 0
+	Private nLASTKEY	:= 0
+	PRIVATE cPERG		:= "MNT20R"
+	Private CABEC1, CABEC2
+
+
+	//---------------------------------------------------------------+
+	//| Variaveis utilizadas para parametros!                        |
+	//| mv_par01     // De Periodo                                   |
+	//| mv_par02     // Ate Periodo                                  |
+	//| mv_par03     // De  Bem                                      |
+	//| mv_par04     // Ate Bem                                      |
+	//| mv_par05     // Da Etapa                                     |
+	//| mv_par06     // Ate Etapa                                    |
+	//| mv_par07     // Etapas Executadas/Etapas nao Executadas/Ambas|
+	//| mv_par08     // Imprimir Opcoes (Nao/Sim)                    |
+	//| mv_par09     // De Localizacao ?                             |
+	//| mv_par10     // Ate Localizacao ?                            |
+	//| mv_par11     // Imprimir Localizacao ? Sim/Nao               |
+	//---------------------------------------------------------------+
+
+	PERGUNTE(cPERG,.F.)
+
+	//-----------------------------------------------
+	// Envia controle para a funcao SETPRINT
+	//-----------------------------------------------
+	WNREL:=SETPRINT(cSTRING,WNREL,cPERG,TITULO,cDESC1,cDESC2,cDESC3,.F.,"")
+
+	If nLASTKEY = 27
+		SET FILTER TO
+		Dbselectarea("STJ")
+		//-----------------------------------------------
+		// Devolve variaveis armazenadas (NGRIGHTCLICK)
+		//-----------------------------------------------
+		NGRETURNPRM(aNGBEGINPRM)
+		Return
+	Endif
+
+	SETDEFAULT(aRETURN,cSTRING)
+
+	RPTSTATUS({|lEND| MNTR200IMP(@lEND,WNREL,TITULO,TAMANHO)},TITULO)
+
+	//-----------------------------------------------
+	// Devolve variaveis armazenadas (NGRIGHTCLICK)
+	//-----------------------------------------------
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return NIL
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTR200IMP
+Chamada do Relat¢rio
+
+@author Deivys Joenck
+@since 23/08/01
+@return Nil
+@version p11/p12
+/*/
+//--------------------------------------------------------------------------------
+FUNCTION MNTR200IMP( lEND,WNREL,TITULO,TAMANHO )
+
+	Local cRODATXT		:= ""
+	Local nCNTIMPR		:= 0
+	Local nMULT			:= 1
+	Local cEstruT		:= ""
+	Local aEstrut		:= {}
+	Local nCont			:= 0
+	Local cSay			:= ""
+	Local cCompare		:= ""
+	Local cARQTR200 //Tab. Temporária 1
+	Local oTmpTbl2 	//Tab. Temporaria 2
+
+
+	Private li	:= 80 ,m_pag := 1
+	nTIPO		:= If(aRETURN[4]==1,15,18)
+
+	Private cTRB200	:= GetNextAlias() //Alias Tab. cARQTR200
+	Private cTRB 	:= GetNextAlias() //Alias Tab. 2
+
+	//--------------------
+	// Monta os Cabecalhos
+	//--------------------
+	CABEC1 := STR0007     //"Bem/Localização    Descrição"
+	CABEC2 := STR0008     //"                   Etapa   Descricao da Etapa                        Dt.Exec.    O.S.     Sit."
+
+	/*
+	1         2         3         4         5         6         7         8         9        10       120       130
+	0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123
+	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Bem                Nome do Bem
+	Etapa   Descricao da Etapa                        Dt.Exec.    O.S.     Sit.    Tarefa    Desc.
+	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	Ordens de Servico de Historico:
+	XXXXXXXXXXXXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+	XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    XX/XX/XX    999999   R       XXXXXX    XXXXXXXXXXXXXXXX
+	Opcao..: XXXXXXXXXXXXXXX   Informou..: XXXXXXXXXX  OS..: XXXXXX
+	XXXXXXXXXXXXXXX   Marcou....: SIM
+	XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    XX/XX/XX    999999           XXXXXX    XXXXXXXXXXXXXXXX
+	Opcao..: XXXXXXXXXXXXXXX   Informou..: XXXXXXXXXXX OS..: XXXXXX
+	XXXXXXXXXXXXXXX   Marcou....: SIM
+	XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    XX/XX/XX    999999
+	XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    XX/XX/XX    999999
+
+	Ordens de servico Atual.......:
+	XXXXXXXXXXXXXXXX   XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+	XXXXXX  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX    XX/XX/XX    999999
+	*/
+
+	aDBFR200 := {	{"ORDEM"   ,	"C",06,0},;
+					{"PLANO"   ,	"C",06,0},;
+					{"ETAPA"   ,	"C",06,0},;
+					{"OK"	   ,	"C",02,0},;
+					{"TAREFA"  ,	"C",06,0},;
+					{"SEQTARE" ,	"C",03,0},;
+					{"SEQUEN"  ,	"C",03,0}}
+
+	//Instancia classe FWTemporaryTable
+	cARQTR200 := FWTemporaryTable():New( cTRB200, aDBFR200 )
+    //Cria indices
+	cARQTR200:AddIndex( "Ind01" , {"ORDEM","PLANO","SEQUEN","TAREFA","ETAPA","SEQTARE"} )
+    //Cria a tabela temporaria
+    cARQTR200:Create()
+
+
+	aDBF := {	{"BEM"     ,"C",16,0},;
+				{"ORDEM"   ,"C",06,0},;
+				{"PLANO"   ,"C",06,0},;
+				{"DTDATA"  ,"D",08,0},;
+				{"DTDATFIM","D",08,0},;
+				{"ARQUIVO" ,"C",03,0},;
+				{"TIPOOS"  ,"C",01,0},;
+				{"SERVICO" ,"C",06,0},;
+				{"SEQRELA" ,"C",03,0}}
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl2 := FWTemporaryTable():New( cTRB, aDBF )
+    //Cria indices
+	oTmpTbl2:AddIndex( "Ind01" , {"BEM","ORDEM","PLANO","DTDATA"} )
+    //Cria a tabela temporaria
+    oTmpTbl2:Create()
+
+
+	PROCESSA({|lEND| MNTR200STJ()},STR0009+STR0010) //"Processando Itens das O.S."+" Normais..."
+	PROCESSA({|lEND| MNTR200STS()},STR0009+STR0011) //"Processando Itens das O.S."+ "historico"
+
+	aORDENS := {}
+	lPRIIMP := .T.
+	Dbselectarea( cTRB )
+	Dbgotop()
+	SETREGUA(LASTREC())
+	If !EoF()
+		While !Eof()
+
+			cBEM	:= (cTRB)->BEM
+			lPRIM	:= .T.
+
+			If (cTRB)->BEM == cBEM
+				IncRegua()
+				If (cTRB)->ARQUIVO == "STJ"
+
+					DbSelectArea( cTRB200 )
+					DbSetOrder( 01 )
+					dbSeek( (cTRB)->ORDEM + (cTRB)->PLANO)
+					SetRegua(LastRec())
+					While !EoF() .And. (cTRB200)->ORDEM == (cTRB)->ORDEM .And. (cTRB200)->PLANO == (cTRB)->PLANO
+
+						If (cTRB200)->ETAPA >= MV_PAR05 .And. (cTRB200)->ETAPA <= MV_PAR06 .AND. (cTRB200)->ORDEM == (cTRB)->ORDEM .AND. (cTRB200)->PLANO == (cTRB)->PLANO
+							If MV_PAR07 <> 3
+								If MV_PAR07 == 2           // Nao Executadas
+									If !EMPTY((cTRB200)->OK)
+										Dbskip()
+										Loop
+									Endif
+								Elseif EMPTY((cTRB200)->OK)  //Executadas
+									Dbskip()
+									Loop
+								Endif
+							Endif
+
+							If lPRIM
+								If lPRIIMP
+									lPRIIMP := .F.
+									Ngsomali(58)
+								Else
+									Ngsomali(58)
+									Ngsomali(58)
+								EndIf
+
+								If (cTRB)->TIPOOS = "B"
+									Dbselectarea("ST9")
+									Dbsetorder(1)
+									Dbseek(Xfilial("ST9")+(cTRB)->BEM)
+									@ Li,000 PSAY ST9->T9_CODBEM
+									@ Li,019 PSAY SUBSTR(ST9->T9_NOME,1,40)
+									If MV_PAR11 == 1
+										cSay     := STR0022 //"Localização.: "
+										cEstrut  := NGLocComp((cTRB)->BEM,"1")
+										cCompare := (cTRB)->BEM
+									EndIf
+								Else
+									dbSelectArea("TAF")
+									dbSetOrder(7)
+									dbSeek(xFilial("TAF")+"X"+"2"+(cTRB)->BEM)
+									@ Li,000 PSay TAF->TAF_CODNIV
+									@ Li,019 PSay SubStr(TAF->TAF_NOMNIV,1,56)
+									If MV_PAR11 == 1
+										cSay     := STR0024 //"Estrutura...: "
+										cEstrut  := NGLocComp((cTRB)->BEM,"2")
+										cCompare := SubStr(TAF->TAF_NOMNIV,1,56)
+									Endif
+								EndIf
+
+								Ngsomali(58)
+
+								If MV_PAR11 == 1
+									aEstrut := {}
+									If Len(cEstrut) > 100
+										aAdd(aEstrut,AllTrim(SubStr(cEstrut,1,100)))
+										cEstrut := AllTrim(SubStr(cEstrut,101))
+										While Len(cEstrut) > 100
+											aAdd(aEstrut,AllTrim(SubStr(cEstrut,1,100)))
+											cEstrut := AllTrim(SubStr(cEstrut,101))
+										End
+										aAdd(aEstrut,AllTrim(cEstrut))
+									EndIf
+
+									If Len(aEstrut) > 0
+										For nCont := 1 To Len(aEstrut)
+											If nCont == 1
+												@ Li,000 PSay cSay
+											EndIf
+											@ Li,019 PSay aEstrut[nCont]
+											NGSomaLi(58)
+										Next nCont
+									Else
+										If AllTrim(cCompare) <> AllTrim(cEstrut)
+											@ Li,000 PSay cSay
+											@ Li,019 PSay cEstrut
+											NGSomaLi(58)
+										EndIf
+									EndIf
+								Endif
+
+								lPRIM := .F.
+							Endif
+							Ngsomali(58)
+							@ Li,019 PSAY (cTRB200)->ETAPA
+							Dbselectarea("TPA")
+							Dbsetorder(1)
+							Dbseek(Xfilial("TPA")+(cTRB200)->ETAPA,.T.)
+							@ Li,027 PSAY SUBSTR(TPA->TPA_DESCRI,1,38)
+
+							nPOS2 := Ascan(aORDENS,{|x| x[1] = (cTRB)->ORDEM})
+
+							If nPOS2 == 0
+								Aadd(aORDENS,{(cTRB)->BEM})
+								Aadd(aORDENS,{(cTRB)->ORDEM})
+								@ Li,081 PSAY (cTRB)->ORDEM     PICTURE "999999"
+							Endif
+							If !Empty((cTRB200)->OK)
+								@ Li,069 PSAY (cTRB)->DTDATFIM  PICTURE "99/99/99"
+								@ Li,090 PSAY "E"
+							Endif
+
+							lCORRET := (cTRB)->PLANO == "000000"
+							@ Li,098 PSAY (cTRB200)->TAREFA
+							@ Li,108 PSAY SubStr(NGNOMETAR((cTRB)->BEM+(cTRB)->SERVICO+(cTRB)->SEQRELA,(cTRB200)->TAREFA),1,40)
+
+							//OPCOES DA ETAPA
+							If !Empty((cTRB200)->OK) .And. MV_PAR08 = 2
+								lPRIMEIRO := .T.
+								DbSelectArea("TPC")
+								DbSetOrder(01)
+								If DbSeek(xFilial("TPC")+(cTRB200)->ETAPA)
+									While !Eof() .And. TPC->TPC_FILIAL = xFilial("TPC") .And.;
+									TPC->TPC_ETAPA = (cTRB200)->ETAPA
+
+										DbSelectArea("TPQ")
+										DbSetOrder(01)
+										If DbSeek( xFilial("TPQ") + (cTRB200)->ORDEM + (cTRB200)->PLANO + (cTRB200)->TAREFA + TPC->TPC_ETAPA + TPC->TPC_OPCAO )
+
+											If lPRIMEIRO
+												lPRIMEIRO := .F.
+												Ngsomali(58)
+												@li,027 Psay STR0012 //"Opcao..:"
+											Else
+												Ngsomali(58)
+											Endif
+											@li,036 Psay TPQ->TPQ_OPCAO Picture '@!'
+											If TPC->TPC_TIPRES == '2'
+												@li,054 Psay STR0013 //"Informou..:"
+												@li,066 Psay TPQ->TPQ_RESPOS
+												If !Empty(TPQ->TPQ_ORDEMG)
+													@li,077 Psay STR0014 //"OS..:"
+													@li,083 Psay TPQ->TPQ_ORDEMG
+												EndIf
+											Else
+												@li,054 Psay STR0015 //"Marcou....:"
+												@li,066 Psay STR0016 //"SIM"
+											EndIf
+
+										EndIf
+										DbSelectArea("TPC")
+										Dbskip()
+									End
+								EndIf
+							EndIf
+						Endif
+						Dbselectarea( cTRB200 )
+						Dbskip()
+					End While
+				Else
+					//LE ETAPAS EXECUTADAS DO BEM NO HISTORICO
+					Dbselectarea("STX")
+					Dbsetorder(1)
+					Dbseek(Xfilial("STX")+(cTRB)->ORDEM+(cTRB)->PLANO)
+					While !Eof() .And. STX->TX_FILIAL == Xfilial("STX") .And.;
+					STX->TX_ORDEM == (cTRB)->ORDEM  .And. STX->TX_PLANO  == (cTRB)->PLANO
+
+						If STX->TX_ETAPA >= MV_PAR05 .And. STX->TX_ETAPA <= MV_PAR06
+							If MV_PAR07 <> 3
+								If MV_PAR07 == 2           // Nao Executadas
+									If !EMPTY(STX->TX_OK)
+										Dbskip()
+										Loop
+									Endif
+								Elseif EMPTY(STX->TX_OK)  //Executadas
+									Dbskip()
+									Loop
+								Endif
+							Endif
+
+							If lPRIM
+								If lPRIIMP
+									lPRIIMP := .F.
+									Ngsomali(58)
+								Else
+									Ngsomali(58)
+									Ngsomali(58)
+								EndIf
+
+								If (cTRB)->TIPOOS = "B"
+									Dbselectarea("ST9")
+									Dbsetorder(1)
+									Dbseek(Xfilial("ST9")+(cTRB)->BEM)
+									@ Li,000 PSAY ST9->T9_CODBEM
+									@ Li,019 PSAY SUBSTR(ST9->T9_NOME,1,40)
+									If MV_PAR11 == 1
+										cSay     := STR0022 //"Localização.: "
+										cEstrut  := NGLocComp((cTRB)->BEM,"1")
+										cCompare := (cTRB)->BEM
+									EndIf
+								Else
+									dbSelectArea("TAF")
+									dbSetOrder(7)
+									dbSeek(xFilial("TAF")+"X"+"2"+(cTRB)->BEM)
+									@ Li,000 PSay TAF->TAF_CODNIV
+									@ Li,019 PSay SubStr(TAF->TAF_NOMNIV,1,56)
+									If MV_PAR11 == 1
+										cSay     := STR0024 //"Estrutura...: "
+										cEstrut  := NGLocComp((cTRB)->BEM,"2")
+										cCompare := SubStr(TAF->TAF_NOMNIV,1,56)
+									EndIf
+								EndIf
+
+								NGSomaLi(58)
+
+								If MV_PAR11 == 1
+									aEstrut := {}
+									If Len(cEstrut) > 100
+										aAdd(aEstrut,AllTrim(SubStr(cEstrut,1,100)))
+										cEstrut := AllTrim(SubStr(cEstrut,101))
+										While Len(cEstrut) > 100
+											aAdd(aEstrut,AllTrim(SubStr(cEstrut,1,100)))
+											cEstrut := AllTrim(SubStr(cEstrut,101))
+										End
+										aAdd(aEstrut,AllTrim(cEstrut))
+									EndIf
+
+									If Len(aEstrut) > 0
+										For nCont := 1 To Len(aEstrut)
+											If nCont == 1
+												@ Li,000 PSay cSay
+											EndIf
+											@ Li,019 PSay aEstrut[nCont]
+											NGSomaLi(58)
+										Next nCont
+									Else
+										If AllTrim(cCompare) <> AllTrim(cEstrut)
+											@ Li,000 PSay cSay
+											@ Li,019 PSay cEstrut
+											NGSomaLi(58)
+										EndIf
+
+									EndIf
+								Endif
+
+								lPRIM := .F.
+							Endif
+
+							Ngsomali(58)
+							@ Li,019 PSAY STX->TX_ETAPA
+							Dbselectarea("TPA")
+							Dbsetorder(1)
+							Dbseek(Xfilial("TPA")+STX->TX_ETAPA)
+							@ Li,027 PSAY SUBSTR(TPA->TPA_DESCRI,1,38)
+
+							nPOS2 := Ascan(aORDENS,{|x| x[1] = (cTRB)->ORDEM})
+							If nPOS2 = 0
+								Aadd(aORDENS,{(cTRB)->BEM})
+							Endif
+							If nPOS2 = 0
+								Aadd(aORDENS,{(cTRB)->ORDEM})
+								@ Li,069 PSAY (cTRB)->DTDATFIM PICTURE "99/99/99"
+								@ Li,081 PSAY (cTRB)->ORDEM    PICTURE "999999"
+							Endif
+
+							If !Empty(STX->TX_OK)
+								@ Li,090 PSAY "E"
+							Endif
+
+							lCORRET := (cTRB)->PLANO == "000000"
+							@ Li,098 PSAY STX->TX_TAREFA
+							@ Li,108 PSAY SubStr(NGNOMETAR((cTRB)->BEM+(cTRB)->SERVICO+(cTRB)->SEQRELA,STX->TX_TAREFA),1,40)
+
+							//OPCOES DA ETAPA
+							If !Empty(STX->TX_OK) .And. MV_PAR08 = 2
+								lPRIMEIRO := .T.
+								DbSelectArea("TPC")
+								DbSetOrder(01)
+								If DbSeek(xFilial("TPC")+STX->TX_ETAPA)
+									While !Eof() .And. TPC->TPC_FILIAL = xFilial("TPC") .And.;
+									TPC->TPC_ETAPA = STX->TX_ETAPA
+
+										DbSelectArea("TPX")
+										DbSetOrder(01)
+										If DbSeek(xFilial("TPX")+STX->TX_ORDEM+STX->TX_PLANO+STX->TX_TAREFA+TPC->TPC_ETAPA+TPC->TPC_OPCAO)
+
+											If lPRIMEIRO
+												lPRIMEIRO := .F.
+												Ngsomali(58)
+												@li,027 Psay STR0012 //"Opcao..:"
+											Else
+												Ngsomali(58)
+											Endif
+											@li,036 Psay TPX->TPX_OPCAO Picture '@!'
+											If TPC->TPC_TIPRES == '2'
+												@li,054 Psay  STR0013 //"Informou..:"
+												@li,066 Psay TPX->TPX_RESPOS
+												If !Empty(TPX->TPX_ORDEMG)
+													@li,077 Psay STR0014 //"OS..:"
+													@li,083 Psay TPX->TPX_ORDEMG
+												EndIf
+											Else
+												@li,054 Psay STR0015 //"Marcou....:"
+												@li,066 Psay STR0016 //"SIM"
+											EndIf
+
+										EndIf
+										DbSelectArea("TPC")
+										Dbskip()
+									End
+								EndIf
+							EndIf
+
+						Endif
+						Dbselectarea("STX")
+						Dbskip()
+					End While
+				Endif
+			EndIf
+
+			Dbselectarea(cTRB)
+			Dbskip()
+		End While
+	Else
+		MsgInfo(STR0032,STR0033) //"Não existem dados para montar o relatório."###"ATENÇÃO"
+		oTmpTbl2:Delete()//Deleta tablera temporária 1
+		cARQTR200:Delete()//Deleta tablera temporária 2
+		Return .F.
+	Endif
+
+	RODA(nCNTIMPR,cRODATXT,TAMANHO)
+	//---------------------------------------------------
+	// Devolve a condicao original do arquivo principam
+	//---------------------------------------------------
+	RETINDEX("STJ")
+	SET FILTER TO
+	SET DEVICE TO SCREEN
+
+	If aRETURN[5] == 1
+		SET PRINTER TO
+		dbCommitAll()
+		OURSPOOL(WNREL)
+	Endif
+
+	MS_FLUSH()
+	oTmpTbl2:Delete()//Deleta tablera temporária 1
+	cARQTR200:Delete()//Deleta tablera temporária 2
+
+Return NIL
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTR200STJ
+Processa as ordens de servico normais ( STJ )
+
+@author	Inácio Luiz Kolling - Modificada por: Elynton Fellipe Bazzo
+@since		23/08/01 - 10/06/2015
+@return	Nil
+@version	p11/p12
+/*/
+//--------------------------------------------------------------------------------
+Static Function MNTR200STJ()
+
+	Local aArea := GetArea()
+	Local cQuery := "", cAliasQry := ""
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TJ_CODBEM AS TJ_BEM, TJ_FILIAL , TJ_ORDEM AS TJ_ORDEM, TJ_PLANO AS TJ_PLANO, TJ_DTORIGI AS TJ_DTDATA, TJ_DTMRFIM AS TJ_DTDATFIM, "
+	cQuery += " 'STJ' AS TJ_ARQUIVO, TJ_TIPOOS AS TJ_TIPOOS, TJ_SERVICO AS TJ_SERVICO, TJ_SEQRELA AS TJ_SEQRELA "
+	cQuery += " FROM " + RetSqlName( "STJ" ) + " STJ "
+	cQuery += " WHERE STJ.TJ_FILIAL = '" + xFilial( "STJ" ) + "' "
+	cQuery += " AND STJ.TJ_SITUACA = 'L' AND STJ.TJ_TERMINO = 'S' "
+	cQuery += " AND STJ.TJ_DTORIGI >= '" + DTOS( Mv_Par01 ) + "' AND STJ.TJ_DTORIGI <= '" + DTOS( Mv_Par02 ) + "'"
+	cQuery += " AND STJ.TJ_CODBEM >= '" + Mv_Par03 + "' AND STJ.TJ_CODBEM <= '" + Mv_Par04 + "'""
+	cQuery += " AND STJ.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery( cQuery )
+	dbUseArea( .T., "TOPCONN", TCGENQRY( ,,cQuery ),cAliasQry, .F., .T. )
+
+	dbSelectArea( cAliasQry )
+	dbGoTop()
+	While ( cAliasQry )->(!Eof())
+		
+		If !Empty(aReturn[7])
+			dbSelectArea( 'STJ' )
+			dbSetOrder( 1 )
+			If !dbSeek( (cAliasQry)->TJ_FILIAL + (cAliasQry)->TJ_ORDEM + (cAliasQry)->TJ_PLANO )
+				
+				( cAliasQry )->(dbSkip())
+				Loop
+			
+			EndIf
+		
+		EndIf
+		
+		IncProc()
+
+		Dbselectarea( cTRB )
+		(cTRB)->( DbAppend() )
+		(cTRB)->ORDEM		:= (cAliasQry)->TJ_ORDEM
+		(cTRB)->PLANO		:= (cAliasQry)->TJ_PLANO
+		(cTRB)->BEM			:= (cAliasQry)->TJ_BEM
+		(cTRB)->DTDATA		:= STOD( (cAliasQry)->TJ_DTDATA )
+		(cTRB)->DTDATFIM	:= STOD( (cAliasQry)->TJ_DTDATFIM )
+		(cTRB)->ARQUIVO		:= (cAliasQry)->TJ_ARQUIVO
+		(cTRB)->TIPOOS		:= (cAliasQry)->TJ_TIPOOS
+		(cTRB)->SERVICO		:= (cAliasQry)->TJ_SERVICO
+		(cTRB)->SEQRELA		:= (cAliasQry)->TJ_SEQRELA
+
+		NGDBSELSKIP( cAliasQry )
+	End While
+
+	(cAliasQry)->( dbCloseArea() )
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TJ_CODBEM AS TJ_BEM, TJ_ORDEM AS TJ_ORDEM, TJ_PLANO AS TJ_PLANO, TJ_SERVICO AS TJ_SERVICO, TJ_SEQRELA AS TJ_SEQRELA, "
+	cQuery += " STQ.TQ_ORDEM AS TQ_ORDEM, STQ.TQ_PLANO AS TQ_PLANO, STQ.TQ_ETAPA AS TQ_ETAPA, STQ.TQ_OK AS TQ_OK, STQ.TQ_TAREFA AS TQ_TAREFA, STQ.TQ_SEQTARE AS TQ_SEQTARE,
+	cQuery += " ST5.T5_SEQUENC AS T5_SEQUEN"
+	cQuery += " FROM " + RetSqlName( "STJ" ) + " STJ "
+	cQuery += " LEFT JOIN " + RetSqlName( "STQ" ) + " STQ ON ( STQ.TQ_ORDEM = STJ.TJ_ORDEM AND STQ.TQ_PLANO = STJ.TJ_PLANO ) "
+	cQuery += " AND STQ.D_E_L_E_T_ <> '*'
+	cQuery += " LEFT JOIN " + RetSqlName( "ST5" ) + " ST5 ON ( ST5.T5_CODBEM = STJ.TJ_CODBEM AND ST5.T5_SERVICO = STJ.TJ_SERVICO AND ST5.T5_SEQRELA = STJ.TJ_SEQRELA AND (ST5.T5_TAREFA = STQ.TQ_TAREFA  )) "
+	cQuery += " AND ST5.D_E_L_E_T_ <> '*'
+	cQuery += " WHERE STJ.TJ_FILIAL = '" + xFilial( "STJ" ) + "' "
+	cQuery += " AND STJ.TJ_SITUACA = 'L' AND STJ.TJ_TERMINO = 'S' "
+	cQuery += " AND STJ.TJ_DTORIGI >= '" + DTOS( Mv_Par01 ) + "' AND STJ.TJ_DTORIGI <= '" + DTOS( Mv_Par02 ) + "'"
+	cQuery += " AND STJ.TJ_CODBEM >= '" + Mv_Par03 + "' AND STJ.TJ_CODBEM <= '" + Mv_Par04 + "'""
+	cQuery += " AND STQ.TQ_FILIAL = '" + xFilial( "STQ" ) + "' "
+	cQuery += " AND (ST5.T5_FILIAL IS NULL OR ST5.T5_FILIAL = '" + xFilial( "ST5" ) + "')"
+
+	cQuery += " AND STJ.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery( cQuery )
+	dbUseArea( .T., "TOPCONN", TCGENQRY( ,,cQuery ),cAliasQry, .F., .T. )
+
+	dbSelectArea( cAliasQry )
+	dbGoTop()
+	While !Eof()
+		IncProc()
+
+		dbSelectArea( cTRB200 )
+		RecLock( cTRB200,.T. )
+		(cTRB200)->ORDEM	:= (cAliasQry)->TQ_ORDEM
+		(cTRB200)->PLANO	:= (cAliasQry)->TQ_PLANO
+		(cTRB200)->ETAPA	:= (cAliasQry)->TQ_ETAPA
+		(cTRB200)->OK		:= (cAliasQry)->TQ_OK
+		(cTRB200)->TAREFA	:= (cAliasQry)->TQ_TAREFA
+		(cTRB200)->SEQTARE	:= (cAliasQry)->TQ_SEQTARE
+		(cTRB200)->SEQUEN	:= cValToChar( (cAliasQry)->T5_SEQUEN )
+		(cTRB200)->(MsUnlock())
+
+		NGDBSELSKIP( cAliasQry )
+	End While
+
+	(cAliasQry)->( dbCloseArea() )
+
+	RestArea( aArea )
+
+Return .T.
+
+//--------------------------------------------------------------------------------
+/*/{Protheus.doc} MNTR200STS
+Processa as ordens de servico normais ( STS )
+
+@author	Inácio Luiz Kolling - Modificada por: Elynton Fellipe Bazzo
+@since		23/08/01 - 10/06/2015
+@return	Nil
+@version	p11/p12
+/*/
+//--------------------------------------------------------------------------------
+Static Function MNTR200STS()
+
+	Local aArea := GetArea()
+	Local cQuery := "", cAliasQry := ""
+
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TS_CODBEM AS TS_BEM, TS_ORDEM AS TS_ORDEM, TS_PLANO AS TS_PLANO, TS_DTORIGI AS TS_DTDATA, TS_DTMRFIM AS TS_DTDATFIM, "
+	cQuery += " 'STS' AS TS_ARQUIVO, TS_TIPOOS AS TS_TIPOOS, TS_SERVICO AS TS_SERVICO, TS_SEQRELA AS TS_SEQRELA "
+	cQuery += " FROM " + RetSqlName( "STS" ) + " STS "
+	cQuery += " WHERE STS.TS_FILIAL = '" + xFilial( "STS" ) + "' "
+	cQuery += " AND STS.TS_SITUACA = 'L' AND STS.TS_TERMINO = 'S' "
+	cQuery += " AND STS.TS_DTORIGI >= '" + DTOS( Mv_Par01 ) + "' AND STS.TS_DTORIGI <= '" + DTOS( Mv_Par02 ) + "'"
+	cQuery += " AND STS.TS_CODBEM >= '" + Mv_Par03 + "' AND STS.TS_CODBEM <= '" + Mv_Par04 + "'""
+	cQuery += " AND STS.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery( cQuery )
+	dbUseArea( .T., "TOPCONN", TCGENQRY( ,,cQuery ),cAliasQry, .F., .T. )
+
+	dbSelectArea( cAliasQry )
+	dbGoTop()
+	While !Eof()
+		IncProc()
+
+		Dbselectarea( cTRB )
+		(cTRB)->( DbAppend() )
+		(cTRB)->ORDEM		:= (cAliasQry)->TS_ORDEM
+		(cTRB)->PLANO		:= (cAliasQry)->TS_PLANO
+		(cTRB)->BEM			:= (cAliasQry)->TS_BEM
+		(cTRB)->DTDATA		:= STOD( (cAliasQry)->TS_DTDATA )
+		(cTRB)->DTDATFIM	:= STOD( (cAliasQry)->TS_DTDATFIM )
+		(cTRB)->ARQUIVO		:= (cAliasQry)->TS_ARQUIVO
+		(cTRB)->TIPOOS		:= (cAliasQry)->TS_TIPOOS
+		(cTRB)->SERVICO		:= (cAliasQry)->TS_SERVICO
+		(cTRB)->SEQRELA		:= (cAliasQry)->TS_SEQRELA
+
+		NGDBSELSKIP( cAliasQry )
+	End While
+
+	(cAliasQry)->( dbCloseArea() )
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TS_CODBEM AS TS_BEM, TS_ORDEM AS TS_ORDEM, TS_PLANO AS TS_PLANO, TS_SERVICO AS TS_SERVICO, TS_SEQRELA AS TS_SEQRELA, "
+	cQuery += " STQ.TQ_ORDEM AS TQ_ORDEM, STQ.TQ_PLANO AS TQ_PLANO, STQ.TQ_ETAPA AS TQ_ETAPA, STQ.TQ_OK AS TQ_OK, STQ.TQ_TAREFA AS TQ_TAREFA, STQ.TQ_SEQTARE AS TQ_SEQTARE,
+	cQuery += " ST5.T5_SEQUENC AS T5_SEQUEN"
+	cQuery += " FROM " + RetSqlName( "STS" ) + " STS "
+	cQuery += " LEFT JOIN " + RetSqlName( "STQ" ) + " STQ ON ( STQ.TQ_ORDEM = STS.TS_ORDEM AND STQ.TQ_PLANO = STS.TS_PLANO ) "
+	cQuery += " AND STQ.D_E_L_E_T_ <> '*'
+	cQuery += " LEFT JOIN " + RetSqlName( "ST5" ) + " ST5 ON ( ST5.T5_CODBEM = STS.TS_CODBEM AND ST5.T5_SERVICO = STS.TS_SERVICO AND ST5.T5_SEQRELA = STS.TS_SEQRELA AND ( ST5.T5_TAREFA = '0     '  OR ST5.T5_TAREFA = STQ.TQ_TAREFA  )) "
+	cQuery += " AND ST5.D_E_L_E_T_ <> '*'
+	cQuery += " WHERE STS.TS_FILIAL = '" + xFilial( "STS" ) + "' "
+	cQuery += " AND STS.TS_SITUACA = 'L' AND STS.TS_TERMINO = 'S' "
+	cQuery += " AND STS.TS_DTORIGI >= '" + DTOS( Mv_Par01 ) + "' AND STS.TS_DTORIGI <= '" + DTOS( Mv_Par02 ) + "'"
+	cQuery += " AND STS.TS_CODBEM >= '" + Mv_Par03 + "' AND STS.TS_CODBEM <= '" + Mv_Par04 + "'""
+	cQuery += " AND STQ.TQ_FILIAL = '" + xFilial( "STQ" ) + "' "
+	cQuery += " AND (ST5.T5_FILIAL IS NULL OR ST5.T5_FILIAL = '" + xFilial( "ST5" ) + "')"
+	cQuery += " AND STS.D_E_L_E_T_ <> '*' "
+	cQuery := ChangeQuery( cQuery )
+	dbUseArea( .T., "TOPCONN", TCGENQRY( ,,cQuery ),cAliasQry, .F., .T. )
+
+	dbSelectArea( cAliasQry )
+	dbGoTop()
+	While !Eof()
+		IncProc()
+
+		dbSelectArea( cTRB200 )
+		RecLock( cTRB200,.T. )
+		(cTRB200)->ORDEM	:= (cAliasQry)->TQ_ORDEM
+		(cTRB200)->PLANO	:= (cAliasQry)->TQ_PLANO
+		(cTRB200)->ETAPA	:= (cAliasQry)->TQ_ETAPA
+		(cTRB200)->OK		:= (cAliasQry)->TQ_OK
+		(cTRB200)->TAREFA	:= (cAliasQry)->TQ_TAREFA
+		(cTRB200)->SEQTARE	:= (cAliasQry)->TQ_SEQTARE
+		(cTRB200)->SEQUEN	:= cValToChar( (cAliasQry)->T5_SEQUEN )
+		(cTRB200)->(MsUnlock())
+
+		NGDBSELSKIP( cAliasQry )
+	End While
+
+	(cAliasQry)->( dbCloseArea() )
+
+	RestArea( aArea )
+
+Return .T.
+

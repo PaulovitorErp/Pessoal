@@ -1,0 +1,1183 @@
+#INCLUDE "MNTA690.ch"
+#Include "Protheus.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690
+Programa que permitir registrar o envio de pneus
+transferidos entre filiais. O controle é feito por lote, a
+cada lote são relacionados os pneus que serão enviados para
+a filial de destino.
+@author Marcos Wagner Junior
+@since 21/09/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA690
+
+	Local aNGBEGINPRM := NGBEGINPRM()
+
+	Local nI
+	Local nSizeFil := If(FindFunction("FWSizeFilial"),FwSizeFilial(),TamSX3("CP_FILIAL")[1])
+
+	Local aOldMenu
+	Local aNGCAD02 := {}
+	Local oTmpTbl1
+
+	// [LGPD] Caso o usuário não possua acesso ao(s) campo(s), deve-se ofuscá-lo(s)
+	Local lOfuscar := FindFunction( 'FWPDCanUse' ) .And. FwPdCanUse( .T. );
+					.And. Len( FwProtectedDataUtil():UsrAccessPDField( __CUSERID, { 'CP_SOLICIT' } ) ) == 0
+
+	Private asMenu
+
+	If NGSX2MODO("ST9") == "C" .OR. NGSX2MODO("TQS") == "C"
+		MsgInfo(STR0035,STR0032) //"A rotina não funcionará com a tabela ST9 e/ou TQS compartilhada!"###"ATENCÃO"
+		Return
+	EndIf
+
+	aOldMenu := aClone(asMenu)
+	asMenu := NGRIGHTCLICK("MNTA690")
+
+	aNGCAD02 := { IIf( Type("aCHOICE") == "A"		, aClone(aCHOICE)	, {}),;
+				  IIf( Type("aVARNAO") == "A"		, aClone(aVARNAO)	, {}),;
+				  IIf( Type("aGETNAO") == "A"		, aClone(aGETNAO)	, {}),;
+				  IIf( Type("cGETWHILE") == "C"		, cGETWHILE			, Nil),;
+				  IIf( Type("cGETMAKE") == "C"		, cGETMAKE			, Nil),;
+				  IIf( Type("cGETKEY") == "C"		, cGETKEY			, Nil),;
+			 	  IIf( Type("cGETALIAS") == "C"		, cGETALIAS			, Nil),;
+				  IIf( Type("cTUDOOK") == "C"		, cTUDOOK			, Nil),;
+				  IIf( Type("cLINOK") == "C"		, cLINOK			, Nil),;
+				  IIf( Type("aRELAC") == "A"		, aClone(aRELAC)	, {}),;
+				  IIf( Type("aCHKDEL") == "A"		, aClone(aCHKDEL)	, {}),;
+				  IIf( Type("bngGRAVA") == "A"		, aClone(bngGRAVA)	, {}),;
+				  IIf( Type("aNGBUTTON") == "A"		, aClone(aNGBUTTON)	, {})}
+
+	//+-------------------------------------------------------------------+
+	//| Define Array contendo as Rotinas a executar do programa      	  |
+	//| ----------- Elementos contidos por dimensao ------------     	  |
+	//| 1. Nome a aparecer no cabecalho                              	  |
+	//| 2. Nome da Rotina associada                                  	  |
+	//| 3. Usado pela rotina                                         	  |
+	//| 4. Tipo de Transa‡„o a ser efetuada                          	  |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados             	  |
+	//|    2 - Simplesmente Mostra os Campos                         	  |
+	//|    3 - Inclui registros no Bancos de Dados                   	  |
+	//|    4 - Altera o registro corrente                            	  |
+	//|    5 - Remove o registro corrente do Banco de Dados          	  |
+	//+-------------------------------------------------------------------+
+	Private aRotina := MenuDef()
+	Private cNgFilCad
+	//+-------------------------------------------------------------------+
+	//| Define o cabecalho da tela de atualizacoes                   	  |
+	//+-------------------------------------------------------------------+
+	Private cCadastro := STR0003 //"Remessa de Pneus"
+	Private aCHKDEL := {}, bNGGRAVA
+	Private aPneus := {}
+
+	Private cFilialde := Space(nSizeFil)//"  "
+	Private lCODBEM   := .t.
+	Private cPerg     := "MNTA690"
+	Private cStaEst   := GetMv("MV_NGSTEST")
+	Private cStaTra   := GetMv("MV_NGSTATR")
+	Private cStaApli  := GetMv("MV_NGSTAPL")
+	Private cEstNeg   := GetMv("MV_ESTNEG")
+	Private cPneuEst  := GetMv("MV_NGPNEST")
+	Private cMntEst   := GetMv("MV_NGMNTES")
+	Private cTRBB	  := GetNextAlias()
+	aCHKDEL := { }
+
+	aPos1      := {15,1,95,315 }
+
+	aDBF := {}
+		aAdd(aDBF,{"VER_OK", "C" , 02, 0 })
+		aAdd(aDBF,{"FILIAL", "C" , nSizeFil, 0 })
+		aAdd(aDBF,{"NUM"   , "C" , 06, 0 })
+		aAdd(aDBF,{"ITEM"  , "C" , 02, 0 })
+		aAdd(aDBF,{"TIPMOD", "C" , 20, 0 })
+		aAdd(aDBF,{"MEDIDA", "C" , 20, 0 })
+		aAdd(aDBF,{"SULMIN", "N" , 06, 2 })
+		aAdd(aDBF,{"SULMAX", "N" , 06, 2 })
+		aAdd(aDBF,{"QTDESOL","N" , 12, 0 })
+		aAdd(aDBF,{"QTDEATE","N" , 12, 0 })
+		aAdd(aDBF,{"EMISSAO","D" , 08, 0})
+		aAdd(aDBF,{"SOLICIT","C" , 15, 0 })
+
+	//Instancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRBB, aDBF )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"FILIAL","NUM","ITEM" } )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	aTRBB := {}
+		aAdd(aTRBB,{"VER_OK" ,Nil,"  "   ,})
+		aAdd(aTRBB,{"FILIAL" ,Nil,STR0006,}) //"Filial"
+		aAdd(aTRBB,{"NUM"    ,Nil,STR0007,}) //"N.Sol."
+		aAdd(aTRBB,{"ITEM"   ,Nil,STR0008,}) //"Item"
+		aAdd(aTRBB,{"TIPMOD" ,Nil,STR0009,}) //"Modelo"
+		aAdd(aTRBB,{"MEDIDA" ,Nil,STR0010,}) //"Medida"
+		aAdd(aTRBB,{"SULMIN" ,Nil,STR0011,}) //"Sul.Min"
+		aAdd(aTRBB,{"SULMAX" ,Nil,STR0012,}) //"Sul.Max"
+		aAdd(aTRBB,{"QTDESOL",Nil,STR0016,}) //"Qtde Sol."
+		aAdd(aTRBB,{"QTDEATE",Nil,STR0017,}) //"Qtde Atend."
+		aAdd(aTRBB,{"EMISSAO",Nil,STR0036 }) //"Data Emissao"
+		aAdd(aTRBB,{"SOLICIT",Nil,STR0018,,,,,,,,,"SOLICIT"}) //"Solicitante"
+		
+	Processa({ |lEnd| NG690TRB() })
+
+	cMARCA  := GetMark()
+	lINVERTE:= .F.
+
+	dbSelectArea(cTRBB)
+	dbSetOrder(1)
+	dbGotop()
+	MARKBROW((cTRBB),"VER_OK","",aTRBB,lINVERTE,cMARCA,"",,,,"MNT690Mark()",,,,,,,,, IIf( lOfuscar, { "SOLICIT" }, {} ) )
+
+	dbSelectArea(cTRBB)
+	While !Eof()
+		If !Empty((cTRBB)->VER_OK)
+			For nI := 1 to Len(aPneus)
+				dbSelectArea("ST9")
+				dbSetOrder(16)
+				If aPneus[nI][1] == (cTRBB)->NUM .AND. aPneus[nI][2] == (cTRBB)->ITEM
+					If dbSeek(aPneus[nI][3])
+						Reclock("ST9",.F.)
+						ST9->T9_STATUS := cStaEst
+						ST9->T9_SITBEM := "A"
+						MsUnlock("ST9")
+					EndIf
+				EndIf
+			Next nI
+
+		EndIf
+		dbSelectArea(cTRBB)
+		dbSkip()
+	End
+
+	oTmpTbl1:Delete()
+
+	asMenu := aClone(aOldMenu)
+
+	aCHOICE := aClone(aNGCAD02[1])
+	aVARNAO := aClone(aNGCAD02[2])
+	AGETNAO := aClone(aNGCAD02[3])
+
+	If(aNGCAD02[4] != Nil,cGETWHILE := aNGCAD02[4],)
+	If(aNGCAD02[5] != Nil,cGETMAKE := aNGCAD02[5],)
+	If(aNGCAD02[6] != Nil,cGETKEY := aNGCAD02[6],)
+	If(aNGCAD02[7] != Nil,cGETALIAS := aNGCAD02[7],)
+	If(aNGCAD02[8] != Nil,cTUDOOK := aNGCAD02[8],)
+	If(aNGCAD02[9] != Nil,cLINOK := aNGCAD02[9],)
+
+	aRELAC := aClone(aNGCAD02[10])
+	aCHKDEL := aClone(aNGCAD02[11])
+	bngGRAVA := aClone(aNGCAD02[12])
+	aNGBUTTON := aClone(aNGCAD02[13])
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NG690TRB
+Carrega a tabela temporaria com os dados
+@author Marcos Wagner Junior
+@since 28/09/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function NG690TRB()
+
+	Local cTabSCP := GetNextAlias()
+	Local cQuerySCP := ""
+
+	cQuerySCP := " SELECT * FROM " + RetSQLName("SCP") + " SCP "
+	cQuerySCP += " WHERE SCP.CP_LOTE = '' AND SCP.CP_TIPMOD <> '' AND SCP.D_E_L_E_T_ = ''"
+	cQuerySCP := ChangeQuery(cQuerySCP)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuerySCP),cTabSCP, .F., .T.)
+
+	While !Eof()
+
+
+		INCPROC()
+		dbSelectArea(cTRBB)
+		DbAppend()
+		(cTRBB)->VER_OK := "  "
+		(cTRBB)->FILIAL := (cTabSCP)->CP_FILIAL
+		(cTRBB)->NUM    := (cTabSCP)->CP_NUM
+		(cTRBB)->ITEM   := (cTabSCP)->CP_ITEM
+		(cTRBB)->TIPMOD := NGSEEK("TQR",(cTabSCP)->CP_TIPMOD,1,"TQR_DESMOD")
+		(cTRBB)->MEDIDA := NGSEEK("TQT",(cTabSCP)->CP_MEDIDA ,1,"TQT_DESMED")
+		(cTRBB)->SULMIN := (cTabSCP)->CP_SULCMI
+		(cTRBB)->SULMAX := (cTabSCP)->CP_SULCMA
+		(cTRBB)->QTDESOL:= (cTabSCP)->CP_QUANT
+		(cTRBB)->QTDEATE:= (cTabSCP)->CP_QUJE
+		(cTRBB)->SOLICIT:= (cTabSCP)->CP_SOLICIT
+		(cTRBB)->EMISSAO := StoD((cTabSCP)->CP_EMISSAO)
+
+
+		dbSelectArea(cTabSCP)
+		dbSkip()
+	End
+
+	(cTabSCP)->(DbCloseArea())
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A960GELO
+Funcao para gerar um novo lote com os registros checados
+@author Marcos Wagner Junior
+@since 29/09/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function A960GELO()
+
+	Local ny, nQtde,i, nI
+	Local nPosco2
+	Local lGera    	:= .F.
+	Local lPIMSINT	:= SuperGetMV("MV_PIMSINT",.F.,.F.)
+	Local nSizeFil 	:= If(FindFunction("FWSizeFilial"),FwSizeFilial(),Len(SCP->CP_FILIAL))
+
+	Local cAlmoxa  := CriaVar('D3_LOCAL')
+	Local cLoteCtl := CriaVar('D3_LOTECTL')
+	Local cNumLote := CriaVar('D3_NUMLOTE')
+	Local cLocaliz := CriaVar('D3_LOCALIZ')
+	Local cNumSeri := CriaVar('D3_NUMSERI')
+	Local cnumSeqD := CriaVar('D3_NUMSEQ')
+	Local cItemCta := CriaVar('D3_ITEMCTA')
+	Local nQtdOco  := 0
+	Local cLocOco  := ""
+	Local cCcusto  := ""
+	Local lSeek    := ""
+	Local cProduto := ""
+
+	Private cObserv, cFil
+	Private nOpcao
+
+	Private oMenu
+	Private cItem
+	Private cNum
+	Private dEmissao
+	Private nGeraLote := 0
+	Private nCont     := 1
+
+	cData   := dDatabase
+	cHora   := SubStr(Time(),1,5)
+	cUsu    := SubStr(cUsuario,7,15)
+
+	dbSelectArea(cTRBB)
+	dbSetOrder(1)
+	dbGoTop()
+
+	While !Eof()
+		If !Empty((cTRBB)->VER_OK)
+			nGeraLote := 1
+			cFil	  := (cTRBB)->FILIAL
+			cItem 	  := (cTRBB)->ITEM
+			cNum 	  := (cTRBB)->NUM
+			dEmissao  := (cTRBB)->EMISSAO
+		EndIf
+
+		dbSelectArea(cTRBB)
+		dbSkip()
+	End
+
+
+	If nGeraLote == 1
+		cFilOld := cFilAnt
+		cFilAnt := cFil
+		cLote   := GETSXENUM("TR2","TR2_LOTE",cFil+x2path("TR2"))
+		cFilAnt := cFilOld
+		ConfirmSX8()
+		Define MsDialog oDlg3 From 300,120 To 510,770 Title STR0014 Pixel  //"Observações"
+
+		@ 0.5,1 Say OemtoAnsi(STR0019)
+		@ 0.5,6 MsGet cLote Picture '@!' When .F. SIZE 47,10
+		@ 0.5,13 Say OemtoAnsi(STR0020)
+		@ 0.5,18 MsGet cData Picture '@!' When .T. Valid MNTA690vl()SIZE 35,10 HasButton
+		@ 1.5,1 Say OemtoAnsi(STR0021)
+		@ 1.5,6 MsGet cHora Picture '99:99' When .T. Valid NGVALHORA( cHora,.T. ) SIZE 35,10
+		@ 1.5,13 Say OemtoAnsi(STR0022)
+		@ 1.5,18 MsGet xFilial("SCP") Picture '@!' When .F. SIZE 35,10
+		@ 2.5,1 Say OemtoAnsi(STR0023)
+		@ 2.5,6 MsGet cFil Picture '@!' When .F. SIZE 35,10
+		@ 2.5,13 Say OemtoAnsi(STR0024)
+		@ 2.5,18 MsGet cUsu Picture '@!' When .F. SIZE 47,10
+
+		@ 45,08 Say STR0015 Of oDlg3 Pixel //"Observação"
+		@ 45,48 GET oMemo Var cObserv MEMO SIZE 270,40 MEMO of oDlg3 PIXEL
+
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg3:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg3)}
+
+		Activate MsDialog oDlg3 On Init EnchoiceBar(oDlg3,{||nOpcao:=1,oDlg3:End()},{||nOpcao:=0,oDlg3:End()}) Centered
+	EndIf
+
+
+	If nOpcao == 1
+		BEGIN TRANSACTION
+
+			If __lSX8
+				ConfirmSX8()
+			EndIf
+			dbSelectArea(cTRBB)
+			dbSetOrder(1)
+			dbGoTop()
+
+			While !Eof()
+				If !Empty((cTRBB)->VER_OK)
+
+					//Se tiver que gerar novo registro na SCP
+					If (cTRBB)->QTDESOL > (cTRBB)->QTDEATE
+						lGera := .T.
+						nQtde := (cTRBB)->QTDESOL - (cTRBB)->QTDEATE
+					EndIf
+
+					//Grava o Lote na TR2 (sera gravado apenas uma vez para cada Geracao de Lote)
+					If nCont == 1
+						RecLock("TR2",.T.)
+						TR2->TR2_FILIAL := (cTRBB)->FILIAL
+						TR2->TR2_LOTE   := cLote
+						TR2->TR2_DTTRAN := cData
+						TR2->TR2_HRTRAN := cHora
+						TR2->TR2_FILORI := xFilial("SCP")
+						TR2->TR2_FILDES := (cTRBB)->FILIAL
+						TR2->TR2_USUENV := cUsu
+						TR2->TR2_DTREC  := Ctod("  /  /    ")
+						TR2->TR2_HRREC  := "  :  "
+						TR2->TR2_USUREC := Space(Len(TR2->TR2_USUREC))
+						TR2->TR2_CCUSTO := Space(Len(TR2->TR2_CCUSTO))
+
+						//TR2->TR2_CENTRA := Space(Len(TR2->TR2_CENTRA))
+						TR2->TR2_OBSENV := cObserv
+						TR2->TR2_OBSREC := Space(Len(TR2->TR2_OBSREC))
+						MsUnLock("TR2")
+					EndIf
+
+
+					//Grava na SCP o Lote gerado referente a cada item de Lote
+					//e gera registro na TR3 com numero da OS
+					If nCont == 1
+						For nI := 1 to Len(aPneus)
+							dbSelectArea("SCP")
+							dbSetOrder(1)
+							dbGoTop()
+							cNumOs := SCP->CP_NUMOS
+
+							If dbSeek(xFilial("SCP")+aPneus[nI][1]+aPneus[nI][2])
+								cNumOs := SCP->CP_NUMOS
+							EndIf
+
+							RecLock("TR3",.T.)
+
+							//Gravacao do Lote na TR3
+							TR3->TR3_NUMOS  := cNumOs
+							TR3->TR3_FILIAL := (cTRBB)->FILIAL
+							TR3->TR3_LOTE   := cLote
+							TR3->TR3_CODBEM := aPneus[nI][3]
+							dbSelectArea("ST9")
+							dbSetOrder(1)
+							If dbSeek(xFilial("ST9") + aPneus[nI][3])
+								TR3->TR3_CODPRO := ST9->T9_CODESTO
+								TR3->TR3_NREQIN := Space(Len(TR3->TR3_NREQIN))
+								TR3->TR3_NUMSEQ := Space(Len(TR3->TR3_NUMSEQ))
+								TR3->TR3_NUMSMA := aPneus[nI][1]
+								TR3->TR3_ITEMSM := aPneus[nI][2]
+								MsUnLock("TR3")
+
+								If ST9->T9_MOVIBEM = "S"
+									RecLock("TPN",.T.)
+									TPN->TPN_FILIAL := (cTRBB)->FILIAL
+									TPN->TPN_CODBEM := aPneus[nI][3]
+									TPN->TPN_DTINIC := cData
+									TPN->TPN_HRINIC := cHora
+									TPN->TPN_CCUSTO := ST9->T9_CCUSTO
+									TPN->TPN_CTRAB  := ST9->T9_CENTRAB
+									TPN->TPN_UTILIZ := 'U'
+									TPN->TPN_POSCON := ST9->T9_POSCONT
+									nPosco2 := NGSEEK("TPE",TPN->TPN_CODBEM,1,"TPE_POSCON")
+									TPN->TPN_POSCO2 := If(Empty(nPosco2),0,nPosco2)
+									MsUnLock("TPN")
+
+									//Funcao de integracao com o PIMS atraves do EAI
+									If lPIMSINT .And. FindFunction("NGIntPIMS")
+										NGIntPIMS("TPN",TPN->(RecNo()),3)
+									EndIf
+								EndIf
+
+								If !Empty(ST9->T9_CODESTO)
+									INCLUI := .T.
+
+									cProduto := ST9->T9_CODESTO
+
+									/*------------------------------------------------------------------------------
+									Verifica saldo de acordo com almoxarifado da TQZ (Histórico do status do pneu)
+									------------------------------------------------------------------------------*/
+									dbSelectArea("TQZ")
+									dbSetOrder(1)
+									lSeek := dbSeek(xFilial("TQZ") + ST9->T9_CODBEM + DToS(cData) + cHora, .T.)
+
+									If !lSeek
+										dbSelectArea("TQZ")
+										dbSkip(-1)
+
+										If TQZ_FILIAL == xFilial("TQZ") .And. TQZ_CODBEM == ST9->T9_CODBEM .And. TQZ_PRODUT == cProduto
+											lSeek := .T.
+										EndIf
+									EndIf
+
+									If lSeek
+										cLocOco := TQZ->TQZ_ALMOX
+									EndIf
+									/*------------------------------------------------------------------------------*/
+
+									If Empty(cLocOco)
+										SB1->(dbSetOrder(1))
+										If SB1->(DbSeek(xFilial('SB1')+cProduto))
+											cB1Aprop := SB1->B1_APROPRI
+											cLocOco  := SB1->B1_LOCPAD
+										EndIf
+									EndIf
+
+									dbSelectArea("ST9")
+									dbSetOrder(16)
+									If dbSeek(aPneus[nI][3])
+										cCcusto  := ST9->T9_CCUSTO
+										If NGCADICBASE("T9_ITEMCTA","A","ST9",.F.)
+											cItemCta := ST9->T9_ITEMCTA
+										EndIf
+									EndIf
+
+									dbSelectArea("SBF")
+									dbSetOrder(2)
+									dbSeek(xFilial("SBF")+cProduto+cLocOco)
+									cAlmoxa  := cLocOco
+									cLoteCtl := If(Empty('BF_LOTECTL'), '', SBF->BF_LOTECTL)
+									cNumLote := If(Empty('BF_NUMLOTE'), '', SBF->BF_NUMLOTE)
+									cLocaliz := If(Empty('BF_LOCALIZ'), '', SBF->BF_LOCALIZ)
+									cNumSeri := If(Empty('BF_NUMSERI'), '', SBF->BF_NUMSERI)
+
+									If Substr(aPneus[nI][3],1,1) = "D"
+										dbSelectArea("SD3")
+										dbSetOrder(4)
+										If dbSeek(xFilial('SD3')+TR3->TR3_NUMSEQ)
+											cNumSeqD := SD3->D3_NUMSEQ
+											cDocEst  := SD3->D3_DOC
+										EndIf
+									Else
+										cDocEst  := NextNumero("SD3",2,"D3_DOC",.T.)
+									EndIf
+
+									MntMovEst("RE0",cAlmoxa,cProduto,1,dDataBase,cDocEst,,cCCusto,;
+											  (Substr(aPneus[nI][3], 1, 1) == "D"),cNumSeqD,cNumOs)
+
+									//Grava NUMSEQ no TR3
+									RecLock("TR3")
+									TR3->TR3_NUMSEQ := cNumSeqD
+									MsUnLock("TR3")
+									INCLUI := .F.
+								EndIf
+							EndIf
+						Next nI
+					EndIf
+
+					dbSelectArea("SCP")
+					dbSetOrder(1)
+					If dbSeek((cTRBB)->FILIAL+(cTRBB)->NUM+(cTRBB)->ITEM)
+						RecLock("SCP",.F.)
+						SCP->CP_LOTE := cLote
+						MsUnLock("SCP")
+						//no processo de Transferencia de Pneus, a SA nao eh integrada.
+						//If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+						// 	NGMUReques(SCP->(RecNo()),"SCP",.F.,3)
+						//EndIf
+					EndIf
+
+					If lGera
+						For i := 1 to FCOUNT()
+							cCampo := "M->" + FieldName(i)
+							cRelac := "SCP->" + FieldName(i)
+							&cCampo. := &cRelac
+						Next
+
+						dbSelectArea("SCP")
+						RecLock("SCP",.T.)
+						For ny := 1 To FCOUNT()
+
+							nx := "M->" + FieldName(ny)
+
+							If Upper(nx) == "M->CP_NUM"
+								cNumSCP := GetSXENum("SCP","CP_NUM")
+								ConfirmSX8()
+								FieldPut(ny, cNumSCP)
+							ElseIf Upper(nx) = "M->CP_QUANT"
+								FieldPut(ny, nQtde)
+							ElseIf Upper(nx) = "M->CP_LOTE"
+								FieldPut(ny, Space(Len(M->CP_LOTE)))
+							Else
+								FieldPut(ny, &nx.)
+							EndIf
+						Next ny
+						MsUnLock("SCP")
+						//no processo de Transferencia de Pneus, a SA nao eh integrada.
+						//If AllTrim(GetNewPar("MV_NGINTER","N")) == "M"  //Mensagem Unica
+						//	NGMUReques(SCP->(RecNo()),"SCP",.F.,3)
+						//EndIf
+					EndIf
+
+					nCont := nCont + 1
+					dbSelectArea(cTRBB)
+					(cTRBB)->VER_OK := Space(Len(VER_OK))
+				EndIf
+
+				dbSelectArea(cTRBB)
+				dbSkip()
+			End
+
+		END TRANSACTION
+		aPneus := {}
+		dbSelectArea(cTRBB)
+		//Zap
+		M->TR3_CODBEM  := Space(Len(TR3->TR3_CODBEM))
+	Else
+		RollBackSX8()
+	EndIf
+
+	cFilialde := Space(nSizeFil)
+
+Return Nil
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT690Mark
+Chama ponto de entrada para marcar itens
+@author Marcos Wagner Junior
+@since 02/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT690Mark()
+
+	Local nI
+	Local nPneu
+	Local nOpca := 0
+	Local aDeletar := {}
+	Local aArea := GetArea()
+	Local cCampo	:= ""
+	Local cPicture 	:= ""
+	Local cTamanho 	:= ""
+	Local cDecimal 	:= ""
+	Local cValid	:= ""
+	Local cUsado	:= ""
+	Local cTipo 	:= ""
+	Local cArquivo	:= ""
+	Local cContext 	:= ""
+	Local cF3		:= ""
+
+	Private oGet
+	Private oMenu
+
+	If !Empty((cTRBB)->VER_OK)
+		Reclock((cTRBB),.F.)
+		Replace VER_OK  With Space(Len(VER_OK))
+		(cTRBB)->QTDEATE := 0
+		MsUnlock()
+
+		For nI := 1 to Len(aPneus)
+			dbSelectArea("ST9")
+			dbSetOrder(16)
+			If aPneus[nI][1] == (cTRBB)->NUM .AND. aPneus[nI][2] == (cTRBB)->ITEM
+				If dbSeek(aPneus[nI][3])
+					Reclock("ST9",.F.)
+					ST9->T9_STATUS := cStaEst
+					ST9->T9_SITBEM := "A"
+					MsUnlock("ST9")
+					aAdd(aDeletar,{nI})
+				EndIf
+			EndIf
+		Next nI
+
+		nI := 0
+		For nI := Len(aDeletar) to 1 Step -1
+			nPneu := aDeletar[nI][1]
+			aDel ( aPneus, nPneu)
+			aSize( aPneus, Len(aPneus)-1)
+		Next nI
+
+		If Len(aPneus) == 0
+			cFilialde := Space(Len((cTRBB)->FILIAL))//"  "
+		EndIf
+
+	Else
+		dbSelectArea(cTRBB)
+		If Empty(cFilialde) .OR. cFilialde == FILIAL
+			dbSelectArea("TQS")
+			dbGoBottom()
+			dbSkip()
+
+			nUsado  :=0
+			aHeader :={}
+
+
+			cCampo		:= "TR3_CODBEM"
+			cPicture 	:= Posicione("SX3",2,cCampo,"X3_PICTURE")
+			cTamanho 	:= Posicione("SX3",2,cCampo,"X3_TAMANHO")
+			cDecimal 	:= Posicione("SX3",2,cCampo,"X3_DECIMAL")
+			cUsado	 	:= Posicione("SX3",2,cCampo,"X3_USADO")
+			cTipo 		:= Posicione("SX3",2,cCampo,"X3_TIPO")
+			cArquivo	:= Posicione("SX3",2,cCampo,"X3_ARQUIVO")
+			cContext 	:= Posicione("SX3",2,cCampo,"X3_CONTEXT")
+
+			nUSADO := nUsado+1
+			aAdd(aHeader,{STR0013,cCampo,cPicture,cTamanho,cDecimal,"MNTA690LIN()",cUsado,cTipo,cArquivo,cContext,"NGST9"}) //"Pneu"
+
+			cCampo		:= "TPP_USUCAN"
+			cPicture 	:= Posicione("SX3",2,cCampo,"X3_PICTURE")
+			cTamanho 	:= Posicione("SX3",2,cCampo,"X3_TAMANHO")
+			cDecimal 	:= Posicione("SX3",2,cCampo,"X3_DECIMAL")
+			cValid	 	:= Posicione("SX3",2,cCampo,"X3_VALID")
+			cUsado	 	:= Posicione("SX3",2,cCampo,"X3_USADO")
+			cTipo 		:= Posicione("SX3",2,cCampo,"X3_TIPO")
+			cArquivo	:= Posicione("SX3",2,cCampo,"X3_ARQUIVO")
+			cContext 	:= Posicione("SX3",2,cCampo,"X3_CONTEXT")
+			cF3		 	:= Posicione("SX3",2,cCampo,"X3_F3")
+
+			nUSADO := nUsado+1
+			aAdd(aHeader,{STR0010,cCampo,cPicture,cTamanho,cDecimal,cValid,cUsado,cTipo,cArquivo,cContext,cF3}) // "Medida"
+
+			nUSADO := nUsado+1
+			aAdd(aHeader,{STR0025,cCampo,cPicture,cTamanho,cDecimal,cValid,cUsado,cTipo,cArquivo,cContext,cF3}) // "Sulco"
+
+			nUSADO := nUsado+1
+			aAdd(aHeader,{STR0026,cCampo,cPicture,cTamanho,cDecimal,cValid,cUsado,cTipo,cArquivo,cContext,cF3}) // "Banda"
+
+			nUSADO := nUsado+1
+			aAdd(aHeader,{STR0027,cCampo,cPicture,cTamanho,cDecimal,cValid,cUsado,cTipo,cArquivo,cContext,cF3}) // "Desenho"
+
+			dbSelectArea("SX3")
+			dbSetOrder(1)
+
+			aCols := BlankGetD(aHeader)
+
+			nOpcx := 2
+
+			DEFINE MSDIALOG oDLG FROM 3,105 TO 355,830 TITLE cCadastro PIXEL
+
+			oGet := MSGetDados():New(30,1,178,366,nOpcx,"AllwaysTrue()","MNTA690ALL()","",.T.,,,,300)
+			oGet:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+			NGPOPUP(asMenu,@oMenu)
+			oDlg:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg)}
+
+			ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar(oDlg,{|| IF(MNTA690ALL(),(nOpca:=1,oDlg:End()),nOpca := 0)},{||nOpca:= 0,oDlg:End()}) CENTERED
+
+			If nOpca = 0
+				Reclock((cTRBB),.F.)
+				Replace VER_OK  With Space(Len(VER_OK))
+				(cTRBB)->QTDEATE := 0
+				MsUnlock()
+			Else
+				If Len(aPneus) > 0
+					dbSelectArea(cTRBB)
+					cFilialde := Filial
+				EndIf
+			EndIf
+		Else
+			MsgStop(STR0028) //"A Filial das solicitações devem ser iguais"
+			Return .F.
+		EndIf
+
+	EndIf
+
+	RestArea(aArea)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690LIN
+Preenche campos referentes ao Pneu selecionado
+@author Marcos Wagner Junior
+@since 25/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA690LIN()
+
+	Local nI
+
+	dbSelectArea("STJ")
+	dbSetOrder(12)
+	If DbSeek(ST9->T9_FILIAL+"B"+M->TR3_CODBEM+"N")
+		While !Eof() .AND. STJ->TJ_FILIAL = ST9->T9_FILIAL .AND. STJ->TJ_TIPOOS = "B" .AND.;
+		STJ->TJ_CODBEM = M->TR3_CODBEM .AND. STJ->TJ_TERMINO = "N"
+			If STJ->TJ_SITUACA = "L"
+				MsgStop(STR0029) //"Existe uma Ordem de Serviço aberta para este bem. A O.S. deverá ser finalizada para permitir a inclusão."
+				Return .f.
+			EndIf
+
+			dbSelectArea("STJ")
+			dbSkip()
+		End
+	EndIf
+
+	dbSelectArea(cTRBB)
+	If Len(aCols) <= (cTRBB)->QTDESOL
+		GetDRefresh()
+		nI := 0
+
+		dbSelectArea("TQS")
+		dbGoTop()
+		If dbSeek(xFilial("ST9")+M->TR3_CODBEM)
+
+			dbSelectArea(cTRBB)
+			If NGSEEK("TQT",TQS->TQS_MEDIDA,1,"TQT_DESMED") == (cTRBB)->MEDIDA
+				dbSelectArea("ST9")
+				dbSetOrder(1)
+				dbGotop()
+				If dbSeek(xFilial("ST9")+M->TR3_CODBEM)
+					If ST9->T9_CATBEM != '3' .Or. ST9->T9_STATUS == cStaApli .Or. ST9->T9_STATUS == cStaTra .Or.;
+					ST9->T9_SITBEM != "A"  //Status diferente de 'Aplicado' ou 'Em Transito'
+						MNTA690NAO()
+						Return .F.
+					EndIf
+				Else
+					MNTA690NAO()
+					Return .F.
+				EndIf
+			Else
+				MNTA690NAO()
+				Return .F.
+			EndIf
+		Else
+			If !ExistCpo("ST9",M->TR3_CODBEM)
+				Return .F.
+			EndIf
+		EndIf
+
+		If !MNTA690EST()
+			Return .f.
+		EndIf
+
+		//Verifica se o Pneu selecionado ja foi selecionado
+		For nI =  1 to Len(aCOLS)
+			If aCols[nI][1] = M->TR3_CODBEM .And. n != nI
+				MsgStop(STR0030) //"Pneu já foi selecionado anteriormente!"
+				M->TR3_CODBEM  := Space(Len(TR3->TR3_CODBEM))
+				aCOLS[n][1]   := ""
+				aCOLS[n][2]   := ""
+				aCOLS[n][3]   := ""
+				aCOLS[n][4]   := ""
+				aCOLS[n][5]   := ""
+				Return .F.
+			EndIf
+		Next
+
+		//Verifica se o sulco do Pneu selecionado esta dentro dos limites da solicitacao
+		dbSelectArea("TQS")
+		dbSetOrder(1)
+		dbSeek(xFilial("ST9")+M->TR3_CODBEM)
+		dbSelectArea(cTRBB)
+		If (TQS->TQS_SULCAT < SULMIN) .OR. (TQS->TQS_SULCAT > SULMAX) .AND. !Empty(M->TR3_CODBEM)
+			If MsgYesNo(STR0031,STR0032) //"Sulco do pneu selecionado está fora dos limites informados pelo solicitante, confirma?"###"ATENCÃO"
+				aCOLS[n][1] := M->TR3_CODBEM
+				aCOLS[n][2] := NGSEEK("TQT",TQS->TQS_MEDIDA,1,"TQT_DESMED")//TQS->TQS_MEDIDA
+				aCOLS[n][3] := TQS->TQS_SULCAT
+				aCOLS[n][4] := TQS->TQS_BANDAA
+				aCOLS[n][5] := TQS->TQS_DESENH
+			Else
+				M->TR3_CODBEM   := Space(Len(TR3->TR3_CODBEM))
+				aCOLS[n][1]     := ""
+				aCOLS[n][2]     := ""
+				aCOLS[n][3]     := ""
+				aCOLS[n][4]     := ""
+				aCOLS[n][5]     := ""
+				GetDRefresh()
+				Return .F.
+			EndIf
+		Else
+			aCOLS[n][1] := M->TR3_CODBEM
+			aCOLS[n][2] := NGSEEK("TQT",TQS->TQS_MEDIDA,1,"TQT_DESMED")//TQS->TQS_MEDIDA
+			aCOLS[n][3] := TQS->TQS_SULCAT
+			aCOLS[n][4] := TQS->TQS_BANDAA
+			aCOLS[n][5] := TQS->TQS_DESENH
+		EndIf
+
+		GetDRefresh()
+
+	Else
+		M->TR3_CODBEM  := Space(Len(TR3->TR3_CODBEM))
+		MsgStop(STR0033) //"Número de Pneus selecionados não pode ser maior que a quantidade solicitada"
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690ALL
+Preenche o campo Qtde. Atendida no Markbrowse de acordo com
+a quantidade de Pneus selecionada
+@author Marcos Wagner Junior
+@since 25/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA690ALL()
+
+	Local nI
+	Local nCont := 0
+
+	dbSelectArea(cTRBB)
+	For nI := 1 to Len(aCols)
+		If !Empty(aCols[nI][1])
+			nCont += 1
+			aAdd(aPneus,{NUM,ITEM,aCols[nI][1]})
+			dbSelectArea("ST9")
+			dbSetOrder(16)
+			If dbSeek(aCols[nI][1])
+				Reclock("ST9",.F.)
+				ST9->T9_STATUS := cStaTra
+				ST9->T9_SITBEM := "T"
+				MsUnlock("ST9")
+			EndIf
+		EndIf
+	Next nI
+
+	If nCont != 0
+		Reclock((cTRBB),.F.)
+		Replace QTDEATE With nCont
+		Replace VER_OK With cMarca
+		MsUnlock()
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690MED
+Busca os Pneus cuja medida seja igual a solicitada
+@author Marcos Wagner Junior
+@since 25/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA690MED()
+
+	Local lRET := .F.
+
+	If ST9->T9_CATBEM == '3' .And. ST9->T9_STATUS <> cStaApli .And. ST9->T9_STATUS <> cStaTra .And. ST9->T9_SITBEM == "A"
+		dbSelectArea("TQS")
+		dbSetOrder(1)
+		If dbSeeK(ST9->T9_FILIAL+ST9->T9_CODBEM)
+			lRET := NGSEEK("TQT",TQS->TQS_MEDIDA,1,"TQT_DESMED") == (cTRBB)->MEDIDA
+		EndIf
+		dbSelectArea("ST9")
+	EndIf
+
+Return lRET
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690NAO
+Verifica se o Pneu pode fazer parte da solicitacao ou nao
+@author Marcos Wagner Junior
+@since 25/10/2006
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA690NAO()
+
+	MsgStop(STR0034) //"O bem digitado não se adequa a Solicitação!"
+	M->TR3_CODBEM := Space( TamSX3("TR3_CODBEM")[1] )
+	aCOLS[n][1]   := ""
+	aCOLS[n][2]   := ""
+	aCOLS[n][3]   := ""
+	aCOLS[n][4]   := ""
+	aCOLS[n][5]   := ""
+	GetDRefresh()
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT690VI
+Visualizar
+@author Marcos Wagner Junior
+@since 06/11/06
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT690VI()
+
+	dbSelectArea("SCP")
+	dbSetOrder(01)
+	dbSeek((cTRBB)->FILIAL+(cTRBB)->NUM+(cTRBB)->ITEM)
+	NGCAD01("SCP",Recno(),1)
+
+	dbSelectArea(cTRBB)
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+@author Rafael Diogo Richter
+@since 02/02/2008
+@version undefined
+@return Array com opções da rotina
+@type function
+@obs ATUALIZACOES SOFRIDAS DESDE A CONSTRU€AO INICIAL.
+/*/
+//---------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina :=	{{STR0001,"MNT690VI"   , 0 , 2},; //"Visualizar"
+						 {STR0002,"A960GELO"   , 0 , 4, 0} }  //"Gerar Lote"
+
+
+	//+----------------------------------------------------------+
+	//	Parametros do array a Rotina:                 	     	 |
+	//| 1. Nome a aparecer no cabecalho                          |
+	//| 2. Nome da Rotina associada                              |
+	//| 3. Reservado                                             |
+	//| 4. Tipo de Transação a ser efetuada:                     |
+	//|    1 - Pesquisa e Posiciona em um Banco de Dados         |
+	//|    2 - Simplesmente Mostra os Campos                     |
+	//|    3 - Inclui registros no Bancos de Dados               |
+	//|    4 - Altera o registro corrente                        |
+	//|    5 - Remove o registro corrente do Banco de Dados      |
+	//| 5. Nivel de acesso                                       |
+	//| 6. Habilita Menu Funcional                 		     	 |
+	//+----------------------------------------------------------+
+
+Return aRotina
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA690EST
+Verifica se ha o produto informado pelo pneu no estoque
+@author Vitor Emanuel Batista
+@since 07/04/2009
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA690EST()
+
+	Local aT9Area := ST9->(GetArea())
+	Local nX, nProduto := 1
+	Local lSeek, lRet := .T.
+	Local cProduto, cLocal
+
+	Private Inclui := .T.
+
+	If cMntEst == 'S' .And. cPneuEst == 'S' .And. cEstNeg == 'N'
+
+		cProduto := ST9->T9_CODESTO
+
+		If !Empty(cProduto)
+
+			/*------------------------------------------------------------------------------
+			Verifica saldo de acordo com almoxarifado da TQZ (Histórico do status do pneu)
+			------------------------------------------------------------------------------*/
+			dbSelectArea("TQZ")
+			dbSetOrder(1)
+			lSeek := dbSeek(xFilial("TQZ") + ST9->T9_CODBEM + DToS(dDataBase) + SubStr( Time(), 1, 5), .T.)
+
+			If !lSeek
+				dbSelectArea("TQZ")
+				dbSkip(-1)
+
+				If TQZ_FILIAL == xFilial("TQZ") .And. TQZ_CODBEM == ST9->T9_CODBEM .And. TQZ_PRODUT == cProduto
+					lSeek := .T.
+				EndIf
+			EndIf
+
+			If lSeek
+				cLocal := TQZ->TQZ_ALMOX
+			EndIf
+			/*------------------------------------------------------------------------------*/
+
+			For nX := 1 To Len(aCols)
+				If nX <> n
+					If NGIFDICIONA("ST9",xFilial("ST9")+GdFieldGet('TR3_CODBEM',nX),1) .And. ST9->T9_CODESTO == cProduto
+						nProduto++
+					EndIf
+				EndIf
+			Next nX
+			If !NGSALSB2(cProduto,cLocal,nProduto,.t.)
+				lRet := .f.
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aT9Area)
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ESA001DT
+Funcao para validar campo de data
+@author Maria Elisandra de Paula
+@since 19/12/2013
+@return Nil
+/*/
+//---------------------------------------------------------------------
+
+Function MNTA690vl()
+
+	If 	cData < dEmissao
+		ShowHelpDLG(STR0032,{STR0037},2,{STR0038},2)//"Atenção","A Data não pode ser menor que a data de emissão","Digite uma Data Valida"
+		Return .F.
+	EndIf
+
+	If cData > dDataBase
+		ShowHelpDLG(STR0032,{STR0039},2,{STR0038},2)//"Atenção","A Data não deverá ser maior que a data atual,"Digite uma Data Valida"
+
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} NGCONPNEU
+Monta tela de consulta de Pneus para Transferencia
+
+@author Tainã Alberto Cardoso
+@since 17/04/17
+@version MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function NGTRAPNEU()
+
+	Local vST9Ind   := {NGRETTITULO("T9_CODBEM")}
+	Local lRet := .F.
+
+	Private cChaST9 := Space(TAMSX3("T9_CODBEM")[1]),aLST9 := {}
+	Private oOrdST9,oChaSTJ,cST9Ix,cOrdemR ,lCheck1 := .f.,lCheck2 := .f.
+	Private nTipConsul := 1, aSTJLN := {}
+	Private cAliQryTQI := GetNextAlias()
+
+	//Cria a tabela temporaria para a consulta padrao
+	MNT690ListP()
+
+	DEFINE MSDIALOG oDlgCE TITLE OemToAnsi( STR0040 ) From 0,0 To 400,500 OF oMainWnd PIXEL //"Consulta de Pneus"
+
+		//Painel TOP
+		oPnlTop := TPanel():New(01, 01, , oDlgCE, , , , CLR_BLACK, CLR_WHITE, 50, 40)
+		oPnlTop:Align := CONTROL_ALIGN_TOP
+
+			@ 02,005 Combobox oOrdST9 Var cST9Ix Items vST9Ind Size 170,08 Pixel Of oPnlTop
+			@ 02,180 Button oBtnBuscar Prompt STR0041 Of oPnlTop Size 30,11 Pixel Action MNT232ST9P() //"Buscar"
+			@ 15,005 MsGet oChvSTJ Var cChaST9 Picture "@!" Size 170,08 Of oPnlTop Pixel
+
+			oCheck1 := TCheckBox():New(27,07,STR0042,,oPnlTop, 100,10,,,,,,,,.T.,,,) //"Posicionar na browse na abertura"
+			oCheck1:bSetGet     := {|| lCheck1 }
+			oCheck1:bLClicked   := {|| lCheck1:=!lCheck1 }
+			oCheck1:bWhen       := {|| .T. }
+
+		//Painel MID
+		oPnlMid := TPanel():New(01, 01, , oDlgCE, , , , CLR_BLACK, CLR_WHITE, 50, 35)
+		oPnlMid:Align := CONTROL_ALIGN_ALLCLIENT
+
+			@ 40,005 ListBox oLST9 ;//Var cList4;
+		         Fields ;
+		         (cAliQryTQI)->T9_CODBEM,;
+		         (cAliQryTQI)->T9_NOME,;
+		         ColSizes 40,40,40,50;
+		         Size 210,100 Of oPnlMid Pixel;
+		         HEADERS STR0043               ,; //"Código"
+                         STR0044               ; //"Nome"
+
+			oLST9:Align := CONTROL_ALIGN_ALLCLIENT
+			oLST9:blDblClick := { || lRet := .T. ,NGIFDBSEEK("ST9",(cAliQryTQI)->T9_CODBEM,1),oDlgCE:End() }
+			oLST9:REFRESH()
+			oLST9:REFRESH()
+
+		//Painel BOT
+		oPnlBot := TPanel():New(01, 01, , oDlgCE, , , , CLR_BLACK, CLR_WHITE, 50, 20)
+		oPnlBot:Align := CONTROL_ALIGN_BOTTOM
+
+		DEFINE SBUTTON oBtn1 FROM 005,005 TYPE  1 ENABLE OF oPnlBot ACTION  (lRet := .T. ,NGIFDBSEEK("ST9",(cAliQryTQI)->T9_CODBEM,1),oDlgCE:End())
+		DEFINE SBUTTON oBtn2 FROM 005,035 TYPE  2 ENABLE OF oPnlBot ACTION ( lRet := .F. ,oDlgCE:End())
+		DEFINE SBUTTON oBtn3 FROM 005,065 TYPE 15 ENABLE OF oPnlBot ACTION NGVISUESPE("ST9",(cAliQryTQI)->T9_CODBEM)
+
+	ACTIVATE MSDIALOG oDlgCE CENTERED
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT690ST9P
+
+Filtro da matriz com as ordens de serviço
+
+@author Tainã Alberto Cardoso
+@since 17/04/17
+@version MP11
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNT690ST9P()
+
+	dbSelectArea(cAliQryTQI)
+	dbSetOrder(1)
+	dbSeek( Alltrim(cChaST9) )
+	oLST9:REFRESH()
+
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT232ListP
+
+Função para
+
+@author Tainã Alberto Cardoso
+@since 17/04/17
+@version MP12
+@return lRet
+/*/
+//---------------------------------------------------------------------
+Function MNT690ListP()
+
+	Local oTmpTbl2
+	Local aDBF := {}
+
+	//Monta estrutura e índice para criação de tabela temporária.
+	aDBF := {{"T9_CODBEM" ,"C",TAMSX3("T9_CODBEM")[1],0},;
+	         {"T9_NOME"   ,"C",TAMSX3("T9_NOME")[1]  ,0}}
+
+	cQueryTQI := " SELECT T9_CODBEM , T9_NOME"
+	cQueryTQI += " FROM "  + RetSQLName( "ST9" ) + " ST9"
+	cQueryTQI += " 	JOIN " + RetSQLName( "TQS" ) + " TQS"
+	cQueryTQI += " 		ON ( TQS.TQS_FILIAL = ST9.T9_FILIAL AND TQS.TQS_CODBEM = ST9.T9_CODBEM )"
+	cQueryTQI += " 	JOIN " + RetSQLName( "TQT" ) + " TQT"
+	cQueryTQI += " 		ON ( TQT.TQT_MEDIDA = TQS.TQS_MEDIDA )"
+	cQueryTQI += " WHERE ST9.T9_SITBEM = 'A' "
+	cQueryTQI += "   AND ST9.T9_CATBEM = '3' "
+	cQueryTQI += "   AND ST9.T9_STATUS <> " + ValToSql( cStaApli )
+	cQueryTQI += "   AND ST9.T9_STATUS <> " + ValToSql( cStaTra )
+	cQueryTQI += "   AND ST9.T9_FILIAL  = " + ValToSql( xFilial( 'ST9' ) )
+	cQueryTQI += "   AND TQT.TQT_FILIAL = " + ValToSql( xFilial( 'TQT' ) )
+	cQueryTQI += "   AND TQT_DESMED     = " + ValToSql( (cTRBB)->MEDIDA )
+	cQueryTQI += "   AND ST9.D_E_L_E_T_ <> '*' "
+	cQueryTQI += "   AND TQS.D_E_L_E_T_ <> '*' "
+	cQueryTQI += "   AND TQT.D_E_L_E_T_ <> '*' "
+
+	//Tranfere dados obtidos na query para tabela temporária criada anteriormente.
+	aIndAux   := {"T9_CODBEM"}
+    //Instancia classe FWTemporaryTable
+	oTmpTbl2:= FWTemporaryTable():New( cAliQryTQI, aDBF )
+	//Adiciona os Indices
+	oTmpTbl2:AddIndex( "Ind01" , aIndAux)
+	//Cria a tabela temporaria
+	oTmpTbl2:Create()
+
+	SqlToTrb(cQueryTQI, aDBF, cAliQryTQI)
+
+Return .T.

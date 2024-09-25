@@ -1,0 +1,2032 @@
+#INCLUDE 'Protheus.ch'
+#INCLUDE 'mnta715.ch'
+
+//Indices dos campos da aCols
+#DEFINE _nCampo_  1
+#DEFINE _nTipo_   2
+#DEFINE _nInicio_ 3
+#DEFINE _nTamFix_ 4
+#DEFINE _nFim_    5
+#DEFINE _nCont_   6
+#DEFINE _nFuncao_ 7
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA715 - Layout de Importação
+Cadastro de layouts de importação.
+@type function
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+
+@param
+@return
+/*/
+//---------------------------------------------------------------------
+Function MNTA715()
+	
+   	//Guarda conteudo e declara variaveis padroes
+	Private aNGBEGINPRM := NGBEGINPRM()
+	Private aRotina     := MenuDef()
+	Private cCadastro   := STR0001 //"Layout de Importação"
+	Private lAbastUnif	:= AliasInDic("TQ7")
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19 )
+
+		If f715VldEnt() // Validação de Entrada no Sistema
+
+			dbSelectArea("TQ7")
+			dbSetOrder(1)
+			mBrowse(6,1,22,75,"TQ7") 
+
+		EndIf
+
+	EndIf
+
+Return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Utilizacao de Menu Funcional.
+
+@return aRotina  -   Array com as opções de menu.
+   Parametros do array a Rotina:
+      1. Nome a aparecer no cabecalho
+      2. Nome da Rotina associada
+      3. Reservado
+      4. Tipo de Transação a ser efetuada:
+         1 - Pesquisa e Posiciona em um Banco de Dados
+         2 - Simplesmente Mostra os Campos
+         3 - Inclui registros no Bancos de Dados
+         4 - Altera o registro corrente
+         5 - Remove o registro corrente do Banco de Dados
+      5. Nivel de acesso
+      6. Habilita Menu Funcional
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local aRotina := {}
+
+	aAdd(aRotina,{STR0002,"AxPesqui"  ,0,1})  //"Pesquisar"
+	aAdd(aRotina,{STR0003,"MNTA715CAD",0,2})  //"Visualizar"
+	aAdd(aRotina,{STR0004,"MNTA715CAD",0,3})  //"Incluir"
+	aAdd(aRotina,{STR0005,"MNTA715CAD",0,4})  //"Alterar"
+	aAdd(aRotina,{STR0006,"MNTA715CAD",0,5,3})//"Excluir"
+
+Return aRotina
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} MNTA715CAD
+
+Visualizacao, Inclusao, Alteracao e Exclusao dos Layouts de importação
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function MNTA715CAD(cAlias,nRecno,nOpc)
+
+	Local oDlg
+	Local nForG   := 0
+	Local nStyle  := 0
+	Local oTFont  := TFont():New('Arial',,16,.T.)
+	Local oTFont2 := TFont():New('Arial',,16,,.T.)
+	Local nCor1   := RGB(33,178,237)
+
+   	//Variaveis de Panel
+	Local oPnEnchTQ7 // Panel para utilização da Enchoice da tabela TQ7
+	Local oPnTabPrin // Panel para montar a MsNewGetDados dos registros da tabela principal
+	Local oPnLoBotao // Panel para localização dos botões que serão utilizados para configuração.
+	Local oPnCfgLOut // Panel para criar os MsNewGetDados da configuração do layout. (TQ8)
+	Local oPnExplArq // Panel para espaço onde será criado o exemplo de arquivo para importação.
+
+   	//Variaveis da Enchoice
+	Local aChoice    := NGCAMPNSX3("TQ7")
+	Local aAreaTQ7   := TQ7->(GetArea())
+
+   	//Variaveis de tamanho de tela e objetos
+	Private aTamTela   := {}
+	Private nAlturaTot := 0
+	Private nLargurTot := 0
+	Private nLargur48p := 0
+	Private nLargura4p := 0
+	Private nAltura30p := 0
+	Private nAlturaBtt := 0
+	Private nAlturaMei := 0
+	Private nPosHorCfg := 0
+	Private nLargurDir := 0
+	Private nLargurMsG := 0
+
+	Private lSeparador := .F.
+	Private lEditTQ8   := .F.
+	Private lIniTQ8    := 1
+	Private cExemplo   := Space(600)
+	Private aSvHeader  := {{},{}}
+	Private aSvCols    := {{},{}}
+	Private aHeader    := {}
+	Private aCols      := {}
+	Private aNoFields  := {}
+	Private aFieldsAlt := {}
+	Private lConfirm   := .F.
+	Private cNomeCampo := Space(TAMSX3('TQ8_CPOTAB')[1])
+	Private cTamRelc   := Space(TAMSX3('TQ8_TAMARQ')[1])
+	Private cFuncao    := Space(TAMSX3('TQ8_FUNCAO')[1])
+	Private cCombo     := ""
+	Private nMaiorOrdm := 0
+
+	Private aHead1     := {}
+	Private aCols1     := {}
+
+	If Type("aNGBEGINPRM") == "U"
+		aNGBEGINPRM := NGBEGINPRM()
+	EndIf
+
+   	//Definicao de tamanho de tela e panels
+	aTamTela   := MsAdvSize(.T.,.F.)
+	f715MtTela()
+
+   	//Inicializa variaveis de memoria da TQ7
+	dbSelectArea("TQ7")
+	dbSetOrder(1)
+	RegToMemory("TQ7",nOpc == 3)
+
+   	//Seta Visual, Inclui, Altera ou Exclui conforme nOpc
+	aRotSetOpc(cAlias,nRecno,nOpc)
+	lConfirm := .F.
+
+   	//Define se permite alterar os campos da MsNewGetDados.
+	If nOpc == 3     //Inclusão
+		nStyle := GD_UPDATE
+	ElseIf nOpc == 4 //Alteração
+		nStyle   := GD_UPDATE
+		lEditTQ8 := .T.
+		If M->TQ7_TIPARQ == '2'
+			lSeparador := .T.
+		Else
+			M->TQ7_SEPARD := ''
+			lSeparador    := .F.
+		EndIf
+	EndIf
+
+	DEFINE MsDialog oDlg TITLE cCadastro FROM aTamTela[7],0 To nAlturaTot,nLargurTot COLOR CLR_BLACK,CLR_WHITE PIXEL
+
+	//INICIO PANEL SUPERIOR
+
+		//Panel para posicionar corretamente a Enchoice. Colocando oPnEnchTQ7 dentro da oDlg, ele posiciona a EnchoiceBar abaixo da MsGet
+		oPanelSup  := TPanel():Create(oDlg,0,0,,oTFont,.F.,,,CLR_WHITE,nLargurMsG,nAltura30p)
+
+		//Cria a Enchoice para a Tabela TQ7
+		oPnEnchTQ7 := MsMGet():New("TQ7",nRecno,nOpc,,,,aChoice,{30,0,nAltura30p,nLargurMsG},,3,,,,oPanelSup)
+
+	//FIM PANEL SUPERIOR
+
+    //INICIO PANEL DA ESQUERDA
+
+		//Cria o Panel com espaço de 48% da tela.
+		oPnTabPrin := TPanel():Create(oDlg,nAltura30p,0,,oTFont,.F.,,,CLR_WHITE,nLargur48p,nAlturaMei)
+
+		@ 000,010 Say OemToAnsi(STR0041) Font oTFont2 Size 80,0 Of oPnTabPrin PIXEL Color nCor1 // "Campos Disponíveis"
+
+		//Inicia a aCols que possui os registros da tabela principal.
+		f715IniTab(nOpc)
+
+		//Cria Panel para simular borda na MsNewGetDados
+		oBrdTbPrin := TPanel():Create(oPnTabPrin,10,10,,oTFont,.F.,,,CLR_GRAY,nLargur48p,nAlturaMei)
+
+		//Get Dados da tabela principal.
+		oGET01 := MsNewGetDados():New(11,11,nAlturaMei-1,nLargur48p-0.5,0,,,"","",,,,,,oPnTabPrin,aHead1,aCols1)
+
+	//FIM PANEL DA ESQUERDA
+
+	//INICIO PANEL CENTRAL
+
+		//Cria Panel com espaço de 4% central. Onde ficará os botões de configuração do layout.
+		oPnLoBotao := TPanel():Create(oDlg,nAltura30p,nLargur48p,,oTFont,.F.,,,CLR_WHITE,nLargura4p,nAlturaMei)
+
+		//Botão de adicionar campo da tabela principal para a tabela da direita(TQ8).
+		@ 040,016 BTNBMP oBtDir  Resource "PMSSETADIR"  When lEditTQ8 Size 22,22 PIXEL Of oPnLoBotao Noborder PIXEL Action Processa({|lEND| fAddCampo(1)},STR0016) // "Transferindo..."
+		oBtDir:cToolTip  := OemToAnsi(STR0010) // "Incluir"
+
+		//Botão de remover campo da tabela da direita(TQ8) para a tabela principal.
+		@ 070,016 BTNBMP oBtEsq  Resource "PMSSETAESQ"  When lEditTQ8 Size 22,22 PIXEL Of oPnLoBotao Noborder PIXEL Action Processa({|lEND| fRemovCmpo()},STR0016) // "Transferindo..."
+		oBtEsq:cToolTip  := OemToAnsi(STR0012) // "Excluir"
+
+		//Botão para subir a posição dos registros da tabela a direita.
+		@ 100,016 BTNBMP oBtUp   Resource "PMSSETAUP"   When lEditTQ8 Size 22,22 PIXEL Of oPnLoBotao Noborder PIXEL Action fAltOrdem("Up")
+		oBtUp:cToolTip   := OemToAnsi(STR0013) // "Subir Ordem"
+
+		//Botão para descer a posição dos registros da tabela a direita.
+		@ 130,016 BTNBMP oBtDown Resource "PMSSETADOWN" When lEditTQ8 Size 22,22 PIXEL Of oPnLoBotao Noborder PIXEL Action fAltOrdem("Down")
+		oBtDown:cToolTip := OemToAnsi(STR0014) // "Descer Ordem"
+
+		//Botão para adicionar campo que não existe na tabela principal.
+		@ 160,016 BTNBMP oBtMore Resource "PMSSETAMORE" When lEditTQ8 Size 22,22 PIXEL Of oPnLoBotao Noborder PIXEL Action Processa({|lEND| fAddCampo(2)},STR0016) // "Transferindo..."
+		oBtMore:cToolTip := OemToAnsi(STR0015) // "Adicionar campo não relacionado"
+
+	//FIM PANEL CENTRAL
+
+	//INICIO PANEL DA DIREITA
+
+		//Cria o Panel com espaço de 48% da tela alinhada a direita.
+		oPnCfgLOut := TPanel():Create(oDlg,nAltura30p,nPosHorCfg,,oTFont,.F.,,,CLR_WHITE,nLargur48p,nAlturaMei)
+
+		@ 00,00 Say OemToAnsi(STR0042) Font oTFont2 Size 80,00 Of oPnCfgLOut PIXEL Color nCor1 // "Configuração de Layout"
+
+		//Inicializar aCols da tabela a direita.(TQ8)
+		f715IniTQ8(nOpc)
+
+		//Cria Panel para simular borda na MsNewGetDados
+		oBrdTQ8 := TPanel():Create(oPnCfgLOut,10,00,,oTFont,.F.,,,CLR_GRAY,nLargurDir,nAlturaMei)
+
+		//Get Dados da tabela direita (TQ8)
+		oGET02  := MsNewGetDados():New(01,01,nAlturaMei-11,nLargurDir-0.5,nStyle,,,"",aFieldsAlt,,,,,,oBrdTQ8,aSVHEADER[1],aSVCOLS[1])
+
+	//FIM PANEL DA DIREITA
+
+	//INICIO PANEL INFERIOR
+
+		//Cria o Panel que possuirá o espaço inferior com o exemplo da importação
+		oPnExplArq := TPanel():Create(oDlg,nAlturaBtt,0,,oTFont,.F.,,,CLR_WHITE,nLargurTot,50)
+
+		@ 010,10 Say OemToAnsi(STR0043 + ": ") Font oTFont2 Size 150,010       Of oPnExplArq PIXEL Color nCor1 // "Exemplo de importação"
+
+		@ 012,160 BTNBMP oBtPrev Resource "BMPVISUAL"         When .T. Size 22,22 PIXEL Of oPnExplArq PIXEL Action fVerExemplo()
+		oBtPrev:cToolTip := OemToAnsi(STR0043) // "Exemplo de Importação"
+
+	//FIM PANEL INFERIOR
+
+	Activate MsDialog oDlg On Init EnchoiceBar(oDlg,{||(lConfirm := .T.,IIf(fValidConf(nOpc),oDlg:End(),Nil))},{||(nCancel := 1,IIf(fCancelINC(),oDlg:End(),Nil))})
+
+	If lConfirm
+
+		If nOpc == 3     // Verifica se é inclusão de um novo registro.
+
+			fIncluiTQ7() // Faz a inclusão dos registros na TQ7
+
+         	//Faz a leitura dos registro que estão no aCols, e inclui eles na TQ8
+			For nForG := 1 To Len(oGET02:aCols)
+				fIncluiTQ8(xFilial("TQ8")                ,;
+					TQ7->TQ7_CODLAY               ,;
+					nForG                         ,;
+					oGET02:aCols[nForG][_nCampo_] ,;
+					oGET02:aCols[nForG][_nTipo_]  ,;
+					oGET02:aCols[nForG][_nTamFix_],;
+					oGET02:aCols[nForG][_nFuncao_],;
+					oGET02:aCols[nForG][_nInicio_],;
+					oGET02:aCols[nForG][_nFim_])
+			Next nForG
+
+		ElseIf nOpc == 4 // Se for alteração
+
+			fAlteraTQ7()
+			fAlteraTQ8()
+
+		ElseIf nOpc == 5 // Se for exclusão
+
+			fDeletaTQ7()
+			fDeleteTQ8()
+
+		EndIf
+	EndIf
+
+	NGRETURNPRM(aNGBEGINPRM)
+	RestArea(aAreaTQ7)
+
+Return .T.
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} f715MtTela - Monta Tela
+
+Monta valores de disposição e tamanhos utilizado na tela e no panel.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function f715MtTela()
+
+   	//Altura total da MsDialog
+	nAlturaTot := aTamTela[6]
+
+   	//Largura total da MsDialog e dos Panels oPnEnchTQ7 e oPnExplArq que utilizam toda a extensão horizontal da tela
+	nLargurTot := aTamTela[5]
+
+   	//Largura dos Panel oPnTabPrin e oPnCfgLOut, que possuem 48% de cada lado da tela. Localização horizontal onde começará o Panel oPnLoBotao
+	nLargur48p := aTamTela[3] * 0.48
+
+   	//Largura do Panel oPnLoBotao. Ocupará os 04% central da tela. Visto que cada lado tem um Panel de 48%
+	nLargura4p := (aTamTela[3] * 0.04)
+
+   	//Altura do Panel oPnEnchTQ7. Espaço de 32% da tela para a Enchoice da tabela TQ7
+  	//Localização vertical onde começará os Panels oPnTabPrin,oPnLoBotao e oPnCfgLOut. Logo a baixo da Enchoice TQ7.
+   	//Adicionado mais 30P, que é o tamanho da faixa que contém a EnchoiceBar.
+	nAltura30p := aTamTela[4] * 0.32 + 30
+
+   	//Localização onde comecará o Panel oPnExplArq. (Foi definido um tamanho fixo de 50, portanto sua posição inicial deverá ser total da tela menos 50)
+	nAlturaBtt := aTamTela[4] - 50
+
+   	//Altura do Panel oPnLoBotao. Sua altura deverá ser o espaço depois do Panel oPnEnchTQ7(nAltura30p) até o começo do Panel oPnExplArq(nAlturaBtt).
+	nAlturaMei := nAlturaBtt - nAltura30p
+
+   	//Posição horizontal de inicio do Panel da direita.
+	nPosHorCfg := nLargur48p + nLargura4p
+
+   	//Largura do panel da direita. Deverá ficar a 10p do final.
+	nLargurDir := nLargur48p - 10
+
+   	//Largura horizontal da MsGet - Enchoice TQ7
+	nLargurMsG := aTamTela[3]
+
+Return
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} A715WheSep
+
+Faz a validação do When do campo de Tipo de Separador (TQ7_SEPARD).
+Se o campo de Tipo de Arquivo (TQ7_TIPARQ) for 2 (Separador), irá liberar o campo tipo separador para Edição.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------------------------------
+Function A715WheSep()
+
+	If M->TQ7_TIPARQ == '2'
+		lSeparador    := .T.
+	Else
+		M->TQ7_SEPARD := ''
+		lSeparador    := .F.
+	EndIf
+
+	fAtuGDados()
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} A715EdiTQ8
+
+Validação que verifica se é possível adicionar registro na tabela TQ8.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function A715EdiTQ8()
+
+	lEditTQ8 := .F.
+
+	If lSeparador
+		If !Empty(M->TQ7_TIPARQ) .And. !Empty(M->TQ7_SEPARD) .And. !Empty(M->TQ7_FORDTA) .And. !Empty(M->TQ7_SEPDEC)
+			lEditTQ8 := .T.
+		EndIf
+	Else
+		If !Empty(M->TQ7_TIPARQ) .And. !Empty(M->TQ7_FORDTA) .And. !Empty(M->TQ7_SEPDEC)
+			lEditTQ8 := .T.
+		EndIf
+	EndIf
+
+	fAtuGDados()
+
+Return .T.
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} f715VldTam()
+
+Função para validação do tamanho dos campos quando alterado na MsNewGetDados
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------
+Function f715VldTam()
+
+	Local nLin       := 0
+	Local nTamMaximo := 99
+	Local nTamSep    := IIf(lSeparador,1,0)
+	Local nTamanho   := 0
+	Local nTamGDados := 0
+	Local nFor       := 0
+	Local cTipo      := ""
+
+	If !Empty(oGET02:aCols[1][1])
+
+		nLin  := oGET02:nAT
+		cTipo := fBsInfoAdd(oGET02:aCols[nLin][_nCampo_],"TIPO")
+
+		If !Empty(Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_CAMPO"))
+			nTamMaximo := TAMSX3(oGET02:aCols[nLin][_nCampo_])[1]
+		EndIf
+
+		lIniTQ8    := 1
+		cExemplo   := ""
+		nTamGDados := Len(oGET02:aCols)
+
+		If cTipo == 'D'
+			MsgStop(STR0017,STR0018) // "Não é possível alterar o tamanho de uma data."#"ATENÇÃO"
+			Return .F.
+		EndIf
+
+		If M->TQ8_TAMARQ > nTamMaximo
+			MsgStop(STR0019+"(" + cValToChar(nTamMaximo) + ")",STR0018) // "Tamanho do campo, maior que o especificado na tabela. "#"ATENÇÃO"
+			Return .F.
+		EndIf
+
+		If M->TQ8_TAMARQ < 1
+			MsgStop(STR0020,STR0018) // "Tamanho do campo não pode ser menor que 1."#"ATENÇÃO"
+			Return .F.
+		EndIf
+
+		For nFor := 1 To nTamGDados
+      	// Faz a atualização dos campos da MsNewGetDados, não chama a fAtuGDados devido a estar posicionado na GetDados nesse momento.
+      	// e por isso quando estiver no campo que foi alterado é necessário utilizar o M->TQ8_TAMARQ que está com os valores atualizado.
+
+			If nLin = nFor
+				nTamanho := fMontaTam(M->TQ8_TAMARQ,oGET02:aCols[nFor][_nTipo_])
+			Else
+				nTamanho := fMontaTam(oGET02:aCols[nFor][_nTamFix_],oGET02:aCols[nFor][_nTipo_])
+			EndIf
+
+			oGET02:aCols[nFor][_nInicio_] := IIf(lSeparador,"-",lIniTQ8)
+			oGET02:aCols[nFor][_nTamFix_] := nTamanho
+			oGET02:aCols[nFor][_nFim_]    := IIf(lSeparador,"-",(lIniTQ8 - 1) + nTamanho)
+			oGET02:aCols[nFor][_nCont_]   := fMontaCont(oGET02:aCols[nFor][_nCampo_],oGET02:aCols[nFor][_nTamFix_],oGET02:aCols[nFor][_nTipo_])
+
+			lIniTQ8 := lIniTQ8 + nTamanho + nTamSep
+
+		Next nFor
+		Return .T.
+
+	EndIf
+
+Return .F.
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} f715VldTpo()
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------
+Function f715VldTpo()
+
+	Local nLin := 0
+
+	If !Empty(oGET02:aCols[1][1])
+
+		nLin  := oGET02:nAT
+		If !Empty(Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_CAMPO"))
+			MsgStop(STR0044,STR0018) // "Não é possível alterar o tipo de caracter de uma coluna pertecente a uma tabela."
+			Return .F.
+		EndIf
+	Else
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------------
+/*/{Protheus.doc} f715VldFun()
+
+Função para não permitir alteração do oGET02:MsNewGetDados quando a primeira linha
+da mesma for zerada.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------
+Function f715VldFun()
+
+	If Empty(oGET02:aCols[1][1])
+		Return .F.
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} f715IniTab
+
+Inicializa as informações do campo TQ7_TABELA (Tabela Principal) e alimenta a tabela a esquerda.
+
+Seta o código do tabela principal a ser usada no layout. Por enquanto só pode ser usada a TR6, mas o
+campo continua a ser apresentado em tela para que em futuras implementações possa ser flexibilizado
+para utilizar outros tipos de importação que não Abastecimento.
+
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function f715IniTab(nOpc)
+
+	Local nTamTot		:= 0
+	Local cCampo		:= ""
+	Local nInd			:= 0
+	Local nC			:= 0
+	Local aNgHeader		:= 0
+
+	M->TQ7_TABELA := "TR6"
+	M->TQ7_DESTAB := A715DesTab(M->TQ7_TABELA)
+	cFuncao       := Space(TAMSX3('TQ8_FUNCAO')[1])
+
+   	//Monta aHeader - Campos do SX3
+   	//aAdd(aHead1,{NGRETTITULO(cCampo), X3_CAMPO, X3_PICTURE, X3_TAMANHO, X3_DECIMAL,X3_VALID, X3_USADO, X3_TIPO, X3_ARQUIVO, X3_CONTEXT })
+	aAdd(aHead1,{"Seq."   ,"X3_ORDEM"  ,"",02,0,"","","N","SX3","R"})
+	aAdd(aHead1,{"Campo"  ,"X3_CAMPO"  ,"",12,0,"","","C","SX3","R"})
+	aAdd(aHead1,{"Título" ,"X3_TITULO" ,"",12,0,"","","C","SX3","R"})
+	aAdd(aHead1,{"Tipo"   ,"X3_TIPO"   ,"",01,0,"","","C","SX3","R"})
+	aAdd(aHead1,{"Tamanho","X3_TAMANHO","",03,0,"","","N","SX3","R"})
+	aAdd(aHead1,{"Função" ,"V_FUNCAO"  ,"",40,0,"","","C","SX3","R"})
+
+   	//Monta aCols - Campos do SX3
+	aNgHeader := NGHeader(M->TQ7_TABELA)
+	nTamTot := Len(aNgHeader)
+
+	For nInd := 1 To nTamTot
+		cCampo 		:= aNgHeader[nInd,2]
+
+		If cCampo != "TR6_FILIAL"
+			nC++
+			aAdd(aCols1, Array(Len(aHead1)+1))
+			aCols1[nC,1] := Val(Posicione("SX3",2,cCampo,"X3_ORDEM"))
+			aCols1[nC,2] := cCampo
+			aCols1[nC,3] := aNgHeader[nInd,1] // Titulo
+			aCols1[nC,4] := aNgHeader[nInd,8] // Tipo
+			aCols1[nC,5] := aNgHeader[nInd,4] // Tamanho
+			aCols1[nC,6] := cFuncao
+
+			aCols1[nC,Len(aHead1)+1] := .F.
+
+			nMaiorOrdm := aCols1[nC,1]
+		EndIf
+
+	Next nInd
+
+	If Len(aCols1) == 0
+		aCols1 := BlankGetD(aHead1)
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} f715IniTQ8
+
+Alimenta as informações da tabela TQ8 (Tabela a direita), com base no cabeçalho (TQ7).
+Se for incluir, inicializa sem informações.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function f715IniTQ8(nOpc)
+
+	Local nInd    := 0
+	Local nTamSep := IIf(lSeparador,1,0)
+
+	aAdd(aNoFields,'TQ8_FILIAL')
+	aAdd(aNoFields,'TQ8_CODLAY')
+	aAdd(aNoFields,'TQ8_SEQUEN')
+
+	aAdd(aFieldsAlt,'TQ8_TAMARQ')
+	aAdd(aFieldsAlt,'TQ8_FUNCAO')
+	aAdd(aFieldsAlt,'TQ8_TIPO')
+
+	cQuery := " SELECT * "
+	cQuery += "   FROM " + RetSqlName("TQ8")
+	cQuery += "  WHERE TQ8_FILIAL  = " + ValToSQL(xFilial("TQ8"))
+	cQuery += "    AND TQ8_CODLAY  = " + ValToSQL(M->TQ7_CODLAY)
+	cQuery += "    AND D_E_L_E_T_ != " + ValToSQL('*')
+
+	FillGetDados(nOpc,"TQ8",1,xFilial("TQ8") + M->TQ7_CODLAY,{||"TQ8->TQ8_FILIAL+TQ8->TQ8_CODLAY"},{||.T.},aNoFields,,,cQuery)
+
+	fRedCol( ) // Redimensiona as colunas do Header e aCols
+
+	dbSelectArea("TQ8")
+	dbGoBottom()
+	dbSkip()
+
+	If nOpc <> 3
+      	//Quando diferente de inclusão, se a posição inicio e fim estiverem com zero, troca para apresentar elas como "-".
+		For nInd := 1 To Len(aCOLS)
+			If aCOLS[nInd][_nInicio_] = 0
+				aCOLS[nInd][_nInicio_] := "-"
+				aCOLS[nInd][_nFim_]    := "-"
+			Else
+				lIniTQ8 := aCOLS[nInd][_nInicio_] + aCOLS[nInd][_nTamFix_] + nTamSep
+			EndIf
+
+			aCOLS[nInd][_nCont_] := fMontaCont(aCOLS[nInd][_nCampo_],aCOLS[nInd][_nTamFix_],aCOLS[nInd][_nTipo_])
+			aCOLS[nInd][_nTipo_] := f715RetTpo(aCOLS[nInd][_nTipo_])
+
+			f715RmvTbP(AllTrim(aCOLS[nInd][_nCampo_]))
+		Next nInd
+	EndIf
+
+	aSVHEADER[1] := aCLONE(aHEADER)
+	aSVCOLS[1]   := aCLONE(aCOLS)
+
+Return .T.
+
+//---------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} fRedCol
+
+Função para forçar o funcionamento da MsNewGetDados conforme desejado.
+
+- Excluir do aHeader e do aCols as colunas que indicam o Alias e Recno da linha da NewGetDados
+         Obs: No aHeader exclui sempre a ultima posição e a redimensiona para uma posição anterior. Já
+         a posição a ser excluida do aCols é sempre a penultima, pois ele tem um campo a mais que o aHeader,
+         que é o campo que indica se a linha está excluída (Não utilizado nesse programa, mas não foi
+         possivel retirar a mesma do aCols).
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//---------------------------------------------------------------------------------------------------
+Static Function fRedCol()
+
+	Local nIndFor := 0
+
+	aDel(aHeader,Len(aHeader))    //Deleta do array a coluna indicadora de tabela.
+	aSize(aHeader,Len(aHeader)-1) //Redimensiona array para o novo tamanho
+
+	aDel(aHeader,Len(aHeader))    //Deleta do array a coluna que indica o RecNo
+	aSize(aHeader,Len(aHeader)-1) //Redimensiona array para o novo tamanho
+
+	For nIndFor := 1 To Len(aCols)
+		aDel(aCols[nIndFor] ,Len(aCols[nIndFor])-1) //Deleta da linha o registro que indica a Tabela
+		aSize(aCols[nIndFor],Len(aCols[nIndFor])-1) //Redimensiona array para o novo tamanho
+
+		aDel(aCols[nIndFor] ,Len(aCols[nIndFor])-1) //Deleta da linha o registro que indica o RecNo
+		aSize(aCols[nIndFor],Len(aCols[nIndFor])-1) //Redimensiona array para o novo tamanho
+	Next nIndFor
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fAddCampo
+
+Adiciona campos a direita (TQ8)
+
+nOption = 1
+   Adiciona campos da tabela principal(Esquerda) direto para a direita.
+
+nOption = 2
+   Abre tela para adicionar campo generico, campos que não existam na tabela principal.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fAddCampo(nOption)
+
+	Local nLinha    := oGET01:nAT
+	Local nTamSep   := IIf(lSeparador,1,0)
+	Local nTamanho  := 0
+	Local nPosCampo := 0
+	Local cConteudo := ""
+	Local xIniLocal := ""
+	Local xFimLocal := ""
+
+	If Len(oGET01:aCols) > 0 .And. !Empty(oGET01:aCols[1][2])
+
+		fVerAcols(1)
+
+		nTamanho   := fMontaTam(oGET01:aCols[nLinha][5],oGET01:aCols[nLinha][4])
+		cNomeCampo := Space(TAMSX3('TQ8_CPOTAB')[1])
+		cTamRelc   := Space(TAMSX3('TQ8_TAMARQ')[1])
+		cFuncao    := Space(TAMSX3('TQ8_FUNCAO')[1])
+
+		If nOption = 1
+
+			nPosCampo := aScanX(oGET02:aCols, {|x,y| x[1] == oGET01:aCols[nLinha][2] .And. y > nPosCampo })
+			If nPosCampo > 0
+				MsgStop(STR0022,STR0018) // "Campo já adicionado!"#"ATENCAO"
+			ElseIf Alltrim( oGET01:aCols[nLinha][2] ) == 'TR6_DTPROC'
+				HELP( ' ', 1, 'NGATENCAO',, STR0053,2, 0 ) // O campo 'TR6_DTPROC' não pode ser utilizado no layout pois é de uso exclusivo do sistema.
+			Else
+				xIniLocal := IIf(lSeparador,"-",lIniTQ8)
+				xFimLocal := IIf(lSeparador,"-",lIniTQ8 - 1 + nTamanho)
+				cConteudo := fMontaCont(oGET01:aCols[nLinha][2],nTamanho,oGET01:aCols[nLinha][4])
+
+				aAdd(oGET02:aCols,{oGET01:aCols[nLinha][2],f715RetTpo(oGET01:aCols[nLinha][4]),xIniLocal,nTamanho,xFimLocal,cConteudo,oGET01:aCols[nLinha][6],.F.})
+				lIniTQ8 := lIniTQ8 + nTamanho + nTamSep
+
+				f715RmvTbP(AllTrim(oGET01:aCols[nLinha][2]))
+				oGET02:GoTo(Len(oGET02:aCols))
+
+			EndIf
+
+		Else
+
+			If fTelaCpGen()
+				nPosCampo := aScanX(oGET02:aCols, {|x,y| x[1] == cNomeCampo .And. y > nPosCampo })
+				If nPosCampo > 0
+					MsgStop(STR0022,STR0018) // "Campo já adicionado!"#"ATENCAO"
+				Else
+					xIniLocal := IIf(lSeparador,"-",lIniTQ8)
+					xFimLocal := IIf(lSeparador,"-",(lIniTQ8 - 1) + Val(cTamRelc))
+					cConteudo := fMontaCont(cNomeCampo,Val(cTamRelc),cCombo)
+
+					aAdd(oGET02:aCols,{cNomeCampo,cCombo,xIniLocal,Val(cTamRelc),xFimLocal,cConteudo,cFuncao,.F.})
+					lIniTQ8 := lIniTQ8 + Val(cTamRelc) + nTamSep
+				EndIf
+			EndIf
+		EndIf
+
+		oGET02:GoTo(Len(oGET02:aCols))
+
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fRemovCmpo
+
+Remove o campo da tabela da Direita.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fRemovCmpo()
+
+	Local nLin       := oGET02:nAT
+	Local aArea      := GetArea()
+	Local nBuscMaxOr := 0
+	Local nProxOrdem := 0
+	Local nNewOrdem  := 0
+
+	Local cRelacao	:= ""
+	Local cOrdem	:= ""
+	Local cTitulo	:= ""
+	Local cTipo		:= ""
+
+	If Len(oGET02:aCols) > 0 .And. !Empty(oGET02:aCols[1][1])
+
+		fVerAcols(3)
+
+		nBuscMaxOr := Val(f715BscMOr())
+
+		If nBuscMaxOr > nMaiorOrdm
+			nProxOrdem := nBuscMaxOr + 1
+		Else
+			nProxOrdem := nMaiorOrdm + 1
+		EndIf
+
+		cRelacao:= Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_RELACAO")
+		cOrdem	:= Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_ORDEM")
+		cTitulo	:= Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3Titulo()")
+		cTipo	:= Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_TIPO")
+		cAlias  := Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_ARQUIVO")
+
+      	//Busca informações da tabela principal.
+		If !Empty(Posicione("SX3",2,oGET02:aCols[nLin][_nCampo_],"X3_CAMPO")) .And. cAlias == M->TQ7_TABELA
+			aAdd(oGET01:aCols,{Val(cOrdem), oGET02:aCols[nLin][_nCampo_], cTitulo, cTipo, oGET02:aCols[nLin][_nTamFix_],oGET02:aCols[nLin][_nFuncao_],.F.})
+			aSort(oGET01:aCols,,,{ |x,y| x[1] < y[1] })
+			nNewOrdem := aScanX(oGET01:aCols, {|x,y| AllTrim(x[2]) == oGET02:aCols[nLin][_nCampo_] .And. y > nNewOrdem })
+		Else
+			aAdd(oGET01:aCols,{nProxOrdem,;
+				 oGET02:aCols[nLin][_nCampo_],;
+				 oGET02:aCols[nLin][_nCampo_],;
+				 oGET02:aCols[nLin][_nTipo_],;
+				 oGET02:aCols[nLin][_nTamFix_],;
+				 oGET02:aCols[nLin][_nFuncao_],;
+				.F.})
+			nNewOrdem := Len(oGET01:aCols)
+		EndIf
+
+		oGET01:GoTo(nNewOrdem)
+
+		aDel(oGET02:aCols,nLin)                 //Deleta do array a opção removida pelo usuário
+		aSize(oGET02:aCols,Len(oGET02:aCols)-1) //Redimensiona array para o novo tamanho
+
+		fVerAcols(2)
+		fAtuGDados()
+
+	EndIf
+
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715RmvTbP
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f715RmvTbP(cCampo)
+
+	Local nPosCampo := 0
+
+	nPosCampo := aScanX(oGET01:aCols, {|x,y| AllTrim(x[2]) == cCampo .And. y > nPosCampo })
+
+	If nPosCampo > 0
+		aDel(oGET01:aCols,nPosCampo)            //Deleta do array a coluna indicadora de tabela.
+		aSize(oGET01:aCols,Len(oGET01:aCols)-1) //Redimensiona array para o novo tamanho
+	EndIf
+
+	If Len(oGET01:aCols) < 1
+		aAdd(oGET01:aCols,{0,"","","",0,"",.F.})
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fVerExemplo - Ver Exemplo
+
+Função utilizada para apresentar um memo em tela que irá demonstrar
+um exemplo de como deverá ficar o arquivo de importação de layout.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fVerExemplo()
+
+	Local oTFont    := TFont():New('Arial',,12,,.F.)
+
+	DEFINE MsDialog oDlgP Title STR0045 From 000,000 To 145,680 Pixel // "Exemplo de Arquivo"
+
+		@ 000,000 GET oMemo VAR cExemplo MEMO SIZE 343,073 OF oDlgP PIXEL
+
+		oMemo:bRClicked := {||AllwaysTrue()}
+		oMemo:oFont    := oTFont
+		oMemo:lReadOnly := .T.
+
+	Activate MsDialog oDlgP Centered
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715BscMOr
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f715BscMOr()
+
+	Local nOrdem     := 0
+
+	nOrdem := oGET02:aCols[Len(oGET02:aCols)][1]
+
+Return nOrdem
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fAltOrdem
+
+Altera a ordem dos campos da TQ8 - Tabela a Direita.
+
+cDirecao Up   -  Sobe a posição do registro.
+       Down - Desce a posição do registro.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fAltOrdem(cDirecao)
+
+	Local nOrdemAnt  := oGET02:nAT
+	Local cCampoAnt  := ""
+	Local cTipoAnt   := ""
+	Local xIniciAnt  := ""
+	Local nTamanAnt  := 0
+	Local xFinalAnt  := ""
+	Local cFuncaoAnt := ""
+
+	Local nInd       := 0
+
+	If Len(oGET02:aCols) > 0
+		If cDirecao == "Up"
+			nNewOrdem := nOrdemAnt - 1
+		Else
+			nNewOrdem := nOrdemAnt + 1
+		EndIf
+
+		If nNewOrdem < 1 .Or. nNewOrdem > Len(oGET02:aCols)
+      		//Verifica se a nova posição é inexistente, menor que 1 ou maior que o máximo na GetDados, dessa forma
+      		//a nova posição será o oposto da onde está, e mudara a posição de todos os campos para 1 acima ou abaixo
+      		//dependendo da escolha do usuário. Isso significa que se pegar a primeira posição e der um Up nela, ela irá para
+      		//a última posição, e a segunda irá para a primeira, e a terceira para a segunda assim sucessivamente. O contrario
+      		//ocorre da mesma forma.
+
+			nNewOrdem := IIf(nNewOrdem < 1,Len(oGET02:aCols),1)
+
+         	//Cria BKP dos campos que estão na nova posição do registros.
+			cCampoAnt  := oGET02:aCols[nNewOrdem][_nCampo_]
+			cTipoAnt   := oGET02:aCols[nNewOrdem][_nTipo_]
+			xIniciAnt  := oGET02:aCols[nNewOrdem][_nInicio_]
+			nTamanAnt  := oGET02:aCols[nNewOrdem][_nTamFix_]
+			xFinalAnt  := oGET02:aCols[nNewOrdem][_nFim_]
+			cConteAnt  := oGET02:aCols[nNewOrdem][_nCont_]
+			cFuncaoAnt := oGET02:aCols[nNewOrdem][_nFuncao_]
+
+         	//Altera a posição do registro escolhido, colocando na nova posição.
+			oGET02:aCols[nNewOrdem][_nCampo_]  := oGET02:aCols[nOrdemAnt][_nCampo_]
+			oGET02:aCols[nNewOrdem][_nTipo_]   := oGET02:aCols[nOrdemAnt][_nTipo_]
+			oGET02:aCols[nNewOrdem][_nInicio_] := oGET02:aCols[nOrdemAnt][_nInicio_]
+			oGET02:aCols[nNewOrdem][_nTamFix_] := oGET02:aCols[nOrdemAnt][_nTamFix_]
+			oGET02:aCols[nNewOrdem][_nFim_]    := oGET02:aCols[nOrdemAnt][_nFim_]
+			oGET02:aCols[nNewOrdem][_nCont_]   := oGET02:aCols[nOrdemAnt][_nCont_]
+			oGET02:aCols[nNewOrdem][_nFuncao_] := oGET02:aCols[nOrdemAnt][_nFuncao_]
+
+			For nInd := 1 To Len(oGET02:aCols) - 2
+         	//Faz o for de menos dois, pois a primeira posição já foi alterada, e a ultima será alterada ao fim do For
+         	//Quando na primeira passagem irá pegar a posição em que estava o registro alterado, e jogar nela o registro anterior
+         	//ou posterior, dependendo da opção escolhida. Depois, irá alterar o valor do nOrdemAnt para mais ou menos 1, e fará
+         	//a mesma lógica.
+
+				nAux := IIf(cDirecao == "Up",nOrdemAnt+1,nOrdemAnt-1)
+
+				oGET02:aCols[nOrdemAnt][_nCampo_]  := oGET02:aCols[nAux][_nCampo_]
+				oGET02:aCols[nOrdemAnt][_nTipo_]   := oGET02:aCols[nAux][_nTipo_]
+				oGET02:aCols[nOrdemAnt][_nInicio_] := oGET02:aCols[nAux][_nInicio_]
+				oGET02:aCols[nOrdemAnt][_nTamFix_] := oGET02:aCols[nAux][_nTamFix_]
+				oGET02:aCols[nOrdemAnt][_nFim_]    := oGET02:aCols[nAux][_nFim_]
+				oGET02:aCols[nOrdemAnt][_nCont_]   := oGET02:aCols[nAux][_nCont_]
+				oGET02:aCols[nOrdemAnt][_nFuncao_] := oGET02:aCols[nAux][_nFuncao_]
+
+				nOrdemAnt := IIf(cDirecao == "Up",nOrdemAnt+1,nOrdemAnt-1)
+
+			Next nInd
+
+         	//Alterar o registro que foi pra posição de BKP e coloca na sua nova posição.
+			oGET02:aCols[nOrdemAnt][_nCampo_]  := cCampoAnt
+			oGET02:aCols[nOrdemAnt][_nTipo_]   := cTipoAnt
+			oGET02:aCols[nOrdemAnt][_nInicio_] := xIniciAnt
+			oGET02:aCols[nOrdemAnt][_nTamFix_] := nTamanAnt
+			oGET02:aCols[nOrdemAnt][_nFim_]    := xFinalAnt
+			oGET02:aCols[nOrdemAnt][_nCont_]   := cConteAnt
+			oGET02:aCols[nOrdemAnt][_nFuncao_] := cFuncaoAnt
+
+		Else
+         	//Cria BKP dos campos que estão na nova posição do registros.
+			cCampoAnt  := oGET02:aCols[nNewOrdem][_nCampo_]
+			cTipoAnt   := oGET02:aCols[nNewOrdem][_nTipo_]
+			xIniciAnt  := oGET02:aCols[nNewOrdem][_nInicio_]
+			nTamanAnt  := oGET02:aCols[nNewOrdem][_nTamFix_]
+			xFinalAnt  := oGET02:aCols[nNewOrdem][_nFim_]
+			cConteAnt  := oGET02:aCols[nNewOrdem][_nCont_]
+			cFuncaoAnt := oGET02:aCols[nNewOrdem][_nFuncao_]
+
+         	//Altera a posição do registro escolhido, colocando na posição escolhida.
+			oGET02:aCols[nNewOrdem][_nCampo_]  := oGET02:aCols[nOrdemAnt][_nCampo_]
+			oGET02:aCols[nNewOrdem][_nTipo_]   := oGET02:aCols[nOrdemAnt][_nTipo_]
+			oGET02:aCols[nNewOrdem][_nInicio_] := oGET02:aCols[nOrdemAnt][_nInicio_]
+			oGET02:aCols[nNewOrdem][_nTamFix_] := oGET02:aCols[nOrdemAnt][_nTamFix_]
+			oGET02:aCols[nNewOrdem][_nFim_]    := oGET02:aCols[nOrdemAnt][_nFim_]
+			oGET02:aCols[nNewOrdem][_nCont_]   := oGET02:aCols[nOrdemAnt][_nCont_]
+			oGET02:aCols[nNewOrdem][_nFuncao_] := oGET02:aCols[nOrdemAnt][_nFuncao_]
+
+        	//Alterar o registro que foi pra posição 99 e coloca na sua nova posição.
+			oGET02:aCols[nOrdemAnt][_nCampo_]  := cCampoAnt
+			oGET02:aCols[nOrdemAnt][_nTipo_]   := cTipoAnt
+			oGET02:aCols[nOrdemAnt][_nInicio_] := xIniciAnt
+			oGET02:aCols[nOrdemAnt][_nTamFix_] := nTamanAnt
+			oGET02:aCols[nOrdemAnt][_nFim_]    := xFinalAnt
+			oGET02:aCols[nOrdemAnt][_nCont_]   := cConteAnt
+			oGET02:aCols[nOrdemAnt][_nFuncao_] := cFuncaoAnt
+		EndIf
+
+		fAtuGDados()
+
+		oGET02:GoTo(nNewOrdem) // Muda o foco da linha da MsNewGetDados para continuar no campo mudou a ordem.
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} A715DesTab
+
+Busca descrição da tabela.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function A715DesTab(cTab)
+
+	Local cDesc    := ""
+	Local aArea    := GetArea()
+	Local aAreaSX2 := SX2->(GetArea())
+
+	dbSelectArea(cTab)
+	cDesc := X2Nome()
+
+	RestArea(aAreaSX2)
+	RestArea(aArea)
+
+Return cDesc
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fBsInfoAdd
+
+Busca o informações adcionais do campo
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fBsInfoAdd(cCampo,cRet)
+
+	Local xRet := ""
+	Local aArea    := GetArea()
+
+	If !Empty(Posicione("SX3",2,cCampo,"X3_CAMPO"))
+		If cRet == "TIPO"
+			xRet := Posicione("SX3",2,cCampo,"X3_TIPO")
+		Else
+			xRet := Posicione("SX3",2,cCampo,"X3_DECIMAL")
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+
+Return xRet
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715VldAdd
+
+Busca tamanho dos campos da SX3 quando adcionado como campos genericos.
+Isso ocorre quando é adicionado um campo da SX3 que não existe na TQ7_TABELA
+dessa forma já traz o tamanho como sugestão.
+
+nTipo - Tipo da validação: 1- Nome do Campo, 2- Tipo de Caracter, 3- Tamanho do Campo
+xRegistro - Valor informado no campo a ser validado
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f715VldAdd(nTipo,xRegistro)
+
+	Local cTipo		:= Posicione("SX3",2,cNomeCampo,"X3_TIPO")
+	Local nTamanho	:= Posicione("SX3",2,cNomeCampo,"X3_TAMANHO")
+
+	Do Case
+		Case nTipo = 1
+
+			If !Empty(Posicione("SX3",2,xRegistro,"X3_CAMPO"))
+				cTamRelc := nTamanho
+				oCbx:Select(Val(f715RetTpo(cTipo)))
+				oCbx:Refresh()
+			EndIf
+
+		Case nTipo = 2
+
+			If !Empty(Posicione("SX3",2,cNomeCampo,"X3_CAMPO")) .And. xRegistro <> f715RetTpo(cTipo)
+				MsgStop(STR0044,STR0018) // "Não é possível alterar o tipo de caracter de uma coluna pertecente a uma tabela."
+				oCbx:Select(Val(f715RetTpo(cTipo)))
+				oCbx:Refresh()
+				Return .F.
+			EndIf
+
+			If xRegistro = '3' // Se Data
+				cTamRelc := cValToChar(Len(fMontaData(M->TQ7_FORDTA)))
+			EndIf
+
+		Case nTipo = 3
+
+			If !Empty(Posicione("SX3",2,cNomeCampo,"X3_CAMPO"))
+
+				If cTipo == 'D'
+					MsgStop(STR0017,STR0018) // "Não é possível alterar o tamanho de uma data."#"ATENÇÃO"
+					Return .F.
+				EndIf
+
+				If Val(xRegistro) > nTamanho
+					MsgStop(STR0019+"(" + nTamanho + ")",STR0018) // "Tamanho do campo, maior que o especificado na tabela. "#"ATENÇÃO"
+					Return .F.
+				EndIf
+
+				If Val(xRegistro) < 1
+					MsgStop(STR0020,STR0018) // "Tamanho do campo não pode ser menor que 1."#"ATENÇÃO"
+					Return .F.
+				EndIf
+
+			Else
+
+				If cCombo = '3' .And. Val(xRegistro) <> Len(fMontaData(M->TQ7_FORDTA))
+					MsgStop(STR0017,STR0018) // "Não é possível alterar o tamanho de uma data."#"ATENÇÃO"
+					Return .F.
+				EndIf
+
+			EndIf
+
+	EndCase
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fTelaCpGen
+
+Abre nova tela para adicionar campos genericos na TQ8
+Esses campos não devem existir na tabela principal, TQ7->TQ7_TABELA.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fTelaCpGen()
+
+	Local lConfirma := .F.
+	Local aItens    := {STR0046,STR0047,STR0048,""}
+
+	cCombo := aItens[4]
+
+	DEFINE Font oFontB Name "Arial" Size 07,17 Bold
+	DEFINE Font oFontN Name "Arial" Size 07,17
+	DEFINE MsDialog oDlgP Title STR0023 From 000,000 To 185,680 Pixel Style DS_MODALFRAME // "Campos Genericos"
+
+		oDlgP:lEscClose := .F.
+
+	    // "Nome do Campo: "
+		@ 05,008 Say OemToAnsi(STR0024) Font oFontN Size 400,10 Of oDlgP PIXEL color CLR_HBLUE
+		@ 05,070 MsGet cNomeCampo Picture "@!" Valid f715VldAdd(1,cNomeCampo) Size 050,06 HASBUTTON Of oDlgP PIXEL
+
+		// "Tipo do Campo: "
+		@ 22,008 Say OemToAnsi(STR0040) Font oFontN Size 400,10 Of oDlgP PIXEL color CLR_HBLUE
+		oCbx := tComboBox():New(22,70,{|u|If(PCount() > 0, cCombo := u,cCombo)},aItens,100,20,oDlgP,,{||f715VldAdd(2,cCombo)},,,,(.T.),,,,,,,,,'cCombo')
+
+	    // "Tamanho do Campo: "
+		@ 39,008 Say OemToAnsi(STR0025) Font oFontN Size 400,10 Of oDlgP PIXEL color CLR_HBLUE
+		@ 39,070 MsGet cTamRelc Picture "@!" Valid f715VldAdd(3,cTamRelc) Size 015,06 HASBUTTON Of oDlgP PIXEL
+
+	    // "Função: "
+		@ 56,008 Say OemToAnsi(STR0026) Font oFontN Size 400,10 Of oDlgP PIXEL
+		@ 56,070 MsGet cFuncao Size 250,06 HASBUTTON  Of oDlgP PIXEL
+
+		DEFINE sButton FROM 73,008 Type 13 Enable Of oDlgP Action (lConfirma := .T.,IIf(fVldCpoGen(cNomeCampo,cTamRelc),oDlgP:End(),)) // Salvar
+		DEFINE sButton FROM 73,040 Type 2  Enable Of oDlgP Action (lConfirma := .F.,oDlgP:End())                                       // Cancelar
+
+	Activate MsDialog oDlgP Centered
+
+Return lConfirma
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fVldCpoGen
+
+Validação do Salvar dos campos genericos.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fVldCpoGen(cNome, cTamRelc)
+
+	Local nPosCampo := 0
+	Local cArquivo	:= Posicione("SX3",2,M->TQ7_TABELA,"X3_ARQUIVO")
+
+	If !Empty(Posicione("SX3",2,cNome,"X3_CAMPO"))
+		If !Empty(cArquivo)
+			MsgStop(STR0027,STR0018) //"Campo já existente na tabela Principal."#"ATENCAO"
+			Return .F.
+		EndIf
+	EndIf
+
+	If Empty(cTamRelc) .Or. Val(cTamRelc) < 1
+		MsgStop(STR0028,STR0018) //"Tamanho do campo nulo ou menor que 1."#"ATENCAO"
+		Return .F.
+	EndIf
+
+	If Empty(cNomeCampo)
+		MsgStop(STR0029,STR0018) //"Campo não pode ser nulo."#"ATENCAO"
+		Return .F.
+	EndIf
+
+	nPosCampo := aScanX(oGET02:aCols, {|x,y| x[1] == cNome .And. y > nPosCampo })
+	If nPosCampo > 0
+		MsgStop(STR0022,STR0018) // "Campo já adicionado!"#"ATENCAO"
+		Return .F.
+	EndIf
+
+	If Empty(cCombo) .Or. Val(cCombo) < 1
+		MsgStop(STR0049,STR0018) //"Tipo do Campo inválido"#"ATENCAO"
+		Return .F.
+	EndIf
+
+Return .T.
+
+//-----------------------------------------------------------------
+/*/{Protheus.doc} fMontaCont
+
+Monta conteúdo do exemplo da tabela a direita. Bem como o exemplo total do arquivo.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fMontaCont(cCampo,nTamanho,cTipo)
+
+	Local cConteudo := ""
+
+	Do Case
+		Case cTipo = '1'
+			cTipo := 'C'
+
+		Case cTipo = '2'
+			cTipo := 'N'
+
+		Case cTipo = '3'
+			cTipo := 'D'
+	EndCase
+
+   	//Campos Caracteres
+	If cTipo = "C" .Or. Empty(cTipo)
+
+		Do Case
+		Case Alltrim(cCampo) == "TR6_NUMABA" .Or. Alltrim(cCampo) == "TR6_NABANT"
+			cConteudo := PadL("1",nTamanho,"0")
+
+		Case Alltrim(cCampo) == "TR6_CNPJ"
+			cConteudo := "22222222000122"
+
+		Case Alltrim(cCampo) == "TR6_HRABAS" .Or. Alltrim(cCampo) == "TR6_HRPROC"
+			cConteudo := "12:00"
+
+		OtherWise
+			cConteudo := PadL(cConteudo,nTamanho,fRadChar())
+
+		EndCase
+
+	ElseIf cTipo = "N"
+
+		cConteudo := PadL(cConteudo,nTamanho,cValToChar(Randomize(1,10)))
+
+	Else // D-Data
+		cConteudo := fMontaData(M->TQ7_FORDTA)
+	EndIf
+
+	If Empty(cExemplo)
+		cExemplo := cConteudo
+	Else
+		cExemplo := AllTrim(cExemplo) + fRetSepard(M->TQ7_SEPARD) + cConteudo
+	EndIf
+
+Return cConteudo
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fRetSepard
+
+Retorna separador dos registros(TQ7_SEPARD).
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fRetSepard(cSep)
+
+	Local cSeparador := ''
+
+	Do Case
+
+	Case cSep == '1'
+		cSeparador := '|'
+
+	Case cSep == '2'
+		cSeparador := ';'
+
+	Case cSep == '3'
+		cSeparador := '-'
+
+	Case cSep == '4'
+		cSeparador := Chr(9)
+
+	EndCase
+
+Return cSeparador
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fMontaData
+
+Monta o formato de exemplo da data.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fMontaData(cForDta)
+
+	Local cData := ''
+
+	Do Case
+	Case cForDta = '1'
+		cData := "dd/mm/aaaa"
+
+	Case cForDta = '2'
+		cData := "ddmmaaaa"
+
+	Case cForDta = '3'
+		cData := "aaaa/mm/dd"
+
+	Case cForDta = '4'
+		cData := "aaaammdd"
+
+	EndCase
+
+Return cData
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fRadChar
+
+Monta o formato de exemplo para campos caracteres.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fRadChar()
+
+	Local cRandom := ""
+	Local nRandom := 0
+
+	//Esse Radomize retorna um numero entre 65 e 90. Na tabela AscII esse valores são de A à Z, dessa forma é possível gerar um caracter aleatorio.
+	nRandom := Randomize(65,91)
+	cRandom := Chr(nRandom)
+
+
+Return cRandom
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715RetTpo
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function f715RetTpo(cTipo)
+
+	Do Case
+		Case cTipo = 'C'
+			cTipo := '1'
+
+		Case cTipo = 'N'
+			cTipo := '2'
+
+		Case cTipo = 'D'
+			cTipo := '3'
+
+	EndCase
+
+Return cTipo
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fMontaTam
+
+Monta tamanho do campo a ser adicionado na TQ8.
+Função necessária para quando o campo for data, nesses casos ele tem que
+respeitar a máscara a ser usada, nos outros casos, devolve o tamanho passado.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fMontaTam(nTamanho,cTipo)
+
+	If cTipo = 'D' .Or. cTipo = '3' // Campos data, valida mascara
+		nTamanho := Len(fMontaData(M->TQ7_FORDTA))
+	EndIf
+
+Return nTamanho
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fAtuGDados
+
+Atualiza os campos da GetDados. Após alteração das especificações da TQ7
+ou na remoção de campo.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Function fAtuGDados()
+
+	Local nTamSep    := IIf(lSeparador,1,0)
+	Local nTamanho   := 0
+	Local nTamGDados := 0
+	Local nFor       := 0
+
+	lIniTQ8    := 1
+	cExemplo   := ""
+	nTamGDados := Len(oGET02:aCols)
+
+	If Empty(oGET02:aCols[1][1])
+		oGET02:aCols[1][_nTipo_] := ""
+	EndIf
+
+	For nFor := 1 To nTamGDados
+
+		nTamanho := fMontaTam(oGET02:aCols[nFor][_nTamFix_],oGET02:aCols[nFor][_nTipo_])
+
+		oGET02:aCols[nFor][_nInicio_] := IIf(lSeparador,"-",lIniTQ8)
+		oGET02:aCols[nFor][_nTamFix_] := nTamanho
+		oGET02:aCols[nFor][_nFim_]    := IIf(lSeparador,"-",(lIniTQ8 - 1) + nTamanho)
+		oGET02:aCols[nFor][_nCont_]   := fMontaCont(oGET02:aCols[nFor][_nCampo_],oGET02:aCols[nFor][_nTamFix_],oGET02:aCols[nFor][_nTipo_])
+
+		lIniTQ8 := lIniTQ8 + nTamanho + nTamSep
+
+	Next nFor
+
+	oGET02:oBrowse:Refresh()
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fValidConf
+
+Validação do botão de confirmação do MNTA715.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fValidConf(nOpc)
+
+	If nOpc <> 5
+		If !fCamposObg() // Verifica campos obrigatórios.
+			lConfirm := .F.
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fCamposObg
+Verifica se os campos obrigatórios foram adicionado.
+@type function
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+
+@sample fCamposObg()
+
+@param
+@return boolean, Define de algum campo obrigatório não foi informado.
+/*/
+//------------------------------------------------------------------
+Function fCamposObg()
+
+	Local lRet := .T.
+
+	Do Case
+
+		Case Empty( M->TQ7_CODLAY )
+			Help( '', 1, 'TQ7_CODLAY', , STR0030, 1, 0 ) // Código do Layout não preenchido
+			lRet := .F.
+
+		Case Empty( M->TQ7_DESLAY )
+			Help( '', 1, 'TQ7_DESLAY', , STR0031, 1, 0 ) // A descrição do Layout não foi preenchida!
+			lRet := .F.
+
+		Case Empty( M->TQ7_TABELA )
+			Help( '', 1, 'TQ7_TABELA', , STR0032, 1, 0 ) // Tabela principal não preenchida.
+			lRet := .F.
+
+		Case Empty( M->TQ7_FORDTA )
+			Help( '', 1, 'TQ7_FORDTA', , STR0035, 1, 0 ) // Informe o formato da data.
+			lRet := .F.
+
+		Case Empty( M->TQ7_SEPDEC )
+			Help( '', 1, 'TQ7_SEPDEC', , STR0036, 1, 0 ) // Informe o separador do decimal.
+			lRet := .F.
+
+		Case Empty( M->TQ7_INDCAB )
+			Help( '', 1, 'TQ7_INDCAB', , STR0037, 1, 0 ) // Informe o registro que indica se existe cabeçalho.
+			lRet := .F.
+
+		Case Empty( M->TQ7_INDROD )
+			Help( '', 1, 'TQ7_INDROD', , STR0038, 1, 0 ) // Informe o registro que indica se existe Rodapé.
+			lRet := .F.
+
+		Case Empty( M->TQ7_TIPARQ )
+			Help( '', 1, 'TQ7_TIPARQ', , STR0033, 1, 0 ) // O tipo do arquivo não foi informado!
+			lRet := .F.
+
+		Case !Empty( M->TQ7_TIPARQ ) .And. M->TQ7_TIPARQ == '2' .And. Empty( M->TQ7_SEPARD )
+			Help( '', 1, 'TQ7_SEPARD', , STR0034, 1, 0 ) // É necessário informar o tipo de separador.
+			lRet := .F.
+
+		Case Len( oGet02:aCols) < 1 .Or. Empty( oGet02:aCols[1,1] )
+			Help( '', 1, 'TR6', , STR0039, 1, 0 ) // Não existem campos a direita para a montagem do Layout
+			lRet := .F.
+
+		Case aScan( oGet02:aCols, { |x| Trim( x[1] ) == 'TR6_DTABAS' } ) == 0
+			Help( '', 1, 'TR6_DTABAS', , STR0052, 1, 0 ) // O campo 'TR6_DTABAS' deve estar contemplado na configuração do layout.
+			lRet := .F.
+
+		Case aScan( oGet02:aCols, { |x| Trim( x[1] ) == 'TR6_PLACA' } ) == 0
+			Help( '', 1, 'TR6_PLACA', , STR0051, 1, 0 ) // O campo 'TR6_PLACA' deve estar contemplado na configuração do layout.
+			lRet := .F.
+
+	EndCase
+
+Return lRet
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fCancelINC
+
+Faz o RollBackSXE no cancelamento da inclusão.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fCancelINC()
+
+	ROLLBACKSXE("TQ7","TQ7_CODLAY")
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fIncluiTQ7
+
+Inclui na Tabela TQ7 os dados do Cabeçalho
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fIncluiTQ7()
+
+	Reclock("TQ7",.T.)
+	TQ7->TQ7_FILIAL := xFilial("TQ7")
+	TQ7->TQ7_CODLAY := M->TQ7_CODLAY
+	TQ7->TQ7_DESLAY := M->TQ7_DESLAY
+	TQ7->TQ7_TABELA := M->TQ7_TABELA
+	TQ7->TQ7_TIPARQ := M->TQ7_TIPARQ
+	TQ7->TQ7_SEPARD := M->TQ7_SEPARD
+	TQ7->TQ7_FORDTA := M->TQ7_FORDTA
+	TQ7->TQ7_SEPDEC := M->TQ7_SEPDEC
+	TQ7->TQ7_INDCAB := M->TQ7_INDCAB
+	TQ7->TQ7_INDROD := M->TQ7_INDROD
+	TQ7->TQ7_MSBLQL := M->TQ7_MSBLQL
+	MsUnLock("TQ7")
+
+	ConfirmSX8()
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fAlteraTQ7
+
+Salva os novos dados da TQ7 quando na alteração.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fAlteraTQ7()
+
+	Local aArea    := GetArea()
+	Local aAreaTQ7 := TQ7->(GetArea())
+
+	Reclock("TQ7",.F.)
+	TQ7->TQ7_DESLAY := M->TQ7_DESLAY
+	TQ7->TQ7_TIPARQ := M->TQ7_TIPARQ
+	TQ7->TQ7_SEPARD := M->TQ7_SEPARD
+	TQ7->TQ7_FORDTA := M->TQ7_FORDTA
+	TQ7->TQ7_SEPDEC := M->TQ7_SEPDEC
+	TQ7->TQ7_INDCAB := M->TQ7_INDCAB
+	TQ7->TQ7_INDROD := M->TQ7_INDROD
+	TQ7->TQ7_MSBLQL := M->TQ7_MSBLQL
+	MsUnLock("TQ7")
+
+	RestArea(aAreaTQ7)
+	RestArea(aArea)
+
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fDeletaTQ7
+
+Deleta a TQ7
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fDeletaTQ7()
+
+	Local aArea    := GetArea()
+	Local aAreaTQ7 := TQ7->(GetArea())
+
+	dbSelectArea("TQ7")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ7") + M->TQ7_CODLAY)
+		RecLock("TQ7",.F.)
+		dbDelete()
+		MsUnLock("TQ7")
+	EndIf
+
+	RestArea(aAreaTQ7)
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fIncluiTQ8
+
+Inclui dados na TQ8
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fIncluiTQ8(cFilTQ8,cCodLay,nSequen,cCpoTab,cTipo,cTamArq,cFuncao,nPosIni,nPosFim)
+
+	Local aArea    := GetArea()
+	Local aAreaTQ8 := TQ8->(GetArea())
+
+	Do Case
+		Case cTipo = '1'
+			cTipo := 'C'
+
+		Case cTipo = '2'
+			cTipo := 'N'
+
+		Case cTipo = '3'
+			cTipo := 'D'
+	EndCase
+
+	Reclock("TQ8",.T.)
+	TQ8->TQ8_FILIAL := cFilTQ8
+	TQ8->TQ8_CODLAY := cCodLay
+	TQ8->TQ8_SEQUEN := nSequen
+	TQ8->TQ8_CPOTAB := cCpoTab
+	TQ8->TQ8_TIPO   := cTipo
+	TQ8->TQ8_TAMARQ := cTamArq
+	TQ8->TQ8_FUNCAO := cFuncao
+	If !lSeparador
+		TQ8->TQ8_POSINI := nPosIni
+		TQ8->TQ8_POSFIM := nPosFim
+	EndIf
+	MsUnLock("TQ8")
+
+	RestArea(aAreaTQ8)
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fAlteraTQ8
+
+Altera dados da TQ8
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fAlteraTQ8()
+
+	Local nTamACols := Len(oGET02:aCols)
+	Local nInd      := 1
+	Local nAux      := 0
+	Local aArea     := GetArea()
+	Local aAreaTQ8  := TQ8->(GetArea())
+	Local cTipo     := ""
+
+	dbSelectArea("TQ8")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ8") + M->TQ7_CODLAY)
+
+		While TQ8->(!EoF()) .And. TQ8->TQ8_FILIAL == xFilial("TQ8") .And. TQ8->TQ8_CODLAY == M->TQ7_CODLAY
+
+			If nInd <= nTamACols
+				If f715DifTQ8(TQ8->TQ8_SEQUEN,TQ8->TQ8_CPOTAB,TQ8->TQ8_TIPO,TQ8->TQ8_POSINI,TQ8->TQ8_TAMARQ,TQ8->TQ8_POSFIM,TQ8->TQ8_FUNCAO,;
+							  nInd,oGET02:aCols[nInd][_nCampo_],oGET02:aCols[nInd][_nTipo_],oGET02:aCols[nInd][_nInicio_],oGET02:aCols[nInd][_nTamFix_],;
+							  oGET02:aCols[nInd][_nFim_],oGET02:aCols[nInd][_nFuncao_])
+               		//Verifica se há diferença entre a linha da MsNewGetDados e dos registros em tabela, só irá alterar a linha caso
+               		//exista tal diferença.
+
+					Do Case
+						Case oGET02:aCols[nInd][_nTipo_] = '1'
+							cTipo := 'C'
+
+						Case oGET02:aCols[nInd][_nTipo_] = '2'
+							cTipo := 'N'
+
+						Case oGET02:aCols[nInd][_nTipo_] = '3'
+							cTipo := 'D'
+					EndCase
+
+					Reclock("TQ8",.F.)
+					TQ8->TQ8_CPOTAB := oGET02:aCols[nInd][_nCampo_]
+					TQ8->TQ8_TIPO   := cTipo
+					TQ8->TQ8_TAMARQ := oGET02:aCols[nInd][_nTamFix_]
+					TQ8->TQ8_FUNCAO := oGET02:aCols[nInd][_nFuncao_]
+					If !lSeparador
+						TQ8->TQ8_POSINI := oGET02:aCols[nInd][_nInicio_]
+						TQ8->TQ8_POSFIM := oGET02:aCols[nInd][_nFim_]
+					Else
+						TQ8->TQ8_POSINI := 0
+						TQ8->TQ8_POSFIM := 0
+					EndIf
+					MsUnLock("TQ8")
+				EndIf
+			EndIf
+
+			TQ8->(dbSkip())
+			nInd++
+
+		End
+
+		RestArea(aAreaTQ8)
+		RestArea(aArea)
+
+		If nInd <= nTamACols
+
+			For nAux := nInd To nTamACols
+
+				fIncluiTQ8(xFilial("TQ8")              ,;
+						   M->TQ7_CODLAY               ,;
+						  nAux                         ,;
+						  oGET02:aCols[nAux][_nCampo_] ,;
+						  oGET02:aCols[nAux][_nTipo_]  ,;
+						  oGET02:aCols[nAux][_nTamFix_],;
+						  oGET02:aCols[nAux][_nFuncao_],;
+						  oGET02:aCols[nAux][_nInicio_],;
+						  oGET02:aCols[nAux][_nFim_])
+
+			Next nAux
+		Else
+			For nAux := nTamACols + 1 To nInd
+				fDelTQ8Cnd(xFilial("TQ8"),M->TQ7_CODLAY,nAux)
+			Next nAux
+		EndIf
+
+	EndIf
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fDeleteTQ8
+
+Deleta toda a TQ8
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fDeleteTQ8()
+
+	Local aArea    := GetArea()
+	Local aAreaTQ8 := TQ8->(GetArea())
+
+	dbSelectArea("TQ8")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ8")+M->TQ7_CODLAY)
+		While TQ8->(!Eof()) .And. TQ8->TQ8_FILIAL == xFilial("TQ8") .And. TQ8->TQ8_CODLAY == M->TQ7_CODLAY
+
+			RecLock("TQ8",.F.)
+			dbDelete()
+			MsUnLock("TQ8")
+
+			TQ8->(dbSkip())
+		End
+	EndIf
+
+	RestArea(aAreaTQ8)
+	RestArea(aArea)
+
+Return .T.
+//------------------------------------------------------------------
+/*/{Protheus.doc} fDelTQ8Cnd
+
+Deleta a TQ8 conforme a condição do parametro.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fDelTQ8Cnd(cFilTQ8,cCodLayTQ8,nSeqTQ8)
+
+	Local aArea    := GetArea()
+	Local aAreaTQ8 := TQ8->(GetArea())
+
+	dbSelectArea("TQ8")
+	dbSetOrder(1)
+	If dbSeek(cFilTQ8 + cCodLayTQ8 + cValToChar(nSeqTQ8))
+		While TQ8->(!Eof()) .And. TQ8->TQ8_FILIAL == cFilTQ8 .And. TQ8->TQ8_CODLAY == cCodLayTQ8 .And. TQ8->TQ8_SEQUEN == nSeqTQ8
+
+			RecLock("TQ8",.F.)
+			dbDelete()
+			MsUnLock("TQ8")
+
+			TQ8->(dbSkip())
+		End
+	EndIf
+
+	RestArea(aAreaTQ8)
+	RestArea(aArea)
+
+Return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715DifTQ8
+
+Deleta toda a TQ8
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f715DifTQ8(nSeqTab,cCpoTab,cTpoTab,nIniTab,nTamTab,nPosTab,nFunTab,nSeqCol,nCpoCol,cTpoCol,nIniCol,nTamCol,nFimCol,nFunCol)
+
+	nIniCol := IIf(ValType(nIniCol)=="C",0,nIniCol)
+	nFimCol := IIf(ValType(nFimCol)=="C",0,nFimCol)
+
+
+	If nSeqTab != nSeqCol .Or. cCpoTab != nCpoCol .Or. nIniTab != nIniCol .Or. nTamTab != nTamCol .Or. nPosTab != nFimCol .Or. nFunTab != nFunCol
+		Return .T.
+	EndIf
+
+Return .F.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} fVerAcols
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 02/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function fVerAcols(nInd)
+
+	cFuncao := Space(TAMSX3('TQ8_FUNCAO')[1])
+
+	If nInd = 1
+		If Empty(oGET02:aCols[1][1])
+			aDel(oGET02:aCols,Len(oGET02:aCols))   //Quando na inclusão deleta a linha zerado.
+			aSize(oGET02:aCols,Len(oGET02:aCols)-1)   //Redimensiona array para o novo tamanho
+		EndIf
+	ElseIf nInd = 2
+		If Len(oGET02:aCols) < 1
+			aAdd(oGET02:aCols,{"",0,0,0,"","",cFuncao,.F.})
+		EndIf
+	ElseIf nInd = 3
+		If Empty(oGET01:aCols[1][2])
+			aDel(oGET01:aCols ,Len(oGET01:aCols)) //Deleta da linha o registro que indica o RecNo
+			aSize(oGET01:aCols,Len(oGET01:aCols)-1) //Redimensiona array para o novo tamanho
+		EndIf
+	EndIf
+
+Return .T.
+
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} f715VldEnt
+
+Validações de entrada no sistema.
+
+@sample
+MenuDef()
+
+@author Maicon André Pinheiro
+@since 21/09/2016
+/*/
+//------------------------------------------------------------------
+Static Function f715VldEnt()
+
+	Local nTamValUni := 0
+	Local nTamVlComb := 0
+
+	If !lAbastUnif
+		MsgStop("Sistema não parametrizado para o uso desse programa. Favor entrar em contato com o Administrador do sistema.") // ""
+		Return .F.
+	EndIf
+
+	If !Empty( Posicione("SX3",2, "TQQ_VALUNI", "X3_CAMPO") )
+		nTamValUni := Posicione("SX3",2, "TQQ_VALUNI", "X3_TAMANHO")
+	EndIf
+
+	If !Empty( Posicione("SX3",2, "TR6_VLCOMB", "X3_CAMPO") )
+		nTamVlComb := Posicione("SX3",2, "TR6_VLCOMB", "X3_TAMANHO")
+	EndIf
+
+	// Verifica se o tamanho dos campos que são correspondentes está diferente
+	If nTamValUni <> nTamVlComb
+		MsgInfo(STR0050) // "O tamanho do campo TQQ_VALUNI está diferente do tamanho do campo TR6_VLCOMB o que pode ocasionar erros. Favor corrigir os tamanhos via configurador."
+	EndIf
+
+Return .T.

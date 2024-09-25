@@ -1,0 +1,2372 @@
+#INCLUDE "Mnta875.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA875
+Função que redireciona para uma das 3 rotinas de correção do sistema:
+
+1 - Acerto Individual de Contador
+2 - Ajuste/Reprocessamento de Contador Próprio
+3 - Reprocessamento de Contador em Estrutura
+
+Caso seja escolhida a opção 1, continua para a rotina de acerto.
+
+@author Éwerton Cercal
+@since 26/06/2015
+@version P12
+@param cBem, carater, define o código do bem quando rotina chamada pelo
+click da direita
+@return true
+/*/
+//---------------------------------------------------------------------
+Function MNTA875(cBem)
+
+	Local aItens	:= {}			//Array contendo as opções que podem ser selecionadas
+
+	Local oDlgO					//Objeto do MsDialog da tela inicial de seleção
+	Local oPnlR					//Objeto do TPanel da tela inicial de seleção
+	Local nOpcSel := 1			//Variável que armazena o número da opção selecionada, sendo:
+									//1 - Acerto Individual de Contador	(Opção Padrão)
+									//2 - Ajuste/Reprocessamento de Contador Próprio
+									//3 - Reprocessamento de Contador em Estrutura
+	Local nOpcao   := 0			//Variável que armazena o numeral que representa se foi confirmada a execução (nOpcao == 1) ou fechada a rotina (nOpcao == 0)
+	Local oTempTMP := Nil
+
+	//+---------------------------------------------+
+	//| Guarda conteudo e declara variaveis padroes |
+	//+---------------------------------------------+
+	Local aNGBEGINPRM := NGBEGINPRM()
+	Local aIndex := {}
+
+	Private asMenu
+    Private oMenu
+	Private aSize     := MsAdvSize()
+	Private lRegVir   := .F.
+    Private nDifVir := 0
+	Private aRotina   := MenuDef()
+	Private cCadastro := OemToAnsi(STR0006) //"Cadastro Historico do Contador - "
+	Private cCasto    := cCadastro
+	Private nOpcin
+	Private oDlg1
+    Private cPrograma  := ProcName()
+
+	Private cTRBAcerto := "", cARQAcerto := ""
+	Private aDBF       := {}
+
+	//Posicoes dos campos da tabela temporaria para utilizacao no Array
+	Private nDATALEI := 0, nHORALEI := 0
+	Private nPOSCONT := 0, nACUMULA := 0
+	Private nVARDIA  := 0, nVIRADA  := 0
+	Private nTIPOLAN := 0, nDESCLAN := 0
+	Private nUSUARIO := 0, nJUSTIFI := 0
+
+	Private lJustifica := NGCADICBASE('TP_JUSTIFI','A','STP',.F.)
+	Private lExCampOri := NGCADICBASE("TP_ORIGEM","A","STP",.F.) .And. NGCADICBASE("TPP_ORIGEM","A","TPP",.F.)
+    Private lGFrota := NGVERUTFR()
+	
+	//Variaveis utilizadas para habilitara edição do contador na função genérica NGBlCont
+	Private TIPOACOM      := .T.
+	Private TIPOACOM2     := .T.
+
+	If FindFunction("MNTA875")
+		aAdd(aItens, STR0085)	//Acerto Individual de Contador
+	EndIf
+
+	If FindFunction("MNTA876")
+		aAdd(aItens, STR0086)	//Ajuste/Reprocessamento de Contador Próprio
+	EndIf
+
+	If FindFunction("MNTA877")
+		aAdd(aItens, STR0087)	//Reprocessamento de Contador em Estrutura (componentes)
+	EndIf
+
+	If Empty(cBem)
+		Define MsDialog oDlgO From 0,0 To 180,380 Title STR0083 Pixel Style DS_MODALFRAME	//"Acerto de Contador"
+
+			oPnlR := TPanel():New(0, 0,, oDlgO,,,,,, 200, 300, .F., .F.)
+				oPnlR:Align := CONTROL_ALIGN_ALLCLIENT
+
+					@ 07,10 To 50,180 LABEL STR0084 of oPnlR Pixel //"Informe qual processo deseja executar:"
+
+					TRadMenu():New(20, 20, aItens, {|u| IIf (PCount() == 0, nOpcSel, nOpcSel := u)}, oPnlR,,,,,,,, 195, 300,,,, .T.)
+
+		Activate MsDialog oDlgO On Init EnchoiceBar(oDlgO, {|| nOpcao := 1, oDlgO:End()}, {|| nOpcao := 0, oDlgO:End()}) Centered
+
+		If nOpcao == 1 .And. (aSCAN(aItens, STR0086) == nOpcSel) //Executa a Função que realiza o Ajuste/Reprocessamento de Contador Próprio
+
+			MNTA876()
+			Return .T.
+
+		ElseIf nOpcao == 1 .And. (aSCAN(aItens, STR0087) == nOpcSel) //nOpcSel == 3 //Vai para a função de "Reprocessamento de Contador em Estrutura"
+
+			NGRETURNPRM(aNGBEGINPRM)
+			MNTA877()
+			Return .T.
+
+		ElseIf nOpcao == 0
+
+			Return
+		EndIf
+	EndIf
+
+	If !NGFUNCRPO("NGACEMANUHIST",,"NGUTIL05.PRX") .Or. !NGFUNCRPO("NGKMTQS",,"NGUTIL04.PRX")
+	   Return
+	EndIf
+
+	dDTINHIS := dDataBase
+	cBEMHIST := IIf(Empty(cBem), Space(Len(st9->t9_codbem)), cBem)
+	cNOMBEMH := IIf(Empty(cBem), Space(TamSx3("T9_NOME")[1]), Posicione("ST9", 1, xFilial('ST9')+cBem, "T9_NOME"))
+	vTPCHIST := {STR0007,STR0008} //"Um"###"Dois"
+	cTPCHIST := STR0007 //"Um"
+	lTPCHIST := .F.
+	Store 0 To nOpcin,nLINHA,nTAMB,nCONTAN
+
+	Define MsDialog oDlg1 Title STR0009 From 9,0 To 150,590 PIXEL
+
+		@ 00,00  MSPANEL oPanel Of oDlg1
+		oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@ 05,010 SAY OEMTOANSI(STR0010) SIZE 47,07 OF oPanel PIXEL Color CLR_HBLUE //"Bem"
+		@ 05,040 MSGET cBEMHIST SIZE 65,08 OF oPanel PIXEL F3 'ST9' PICTURE '@!' Valid MNTA875BCO() When Empty(cBem) HASBUTTON
+		@ 05,105 MSGET cNOMBEMH SIZE 130,08 OF oPanel PIXEL When .F.
+
+		@ 20,010 SAY OEMTOANSI(STR0011) SIZE 47,07 OF oPanel PIXEL Color CLR_HBLUE //"Contador"
+		@ 20,040 COMBOBOX cTPCHIST ITEMS vTPCHIST When lTPCHIST SIZE 38,8 OF oPanel PIXEL
+
+		@ 20,110 SAY OEMTOANSI(STR0012) SIZE 47,07 OF oPanel PIXEL Color CLR_HBLUE //"A Partir de"
+		@ 20,145 MSGET dDTINHIS SIZE 45,08 OF oPanel PIXEL PICTURE '99/99/99' Valid Naovazio() HASBUTTON
+		NGPOPUP(asMenu,@oMenu)
+		oPanel:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPanel)}
+
+	ACTIVATE MSDIALOG oDlg1 ON INIT EnchoiceBar(oDlg1,{||nOpcin:= 1,oDlg1:End()},{|| nOpcin := 2,oDlg1:End()},;
+                                            AlignObject(oDlg1,{oPanel},1)) CENTERED
+
+	//--------------------------
+	//Monta a tabela temporaria
+	//--------------------------
+	cTRBAcerto := GetNextAlias()
+
+	aDBF := {}
+	aAdd(aDBF, {"DATALEI" , "D", 08,0})
+	aAdd(aDBF, {"HORALEI" , "C", 05,0})
+	aAdd(aDBF, {"POSCONT" , "N", 09,0})
+	aAdd(aDBF, {"ACUMULA" , "N", 12,0})
+	aAdd(aDBF, {"VARDIA"  , "N", 06,0})
+	aAdd(aDBF, {"VIRADA"  , "N", 03,0})
+	aAdd(aDBF, {"TIPOLAN" , "C", 01,0})
+	aAdd(aDBF, {"DESCLAN" , "C", 40,0})
+
+	If lJustifica
+		aAdd(aDBF, {"USUARIO" , "C", Len(STP->TP_USUCANC),0})
+		aAdd(aDBF, {"JUSTIFI" , "C", 83,0})
+	EndIf
+
+	aIndex := {{"DATALEI","HORALEI"}}
+	oTempTMP  := NGFwTmpTbl(cTRBAcerto,aDBF,aIndex)
+
+	//--- Define as posicoes dos campos do Array
+	nDATALEI := aScan(aDBF, {|x| x[1] == "DATALEI" })
+	nHORALEI := aScan(aDBF, {|x| x[1] == "HORALEI" })
+	nPOSCONT := aScan(aDBF, {|x| x[1] == "POSCONT" })
+	nACUMULA := aScan(aDBF, {|x| x[1] == "ACUMULA" })
+	nVARDIA  := aScan(aDBF, {|x| x[1] == "VARDIA"  })
+	nVIRADA  := aScan(aDBF, {|x| x[1] == "VIRADA"  })
+	nTIPOLAN := aScan(aDBF, {|x| x[1] == "TIPOLAN" })
+	nDESCLAN := aScan(aDBF, {|x| x[1] == "DESCLAN" })
+	nUSUARIO := aScan(aDBF, {|x| x[1] == "USUARIO" })
+	nJUSTIFI := aScan(aDBF, {|x| x[1] == "JUSTIFI" })
+
+	//--------------------
+	//Processa o Historico
+	//--------------------
+	If nOpcin == 1
+	   Processa({|lEnd| MNTA875FIL()},STR0013) //"Processando Arquivo de historico"
+	Endif
+
+	//------------------------------
+	//Devolve as condicoes da rotina
+	//------------------------------
+	oTempTMP:Delete()
+
+	DbSelectArea('STP')
+	DbSetOrder(1)
+	DbSeek(xFilial('STP'))
+
+	NGRETURNPRM(aNGBEGINPRM)
+
+Return .T.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875BCO³ Autor ³In cio Luiz Kolling    ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Valida e verifica se o bem tem contador                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³MNTA875                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875BCO()
+lTPCHIST := .F.
+cNOMBEMH := NGSEEK('ST9',cBEMHIST,1,'T9_NOME')
+If Empty(cNOMBEMH)
+   HELP(" ",1,"NAOCADAST")
+   Return .F.
+Endif
+
+If st9->t9_temcont <> 'S'
+   MsgInfo(STR0014,STR0015) //"Este bem nao e controlado por contador"###"NÃO CONFORMIDADE"
+   Return .F.
+Endif
+
+DbSelectArea('TPE')
+DbSetOrder(1)
+If DbSeek(xFilial('TPE')+cBEMHIST)
+   lTPCHIST := .T.
+Endif
+lRefresh := .T.
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875FIL³ Autor ³In cio Luiz Kolling    ³ Data ³ 14/05/03 ³±±
+Rmnta±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Montagem do Arquivo para gerar o Browse                     ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875FIL()
+Local i := 0, oMenu
+Local cAuxField := ""
+//Variaveis de botoes
+Local oBtnAlt, oBtnBus
+//Variaveis de objeto
+Local oPnlTWB, oPnlTot, oPnlInf, oPnlBtn//Panels da tela
+Private oDlg2 //Objeto do Dialog
+Private oLbx  //List box de apresentação
+
+nTIPCA  := If(cTPCHIST = STR0007,1,2) //"Um"
+aARALTC := If(nTIPCA == 1,{'STP','stp->tp_filial','stp->tp_codbem',;
+                          'stp->tp_dtleitu','stp->tp_hora','stp->tp_poscont',;
+                          'stp->tp_acumcon','stp->tp_vardia','stp->tp_viracon','stp->tp_tipolan'},;
+                         {'TPP','tpp->tpp_filial','tpp->tpp_codbem',;
+                          'tpp->tpp_dtleit','tpp->tpp_hora','tpp->tpp_poscon',;
+                          'tpp->tpp_acumco','tpp->tpp_vardia','tpp->tpp_viraco','tpp->tpp_tipola'})
+If lJustifica
+	If nTIPCA == 1
+		aAdd(aARALTC, 'stp->tp_usucanc')
+		aAdd(aARALTC, 'stp->tp_justifi')
+	EndIf
+Endif
+
+If lExCampOri // Indica se existe campo TP_ORIGEM ou TPP_ORIGEM
+    If nTIPCA == 1
+        aAdd(aARALTC, 'stp->tp_origem')
+    Else
+        aAdd(aARALTC, 'tpp->tpp_origem')
+    EndIf
+EndIf
+
+aARABEM := If(nTIPCA == 1,{'ST9','st9->t9_poscont','st9->t9_contacu',;
+                          'st9->t9_dtultac','st9->t9_vardia','st9->t9_limicon'},;
+                         {'TPE','tpe->tpe_poscon','tpe->tpe_contac',;
+                          'tpe->tpe_dtulta','tpe->tpe_vardia','tpe->tpe_limico'})
+
+cAuxField := If(nTIPCA == 1, "TP_TIPOLAN", "TPP_TIPOLA")
+nOpca := 0
+While .T.
+
+   DbSelectArea(cTRBAcerto)
+   Zap
+
+   DbSelectArea(aARALTC[1])
+   DbSetOrder(5)
+   DbSeek(xFilial(aARALTC[1])+cBEMHIST+Dtos(dDTINHIS),.T.)
+   ProcRegua(Reccount())
+   While !Eof() .And. &(aARALTC[2]) = Xfilial(aARALTC[1]) .And. &(aARALTC[3]) = cBEMHIST;
+      .And. &(aARALTC[4]) >= dDTINHIS
+      IncProc()
+      DbSelectArea(cTRBAcerto)
+      RecLock((cTRBAcerto),.T.)
+      (cTRBAcerto)->DATALEI := &(aARALTC[4])
+      (cTRBAcerto)->HORALEI := &(aARALTC[5])
+      (cTRBAcerto)->POSCONT := &(aARALTC[6])
+      (cTRBAcerto)->ACUMULA := &(aARALTC[7])
+      (cTRBAcerto)->VARDIA  := &(aARALTC[8])
+      (cTRBAcerto)->VIRADA  := &(aARALTC[9])
+      (cTRBAcerto)->TIPOLAN := &(aARALTC[10])
+      (cTRBAcerto)->DESCLAN := AllTrim( NGRETSX3BOX(cAuxField, &(aARALTC[10])) )
+		If lJustifica
+		   (cTRBAcerto)->USUARIO := &(aARALTC[11])
+	      (cTRBAcerto)->JUSTIFI := &(aARALTC[12])
+		Endif
+      MsUnlock(cTRBAcerto)
+      DbSelectArea(aARALTC[1])
+      DbSkip()
+   End
+
+   DbSelectArea(cTRBAcerto)
+   Dbgotop()
+   If Reccount() = 0
+      MsgInfo(STR0016+chr(13)+chr(13); //"Nao ha itens de historico para:"
+             +STR0017+cBEMHIST+chr(13)+STR0018+cTPCHIST+chr(13); //"Bem..................: "###"Tipo Contador...: "
+             +STR0019+Dtoc(dDTINHIS),STR0020) //"A partir de.........: "###"ATENCAO"
+      Exit
+      Return
+   Else
+      cLine := "{ || { "
+      i     := 0
+      aAux  := {}
+      aLbx  := {}
+
+      // Monta os dados do listbox
+      aFields := DBSTRUCT()
+      If !lJustifica
+      	aCabec  := {STR0021,STR0022,STR0011,STR0023,STR0024,STR0025,STR0057, STR0079} //"Dt Leitura"###"H. Leitura"###"Contador"###"Acumulado"###"Var. dia"###"Viradas"###"Tip.Lan"###"Desc. Lan."
+      Else
+      	aCabec  := {STR0021,STR0022,STR0011,STR0023,STR0024,STR0025,STR0057, STR0079, STR0058,STR0059} //"Dt Leitura"###"H. Leitura"###"Contador"###"Acumulado"###"Var. dia"###"Viradas"###"Tip.Lan"###"Desc. Lan."###"Usuário"###"Justificativa"
+      Endif
+
+      While !Eof()
+         aAux := ARRAY(Len(aFields))
+         For i := 1 to Len(aFields)
+            aAux[i] := &(aFields[i][1])
+         Next i
+         Aadd(aLbx,aAux)
+         dbSkip()
+      End
+
+      nTAMB := Len(aLbx)
+      // Define o numero de colunas do listbox
+      For i:=1 To Len(aDBF)
+         If aDBF[i][2] == "D"
+            cLine+= "DtoC(aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"])"
+         ElseIf aDBF[i][2] == "N"
+            cLine+= "Str(aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"])"
+         Else
+           cLine+= "aLbx[oLbx:nAt,"+Alltrim(str(i,2))+"]"
+         EndIf
+         If i#Len(aDBF)
+            cLine+=","
+         Else
+            cLine+="}"
+         EndIf
+      Next i
+      cLine+= "}"
+      nGuarda := 1
+      nOrdem  := 1
+
+      Define MsDialog oDlg2 Title STR0009+Space(2)+cTPCHIST From aSize[7],00 To aSize[6],aSize[5] PIXEL
+
+		oPnlTot := TPanel():New(01,01,,oDlg2,,,,,,0,0,.F.,.T.)
+			oPnlTot:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPnlInf := TPanel():New(01,01,,oPnlTot,,,,,,0,22,.F.,.T.)
+				oPnlInf:Align := CONTROL_ALIGN_TOP
+
+				@ 07,002 SAY OEMTOANSI(STR0010) SIZE 47,07 OF oPnlInf PIXEL //"Bem"
+				@ 06,020 MSGET cBEMHIST SIZE 55 ,08 OF oPnlInf PIXEL When .F.
+				@ 06,080 MSGET cNOMBEMH SIZE 130,08 OF oPnlInf PIXEL When .F.
+
+				@ 07,215 SAY OEMTOANSI(STR0011) SIZE 47,07 OF oPnlInf PIXEL //"Contador"
+				@ 06,240 MSGET cTPCHIST SIZE 10,8 OF oPnlInf PIXEL When .F.
+
+				@ 07,270 SAY OEMTOANSI(STR0012) SIZE 47,07 OF oPnlInf PIXEL //"A Partir de"
+				@ 06,300 MSGET dDTINHIS SIZE 45,08 OF oPnlInf PIXEL PICTURE '99/99/99' When .F. HASBUTTON
+
+			oPnlTWB := TPanel():New(01,01,,oPnlTot,,,,,,0,0,.F.,.T.)
+		  		oPnlTWB:Align := CONTROL_ALIGN_ALLCLIENT
+
+				oLbx:= TWBrowse():New(0,0,0,0,,aCabec,, oPnlTWB,,,,,,,,,,,, .F.,, .F.,, .F.,,, )
+					oLbx:SetArray(aLbx)
+					oLbx:bLine := &(cLine)
+					oLbx:nAt   := nGuarda
+					oLbx:Align := CONTROL_ALIGN_ALLCLIENT
+
+			oPnlBtn := TPanel():New(01,01,,oPnlTot,,,,,,0,25,.F.,.T.)
+				oPnlBtn:Align := CONTROL_ALIGN_BOTTOM
+
+				DEFINE SBUTTON oBtnBus FROM 05,10  TYPE  5  ENABLE OF oPnlBtn ACTION MNTA875PE() When nTAMB > 1
+					oBtnBus:cToolTip := OemToAnsi(STR0026)
+				DEFINE SBUTTON      FROM 05,40  TYPE 15  ENABLE OF oPnlBtn ACTION MNTA875VI()  // VISUALIZAR
+				DEFINE SBUTTON oBtnAlt FROM 05,70  TYPE 11  ENABLE OF oPnlBtn ACTION MNTA875AL()  // ALTERAR
+					oBtnAlt:cToolTip := OemToAnsi(STR0027) //"Alterar..."
+				DEFINE SBUTTON      FROM 05,100 TYPE 03  ENABLE OF oPnlBtn ACTION MNTA875EX()  // EXCLUIR
+
+		NGPOPUP(asMenu,@oMenu)
+		oDlg2:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oDlg2)}
+
+		ACTIVATE MSDIALOG oDlg2 ON INIT EnchoiceBar(oDlg2,{||nOpca:= 1,oDlg2:End()},{|| nOpca := 2,oDlg2:End()},;
+	  													AlignObject(oDlg2,{oPnlTot},1))
+      If nOpca = 2 .Or. nOpca = 0
+         Exit
+      Endif
+   Endif
+End
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875PE ³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Pesquisar o historico                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875PE()
+Local dDTPESQ := aLbx[1,nDATALEI], cHOPESQ := aLbx[1,nHORALEI], nOpcap := 0
+Local oMenu, oPnlPai
+
+Define MsDialog oDlg4 Title STR0001 From 20,32 To 27,100 Of oMainWnd //"Pesquisar"
+
+oPnlPai := TPanel():New(00,00,,oDlg4,,,,,,100,27,.F.,.F.)
+	oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+@ 10,010 SAY OEMTOANSI(STR0028) SIZE 47,07 OF oPnlPai PIXEL Color CLR_HBLUE //"Data Leitura"
+@ 10,045 MSGET dDTPESQ SIZE 45,08 OF oPnlPai PIXEL PICTURE '99/99/99' Valid Naovazio(dDTPESQ) HASBUTTON
+
+@ 25,010 SAY OEMTOANSI(STR0029) SIZE 47,07 OF oPnlPai PIXEL Color CLR_HBLUE //"Hora Leitura"
+@ 25,045 MSGET cHOPESQ SIZE 35,08 OF oPnlPai PIXEL PICTURE '99:99' Valid NGVALHORA(cHOPESQ,.T.)
+NGPOPUP(asMenu,@oMenu)
+oPnlPai:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPnlPai)}
+
+ACTIVATE MSDIALOG oDlg4 ON INIT EnchoiceBar(oDlg4,{||nOpcap:= 1,oDlg4:End()},{|| nOpcap := 2,oDlg4:End()}) CENTER
+
+If nOpcap = 1
+   nOrdem := 1
+   DbSelectArea(cTRBAcerto)
+   Dbseek(Dtos(dDTPESQ)+cHOPESQ,.T.)
+   If !Eof()
+      nOrdem := recno()
+      If (cTRBAcerto)->DATALEI > dDTPESQ .Or. ( (cTRBAcerto)->DATALEI == dDTPESQ .And. (cTRBAcerto)->HORALEI > cHOPESQ )
+			MNTA875PTR(-1,'!Bof()')
+      ElseIf (cTRBAcerto)->DATALEI < dDTPESQ .Or. ( (cTRBAcerto)->DATALEI == dDTPESQ .And. (cTRBAcerto)->HORALEI < cHOPESQ )
+			MNTA875PTR(1,'!Eof()')
+      Endif
+   ElseIf Eof()
+      nOrdem := Len(aLbx)
+   Endif
+Endif
+
+oLbx:SetFocus(aLbx[nOrdem])
+oLbx:nAt   := nOrdem
+oLbx:bLine := &(cline)
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875PTR³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Posiciona no registro da pesquisa                           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875PTR(nAVAN,cTESARQ)
+DbSkip(nAVAN)
+If &(cTESARQ)
+   nOrdem := recno()
+Endif
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875VI ³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Visualiza o historico                                       ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875VI()
+cCadastro += Space(2)+cTPCHIST+' - '+STR0002 //"Visualizar"
+DbSelectArea(aARALTC[1])
+Dbsetorder(5)
+If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[oLbx:nAt,nDATALEI])+aLbx[oLbx:nAt,nHORALEI])
+   NGCAD01(aARALTC[1],Recno(),2)
+Endif
+cCadastro := cCasto
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA875AL
+Alterar o histórico
+
+@author Inácio Luiz Kolling
+@since 14/05/03
+@return 
+/*/
+//---------------------------------------------------------------------
+Static Function MNTA875AL()
+
+	Local oMenu, oPnlPai
+	Local nDlgHeight := 200 + If(lJustifica, 050, 0)
+	Local nDlgWidth  := 450 + If(lJustifica, 150, 0)
+	Local aPictures  := fBuscaPict()
+	Local cCodUsr    := RetCodUsr()
+	Local lVarDia    := .T.
+	Local cLanex     := IIf( FindFunction('NGUSELANEX'), NGUSELANEX( cBEMHIST ), AllTrim( SuperGetMv( 'MV_NGLANEX', .F., '' ) ))
+ 
+	If !fChkContad()
+		Return .F.
+	EndIf
+
+	If !Empty( cLanex ) .And. !(aLbx[oLbx:nAt,nTIPOLAN] $ cLanex + "IQV")
+		MsgInfo(STR0090)//O parâmetro MV_NGLANEX restringe a alteração de lançamentos do tipo Contador.
+		Return .F.
+	EndIf
+
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(5)
+	If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[oLbx:nAt,nDATALEI])+aLbx[oLbx:nAt,nHORALEI])
+		nOpcal  := 0
+		nCONTAL := aLbx[oLbx:nAt,nPOSCONT]
+		If lJustifica
+			cUsuAltera := If(Len(STP->TP_USUCANC) > 15,cUsername,Substr(cUsuario,7,15))
+			cJustifica := SubStr(aLbx[oLbx:nAt,nJUSTIFI],1,80)
+		Endif
+		nCONTAN := nCONTAL
+		nCONTL  := nCONTAL
+
+		Define MsDialog oDlg3 Title STR0030+Space(2)+cTPCHIST From 0,0 To nDlgHeight,nDlgWidth Of oMainWnd PIXEL //"Alteracao do Contador"
+		oPnlPai := TPanel():New(00,00,,oDlg3,,,,,,107,33,.F.,.F.)
+			oPnlPai:Align := CONTROL_ALIGN_ALLCLIENT
+
+		@ 010,008 Say OemtoAnsi(STR0028) Size 47,07 Of oPnlPai Pixel //"Data Leitura"
+		@ 009,040 MsGet aLbx[oLbx:nAt,nDATALEI] Of oPnlPai Pixel Size 45,08 Picture '99/99/99' When .F. HASBUTTON
+
+		@ 010,090 Say OemtoAnsi(STR0029) Size 47,07 Of oPnlPai Pixel //"Hora Leitura"
+		@ 009,122 MsGet aLbx[oLbx:nAt,nHORALEI] Of oPnlPai Pixel Size 10,08 Picture "99:99" When .F.
+
+		@ 025,008 Say OemtoAnsi(STR0011) Size 47,07 Of oPnlPai Pixel Color CLR_HBLUE //"Contador"
+		@ 024,040 MsGet nCONTAL          Of oPnlPai Pixel Size 38,08 Picture aPictures[1] Valid MNTA875CA(@lVarDia)
+
+		@ 025,090 Say OemtoAnsi(STR0023) Size 47,07 Of oPnlPai Pixel //"Acumulado"
+		@ 024,122 MsGet aLbx[oLbx:nAt,nACUMULA] Of oPnlPai Pixel Size 38,08 Picture aPictures[2] When .F.
+
+		@ 040,008 Say OemtoAnsi(STR0024) Size 47,07 Of oPnlPai Pixel //"Var. Dia"
+		@ 039,040 MsGet aLbx[oLbx:nAt,nVARDIA] Of oPnlPai Pixel Size 30,08 Picture aPictures[3] When .F.
+
+		@ 040,090 Say OemtoAnsi(STR0025) Size 47,07 Of oPnlPai Pixel //"Viradas"
+		@ 039,122 MsGet aLbx[oLbx:nAt,nVIRADA] Of oPnlPai Pixel Size 18,08 Picture "999" When .F.
+
+		@ 055,008 Say OemtoAnsi(STR0057) Size 47,07 Of oPnlPai Pixel //"Tip.Lan."
+		@ 054,040 MsGet aLbx[oLbx:nAt,nTIPOLAN] Of oPnlPai Pixel Size 18,08 Picture "@!" When .F.
+
+		@ 055,090 SAY OemToAnsi(STR0079) OF oPnlPai PIXEL //"Desc. Lan."
+		@ 054,122 MSGET aLbx[oLbx:nAt,nDESCLAN] SIZE 080,08 WHEN .F. OF oPnlPai PIXEL
+
+		NGPOPUP(asMenu,@oMenu)
+		oPnlPai:bRClicked:= { |o,x,y| oMenu:Activate(x,y,oPnlPai)}
+
+		If lJustifica
+
+			@ 070,008 Say OemtoAnsi(STR0058) Size 47,07 Of oPnlPai Pixel //"Usuário"
+			@ 069,040 MsGet cUsuAltera Of oPnlPai Pixel Size 65,08 Picture "@!" When .F.
+
+			@ 085,008 Say OemtoAnsi(STR0059) Size 38,07 Of oPnlPai Pixel Color CLR_HBLUE //"Justificativa"
+			@ 084,040 MsGet cJustifica Of oPnlPai Pixel Size 250,08 Picture "@!"
+
+			ACTIVATE MSDIALOG oDlg3 ON INIT EnchoiceBar(oDlg3,{||nOpcal:= 1,If(!U_MNT875VA(),nOpcal := 2,oDlg3:End())},{|| nOpcal := 2,oDlg3:End()}) CENTER
+		Else
+			ACTIVATE MSDIALOG oDlg3 ON INIT EnchoiceBar(oDlg3,{||nOpcal:= 1,oDlg3:End()},{|| nOpcal := 2,oDlg3:End()}) CENTER
+		Endif
+
+		If nOpcal = 1 .And. nCONTAL <> nCONTAN
+
+			If ExistBlock("MNTA8751")//ponto de entrada na confirmação do acerto.
+				If !ExecBlock("MNTA8751",.F.,.F.)
+					Return .F.
+				Endif
+			EndIf
+
+			nDIFCO := nCONTAL - nCONTAN
+			//Numa Quebra, o Contador Acumulado e' o mesmo, pois so foi modificada a Posicao do Contador
+			//Nas demais informacoes, o Contador Acumulado deve ser recalculado
+			nACUMC := aLbx[oLbx:nAt,nACUMULA] + If(aLbx[oLbx:nAt,nTIPOLAN] == "Q", 0, nDIFCO)
+			DbSelectArea(aARALTC[1])
+			Dbsetorder(5)
+			If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[oLbx:nAt,nDATALEI])+aLbx[oLbx:nAt,nHORALEI])
+				nRECNSTP := Recno()
+				//                  BEM      DATA             HORA             TIPOC ACUMULADO
+				MNTA875FAL(cBEMHIST,aLbx[oLbx:nAt,nDATALEI],aLbx[oLbx:nAt,nHORALEI],nTIPCA,nACUMC)
+
+				#IFDEF TOP
+					cQuery := "SELECT TJ_CODBEM,TJ_ORDEM,TJ_PLANO,TJ_POSCONT FROM " + RetSQLName("STJ")
+					cQuery += " WHERE TJ_FILIAL = '" + xFilial("STJ") + "'"
+					cQuery += " AND TJ_TIPOOS = 'B' AND TJ_SITUACA <> 'C' "
+					cQuery += " AND TJ_CODBEM = '" + cBEMHIST +"'"
+					cQuery += " AND TJ_DTORIGI = '" + Dtos(aLbx[oLbx:nAt,nDATALEI]) +"'"
+
+					If nTIPCA = 1
+					cQuery += " AND TJ_HORACO1 = '" + aLbx[oLbx:nAt,nHORALEI] +"'"
+					//cQuery += " AND TJ_POSCONT = '" + Str(nCONTAN,9,0)+"'"
+					cQuery += " AND TJ_POSCONT = " + Str(nCONTAN,9,0)
+					Else
+					cQuery += " AND TJ_HORACO2 = '" + aLbx[oLbx:nAt,nHORALEI] +"'"
+					//cQuery += " AND TJ_POSCON2 = '" + Str(nCONTAN,9,0)+"'"
+					cQuery += " AND TJ_POSCON2 = " + Str(nCONTAN,9,0)
+					Endif
+
+					cQuery += " AND D_E_L_E_T_ = ' '"
+
+					cQuery := ChangeQuery(cQuery)
+					dbUseArea( .T., "TOPCONN", TCGenQry(,,cQuery), 'STJTMP', .F., .T.)
+
+					dbSelectArea("STJTMP")
+					dbgotop()
+
+					While !Eof()
+					dbSelectArea("STJ")
+					dbsetorder(1)
+					If Dbseek(xFILIAL("STJ")+STJTMP->TJ_ORDEM+STJTMP->TJ_PLANO)
+						RecLock("STJ",.F.)
+						If(nTIPCA = 1,STJ->TJ_POSCONT := nCONTAL,;
+										STJ->TJ_POSCON2 := nCONTAL)
+						If STJ->TJ_TERMINO == "S"
+							STJ->TJ_OBSERVA := Alltrim(STJ->TJ_OBSERVA) + CHR(10)  + STR0081 + DtoC(dDataBase) ;
+												+ CHR(10) + STR0082 + cCodUsr //"Contador alterado após finalização da O.S." ## "Usuário: "
+						EndIf
+						MsUnLock("STJ")
+						Exit
+					Endif
+					dbSelectArea("STJTMP")
+					dbskip()
+					End
+					dbSelectArea("STJTMP")
+					dbCloseArea()
+				#ENDIF
+
+				DbSelectArea(aARALTC[1])
+				Dbgoto(nRECNSTP)
+				DbSkip()
+				If Eof() .Or. &(aARALTC[2]) <> xFILIAL(aARALTC[1]) .Or. &(aARALTC[3]) <> cBEMHIST
+					NGACEMANUHIST(cBEMHIST,aLbx[oLbx:nAt,nDATALEI],aLbx[oLbx:nAt,nHORALEI],nTIPCA)
+				EndIf
+				Dbgoto(nRECNSTP)
+
+			Endif
+			nOpca := 1
+			oDlg2:End()
+		Endif
+	Endif
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT875CA
+
+Consistência do intervalo do contador
+
+@author  Inacio Luiz Kolling
+@since   15/03/03
+@param   lVarDia, lógico, verifica se a variação diária já foi validada
+				evitando que a mesma mensagem se repita ao confirmar
+@return  lRet
+/*/
+//-------------------------------------------------------------------
+
+Function MNTA875CA(lVarDia)
+
+	Local lRET   := .T.
+	Local lPOBLA := .F.
+	Local nCONTS := 0
+	Local nCONTI := 0
+	Local nI     := 0
+	Local nPrev  := 0
+	Local nNext  := 0
+	Local cLanex := IIf( FindFunction('NGUSELANEX'), NGUSELANEX( cBEMHIST ), AllTrim( SuperGetMv( 'MV_NGLANEX', .F., '' ) ))
+	Local nLINHI := oLbx:nAt
+	Local cMENS1 := STR0031+chr(13)+chr(13); //"Problema de contador na alteracao do lancamento"
+					+STR0032+dtoc(aLbx[nLINHI,nDATALEI])+chr(13); //"Data da Leitura........: "
+					+STR0033+aLbx[nLINHI,nHORALEI]+chr(13); //"Hora da Leitura........: "
+					+STR0034   +Str(nCONTAL,9)+chr(13)+chr(13) //"Contador Infornado..: "
+
+	Local cMENS3 := STR0035+chr(13); //"Solucoes possiveis:"
+				+STR0036+chr(13); //"1 - Alterar o contador. "
+				+STR0037+chr(13); //"2 - Cancelar a operacao."
+				+STR0038 //"3 - Selecionar a opcao VIRADA do INFORMA CONTADOR (menu)."
+
+	Default lVarDia := .T.
+
+	nLINHA := oLbx:nAt
+	cMENS2 := Space(1)
+
+	If !Empty(cLanex)
+		nI := nLINHA-1//no parâmetro, ou dos tipos I, Q ou V.
+		While nI >= 1
+			If aLbx[nI][nTIPOLAN] $ cLanex+"QVI" .Or. nI == 1
+				nPrev := nI//Pega a posição de contador anterior do tipo I, Q, V ou o que foi configurado no parâmetro LANEX
+				Exit
+			Else
+				nI -= 1
+			EndIf
+		EndDo
+
+		For nI := nLINHA+1 To Len(aLbx)
+			If aLbx[nI][nTIPOLAN] $ cLanex+"QV"
+				nNext := nI//Pega a posição de contador posterior do tipo Q, V ou o que foi configurado no parâmetro LANEX
+			EndIf
+		Next nI
+	Else
+		//Verifica se não é o primeiro contador e posiciona no registro do contador anterior -1
+		If nLinha > 1
+			nPrev := nLinha -1
+		EndIf
+		//Verifica se existe algum contador posterior ao lançamento editado + 1
+		If nLinha < nTAMB
+			nNext := nLinha + 1
+		EndIf
+	EndIf
+
+	If Vazio(nCONTAL)
+	lRET := .F.
+	Else
+		If nTAMB = nLINHA // ULTIMA LINHA
+			If nLINHA > 1
+				If nCONTAL < aLbx[nPrev,nPOSCONT] .And. !(aLbx[nLINHA,nTIPOLAN]) $ "QV"
+					cMENS2 := STR0039+str(aLbx[nPrev,nPOSCONT],9) //"O contador devera ser maior ou igual "
+				Endif
+			Else
+				DbSelectArea(aARALTC[1])
+				Dbsetorder(5)
+				If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[nLINHA,nDATALEI])+aLbx[nLINHA,nHORALEI])
+					DbSkip(-1)
+					If !Bof() .And. &(aARALTC[2]) = xfilial(aARALTC[1]) .And. &(aARALTC[3]) = cBEMHIST
+						If nCONTAL < &(aARALTC[6])
+							MNTA875ME1(STR0040,&(aARALTC[4]),&(aARALTC[5]),&(aARALTC[6])) //"maior ou igual"
+						Endif
+					Endif
+				Endif
+			Endif
+		Else
+			If nLINHA = 1 // PRIMEIRA LINHA
+				nCONTI := 0
+				nCONTS := 0
+				DbSelectArea(aARALTC[1])
+				Dbsetorder(5)
+				If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[nLINHA,nDATALEI])+aLbx[nLINHA,nHORALEI])
+					DbSkip(-1)
+					If !Bof() .And. &(aARALTC[2]) = xfilial(aARALTC[1]) .And. &(aARALTC[3]) = cBEMHIST
+						nCONTS := &(aARALTC[6])
+					Endif
+				Endif
+
+				If nLINHA < nTAMB
+					nCONTI := IIf(nNext <= nTAMB .And. nNext > 0,aLbx[nNext,nPOSCONT],0)
+				Endif
+
+				lPOBLA := .F.
+				If !Empty(nCONTI) .And. !Empty(nCONTS)
+
+					// IDENTIFICAR SE HOUVE VIRADA
+					lVIRADA := If(nCONTS > nCONTL,.T.,.F.)
+					If lVIRADA
+						lPOBLA := If(nCONTAL < nCONTS .And. nCONTAL <= nCONTI,.T.,.F.)
+					Else
+						If nCONTS <= nCONTI
+							lPOBLA := If(nCONTAL >= nCONTS .And. nCONTAL <= nCONTI,.T.,.F.)
+						Else
+							lPOBLA := If(nCONTAL >= nCONTS .And. nCONTAL >= nCONTI,.F.,.T.)
+						Endif
+					Endif
+
+					If !lPOBLA
+						If lVIRADA
+							MNTA875ME1(STR0041,&(aARALTC[4]),&(aARALTC[5]),&(aARALTC[6])) //"menor"
+						Else
+							If nCONTI < nCONTS
+								MNTA875ME1(STR0040,&(aARALTC[4]),&(aARALTC[5]),&(aARALTC[6])) //"maior ou igual"
+							Else
+							//Se for uma Quebra ou uma Virada, o contador anterior pode ser maior, me se nao for Quebra nem Virada, entao deve respeitar o intervalo
+							If nNext > 0 .And. !(aLbx[nNext][nTIPOLAN] $ "QV")
+									MNTA875ME2(&(aARALTC[4]),&(aARALTC[5]),&(aARALTC[6]),;
+														aLbx[nNext,nDATALEI],aLbx[nNext,nHORALEI],aLbx[nNext,nPOSCONT])
+									EndIf
+							Endif
+						Endif
+					Endif
+
+				ElseIf Empty(nCONTS) .And. !Empty(nCONTI) .And. nNext > 0
+					If nCONTI < nCONTAL
+						MNTA875ME1(STR0041,aLbx[nNext,nDATALEI],aLbx[nNext,nHORALEI],aLbx[nNext,nPOSCONT]) //"menor"
+					Endif
+				Endif
+
+			Else
+
+				nCONTS := aLbx[nPrev,nPOSCONT]  // guardo o valor do item anterior
+
+				nCONTI := IIf(nNext <= nTAMB .And. nNext > 0,aLbx[nNext,nPOSCONT],0) // guardo o valor do proximo item
+				lPOBLA := .F.
+				If !Empty(nCONTI) .And. !Empty(nCONTS)// IDENTIFICAR SE HOUVE VIRADA
+
+					lVIRADA := If(nCONTS > nCONTL,.T.,.F.)
+					If lVIRADA .OR. aLbx[oLbx:nAt,nTIPOLAN] == 'Q' 
+						lPOBLA := nCONTAL <= nCONTI
+					Else
+						If nCONTS >= nCONTI
+							lPOBLA := .F.
+							If nCONTS > nCONTI
+								If (nCONTAL >= nCONTS .And. nCONTAL <= nCONTI) .Or.;
+								(nCONTAL >= nCONTS .And. nCONTAL >= nCONTI)
+									lPOBLA := .T.
+								Endif
+							Else
+								If (nCONTAL = nCONTS .And. nCONTAL = nCONTI)
+									lPOBLA := .T.
+								Endif
+							Endif
+						Else
+							lPOBLA := If(nCONTAL >= nCONTS .And. nCONTAL <= nCONTI,.T.,.F.)
+						Endif
+					Endif
+
+					If !lPOBLA
+						If lVIRADA .And. nNext > 0
+							MNTA875ME1(STR0041,aLbx[nNext,nDATALEI],aLbx[nNext,nHORALEI],aLbx[nNext,nPOSCONT]) //"menor"
+						Else
+							If nCONTI < nCONTS
+								MNTA875ME1(STR0040,aLbx[nPrev,nDATALEI],aLbx[nPrev,nHORALEI],aLbx[nPrev,nPOSCONT]) //"maior ou igual"
+							ElseIf nNext != 0
+								MNTA875ME2(aLbx[nPrev,nDATALEI],aLbx[nPrev,nHORALEI],aLbx[nPrev,nPOSCONT],;
+										aLbx[nNext,nDATALEI],aLbx[nNext,nHORALEI],aLbx[nNext,nPOSCONT])
+							Endif
+						Endif
+					Endif
+
+				ElseIf Empty(nCONTS) .And. !Empty(nCONTI)
+					If nCONTI > nCONTAL .And. nNext > 0
+						MNTA875ME1(STR0041,aLbx[nNext,nDATALEI],aLbx[nNext,nHORALEI],aLbx[nNext,nPOSCONT]) //"menor"
+					Endif
+				ElseIf !Empty(nCONTS) .And. nCONTAL < nCONTS
+					MNTA875ME1(STR0040,aLbx[nPrev,nDATALEI],aLbx[nPrev,nHORALEI],aLbx[nPrev,nPOSCONT]) //"maior ou igual"
+				Endif
+			Endif
+		Endif
+	Endif
+
+	//Valida a variação dia do contador
+	If lRet .And. lVarDia
+		lRet := NGVALIVARD(cBEMHIST, nCONTAL, aLbx[nLinha][nDATALEI], aLbx[nLinha][nHORALEI], nTIPCA, .T.)
+		IIF( lRet, lVarDia := .F., lVarDia := .T. ) //Evita apresentar a mensagem mais uma vez ao confirmar a tela
+	Endif
+
+	//Se for um reporte de Abastecimento, verifica a autonomia do veiculo
+	If lRet .And. aLbx[nLINHA][nTIPOLAN] == "A"
+		dbSelectArea("TQN")
+		dbSetOrder(1)
+		If dbSeek(xFilial("TQN")+cBEMHIST+DTOS(aLbx[oLbx:nAt,nDATALEI])+aLbx[oLbx:nAt,nHORALEI])
+			If !NGAUTONOMIA(cBEMHIST,aLbx[oLbx:nAt,nDATALEI],aLbx[oLbx:nAt,nHORALEI],nCONTAL,.T.,TQN->TQN_CODCOM,nTIPCA)
+				Return .F.
+			EndIf
+		EndIf
+	EndIf
+
+	If lRET
+	If !Empty(cMENS2)
+		MsgInfo(cMENS1+cMENS2+chr(13)+chr(13)+cMENS3,STR0015) //"NÃO CONFORMIDADE"
+		lRET := .F.
+	Else
+		nTIPCA := If(cTPCHIST = STR0007,1,2) //"Um"
+		NGIFDBSEEK(aARALTC[1],cBEMHIST+Dtos(aLbx[nLINHA,nDATALEI])+aLbx[nLINHA,nHORALEI],5)
+		nAcumReg := (&(aARALTC[7])-&(aARALTC[6]))+nCONTAL
+		nNovaVar := NGVARIADT(cBEMHIST,aLbx[nLINHA,nDATALEI],nTIPCA,nAcumReg,.F.,.T.)
+		If !NGCHKLIMVAR(cBEMHIST,NGSEEK('ST9',cBEMHIST,1,'T9_CODFAMI'),nTIPCA,nNovaVar,.T.,.T.)
+			lRET := .F.
+		EndIf
+	Endif
+	Endif
+
+	If lRET
+		// Limite do Contador
+		If !CHKPOSLIM(cBEMHIST, nCONTAL, nTIPCA, )
+			lRET := .F.
+		EndIf
+	EndIf
+
+Return lRET
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875ME1³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Mensagem 1 historico                                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875ME1(cCOMPAR,dDTLEI,cHOLEI,nPOSCLEI)
+cMENS2 := STR0042+cCOMPAR+STR0043+chr(13)+chr(13); //"O contador devera ser "###" ao do lancamento"
+         +STR0044+chr(13); //"Dados do Lancamento Anterior"
+         +STR0045+Dtoc(dDTLEI)+chr(13); //"Dia da Leitura.....: "
+         +STR0046+cHOLEI+chr(13); //"Hora da Leitura....: "
+         +STR0047+str(nPOSCLEI,9) //"Contador do Lanc...: "
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875ME2³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Mensagem 2 historico                                        ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875ME2(dDTLEI,cHOLEI,nPOSCLEI,dDLEI2,cHOLEI2,nPOSCLEI2)
+cMENS2 := STR0048+chr(13)+chr(13); //"O contador devera pertencer ao intervalo:"
+         +STR0044+chr(13); //"Dados do Lancamento Anterior"
+         +STR0049+Dtoc(dDTLEI)+chr(13); //"Dia da Leitura........: "
+         +STR0050+cHOLEI+chr(13); //"Hora da Leitura......: "
+         +STR0047+str(nPOSCLEI,9)+chr(13)+chr(13); //"Contador do Lanc...: "
+         +STR0051+chr(13); //"Dados do Lancamento Posterior"
+         +STR0049+dtoc(dDLEI2)+chr(13); //"Dia da Leitura........: "
+         +STR0050+cHOLEI2+chr(13); //"Hora da Leitura......: "
+         +STR0047+str(nPOSCLEI2,9) //"Contador do Lanc...: "
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875EX ³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Excluir o historico                                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875EX()
+
+	Local aARQCont := If(nTIPCA == 1,;
+											{"ST9", "ST9->T9_VIRADAS"},;
+											{"TPE", "TPE->TPE_VIRADA"})
+
+	nTAM     := Len(aLbx)
+	nLINHA   := oLbx:nAt
+	bNGGRAVA := {|| MNTA875CE()}
+	cCadastro += Space(2)+cTPCHIST+' - '+STR0005 //"Excluir"
+
+	If !fChkContad(.T.)
+		Return .F.
+	EndIf
+
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(5)
+	If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+Dtos(aLbx[oLbx:nAt,nDATALEI])+aLbx[oLbx:nAt,nHORALEI])
+	nRECNSTP := Recno()
+	lULTIMOP := .T.
+	nACUMFIP := 0
+	nCONTAFP := 0
+	nVARDIFP := 0
+	dDTACUFP := Ctod('  /  /  ')
+	DbSkip(-1)
+	If !Eof() .And. !Bof() .And. &(aARALTC[2]) = Xfilial(aARALTC[1]) .And.;
+		&(aARALTC[3]) = cBEMHIST
+		nACUMFIP := &(aARALTC[7])
+		dDTACUFP := &(aARALTC[4])
+		nCONTAFP := &(aARALTC[6])
+		nVARDIFP := &(aARALTC[8])
+	Endif
+	Dbgoto(nRECNSTP)
+	nACUMDEL := stp->tp_acumcon
+
+	DbSkip()
+	lUltReg := If(Eof() .Or. &(aARALTC[2]) <> xFILIAL(aARALTC[1]) .Or. &(aARALTC[3]) <> cBEMHIST,.T.,.F.)
+
+	Dbgoto(nRECNSTP)
+	nRET := NGCAD01(aARALTC[1],Recno(),5)
+
+	If nRET = 1
+		//Se excluiu uma virada, atualiza as viradas do Bem
+		If aLbx[oLbx:nAt,nTIPOLAN] == "V"
+			If NGIFDBSEEK(aARQCont[1], cBEMHIST, 1)
+				If ( &(aARQCont[2]) - 1 ) >= 0
+					RecLock(aARQCont[1], .F.)
+					&(aARQCont[2]) := ( &(aARQCont[2]) - 1 )
+					MsUnlock(aARQCont[1])
+				EndIf
+			EndIf
+		EndIf
+		MNTA875ADEL(cBEMHIST,aLbx[oLbx:nAt,nDATALEI],aLbx[oLbx:nAt,nHORALEI],nTIPCA)
+		If lUltReg
+			NGACEMANUHIST(cBEMHIST,aLbx[oLbx:nAt,nDATALEI],aLbx[oLbx:nAt,nHORALEI],nTIPCA)
+		EndIf
+		nOpca := 1
+		oDlg2:End()
+	Endif
+	Endif
+	cCadastro := cCasto
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875CE ³ Autor ³ In cio Luiz Kolling   ³ Data ³ 14/05/03 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Consistˆncia na exclusÆo do lancamento                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875CE()
+
+	Local cMensa  := ''
+	Local cAlsSTC := ''
+	Local dData   := aLbx[oLbx:nAt,nDATALEI]
+	Local cHora   := aLbx[oLbx:nAt,nHORALEI]
+	Local aStruct := {}
+	Local nIndex  := 0
+
+	lRegVir      := .F.
+	nDifVir      := 0
+	NGIFDBSEEK(aARABEM[1],cBEMHIST,1)
+	
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(5)
+	If Dbseek(xFILIAL(aARALTC[1])+cBEMHIST+DTOS(dData)+cHora)
+		
+		Do Case
+
+			Case &( aARALTC[10] ) == 'I'
+
+				cMensa := STR0054 + Chr( 13 ) +; // Relacionado a situacao atual do bem
+					STR0055 // Ou na inclusao do bem como contador proprio
+				
+			Case &( aARALTC[10] ) == 'A'
+
+				cMensa := STR0061 // relacionado a um abastecimento!
+
+			Case &( aARALTC[10] ) == 'Q'
+
+				cMensa := STR0091 + Chr( 13 ) + Chr( 13 ) +; // relacionado a uma quebra de contador.
+					STR0092 // A alteração ou exclusão deste movimento deve ser feito pela rotina Ajuste/Reprocessamento de Contador Próprio.
+
+		End Case
+		
+		If Empty(cMensa)
+
+			DbSelectArea(aARALTC[1])
+			nRegArq  := Recno()
+			nContDel := &(aARALTC[6])
+			Dbskip(-1)
+			If !Bof() .And. &(aARALTC[2]) = xfilial(aARALTC[1]) .And. &(aARALTC[3]) = cBEMHIST
+				If nContDel < &(aARALTC[6])
+					lRegVir := .T.
+					nDifVir := (&(aARABEM[6])-&(aARALTC[6]))+&(aARALTC[7])
+				Endif
+			Endif
+			DbSelectArea(aARALTC[1])
+			Dbgoto(nRegArq)
+		
+		Else
+
+			MsgInfo( STR0052 + Chr( 13 ) + Chr( 13 ) +;  // Exclusão não permitida
+				STR0053 + Chr( 13 ) +; // O registro de histórico em questão esta diretamente"
+				cMensa, STR0015 )
+
+		EndIf
+
+	Endif
+
+	If Empty(cMensa)
+
+		aStruct := NGESTRU( cBEMHIST ) // Retorna componentes da estrutura.
+
+		For nIndex := 1 to Len( aStruct )
+
+			cAlsSTC := GetNextAlias()
+
+			BeginSQL Alias cAlsSTC
+
+				SELECT
+					TZ_CODBEM ,
+					TZ_DATAMOV,
+					TZ_HORAENT,
+					TZ_DATASAI,
+					TZ_HORASAI
+				FROM
+					%table:STZ% STZ
+				WHERE
+					TZ_FILIAL = %xFilial:STZ%         AND
+					TZ_BEMPAI = %exp:aStruct[nIndex]% AND
+					( ( TZ_DATAMOV || TZ_HORAENT = %exp:DToS( dData ) + cHora% ) OR
+					  ( TZ_DATASAI || TZ_HORASAI = %exp:DToS( dData ) + cHora% ) ) AND
+					%NotDel%
+
+			EndSQL
+
+			If (cAlsSTC)->( !EoF() )
+
+				cMensa := STR0062 //"Não é possível excluir este histórico de contador pois existe um relacionamento de Entrada e/ou Saída de componente nesta estrutura."
+				cMensa += CRLF+CRLF
+				cMensa += STR0063 + ": " + (cAlsSTC)->TZ_CODBEM + CRLF + CRLF //"Componente"
+				cMensa += STR0064 + ": " + DTOC(STOD((cAlsSTC)->TZ_DATAMOV)) + CRLF //"Data Entrada"
+				cMensa += STR0065 + ": " + (cAlsSTC)->TZ_HORAENT //"Hora Entrada"
+
+				If !Empty( (cAlsSTC)->TZ_DATASAI )
+
+					cMensa += CRLF +CRLF + STR0066 + ": " + DTOC(STOD((cAlsSTC)->TZ_DATASAI)) //"Data Saída"
+					cMensa += CRLF + STR0067 + ": " + (cAlsSTC)->TZ_HORASAI //"Hora Saída"
+
+				EndIf
+
+				Help( '', 1, STR0020, , cMensa, 5, 1 ) // Atenção
+
+				Exit
+
+			EndIf
+
+			(cAlsSTC)->( dbCloseArea() )
+
+		Next nIndex
+
+	EndIf
+
+	dbSelectArea(aARALTC[1])
+
+Return Empty(cMensa)
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA875CFI
+Atualiza os filhos do lancamento
+
+@param [cBEMR]   , Caracter, Código do bem
+@param [dLEITR]  , Data    , Data para realizar a busca na estrutura
+@param [cHORAR]  , Caracter, Hora para realizar a busca na estutura
+@param nCONTAR   , Numérico, Posição do contador.
+@param [nTIPOR]  , Numérico, Tipo de contador
+@param [nDIFCO]  , Numérico, Diferença entre os lançamentos
+@param [lDELR]   , Lógico  , Define se é um registro de deleção
+@param [cFilCo]  , Caracter, Filial do contador
+@param [cFilHi]  , Caracter, Filial do historico do contador
+@para  [aTrbEst] , Array   , Array possuindo as tabelas temporárias responsáveis por montar a estrutura do bem.
+							[1] tabela temporaria do pai da estrutura - cTRBS
+							[2] tabela temporaria do pai da estrutura - cTRBF
+							[3] tabela temporaria do eixo suspenso    - CTRBEixo
+@author Inácio Luiz Kolling
+@since 14/05/2003
+@return array, componentes que devem ter contador ajustados
+	 (na deleção os componentes serão atualizados posteriormente)
+/*/
+//---------------------------------------------------------------------
+Function MNTA875CFI(cBEMR,dLEITR,cHORAR,nCONTAR,nTIPOR,nDIFCO,lDELR,cFilTC,cFilTH,aTrbEst)
+	Local nn       := 0
+	Local lULTREG  := .T.
+	Local cFilDHF  := NGTROCAFILI(aARALTC[1],cFilTH)
+	Local cFilDCF  := NGTROCAFILI(aARABEM[1],cFilTC)
+	Local nACUMDEL := 0
+	Local lULTIMOF := .T.
+	Local nACUMFIF := 0
+	Local nCONTAFF := 0
+	Local nVARDIFF := 0
+	Local dDTACUFF := Ctod('  /  /  ')
+	Local lENTRADA := .F.
+	Local nDIFTmp  := nDIFCO
+	Local nDifPai  := 0, lKMSUSP := .F., nNewDIFCO := 0
+
+	// Variáveis usadas na trativa para não considerar itens da estrutura do 2º nível pra cima
+	Local nI         := 0
+	Local aNewComps  := {}
+	Local cFamComp   := ""
+	Local cAliasComp := ""
+	Local cQueryComp := ""
+
+	//Variáveis para query e verificação da STP
+	Local cQuerySTP := ""
+	Local cAliasSTP := ""
+	Local lFinal := .F.
+
+	//Variáveis para query e verificação da STZ
+	Local cQuerySTZ := ""
+	Local cAliasSTZ := ""
+
+	Local cQryPai    := ""
+	Local cAliasPai  := ""
+	Local lAlterou   := .F. //Variável que indica se houve transição de um bem pai para outro
+	Local lAtualizou := .F. //Variável que verifica se a STZ foi atualizada
+	Local lTQ1SUSP   := .T.
+	Local lVerifica  := .F.
+	Local lOk        := .F.
+	Local lNewLocal  := .F.
+	Local aAreaAtual := ""
+	Local cBemOldHis
+	Local nRecnoAnt  := 0
+	Local aComponents:= {}
+
+	Default aTrbEst := {}
+
+	Private lGFrota := NGVERUTFR()
+	Private nAcum1 := 0
+	Private nDiff := 0
+
+	//Dados da Data Inicial, Final, Hora Inicial e Final da entrada do bem na estrutura
+	Private dDataIni := ""
+	Private dDataSai := ""
+	Private cHoraIni := ""
+	Private cHoraSai := ""
+
+	If Type("aARALTC") != "U"
+		cFilDHF  := NGTROCAFILI(aARALTC[1],cFilTH)
+	EndIf
+
+	If Type("aARABEM") != "U"
+		cFilDCF  := NGTROCAFILI(aARABEM[1],cFilTC)
+	EndIf
+
+	If FunName() == "MNTA655" .Or. FunName() == "MNTA656" .Or. FunName() == "MNTA681" .Or.;
+	FunName() == "MNTA700" .Or. FunName() == "MNTA851" .Or. FunName() == "MNTA985" .Or.;
+	FunName() == "MATA241"
+		cBEMHIST := cBEMR
+		cBemOldHis := cBEMR
+	Else
+		cBemOldHis := IIF(Type("cBEMHIST") == "U", cBEMR, cBEMHIST)
+		cBEMHIST := cBemOldHis
+	EndIf
+
+	//Caso a diferença seja negativa
+	If nDIFTMP < 0
+		nDIFTMP *= -1
+	EndIf
+
+	aESTREC := NGCOMPPCONT(cBEMR,dLEITR,cHORAR,cFilDCF,aTrbEst)
+
+	// Tratativa temporária para resolver problema no repasse do ajuste de contador
+	// para itens que sejam eixo suspenso e não sejam primeiro nível na estrutura, portanto
+	// será feito aqui a exclusão do array de componentes de todos os itens que estejam do
+	// 2° nível para cima E que sejam eixo suspenso
+
+	aNewComps := aClone( aESTREC )
+	aESTREC   := {}
+	For nI := 1 To Len( aNewComps )
+
+		cFamComp   := NGSEEK( "ST9",aNewComps[nI][1],01,"ST9->T9_CODFAMI" ) // Família do bem componente
+		cAliasComp := GETNEXTALIAS()
+		cQueryComp := ""
+
+		If NGIFDBSEEK( "ST9",aNewComps[nI][7],1 ) // Posiciona na ST9 com bem pai do componente
+
+			cQueryComp := "SELECT TQ1_SUSPEN,TQ1_EIXO FROM " + RETSQLNAME( "TQ1" ) + " WHERE "
+			cQueryComp += " TQ1_FILIAL = '" + xFilial( "TQ1" ) + "' AND "
+			cQueryComp += " TQ1_DESENH = '" + ST9->T9_CODFAMI + "' AND "
+			cQueryComp += " TQ1_TIPMOD = '" + ST9->T9_TIPMOD + "' AND "
+			cQueryComp += " ( TQ1_FAMIL1 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL1 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL2 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL3 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL4 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL5 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL6 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL7 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL8 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL9 = '" + cFamComp + "' OR "
+			cQueryComp += " TQ1_FAMIL0 = '" + cFamComp + "' ) "
+
+			cQueryComp := ChangeQuery( cQueryComp )
+			DbUseArea( .T.,"TOPCONN",TCGenQry( ,,cQueryComp ),cAliasComp,.F.,.T. )
+			DbSelectArea( cAliasComp )
+
+			// Só adiciona no array caso: NÃO ( SEJA um eixo suspenso E diferente de reserva E o bem pai
+			// deste item é diferente do bem pai da Estrutura )
+			If !( ( cAliasComp )->TQ1_SUSPEN == "1" .And. AllTrim( ( cAliasComp )->TQ1_EIXO ) != "RESERVA" .And. ; // Indica que é eixo suspenso
+					AllTrim( aNewComps[nI][7] ) != AllTrim( cBEMR ) ) // Identifica que não está no 1° nível
+				aAdd( aESTREC,aNewComps[nI] )
+			EndIf
+
+			( cAliasComp )->( DbCloseArea() )
+		EndIf
+
+	Next nI
+	// Fim do tratamento temporário
+
+	// TINHA ESTRUTURA NO INTERVALO DE DIAS ???
+	If Len(aESTREC) > 0
+
+		//---------------------------------------------------------------------------
+		//ao inves de usar nDIFCO como diferenca, usar diferenca do contador pai com base STP
+		dbSelectArea(aARALTC[1]) //COMENTAR
+		dbSetOrder(5)
+		If dbSeek(cFilDHF+cBEMR+Dtos(dLEITR)+cHORAR)
+			dbSkip(-1)
+			If !Eof() .And. !Bof() .And. &(aARALTC[2]) = cFilDHF .And. &(aARALTC[3]) = cBEMR
+				If !IsInCallStack("MNTA875")
+					nDifPai := 0
+				Else
+					nDifPai := aLbx[oLbx:nAt,nACUMULA] - &(aARALTC[7])
+				EndIf
+			EndIf
+		EndIf
+
+		// adiciona posicao indicando o quanto foi rodado com eixo suspenso
+		For nn := 1 To Len(aESTREC)
+			aAdd(aESTREC[nn],0) //posicao 8: quanto rodou a menos que o pai
+			aAdd(aESTREC[nn],0) //posicao 9: quanto rodou entre os dois reportes
+			dbSelectArea(aARALTC[1])
+			dbSetOrder(5)
+			// Posiciona no reporte de contador com data e hora
+			// do registro de contador que estou alterando
+			If dbSeek(cFilDHF+aESTREC[nn][1]+Dtos(dLEITR)+cHORAR)
+				aESTREC[nn,8] := &(aARALTC[7]) // Posição 8 recebe contador acumulado do reporte em questão
+				dbSkip( -1 )
+				If !Eof() .And. !Bof() .And. &(aARALTC[2]) = cFilDHF .And. &(aARALTC[3]) = aESTREC[nn][1];
+				.And. !(aESTREC[nn,2] == dLEITR .And. aESTREC[nn,3] == cHORAR) // diferente do momento que entrou na estrutura
+					aESTREC[nn,8] -= &(aARALTC[7]) //o quanto rodou entre os dois reportes
+					aESTREC[nn,9] := -(aESTREC[nn,8]) //o quanto rodou entre os dois reportes
+					aESTREC[nn,8] := nDifPai - aESTREC[nn,8] //o quanto rodou a menos que o pai (suspenso)
+				Else
+					aESTREC[nn,8] := 0
+				EndIf
+			EndIf
+		Next nn
+
+		If lGFrota .And. lTQ1SUSP
+			//Verifica se houve eixo suspenso
+			aEval( aESTREC, {|x| If( x[8]>0,lKMSUSP := .T.,Nil) } )
+			If lKMSUSP
+				aESTREC := NGEixoSusp( aESTREC,nDifPai+nDIFCO,nTIPOR,cBEMR )
+			EndIf
+		EndIf
+
+		//---------------------------------------------------------------------------
+		// Verificações para itens de eixo suspenso
+		//---------------------------------------------------------------------------
+		For nn := 1 To Len(aESTREC)
+			//---------------------------------------------------------------------------
+			// Se a Data+Hora for igual a entrada do componente não poderá ser feita a
+			// alteração de contador, pois o componente não participou deste incremento.
+			//---------------------------------------------------------------------------
+
+			lENTRADA := .F.
+			If DTOS(dLEITR)+cHORAR == DTOS(aESTREC[nn][2])+aESTREC[nn][3]
+				lENTRADA := .T.
+				lVerifica := .T.
+			EndIf
+
+			aAreaAtual := GetArea()
+
+			cAliasPai := GetNextAlias()
+
+			cQryPai := " SELECT TZ_BEMPAI FROM " + RetSQLName("STZ") + " STZ "
+			cQryPai += " WHERE TZ_FILIAL = " + ValToSQL(cFilDHF)
+			cQryPai += " AND TZ_CODBEM = " + ValToSQL(aESTREC[nn][1])
+			cQryPai += " AND TZ_BEMPAI = " + ValToSQL(cBEMHIST)
+			cQryPai += " AND STZ.TZ_DATAMOV <= " + ValToSQL(dLEITR)
+			cQryPai += " AND STZ.D_E_L_E_T_ <> '*' "
+
+			cQryPai := ChangeQuery(cQryPai)
+			dbUseArea(.T., "TOPCONN", TCGenQry(,, cQryPai), cAliasPai, .F., .T.)
+
+			dbSelectArea(cAliasPai)
+			dbGoTop()
+
+			If ReCountTMP(cAliasPai) == 0
+
+				dbSelectArea("STZ")
+				dbSetOrder(2)
+
+				If dbSeek(cFilDHF + aESTREC[nn][1])
+					If AllTrim(aESTREC[nn][1]) == AllTrim(STZ->TZ_CODBEM)
+						If DTOS(STZ->TZ_DATAMOV) <= DTOS(dLeitr)
+							cBEMHIST := STZ->TZ_BEMPAI
+							dbSkip()
+						Else
+							dbSkip(-1)
+						EndIf
+					EndIf
+				EndIf
+
+			EndIf
+
+			(cAliasPai)->(dbCloseArea())
+
+			RestArea(aAreaAtual)
+
+			lULTREG := .T.
+			DbSelectArea(aARALTC[1])
+			DbSetOrder(5)
+
+			// Caso encontre registro de contador para data+hora para o componente, então ajusta
+			If Dbseek(cFilDHF+aESTREC[nn][1]+Dtos(dLEITR)+cHORAR)
+				nRECNSTF := Recno()
+				lULTIMOF := .T.
+				nACUMFIF := 0
+				nCONTAFF := 0
+				nVARDIFF := 0
+				dDTACUFF := Ctod('  /  /  ')
+				DbSkip(-1)
+				If !Eof() .And. !Bof() .And. &(aARALTC[2]) = cFilDHF .And.;
+					&(aARALTC[3]) = aESTREC[nn][1]
+					nACUMFIF := &(aARALTC[7])
+					dDTACUFF := &(aARALTC[4])
+					nCONTAFF := &(aARALTC[6])
+					nVARDIFF := &(aARALTC[8])
+
+					nRecnoAnt := Recno()
+
+					lULTREG  := .F.
+				Endif
+
+				cAliasSTZ := GetNextAlias()
+
+				cQuerySTZ := "SELECT STZ.TZ_FILIAL, STZ.TZ_CODBEM, STZ.TZ_BEMPAI, STZ.TZ_LOCALIZ, STZ.TZ_DATAMOV, STZ.TZ_HORAENT, STZ.TZ_DATASAI, STZ.TZ_HORASAI, "
+				cQuerySTZ += "STZ.TZ_POSCONT FROM " + RetSqlName("STZ") + " STZ "
+				cQuerySTZ += "WHERE STZ.TZ_FILIAL = " + ValToSql(xFilial("STZ"))
+				cQuerySTZ += "AND STZ.TZ_CODBEM = " + ValToSql(aESTREC[nn][1])
+				cQuerySTZ += "AND STZ.TZ_DATAMOV <= " + ValToSql(dLEITR)
+				cQuerySTZ += "AND STZ.D_E_L_E_T_ <> '*' "
+				cQuerySTZ += "ORDER BY STZ.TZ_DATAMOV || STZ.TZ_HORAENT DESC "
+
+				cQuerySTZ := ChangeQuery(cQuerySTZ)
+				DbUseArea(.T., "TOPCONN", TCGenQry(,,cQuerySTZ), cAliasSTZ, .F., .T.)
+
+				DbSelectArea(cAliasSTZ)
+				DbGoTop()
+
+				cBemPai := (cAliasSTZ)->TZ_BEMPAI
+
+				While (cAliasSTZ)->(!EoF())
+
+					If (AllTrim((cAliasSTZ)->TZ_BEMPAI) == AllTrim(cBEMHIST)) .AND. (AllTrim((cAliasSTZ)->TZ_CODBEM) == AllTrim(aESTREC[nn][1]))
+
+						If AllTrim((cAliasSTZ)->TZ_LOCALIZ) != AllTrim(aESTREC[nn][6])
+
+							lNewLocal := .T.
+
+						EndIf
+
+					EndIf
+
+					If AllTrim((cAliasSTZ)->TZ_BEMPAI) != AllTrim(cBemPai)
+
+						lAlterou := .T.
+						Exit
+
+					EndIf
+
+					DbSelectArea(cAliasSTZ)
+					(cAliasSTZ)->(DbSkip())
+
+				End
+
+				DbSelectArea(cAliasSTZ)
+				DbGoTop()
+
+				While (cAliasSTZ)->(!EoF())
+
+					If (AllTrim((cAliasSTZ)->TZ_BEMPAI) == AllTrim(cBEMHIST)) .AND. (AllTrim((cAliasSTZ)->TZ_CODBEM) == AllTrim(aESTREC[nn][1]));
+						.AND. ((cAliasSTZ)->TZ_DATAMOV == DTOS(aESTREC[nn][2])) .AND. ((cAliasSTZ)->TZ_HORAENT == aESTREC[nn][3])
+
+						dDataIni := (cAliasSTZ)->TZ_DATAMOV
+						dDataSai := (cAliasSTZ)->TZ_DATASAI
+						cHoraIni := (cAliasSTZ)->TZ_HORAENT
+						cHoraSai := (cAliasSTZ)->TZ_HORASAI
+
+						Exit
+
+					EndIf
+
+					DbSelectArea(cAliasSTZ)
+					(cAliasSTZ)->(DbSkip())
+
+				End
+
+				(cAliasSTZ)->(DbCloseArea())
+
+				/*/
+				Query utilizada para verificar todos os registros referentes ao pneu a ser gravado, observando
+				se o reporte que está sendo alterado é o último ou não. Caso sim, a TQS recebe o novo valor de
+				quilometragem percorrida. Caso contrário, se o registro faz parte de algum reporte antes do fi-
+				nal, a TQS não deve ser atualizada. Exemplificando o erro que ocorria antigamente, se houvesse
+				um reporte inicial de 1000, outro de 1500 e um final de 2000, a quilometragem percorrida seria
+				de 1000 KM. Porém, se o reporte central fosse modificado de 1500 para 1300, eram substraídos
+				200 KM, ou seja, ficando 800KM na banda atual do pneu, sendo que isto é inconsistente, pois a
+				diferença total de quilometragem entre o registro inicial de 1000 e 2000, continua sendo o mesmo.
+
+				S.S.: 022591
+				Autor: Éwerton Cercal
+				Data: 19/12/2014
+				/*/
+
+				cAliasSTP := GetNextAlias()
+
+				cQuerySTP := "SELECT DISTINCT STP.TP_FILIAL, STZ.TZ_FILIAL, STP.TP_CODBEM, STZ.TZ_CODBEM, STZ.TZ_BEMPAI, STP.TP_DTLEITU, STP.TP_HORA, "
+				cQuerySTP += "STP.TP_POSCONT, STP.TP_TIPOLAN FROM " + RetSqlName("STP") + " STP, " + RetSqlName("STZ") + " STZ "
+				cQuerySTP += "WHERE STP.TP_FILIAL = STZ.TZ_FILIAL "
+				cQuerySTP += "AND STP.TP_CODBEM = " + ValToSql(aESTREC[nn][1])
+				cQuerySTP += "AND STP.TP_CODBEM = STZ.TZ_CODBEM "
+				cQuerySTP += "AND STP.TP_DTLEITU BETWEEN " + ValToSql(dDataIni)
+
+				If !Empty(dDataSai)
+					cQuerySTP += "AND " + ValToSql(dDataSai)
+				Else
+					cQuerySTP += "AND " + ValToSql(dDataBase)
+				EndIf
+
+				cQuerySTP += "AND STZ.TZ_BEMPAI = " + ValToSql(cBEMHIST)
+				cQuerySTP += "AND STP.TP_TIPOLAN <> 'I' "
+				cQuerySTP += "AND STP.D_E_L_E_T_ <> '*' "
+				cQuerySTP += "AND STZ.D_E_L_E_T_ <> '*' "
+				cQuerySTP += "ORDER BY STP.TP_DTLEITU, STP.TP_HORA"
+
+				cQuerySTP := ChangeQuery(cQuerySTP)
+				DbUseArea(.T., "TOPCONN", TCGenQry(,,cQuerySTP), cAliasSTP, .F., .T.)
+
+				DbSelectArea(cAliasSTP)
+				DbGoTop()
+
+				If ReCountTmp(cAliasSTP) > 1
+					lOk := .T.
+				EndIf
+
+				DbSelectArea(cAliasSTP)
+				DbGoTop()
+
+				While(cAliasSTP)->(!EoF())
+
+					If (cAliasSTP)->TP_DTLEITU == DTOS(dLEITR) .AND. (cAliasSTP)->TP_HORA == cHORAR
+						DbSkip()
+
+						If EoF()
+							lFinal := .T. //Variável que define se é o último registro da STP que está sendo alterado ou não.
+							Exit		  //.T. - É o último registro; .F. - Não é o último registro.
+						Else
+							lFinal := .F.
+							Exit
+						EndIf
+
+					EndIf
+
+					DbSelectArea(cAliasSTP)
+					(cAliasSTP)->(DbSkip())
+
+				End
+
+				(cAliasSTP)->(DbCloseArea())
+
+				DbSelectArea(aARALTC[1])
+				DbSetOrder(5)
+
+				DbGoTo(nRECNSTF)
+
+				If lDELR
+					nACUMDEL := stp->tp_acumcon
+
+					DbSelectArea(aARALTC[1])
+					DbSetOrder(5)
+
+					DbGoTo(nRECNSTF)
+
+					// Decremento da Km Banda do Pneu
+					NGKMTQS(aESTREC[nn, 1],dLEITR,cHORAR,.T.)
+
+					RecLock(aARALTC[1],.F.)
+					DBDelete()
+					MsUnLock(aARALTC[1])
+
+					//---------------------------------------------------------
+					// Necessário selecionar o registro STP anterior ao deletado
+					// para realizar o ajuste de histórico corretamente
+					//---------------------------------------------------------
+					If nRecnoAnt > 0
+						DbSelectArea(aARALTC[1])
+						DbSetOrder(5)
+						DbGoTo(nRecnoAnt)
+					EndIf
+
+					lULTIMOF := .F.
+
+					// Carrega array para ajustar contador dos componentes
+					aAdd( aComponents, { aESTREC[nn,1], nRecnoAnt, 0, .F., &(aARALTC[6]), &(aARALTC[4]),;
+										nTIPOR, .T., .T., Nil, cFilDCF, cFilDHF, .F. } )
+
+				Else
+					//--------------------------------
+					// Decrementa Km da Banda do pneu
+					//--------------------------------
+
+					DbSelectArea(aARALTC[1])
+					DbSetOrder(5)
+
+					DbGoTo(nRECNSTF)
+
+					DbSelectArea(aARALTC[1])
+					DbSetOrder(5)
+
+					DbGoTo(nRECNSTF)
+
+					// Linha Critica para quebra de contador
+					nNewDIFCO := aESTREC[nn,9] + (nDifPai+nDIFCO) - aESTREC[nn,8]
+										/*desfaz o suspenso + soma a diferenca de reporte da alteracao - novo suspenso*/
+					nNewDIFCO := If(&(aARALTC[10]) = "Q",0,nNewDIFCO)
+
+					nACUMC := &(aARALTC[7])+nNewDIFCO
+					nACUMDEL := nACUMC
+					nRECNOSTP := Recno()
+					DbSkip(-1)
+					nVARDSTR := NGVARIADT(aESTREC[nn][1],dLEITR,nTIPOR,nACUMC,.F.,.F.,cFilDHF)
+					DbSelectArea(aARALTC[1])
+					Dbgoto(nRECNOSTP)
+
+					//Atualiza STP
+					RecLock(aARALTC[1],.F.)
+
+						&(aARALTC[8]) := nVARDSTR
+
+						If !lULTREG .And. !lENTRADA
+						&(aARALTC[7]) := nACUMC
+						Endif
+
+						If nContal > &(aARALTC[6])
+							nDiff := 1
+							nAcum1 := (nContal - &(aARALTC[6]))
+						Else
+							nDiff := -1
+							nAcum1 := (&(aARALTC[6]) - nContal)
+						EndIf
+
+						If lExCampOri
+							If nTIPCA == 1 .And. lJustifica
+								&(aARALTC[13]) := cPrograma
+							Else
+								&(aARALTC[11]) := cPrograma
+							EndIf
+						EndIf
+
+						&(aARALTC[6]) := nCONTAL
+
+					MsUnLock(aARALTC[1])
+
+					NGPACONT( &(aARALTC[3]), &(aARALTC[4]), &(aARALTC[5]), &(aARALTC[6]), &(aARALTC[7]), nTIPCA, .T. )
+
+					DbSelectArea("STZ")
+					DbSetOrder(5)
+
+					If DbSeek(xFilial("STZ") + cBEMHIST + aESTREC[nn][1] + DTOS(aESTREC[nn][2]) + aESTREC[nn][3])
+
+						If lNewLocal
+
+							If ((DTOS(STP->TP_DTLEITU) + STP->TP_HORA) == (DTOS(STZ->TZ_DATAMOV) + (MTOH(HTOM(SubStr(STZ->TZ_HORAENT, 1, 5)) - 1))))
+								RecLock("STZ",.F.)
+								If nTIPOR == 1
+									STZ->TZ_POSCONT := nCONTAL
+								Else
+									STZ->TZ_POSCON2 := nCONTAL
+								EndIf
+								STZ->(MsUnlock())
+								lAtualizou := .T.
+
+							EndIf
+
+						Else
+
+							If ((DTOS(STP->TP_DTLEITU) + STP->TP_HORA) == (DTOS(STZ->TZ_DATAMOV) + STZ->TZ_HORAENT))
+
+								RecLock("STZ",.F.)
+								If nTIPOR == 1
+									STZ->TZ_POSCONT := nCONTAL
+								Else
+									STZ->TZ_POSCON2 := nCONTAL
+								EndIf
+								STZ->(MsUnlock())
+
+								lAtualizou := .T.
+
+							EndIf
+
+						EndIf
+
+					EndIf
+
+					//--------------------------------
+					// Incrementa Km da Banda do pneu
+					//--------------------------------
+
+					DbSelectArea(aARALTC[1])
+					DbSetOrder(5)
+
+					DbGoTo(nRECNOSTP)
+
+					lULTIMOF := .F.
+					NGRECALHIS(aESTREC[nn][1],nNewDIFCO,nCONTAL,dLEITR,nTIPOR,.T.,.F.,.T.,,cFilDCF,cFilDHF)
+
+					// Atualiza a Km Banda
+					NGKMTQS(aESTREC[nn, 1],dLEITR,cHORAR,.F., nNewDIFCO)
+
+				Endif
+
+				If lULTIMOF
+					DbSelectArea(aARABEM[1])
+					DbSetOrder(1)
+					If DbSeek(xFILIAL(aARABEM[1],cFilDCF)+aESTREC[nn][1])
+						RecLock(aARABEM[1],.F.)
+						&(aARABEM[2]) := nCONTAFF
+						&(aARABEM[3]) := If(lENTRADA,&(aARABEM[3]),nACUMFIF)
+						&(aARABEM[4]) := dDTACUFF
+						&(aARABEM[5]) := nVARDIFF
+						MsUnLock(aARABEM[1])
+					EndIf
+				EndIf
+			Endif
+
+			If lEntrada .And. !lAtualizou
+				dbSelectArea("STZ")
+				dbSetOrder(5)
+
+				If dbSeek( xFilial("STZ") + cBEMHIST + aESTREC[nn][1] + DtoS(aESTREC[nn][2]) + aESTREC[nn][3] )
+
+					RecLock("STZ",.F.)
+					If nTIPOR == 1
+						STZ->TZ_POSCONT := nCONTAR
+					Else
+						STZ->TZ_POSCON2 := nCONTAR
+					EndIf
+					STZ->(MsUnlock())
+
+				EndIf
+
+			EndIf
+
+			lVerifica  := .F.
+			lOk        := .F.
+			lAtualizou := .F.
+			lFinal     := .F.
+			lAlterou   := .F.
+			nDiff      := 0
+			nACum1     := 0
+
+		Next nn
+
+	ElseIf ExistBlock("MNTA8752") // Verifica se existe o ponto de entrada
+		ExecBlock("MNTA8752",.F.,.F.,{cBEMR,dLEITR,cHORAR,nDIFCO}) // Passa informacoes de alteracao na STP
+	EndIf
+
+	//Volta para o bem Pai da estrutura
+	cBEMHIST := cBemOldHis
+
+Return aComponents
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA875ADEL
+Ajusta o bem e aciona a exclusão dos componentes
+
+@param [cBEMD]  , Caracter, Código do bem
+@param [dDTAD]  , Data    , Data para realizar a busca na estrutura
+@param [cHORD]  , Caracter, Hora para realizar a busca na estutura
+@param [nTPDEL] , Numérico, Tipo de contador
+@param [cFilCo] , Caracter, Filial do contador
+@param [cFilHi] , Caracter, Filial do historico do contador
+@para  [aTrbEst], Array   , Array possuindo as tabelas temporárias responsáveis por montar a estrutura do bem.
+							[1] tabela temporaria do pai da estrutura - cTRBS
+							[2] tabela temporaria do pai da estrutura - cTRBF
+							[3] tabela temporaria do eixo suspenso    - CTRBEixo
+@author Inácio Luiz Kolling
+@since 19/07/2006
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function MNTA875ADEL(cBEMD,dDTAD,cHORD,nTPDEL,cFilCo,cFilHi,aTrbEst)
+
+	Local cFilDHi     := NGTROCAFILI(aARALTC[1],cFilHI)
+	Local cFilDCo     := NGTROCAFILI(aARABEM[1],cFilCo)
+	Local aRecalHis   := {} // filhos para recálculo de contador
+	Local aFather     := {} // bem pai para recálculo de contador
+	Local nCount      := 0
+
+	Default aTrbEst := {}
+
+	If Type("lRegVir") == "U"
+		lRegVir := .F.
+	Endif
+
+	If Type("nDifVir") == "U"
+		nDifVir := 0
+	Endif
+
+	If ValType("nTIPCA") == "U"
+		nTIPCA := 1
+	EndIf
+
+	nDifCon := If(lRegVir,nDifVir * -1,0)
+	nDifAcu := 0
+
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(5)
+
+	nRegAd := Recno() // Armazena recno antes de pular para próximo registro
+
+	DbSkip()
+	If !Eof() .And. &(aARALTC[2]) == cFilDHi .And. &(aARALTC[3]) == cBEMD
+
+		lULTIMOP := .F.
+
+		//------------------------------------------------------------------
+		// Trecho abaixo faz tratamento para quando a exclusão é de virada
+		// Ajuste dos registros posteriores
+		//------------------------------------------------------------------
+		If lRegVir
+			While !Eof() .And. &(aARALTC[2]) == cFilDHi .And. &(aARALTC[3]) == cBEMD
+				nRegVar  := Recno()
+				nNovAcu  := &(aARALTC[7]) - nDifVir
+				nVARDSTR := NGVARIADT(cBEMD,&(aARALTC[4]),nTIPCA,nNovAcu,.T.,.F.,cFilDHi)
+
+				Dbgoto(nRegVar)
+				RecLock(aARALTC[1],.F.)
+				&(aARALTC[7]) := nNovAcu
+				&(aARALTC[8]) := nVARDSTR
+				If Empty(nDifAcu)
+					nDifAcu := &(aARALTC[7])
+				Endif
+				If !Empty(&(aARALTC[9]))
+					&(aARALTC[9]) := &(aARALTC[9]) - 1
+					nVarDel := &(aARALTC[8])
+				Endif
+				MsUnLock(aARALTC[1])
+				Dbskip()
+			End
+		Endif
+
+	Else
+		lULTIMOP := .T.
+	Endif
+
+	//--------------------------------------------------------------------------------
+	// Necessário selecionar registro anterior ao deletado antes de acionar o recálculo
+	//--------------------------------------------------------------------------------
+	DbSelectArea(aARALTC[1])
+	Dbsetorder(5)
+
+	Dbgoto(nRegAd)
+	DbSkip(-1)
+
+	If !Bof() .And. &(aARALTC[2]) == cFilDHi .And. &(aARALTC[3]) == cBEMD
+
+		nCount := &(aARALTC[6]) // Posição do contador
+
+		// Carrega array para ajustar contador do bem pai
+		aFather := { cBEMD, Recno(), 0, .F., &(aARALTC[6]), dDTAD, nTPDEL, .T., .T.,, cFilDCo, cFilDHi, .F. }
+	Else
+		//---------------------------------------------------------
+		// Atualiza tabela do bem com dados do histórico anterior
+		//---------------------------------------------------------
+		DbSelectArea(aARABEM[1])
+		DbSetOrder(1)
+		If lULTIMOP .And. !Empty(nACUMFIP) .And. DbSeek(xFILIAL(aARABEM[1],cFilDCo)+cBEMD)
+			RecLock(aARABEM[1],.F.)
+			&(aARABEM[2]) := nCONTAFP
+			&(aARABEM[3]) := nACUMFIP
+			&(aARABEM[4]) := dDTACUFP
+			&(aARABEM[5]) := nVARDIFP
+			MsUnLock(aARABEM[1])
+
+			nCount := nCONTAFP // Posição do contador
+
+		EndIf
+
+	EndIf
+
+	//------------------------------------------
+	// Exclui histórico dos filhos
+	//------------------------------------------
+	aRecalHis := MNTA875CFI(cBEMD,dDTAD,cHORD,nCount,nTPDEL,0,.T.,cFilDCo,cFilDHi,aTrbEst)
+
+	If Len( aFather ) > 0
+		Aadd( aRecalHis, aClone( aFather ) )
+	EndIf
+
+	//------------------------------------------------------------------
+	// Aciona o ajuste de contador apenas 1 vez para o bem e componentes
+	//------------------------------------------------------------------
+	If Len( aRecalHis ) > 0
+		NGRECALHIS(,,,,,,,,,,, aRecalHis )
+	EndIf
+
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNTA875FAL ³ Autor ³ In cio Luiz Kolling   ³ Data ³19/07/2006³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Atualiza os filhos do lancamento                             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function MNTA875FAL(cBEMAL,dDTAL,cHOAL,nTPCO,nACUAL,cFilAC,cFilAH)
+
+	Local cFilAHi  := NGTROCAFILI(aARALTC[1],cFilAH)
+	Local cFilACo  := NGTROCAFILI(aARABEM[1],cFilAC)
+	Local lPRINSTP := .F.
+	Local nX, aTQN, aEmp, cX2ST9
+
+	nRECNOSTP := Recno()
+	DbSkip(-1)
+	If Bof()
+	lPRINSTP := .T.
+	ElseIf (&(aARALTC[2]) <> cFilACo) .Or.;
+	&(aARALTC[2]) = cFilACo .And.;
+	&(aARALTC[3]) <> cBEMAL
+	lPRINSTP := .T.
+	Endif
+
+	nVARDSTR := NGVARIADT(cBEMAL,dDTAL,nTPCO,nACUAL,.F.,.F.,cFilAHi)
+	DbSelectArea(aARALTC[1])
+	Dbgoto(nRECNOSTP)
+	RecLock(aARALTC[1],.F.)
+
+		If !lPRINSTP
+			&(aARALTC[8]) := nVARDSTR
+			&(aARALTC[7]) := nACUAL
+			&(aARALTC[6]) := nCONTAL
+		Else
+			&(aARALTC[6]) := nCONTAL
+			&(aARALTC[7]) := nACUAL
+		Endif
+
+		If lJustifica
+			&(aARALTC[11]) := cUsuAltera
+			&(aARALTC[12]) := cJustifica
+		Endif
+
+		If lExCampOri
+			If nTIPCA == 1 .And. lJustifica
+				&(aARALTC[13]) := cPrograma
+			Else
+				&(aARALTC[11]) := cPrograma
+			EndIf
+		EndIf
+
+		MsUnLock(aARALTC[1])
+
+	If STP->TP_TIPOLAN = "A" .And. AliasinDic("TQN")
+		aTQN := {Nil}
+		If NGSX2MODO("ST9") = "C" .And. NGSX2MODO("TQN") = "E"
+			aEmp := NGArrayEmp({|| SM0->M0_CODIGO != cEmpAnt})
+			cX2ST9 := RetSqlName("ST9")
+			For nX := 1 to Len(aEmp)
+				If cX2ST9 == NGRETX2("ST9",aEmp[nX][1],.F.)
+					aAdd(aTQN,aEmp[nX][1])
+				EndIf
+			Next nX
+		EndIf
+		For nX := 1 to Len(aTQN)
+			If AltConTQN(aTQN[nX])
+				Exit
+			EndIf
+		Next nX
+	Endif
+
+	//----------------------------
+	// 	Recalcula contador do bem
+	//----------------------------
+	NGRECALHIS(cBEMAL,nDIFCO,nCONTAL,dDTAL,nTPCO,.F.,.F.,.T.,,cFilACo,cFilAHi)
+
+	//------------------------------------
+	// Altera apontamento dos componentes
+	//------------------------------------
+	MNTA875CFI(cBEMAL,dDTAL,cHOAL,nCONTAL,nTPCO,nDIFCO,.F.,cFilACo,cFilAHi)
+
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³AltConTQN  ³ Autor ³Vitor Emanuel Batista  ³ Data ³11/11/2009³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Altera o contador do abastecimento                           ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function AltConTQN(cEmp)
+	Local cAliasQry := GetNextAlias()
+	Local cQuery, lRet := .F.
+	Local cTable := NGRETX2("TQN",cEmp)
+
+	cQuery := " SELECT R_E_C_N_O_ FROM "+cTable
+	cQuery += " WHERE TQN_FROTA  = "+ValToSql(STP->TP_CODBEM)
+	cQuery += "   AND TQN_DTABAS = "+ValToSql(STP->TP_DTLEITU)
+	cQuery += "   AND TQN_HRABAS = "+ValToSql(STP->TP_HORA)
+	cQuery += "   AND D_E_L_E_T_ <> '*'"
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	If (cAliasQry)->(!Eof())
+		dbSelectArea("TQN")
+		cQuery := " UPDATE "+cTable+" SET TQN_HODOM = "+cValToChar(STP->TP_POSCONT)
+		cQuery += " WHERE R_E_C_N_O_ = " + cValToChar((cAliasQry)->R_E_C_N_O_)
+		TcSqlExec(cQuery)
+		lRet := .T.
+	EndIf
+	(cAliasQry)->(dbCloseArea())
+Return lRet
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡„o    ³MNT875VA   ³ Autor ³ Marcos Wagner Junior  ³ Data ³01/06/2007³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡„o ³Forca o usuario a informar o campo de Justificativa          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTA875                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+User Function MNT875VA()
+
+If Empty(cJustifica)
+	MsgStop(STR0060,STR0020)//"O campo Justificativa deverá ser preenchido!"###"ATENCAO"
+	Return .F.
+Endif
+
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Programa  ³MenuDef   ³ Autor ³ Vitor Emanuel Batista ³ Data ³23/07/2008³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³ Utilizacao de menu Funcional                               ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³Array com opcoes da rotina.                                 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³Parametros do array a Rotina:                               ³±±
+±±³          ³1. Nome a aparecer no cabecalho                             ³±±
+±±³          ³2. Nome da Rotina associada                                 ³±±
+±±³          ³3. Reservado                                                ³±±
+±±³          ³4. Tipo de Transa‡„o a ser efetuada:                        ³±±
+±±³          ³    1 - Pesquisa e Posiciona em um Banco de Dados           ³±±
+±±³          ³    2 - Simplesmente Mostra os Campos                       ³±±
+±±³          ³    3 - Inclui registros no Bancos de Dados                 ³±±
+±±³          ³    4 - Altera o registro corrente                          ³±±
+±±³          ³    5 - Remove o registro corrente do Banco de Dados        ³±±
+±±³          ³5. Nivel de acesso                                          ³±±
+±±³          ³6. Habilita Menu Funcional                                  ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Static Function MenuDef()
+Local aRotina :=  {	{STR0001,"AxPesqui" , 0, 1},; //"Pesquisar"
+                    {STR0002,"NGCAD01" , 0, 2},; //"Visualizar"
+                    {STR0003,"NGCAD01" , 0, 3},; //"Incluir"
+                    {STR0004,"NGCAD01" , 0, 4},; //"Alterar"
+                    {STR0005,"NGCAD01" , 0, 5}}  //"Excluir"
+Return(aRotina)
+
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Programa  ³NGACEMANUHIST³ Autor ³ Inacio Luiz Kolling   ³ Data ³23/05/2011³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Atualiza as manutencoes na exclusao do historico do contador   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³cBem   - Codigo do bem                           - Obrigatorio ³±±
+±±³          ³dDtLei - Data da leitura                         - Obrigatorio ³±±
+±±³          ³cHoLei - Hora da leitura                         - Obrigatorio ³±±
+±±³          ³nTipoC - Tipo do contador                        - Obrigatorio ³±±
+±±³          ³cFilA   - Código da filail                        - Nao Obrigat.±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function NGACEMANUHIST(cBem,dDtLei,cHoLei,nTipoc,cFilA)
+Local cAliasQry := GetNextAlias(),aAreaL := GetArea()
+Local cFilASTP  := NGTROCAFILI(If(nTipoC = 1,"STP","TPP"),cFilA), cFilASTJ  := NGTROCAFILI("STJ",cFilA)
+
+If NGIFDBSEEK("STF",cBem,1,.F.)
+   cQuery := " SELECT TF_SERVICO,TF_SEQRELA FROM "+RetSqlName("STF")
+   cQuery += " WHERE TF_FILIAL  = '" + XFilial('STF') + "' AND TF_CODBEM  = '" + cBem + "' AND "
+   cQuery += If(nTipoC = 2," TF_TIPACOM = 'S'","(TF_TIPACOM <> 'S' AND TF_TIPACOM <> 'T') ")
+   cQuery += " AND D_E_L_E_T_ <> '*'"
+   cQuery := ChangeQuery(cQuery)
+   dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+   Dbgotop()
+   While !Eof()
+      If !Empty((cAliasQry)->TF_SERVICO)
+         cAliasQr2 := GetNextAlias()
+         cQuer2 := " SELECT TJ_DTMRFIM,TJ_HORACO1,TJ_HORACO2 FROM "+RetSqlName("STJ")
+         cQuer2 += " WHERE TJ_FILIAL = '" + cFilASTJ + "' AND TJ_CODBEM = '" + cBem + "' AND"
+         cQuer2 += " TJ_SERVICO = '" + (cAliasQry)->TF_SERVICO +"' AND TJ_SEQRELA = '" + (cAliasQry)->TF_SEQRELA + "' AND "
+         cQuer2 += " TJ_SITUACA = 'L' AND TJ_TERMINO = 'S' AND TJ_TIPOOS = 'B' AND (TJ_POSCONT > 0 OR TJ_POSCON2 > 0) AND "
+         cQuer2 += " TJ_DTMRFIM = '" + Dtos(dDtLEI) + "' AND "
+         cQuer2 +=  If(nTipoC = 1," TJ_HORACO1 = '" + cHoLei+ "'"," TJ_HORACO2 = '" + cHoLei+ "'")
+         cQuer2 += " AND  D_E_L_E_T_ <> '*'"
+         cQuer2 := ChangeQuery(cQuer2)
+         dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuer2),cAliasQr2, .F., .T.)
+
+         If !Eof() .And. !Empty((cAliasQr2)->TJ_DTMRFIM)
+            dDataA  := (cAliasQr2)->TJ_DTMRFIM
+            cHoraA  := If(nTipoC = 1,(cAliasQr2)->TJ_HORACO1,(cAliasQr2)->TJ_HORACO2)
+            vRetHist := NGACUMEHIS(cBem,Stod(dDataA),cHoraA,nTipoC,"E",cFilASTP)
+            If !Empty(vRetHist[2]) .And. NGIFDBSEEK("STF",cBem+(cAliasQry)->TF_SERVICO+(cAliasQry)->TF_SEQRELA,1,.F.)
+               RecLock("STF",.F.)
+               STF->TF_DTULTMA   := vRetHist[3]
+               STF->TF_CONMANU := vRetHist[2]
+               STF->(MsUnLock())
+               NGACERMANS(STF->TF_CODBEM,STF->TF_SERVICO,STF->TF_SEQRELA,STF->TF_DTULTMA,STF->TF_CONMANU,cFila)
+               //NGACERMANSUB(STF->TF_CODBEM,STF->TF_SERVICO,STF->TF_SEQRELA,STF->TF_DTULTMA,STF->TF_CONMANU,cFila)
+            EndIf
+         EndIf
+         (cAliasQr2)->(DbCloseArea())
+     EndIf
+     NGDBSELSKIP((cAliasQry))
+   End
+   (cAliasQry)->(DbCloseArea())
+EndIf
+RestArea(aAreaL)
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºFuncao    ³fChkContadºAutor  ³Wagner S. de Lacerdaº Data ³  17/01/2012 º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³ Efetua umas verificacoes do contador selecionado antes     º±±
+±±º          ³ de altera-lo ou exclui-lo, para averiguar se a acao pode   º±±
+±±º          ³ mesmo ser realizado sobre o registro.                      º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºRetorno   ³ .T. -> Pode manipular o contador.                          º±±
+±±º          ³ .F. -> Nao e' possivel manipular o contador.               º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºParametros³ lExclusao -> Opcional;                                     º±±
+±±º          ³              Indica se a validacao deve ser de exclusao.   º±±
+±±º          ³                 .T. - Exclusao                             º±±
+±±º          ³                 .F. - Alteracao                            º±±
+±±º          ³              Default: .F.                                  º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ MNTA875                                                    º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºObservacao³ Validacao desenvolvida, inicialmente, pelo Taina Alberto   º±±
+±±º          ³ Cardoso. Como primeira alteracao, joguei para um funcao,   º±±
+±±º          ³ pois uma validacao semelhante estava sendo usada em dois   º±±
+±±º          ³ blocos; tambem ajustei a validacao, pois haviam trechos    º±±
+±±º          ³ redundantes, bem como as strings STR (.CH).                º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±º           ATUALIZACOES SOFRIDAS DESDE A CONSTRUCAO INICIAL            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºProgramador ³   Data     ³ Descricao                                   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±º            ³ xx/xx/xxxx ³                                             º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function fChkContad(lExclusao)
+
+	Local cQuery
+	Local cFilTPN := ""
+	Local nQuanR := 0
+	Local lMsgTran := .F.
+
+	Local cTipoLanca := aLbx[oLbx:nAt,nTIPOLAN] //Tipo de Lancamento do contador do registro selecionado
+	Local cMsgLanca  := AllTrim( NGRETSX3BOX("TP_TIPOLAN", cTipoLanca) )
+	Local dDtLeitura := aLbx[oLbx:nAt,nDATALEI]
+	Local cHrLeitura := aLbx[oLbx:nAt,nHORALEI]
+	Local nPosContad := aLbx[oLbx:nAt,nPOSCONT]
+
+	//Variaveis para armazenar os nomes corretos dos campos da tabela conforme o Tipo do Contador
+	Local cTJHORCONT := ""
+	Local cTJPOSCONT := ""
+	Local cBEMTR := GetNewPar("MV_NGBEMTR","")  //Status do bem transferido
+	Local cLanex := IIf( FindFunction('NGUSELANEX'), NGUSELANEX( cBEMHIST ), AllTrim( SuperGetMv( 'MV_NGLANEX', .F., '' ) ))
+
+	Default lExclusao := .F.
+
+	If nTIPCA == 1 //Se for primeiro contador
+		cTJHORCONT := "TJ_HORACO1"
+		cTJPOSCONT := "TJ_POSCONT"
+	Else
+		cTJHORCONT := "TJ_HORACO2"
+		cTJPOSCONT := "TJ_POSCON2"
+	EndIf
+
+	//--- Se for um lancamento normal de contador "C", verifica se o contador e' referente a uma O.S. Finalizada
+	If cTipoLanca == "C"
+		cAliasQry := GetNextAlias()
+		cQuery := " SELECT TJ_ORDEM , TJ_TERMINO FROM "+RetSqlName("STJ")
+		cQuery += " WHERE TJ_CODBEM  = "+ValToSql(cBEMHIST)
+		cQuery += "   AND TJ_DTMRFIM = "+ValToSql(dDtLeitura)
+		cQuery += "   AND "+cTJHORCONT+" = "+ValToSql(cHrLeitura)
+		cQuery += "   AND "+cTJPOSCONT+" = "+Alltrim(STR(nPosContad))
+		cQuery += "   AND D_E_L_E_T_ <> '*'"
+		cQuery := ChangeQuery(cQuery)
+		dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+		If (cAliasQry)->(!Eof())
+			If (cAliasQry)->TJ_TERMINO == "S" .And. lExclusao
+				ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+								{STR0068 + Space(1) + (cAliasQry)->TJ_ORDEM + ", " + STR0069},2,; //"Este reporte de contador foi gerado pela ordem de serviço"###"a qual se encontra finalizada."
+								{STR0070},2) //"Reabra a ordem de serviço ou selecione outro registro."
+				(cAliasQry)->(dbCloseArea())
+				Return .F.
+			EndIf
+		EndIf
+		(cAliasQry)->(dbCloseArea())
+	EndIf
+
+	//--- Se ja houver apropriacao posterior nao permite alterar (Integração Mensagem Única)
+	If GetNewPar("MV_NGINTER","") == "M" .And. FindFunction("MNA385APR")
+		If MNA385APR(cBEMHIST,dDtLeitura,cHrLeitura,nTIPCA)
+			ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+							{STR0080},2,; //"Já existe apropriação de custos posterior a este lançamento de histórico. Não é possível alterar ou excluir esse registro."
+							{""},2)
+			Return .F.
+		EndIf
+	EndIf
+
+	//--- Verifica se o Contador e' referente ao ultimo reporte feito antes do bem ser Transferido
+	dbSelectArea("ST9")
+	dbSetOrder(1)
+	If dbSeek(xFilial("ST9")+cBEMHIST)
+		If ST9->T9_STATUS == cBEMTR
+			dbSelectArea("TQY")
+			dbSetOrder(01)
+			If dbSeek(xFilial("TQY")+cBEMTR)
+				If TQY->TQY_CATBEM == ST9->T9_CATBEM
+					dbSelectArea(aARALTC[1])
+					dbSetOrder(5)
+					If dbSeek(xFILIAL(aARALTC[1])+cBEMHIST+DTOS(dDtLeitura)+cHrLeitura)
+						While !Eof() .And. xFilial(aARALTC[1])+cBEMHIST == &(aARALTC[2])+&(aARALTC[3])
+							nQuanR++
+							dbSelectArea(aARALTC[1])
+							dbSkip()
+						End
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	If nQuanR == 1
+		ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+						{STR0071},2,; //"Este bem foi transferido e este registro está relacionado a ultima posição do contador antecedendo a transferência."
+						{STR0072},2) //"Selecione outro registro."
+		Return .F.
+	EndIf
+
+	//--- Busca uma Transferencia do Bem para este contador
+	cAliasQry := GetNextAlias()
+	cQuery := " SELECT TPN_FILIAL, TPN_DTINIC, TPN_HRINIC  FROM "+RetSqlName("TPN")
+	cQuery += " WHERE TPN_CODBEM  = "+ValToSql(cBEMHIST)
+	cQuery += "   AND TPN_DTINIC || TPN_HRINIC  <= "+ValToSql(DTOS(dDtLeitura)+cHrLeitura)
+	cQuery += "   AND D_E_L_E_T_ <> '*'"
+	cQuery += "   ORDER BY TPN_DTINIC DESC ,TPN_HRINIC DESC"
+	cQuery := ChangeQuery(cQuery)
+	dbUseArea( .T., "TOPCONN", TCGENQRY(,,cQuery),cAliasQry, .F., .T.)
+	ProcRegua(LastRec())
+	dbSelectArea(cAliasQry)
+	While !EoF()
+		If (cAliasQry)->TPN_DTINIC + (cAliasQry)->TPN_HRINIC == DTOS(dDtLeitura)+cHrLeitura
+			cFilTPN := (cAliasQry)->TPN_FILIAL
+			dbSelectArea((cAliasQry))
+			dbSkip()
+			Loop
+		EndIf
+		If !Empty(cFilTPN) .And. (cFilTPN <> (cAliasQry)->TPN_FILIAL)
+			lMsgTran := .T.
+			Exit
+		EndIf
+		Exit
+	End
+	If lMsgTran
+		ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+						{STR0073},2,; //"Este registro está relacionado a uma transferência do bem."
+						{STR0072},2) //"Selecione outro registro."
+		Return .F.
+	EndIf
+
+	//--- Busca uma Transferencia do Bem para este contador
+	dbSelectArea("TQ2")
+	dbSetOrder(1)
+	If dbSeek(xFilial("TQ2")+cBEMHIST+DTOS(dDtLeitura)+cHrLeitura)
+		If TQ2->TQ2_FILDES == cFilAnt
+			ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+							{STR0074},2,; //"Este bem foi transferido e este registro é referente a primeira posição do contador em relação a transferência."
+							{STR0072},2) //"Selecione outro registro."
+			Return .F.
+		EndIf
+	EndIf
+
+	//--- Verifica se pode alterar a Virada/Quebra
+	nQuanR := 0
+	If cTipoLanca == "V" .Or. ( lExclusao .And. cTipoLanca $ "QV" )
+		dbSelectArea(aARALTC[1])
+		dbSetOrder(5)
+		If dbSeek(xFILIAL(aARALTC[1])+cBEMHIST+DTOS(dDtLeitura)+cHrLeitura)
+			While !Eof() .And. (xFilial(aARALTC[1])+cBEMHIST ==  &(aARALTC[2])+&(aARALTC[3]) .And. !(&(aARALTC[10]) $ cLanex+"QV"))
+				nQuanR++
+				dbSelectArea(aARALTC[1])
+				dbSkip()
+			End
+		EndIf
+		If nQuanR >= 2
+			ShowHelpDlg(STR0015,; //"NÃO CONFORMIDADE"
+							{If(nQuanR == 2, STR0075, STR0076) + Space(1) + cMsgLanca + "."},2,; //"Existe um reporte de contador após este lançamento de" ### "Existem reportes de contador após este lançamento de"
+							{If(nQuanR == 2, STR0077, STR0078)},2) //"Exclua o registro posterior, ou então selecione outro registro para acertar." ### "Exclua os registros posteriores, ou então selecione outro registro para acertar."
+			Return .F.
+		EndIf
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fBuscaPict
+Busca as pictures para montagem da tela na mão.
+
+@author Maicon André Pinheiro
+@since 13/06/2017
+@version P11
+@return aPictures
+/*/
+//---------------------------------------------------------------------
+Static Function fBuscaPict()
+
+	Local aPictures := {}
+
+	aAdd(aPictures,Posicione("SX3",2,"T9_POSCONT","X3_PICTURE"))
+	aAdd(aPictures,Posicione("SX3",2,"T9_CONTACU","X3_PICTURE"))
+	aAdd(aPictures,Posicione("SX3",2,"T9_VARDIA","X3_PICTURE"))
+
+Return aPictures

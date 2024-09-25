@@ -1,0 +1,680 @@
+#INCLUDE "MNTA156.ch"
+#INCLUDE "PROTHEUS.CH"
+
+Static lRel12133 := GetRPORelease() >= '12.1.033'
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156
+Gera o cadastro de Manutenção Padrão utilizando uma manutenção Padrão
+já cadastrada (TPF,TP5,TPG,TPH,TPM,TP2),
+para um intervalo de familia (De, Ate)
+@author Inácio Luiz Kolling
+@since 11/08/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA156()
+
+	If !FindFunction( 'MNTAmIIn' ) .Or. MNTAmIIn( 19, 95 )
+
+		Private APOS1
+		Private ACAMPOS
+		Private NN
+		Private PP
+		Private VL
+		Private CCODFAM
+		Private CSERVIC
+		Private cSEQUEN
+		Private cSEQ
+		Private LTP2
+		Private nSEQUEN
+		Private lIndTPF 	:= NgVerify("TPF")
+		Private nImp 		:= 0
+		Private cCadastro   := STR0005
+		aPos1           := {15,1,78,315}
+
+		If MNTA156FR()
+
+			If Pergunte("MNT156",.T.)
+				Processa({|lEnd| MNTA156TP9()})
+			Endif
+
+		Else
+
+			If lRel12133
+				// "A rotina deve ser acessada pelo módulo Gestão de Frotas (95)."
+				MsgInfo( STR0017, STR0013 )
+			Else
+				// "Não tem integração com o frotas" ## "NÃO CONFORMIDADE"##
+				MsgInfo( STR0014, STR0013 )
+			Endif
+
+		Endif
+
+	Endif
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156TP9
+Processa o TP9 e faz copia da manutencao
+@author Inacio Luiz Kolling
+@since 12/08/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA156TP9()
+
+	Local ii := 0
+	Local oTmpTbl1
+
+	Private cTRB  := GetNextAlias() //Alias Tab. 1
+
+	DbSelectArea("TPF")
+	aCampos  := TPF->(DbStruct())
+
+	//Intancia classe FWTemporaryTable
+	oTmpTbl1:= FWTemporaryTable():New( cTRB, aCampos )
+	//Adiciona os Indices
+	oTmpTbl1:AddIndex( "Ind01" , {"TPF_CODFAM","TPF_SERVIC","TPF_TIPMOD"} )
+	//Cria a tabela temporaria
+	oTmpTbl1:Create()
+
+	DbSelectArea("TP9")
+	Dbsetorder(1)
+	Dbseek(xfilial("TP9")+MV_PAR05,.T.)
+	ProcRegua(reccount())
+
+	While !Eof() .And. TP9->TP9_filial = xfilial("TP9") .And.;
+	TP9->TP9_CODFAM <= MV_PAR06
+
+		IncProc()
+		If TP9->TP9_TIPMOD = MV_PAR07 .And. TP9->TP9_MODELO = MV_PAR08
+
+			DbSelectArea("TPF" )
+			Dbsetorder(1)
+			Dbseek(xfilial("TPF")+MV_PAR01+MV_PAR02+If(lIndTPF,MV_PAR03,Str(MV_PAR03,3)),.t.)
+			While !Eof() .And. TPF->TPF_FILIAL = Xfilial("TPF") .And. ;
+			TPF->TPF_CODFAM = MV_PAR01 .And. TPF->TPF_SERVIC = MV_PAR02;
+			.And. If(lIndTPF,TPF->TPF_SEQREL <= MV_PAR04,TPF->TPF_SEQUEN <= MV_PAR04)
+
+				nRegTPF := Recno()
+				nSEQUEN := TPF->TPF_SEQUEN
+				cCODFAM := TPF->TPF_CODFAM
+				cSERVIC := TPF->TPF_SERVIC
+				cTIPMOD := TPF->TPF_TIPMOD
+
+				If lIndTPF
+					cSEQUEN := TPF->TPF_SEQREL
+				EndIf
+
+				Dbgoto(nRegTPF)
+				DbSelectArea(cTRB)
+				Zap
+				RecLock((cTRB),.T.)
+				For ii := 1 To FCount()
+					nn := FieldName(ii)
+					pp := (cTRB) ->(fieldpos(nn))
+					vl := "TPF->" + FieldName(ii)
+					(cTRB) ->(FieldPut(pp,&vl.) )
+				Next ii
+				(cTRB)->(MsUnlock())
+
+				DbSelectArea("TPF")
+				Dbsetorder(4)
+				If !Dbseek(xfilial("TPF")+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+MV_PAR02+If(lIndTPF,cSEQUEN,Str(nSEQUEN,3)))
+					RecLock("TPF",.T.)
+					For ii := 1 To FCount()
+						nn := FieldName(ii)
+						pp := TPF->(fieldpos(nn))
+						If nn == 'TPF_CODFAM'
+							TPF->TPF_CODFAM := TP9->TP9_CODFAM
+						ElseIf nn == 'TPF_TIPMOD'
+							TPF->TPF_TIPMOD := TP9->TP9_TIPMOD
+						Else
+							vl := "(cTRB)->"+FieldName(ii)
+							TPF->(FieldPut(pp,&vl.))
+						Endif
+					Next ii
+					TPF->(MsUnlock())
+					nImp ++
+					MNTA156PRO()
+				Endif
+
+				DbSelectArea("TPF")
+				Dbsetorder(1)
+				Dbgoto(nRegTPF)
+				DbskIP()
+			End
+		Endif
+		DbSelectArea("TP9")
+		DbskIP()
+	End
+
+	oTmpTbl1:Delete()//Deleta Tabela Temporária 1
+
+	MsgInfo(STR0008+"  "+str(nImp,10),STR0007)
+
+Return
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156PRO
+Processa o TP5,TPG,TPH,TPM,TP2 e faz as copias
+@author Inacio Luiz Kolling
+@since 12/08/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA156PRO()
+
+	Local oTmpTbl2 //Obj. Tab. Temporária
+	Local oTmpTbl3 //Obj. Tab. Temporária
+	Local oTmpTbl4 //Obj. Tab. Temporária
+	Local oTmpTbl5 //Obj. Tab. Temporária
+	Local oTmpTbl6 //Obj. Tab. Temporária
+
+	Local I       := 0
+	Local lIndTPG := If(NgVerify("TPG"),.T.,.F.)
+	Local lIndTP5 := If(NgVerify("TP5"),.T.,.F.)
+	Local lIndTPH := If(NgVerify("TPH"),.T.,.F.)
+	Local lIndTP2 := If(NgVerify("TP2"),.T.,.F.)
+	Local lIndTPM := If(NgVerify("TPM"),.T.,.F.)
+
+	Private cTRBA := GetNextAlias() //Alias Tab. 2
+	Private cTRBB := GetNextAlias() //Alias Tab. 3
+	Private cTRBC := GetNextAlias() //Alias Tab. 4
+	Private cTRB1 := GetNextAlias() //Alias Tab. 5
+	Private cTRBD := GetNextAlias() //Alias Tab. 6
+
+	// TAREFA DA MANUTENCAO
+	DbSelectArea("TP5")
+	DbSetOrder(3)
+
+	If DbSeek(xfilial('TP5')+cCODFAM+cTIPMOD+cSERVIC+If(lIndTP5,cSEQUEN,STR(nSEQUEN,3)))
+		aCampos  := TP5->(DbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl2 := FWTemporaryTable():New( cTRBA, aCampos )
+		//Adiciona os Indices
+		oTmpTbl2:AddIndex( "Ind01" , {"TP5_CODFAM","TP5_TIPMOD","TP5_SERVIC"} )
+		//Cria a tabela temporaria
+		oTmpTbl2:Create()
+
+		DbSelectArea("TP5")
+		DbSetOrder(3)
+		While !eof() .And. TP5->TP5_filial == xfilial('TP5') .And.;
+		TP5->TP5_CODFAM == cCODFAM .And. TP5->TP5_TIPMOD == cTIPMOD .And.;
+		TP5->TP5_SERVIC == cSERVIC .And.;
+		IIF(lIndTP5,TP5->TP5_SEQREL == cSEQUEN,TP5->TP5_SEQUEN == nSEQUEN)
+			DbSelectArea(cTRBA)
+			RecLock((cTRBA),.T.)
+			For i := 1 TO FCount()
+				nn := FieldName(i)
+				pp := (cTRBA)->(fieldpos(nn))
+				vl := TP5->(fieldget(I))
+				(cTRBA)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBA)->(MSUNLOCK())
+			DbSelectArea("TP5")
+			DbSkip()
+		End
+
+		DbSelectArea(cTRBA)
+		Dbgotop()
+
+		While !Eof()
+
+			DbSelectArea("TP5")
+			DbSetOrder(3)
+			If !DbSeek(xfilial('TP5')+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+cSERVIC;
+			+If(lIndTP5,cSEQUEN,STR(nSEQUEN,3))+(cTRBA)->TP5_TAREFA)
+				RecLock("TP5",.T.)
+				For i := 1 TO FCount()
+					nn := FieldName(i)
+					pp := TP5->(fieldpos(nn))
+					If nn == 'TP5_CODFAM'
+						TP5->TP5_CODFAM := TP9->TP9_CODFAM
+					ElseIf nn == 'TP5_TIPMOD'
+						TP5->TP5_TIPMOD := TP9->TP9_TIPMOD
+					Else
+						vl := (cTRBA)->(fieldget(I))
+						TP5->(FieldPut(pp,vl))
+					Endif
+				Next i
+				TP5->(MsUnlock())
+			Endif
+			DbSelectArea(cTRBA)
+			DbSkip()
+
+		End
+
+		oTmpTbl2:Delete()//Deleta Tabela Temporária 2
+
+	Endif
+
+	// DETALHE DA MANUTENCAO
+	DbSelectArea("TPG")
+	DbSetOrder(3)
+	If DbSeek(xfilial('TPG')+cCODFAM+cTIPMOD+cSERVIC+If(lIndTPG,cSEQUEN,STR(nSEQUEN,3)))
+
+		aCampos  := TPG->(DbStruct())
+		//Instancia classe FWTemporaryTable
+		oTmpTbl3 := FWTemporaryTable():New( cTRBB, aCampos )
+		//Adiciona os Indices
+		oTmpTbl3:AddIndex( "Ind01" , {"TPG_CODFAM","TPG_TIPMOD","TPG_SERVIC"} )
+		//Cria a tabela temporaria
+		oTmpTbl3:Create()
+
+		DbSelectArea("TPG")
+		While !eof() .And. TPG->TPG_filial == xfilial('TPG') .And.;
+		TPG->TPG_CODFAM == cCODFAM .And. TPG->TPG_TIPMOD == cTIPMOD .And.;
+		TPG->TPG_SERVIC == cSERVIC .And.;
+		IIF(lIndTPG,TPG->TPG_SEQREL == cSEQUEN,TPG->TPG_SEQUEN == nSEQUEN)
+
+			DbSelectArea(cTRBB)
+			RecLock((cTRBB),.T.)
+			For i := 1 TO FCount()
+				nn := FieldName(i)
+				pp := (cTRBB)->(fieldpos(nn))
+				vl := TPG->(fieldget(I))
+				(cTRBB)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBB)->(MSUNLOCK())
+			DbSelectArea("TPG")
+			DbSkip()
+		End
+
+		DbSelectArea(cTRBB)
+		Dbgotop()
+
+		While !Eof()
+			DbSelectArea("TPG")
+			DbSetOrder(3)
+			If !DbSeek(xfilial('TPG')+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+cSERVIC;
+			+If(lIndTPG,cSEQUEN,STR(nSEQUEN,3))+(cTRBB)->TPG_TAREFA+(cTRBB)->TPG_TIPORE;
+			+(cTRBB)->TPG_CODIGO)
+				RecLock("TPG",.T.)
+				For i := 1 To FCount()
+					nn := FieldName(i)
+					pp := TPG->(fieldpos(nn))
+					If nn == 'TPG_CODFAM'
+						TPG->TPG_CODFAM := TP9->TP9_CODFAM
+					ElseIf nn == 'TPG_TIPMOD'
+						TPG->TPG_TIPMOD := TP9->TP9_TIPMOD
+					Else
+						vl := (cTRBB)->(fieldget(I))
+						TPG->(FieldPut(pp,vl))
+					Endif
+				Next i
+
+				MSUNLOCK('TPG')
+			Endif
+
+			DbSelectArea(cTRBB)
+			DbSkip()
+		End
+
+		oTmpTbl3:Delete()//Deleta Tabela Temporária 3
+
+	Endif
+
+	// ETAPAS DA MANUTENCAO
+
+	DbSelectArea("TPH")
+	DbSetOrder(6)
+	If DbSeek(xfilial('TPH')+cCODFAM+cTIPMOD+cSERVIC+If(lIndTP5,cSEQUEN,STR(nSEQUEN,3)))
+
+		aCampos  := TPH->(DbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl4:= FWTemporaryTable():New( cTRBC, aCampos )
+		//Adiciona os Indices
+		oTmpTbl4:AddIndex( "Ind01" , {"TPH_CODFAM","TPH_TIPMOD","TPH_SERVIC" } )
+		//Cria a tabela temporaria
+		oTmpTbl4:Create()
+
+		lTP2 := .F.
+
+		DbSelectArea("TPH")
+		While !Eof() .And. TPH->TPH_filial == xfilial('TPH') .And.;
+		TPH->TPH_CODFAM == cCODFAM .And. TPH->TPH_TIPMOD == cTIPMOD .And.;
+		TPH->TPH_SERVIC == cSERVIC .And.;
+		IIF(lIndTPH,TPH->TPH_SEQREL == cSEQUEN,TPH->TPH_SEQUEN == nSEQUEN)
+
+			DbSelectArea(cTRBC)
+			RecLock((cTRBC),.T.)
+			For i := 1 TO FCount()
+				nn := FieldName(i)
+				pp := (cTRBC)->(fieldpos(nn))
+				vl := TPH->(fieldget(I))
+				(cTRBC)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBC)->(MSUNLOCK())
+
+			// OPCOES DAS ETAPAS DA MANUTENCAO
+
+			DbSelectArea("TP2")
+			DbSetOrder(3)
+			If DbSeek(xfilial('TP2')+cCODFAM+cTIPMOD+cSERVIC+If(lIndTP2,cSEQUEN,STR(nSEQUEN,3)))
+				If !lTP2
+
+					aCampos    := TP2->(DbStruct())
+
+					//Instancia classe FWTemporaryTable
+					oTmpTbl5:= FWTemporaryTable():New( cTRB1, aCampos )
+					//Adiciona os Indices
+					oTmpTbl5:AddIndex( "Ind01" , {"TP2_CODFAM","TP2_SERVIC","TP2_TIPMOD" } )
+					//Cria a tabela temporaria
+					oTmpTbl5:Create()
+
+					lTP2 := .T.
+
+				Endif
+
+				DbSelectArea("TP2")
+				While !Eof() .And. TP2->TP2_filial == xfilial('TP2') .And.;
+				TP2->TP2_CODFAM == cCODFAM .And. TP2->TP2_TIPMOD == cTIPMOD .And.;
+				TP2->TP2_servic == cSERVIC .And.;
+				IIF(lIndTP2,TP2->TP2_seqrel == cSEQUEN,TP2->TP2_SEQUEN == nSEQUEN) .and.;
+				TP2->TP2_TAREFA == TPH->TPH_TAREFA .And.;
+				TP2->TP2_ETAPA  == TPH->TPH_ETAPA
+
+					DbSelectArea(cTRB1)
+					RecLock((cTRB1),.T.)
+					For i := 1 TO FCount()
+						nn := FieldName(i)
+						pp := (cTRB1)->(fieldpos(nn))
+						vl := TP2->(fieldget(I))
+						(cTRB1)->(FieldPut(pp,vl))
+					Next i
+
+					(cTRB1)->(MSUNLOCK())
+
+					DbSelectArea("TP2")
+					DbSkip()
+
+				End
+
+			Endif
+
+			DbSelectArea("TPH")
+			DbSkip()
+
+		End
+
+		DbSelectArea(cTRBC)
+		Dbgotop()
+
+		While !Eof()
+
+			DbSelectArea("TPH")
+			DbSetOrder(6)
+			If !DbSeek(xfilial('TPH')+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+cSERVIC;
+			+If(lIndTPH,cSEQUEN,STR(nSEQUEN,3))+(cTRBC)->TPH_TAREFA+(cTRBC)->TPH_ETAPA)
+				RecLock("TPH",.T.)
+				For i := 1 TO FCount()
+					nn := FieldName(i)
+					pp := TPH->(fieldpos(nn))
+					If nn == 'TPH_CODFAM'
+						TPH->TPH_CODFAM := TP9->TP9_CODFAM
+					ElseIf nn == 'TPH_TIPMOD'
+						TPH->TPH_TIPMOD := TP9->TP9_TIPMOD
+					Else
+						vl := (cTRBC)->(fieldget(I))
+						TPH->(FieldPut(pp,vl))
+					EndIf
+				Next i
+				TPH->(MsUnlock())
+			Endif
+			DbSelectArea(cTRBC)
+			DbSkip()
+
+		End
+
+		oTmpTbl4:Delete()//Deleta Tabela Temporária 4
+
+		If lTP2
+
+			DbSelectArea(cTRB1)
+			DbGotop()
+			While !Eof()
+				DbSelectArea("TP2")
+				DbSetOrder(3)
+				If !DbSeek(xfilial('TP2')+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+cSERVIC;
+				+If(lIndTP2,cSEQUEN,STR(nSEQUEN,3))+(cTRB1)->TP2_TAREFA;
+				+(cTRB1)->TP2_ETAPA+(cTRB1)->TP2_OPCAO)
+					RecLock("TP2",.T.)
+					For i := 1 To FCount()
+						nn := FieldName(i)
+						pp := TP2->(fieldpos(nn))
+						If nn == 'TP2_CODFAM'
+							TP2->TP2_CODFAM := TP9->TP9_CODFAM
+						ElseIf nn == 'TP2_TIPMOD'
+							TP2->TP2_TIPMOD := TP9->TP9_TIPMOD
+						Else
+							vl := (cTRB1)->(fieldget(I))
+							TP2->(FieldPut(pp,vl))
+						EndIf
+					Next i
+					TP2->(MsUnlock())
+				Endif
+				DbSelectArea(cTRB1)
+				DbSkip()
+			End
+
+			oTmpTbl5:Delete()//Deleta Tabela Temporária 5
+
+		EndIf
+
+	EndIf
+
+	// DEPENDENCIAS DA MANUTENCAO
+
+	DbSelectArea("TPM")
+	DbSetOrder(2)
+	If DbSeek(xfilial('TPM')+cCODFAM+cTIPMOD+cSERVIC+If(lIndTPM,cSEQUEN,STR(nSEQUEN,3)))
+		aCampos  := TPM->(DbStruct())
+
+		//Instancia classe FWTemporaryTable
+		oTmpTbl6:= FWTemporaryTable():New( cTRBD, aCampos )
+		//Cria indices
+		oTmpTbl6:AddIndex( "Ind01" , {"TPM_CODFAM","TPM_SERVIC","TPM_TIPMOD" } )
+		//Cria a tabela temporaria
+		oTmpTbl6:Create()
+
+		DbSelectArea("TPM")
+		While !eof() .And. TPM->TPM_filial == xfilial('TPM') .And.;
+		TPM->TPM_CODFAM == cCODFAM .And. TPM->TPM_TIPMOD == cTIPMOD .And.;
+		TPM->TPM_SERVIC == cSERVIC .And.;
+		IIF(lIndTPM,TPM->TPM_SEQREL == cSEQUEN,TPM->TPM_SEQUEN == nSEQUEN)
+
+			DbSelectArea(cTRBD)
+			RecLock((cTRBD),.T.)
+			For i := 1 TO FCount()
+				nn := FieldName(i)
+				pp := (cTRBD)->(fieldpos(nn))
+				vl := TPM->(fieldget(I))
+				(cTRBD)->(FieldPut(pp,vl))
+			Next i
+
+			(cTRBD)->(MSUNLOCK())
+			DbSelectArea("TPM")
+			DbSkip()
+
+		End
+
+		DbSelectArea(cTRBD)
+		Dbgotop()
+
+		While !Eof()
+
+			DbSelectArea("TPM")
+			DbSetOrder(2)
+			If !DbSeek(xfilial('TPM')+TP9->TP9_CODFAM+TP9->TP9_TIPMOD+cSERVIC;
+			+If(lIndTPM,cSEQUEN,STR(nSEQUEN,3))+(cTRBD)->TPM_TAREFA+(cTRBD)->TPM_DEPEND)
+				RecLock("TPM",.T.)
+				For i := 1 TO FCount()
+					nn := FieldName(i)
+					pp := TPM->(fieldpos(nn))
+					If nn == 'TPM_CODFAM'
+						TPM->TPM_CODFAM := TP9->TP9_CODFAM
+					ElseIf nn == 'TPM_TIPMOD'
+						TPM->TPM_TIPMOD := TP9->TP9_TIPMOD
+					Else
+						vl := (cTRBD)->(fieldget(I))
+						TPM->(FieldPut(pp,vl))
+					Endif
+				Next i
+				TPM->(MsUnlock())
+			Endif
+			DbSelectArea(cTRBD)
+			DbSkip()
+		End
+
+		oTmpTbl6:Delete()//Deleta Tabela Temporária 6
+
+	EndIf
+
+Return .T.
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156DS
+Consistencia De sequencia
+@author Inacio Luiz Kolling
+@since 14/08/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA156DS()
+
+	Local lRet03 := .T., cSeqP := If(lIndTPF,MV_PAR03,Str(MV_PAR03,3))
+
+	DbSelectArea("TPF" )
+	Dbsetorder(1)
+
+	If Empty(mv_par03)
+	Else
+		If !ExistCpo("TPF",MV_PAR01+MV_PAR02+cSeqP)
+			lRet03 := .F.
+		Endif
+	Endif
+Return lRet03
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156AS
+Consistencia de Ate seguencia
+@author Inacio Luiz Kolling
+@since 14/08/2008
+@version undefined
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNTA156AS()
+	Local lRet04 := .T., cSeqP := If(lIndTPF,MV_PAR04,Str(MV_PAR04,3))
+	If mv_par04 = "ZZZ"
+	Else
+		If !NAOVAZIO(MV_PAR04)
+			lRet04 := .F.
+		Else
+			If mv_par04 < mv_par03
+				MsgInfo(STR0012,STR0013)
+				lRet04 := .F.
+			Else
+				If !ExistCpo("TPF",MV_PAR01+MV_PAR02+cSeqP)
+					lRet04 := .F.
+				Endif
+			Endif
+		Endif
+	Endif
+Return lRet04
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTA156FR
+Verifica se usa frota
+
+@type   Function
+
+@author Inacio Luiz Kolling
+@since  12/02/2008
+
+@return Lógico, Define se o ambiente está utilizando frotas
+/*/
+//-------------------------------------------------------------------
+Function MNTA156FR()
+
+	Local vRetS := {}
+	Local lRetS := IIf( FindFunction('MNTFrotas'), MNTFrotas(), GetNewPar('MV_NGMNTFR','N') == 'S' ) // Utiliza Frotas
+
+	// Somente valida o campo e os indices quando o release for menor que 12133
+	If lRetS .And. !lRel12133
+
+		vRetS := NGCADICBASE('TP9_TIPMOD','A','TP9')
+		lRetS := If(!vRetS[1],.F.,.T.)
+
+		If lRetS
+			lRetS := If(NGRETORDEM("TPF","TPF_FILIAL+TPF_CODFAM+TPF_TIPMOD+TPF_SERVIC+TPF_SEQREL",.T.) = 0,.f.,.t.)
+		Endif
+		If lRetS
+			lRetS := If(NGRETORDEM("TP5","TP5_FILIAL+TP5_CODFAM+TP5_TIPMOD+TP5_SERVIC+TP5_SEQREL+TP5_TAREFA",.T.) = 0,.f.,.t.)
+		Endif
+		If lRetS
+			lRetS := If(NGRETORDEM("TPG","TPG_FILIAL+TPG_CODFAM+TPG_TIPMOD+TPG_SERVIC+TPG_SEQREL+TPG_TAREFA+TPG_TIPORE+TPG_CODIGO",.T.) = 0,.f.,.t.)
+		Endif
+		If lRetS
+			lRetS := If(NGRETORDEM("TPH","TPH_FILIAL+TPH_CODFAM+TPH_TIPMOD+TPH_SERVIC+TPH_SEQREL+TPH_TAREFA+TPH_ETAPA",.T.) = 0,.f.,.t.)
+		Endif
+		If lRetS
+			lRetS := If(NGRETORDEM("TPM","TPM_FILIAL+TPM_CODFAM+TPM_TIPMOD+TPM_SERVIC+TPM_SEQREL+TPM_TAREFA+TPM_DEPEND",.T.) = 0,.f.,.t.)
+		Endif
+		If lRetS
+			lRetS := If(NGRETORDEM("TP2","TP2_FILIAL+TP2_CODFAM+TP2_TIPMOD+TP2_SERVIC+TP2_SEQREL+TP2_TAREFA+TP2_ETAPA+TP2_OPCAO",.T.) = 0,.f.,.t.)
+		Endif
+
+	Endif
+
+Return lRetS
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MNT156FAN
+Validacao ao informar uma familia
+@author Taina A. Cardoso
+@since 26/08/11
+@version undefined
+
+@type function
+/*/
+//---------------------------------------------------------------------
+Function MNT156FAN()
+
+	If !ExistCpo('ST6',MV_PAR01)
+		Return .F.
+	Else
+		dbSelectArea("TPF")
+		dbSetOrder(1)
+		If !dbSeek(xFilial("TPF")+MV_PAR01)
+			MsgInfo(STR0015,STR0016) //"Esta família não possui nenhuma manutenção padrão" ## "ATENCAO"
+			Return .F.
+		EndIf
+	EndIf
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNT156MOD
+Valida o tipo modelo(Tipo Modelo? - MV_PAR07) informado no pergunte MNT156
+
+@type   Function
+
+@author Eduardo Mussi
+@since  30/07/2021
+
+@Param  cTipoMod, Caracter, Tipo modelo a ser validado
+
+@return Lógico, define se o tipo modelo informado é valido
+/*/
+//-------------------------------------------------------------------
+Function MNT156MOD( cTipoMod )
+	// A partir do release 12.1.33 será considerado o tipo modelo '*' = TODOS
+Return RTrim( cTipoMod ) == '*' .Or. ExistCpo( 'TQR', cTipoMod )

@@ -1,0 +1,271 @@
+#INCLUDE "mntc980.ch"
+#INCLUDE "PROTHEUS.CH"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MNTC980
+Custos das O.S. trimestrais ( gráfico comparativo )  
+
+@author  Inacio Luiz Kolling
+@since   19/03/98
+@version P11/P12
+/*/
+//-------------------------------------------------------------------
+Function MNTC980()
+
+   Local aDBF     := {}
+   Local oTmpTbl1
+
+   Private cTRB := GetNextAlias()
+   Private cCadastro := OemToAnsi(STR0001) //"Custos das O.S. TRIMESTRAIS da Manutencao De "
+   Private nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1,nFol,nTempo,nSem
+   Private vVETHORAS := {}
+
+   Store 0.00 To nprevist,nrealiza,hprevist,hrealiza,nCusto,nQTD1,nFol
+   Store 0    To nTempo,nSem
+
+   cCadastro := OemToAnsi(cCadastro)
+   //+---------------------------------------+
+   //| Variaveis utilizadas para parametros  |
+   //| mv_par01     // De Ano                |
+   //| mv_par02     // Ate Ano               |
+   //| mv_par03     // De  Centro de custo   |
+   //| mv_par04     // Ate Centro de custo   |
+   //+---------------------------------------+
+
+   If Pergunte( 'MNT980', .T. )
+
+      aDBF := {{"CUSTO"   , "C", Len(stj->tj_ccusto), 0},;
+               {"VLRANO1" , "N", 18, 2},;
+               {"VLRANO2" , "N", 18, 2},;
+               {"VLRANO3" , "N", 18, 2}}
+
+      // Instancia classe FWTemporaryTable
+      oTmpTbl1 := FWTemporaryTable():New( cTRB, aDBF )
+      // Cria indices
+      oTmpTbl1:AddIndex( "Ind01" , {"CUSTO"} )
+      // Cria a tabela temporaria
+      oTmpTbl1:Create()
+
+      Processa({|| C980PRCO()})   // STJ & STS - HISTORICO
+
+      DbSelectArea(cTRB)
+      DbGoTop()
+      If Reccount() > 0
+         C980GRAFI()
+      Else
+         nDel := Help(" ",1,"NGTDADGRAF") //"Nao existem dados para montar o grafico..."###"ATENCAO"
+      EndIf
+
+      oTmpTbl1:Delete()
+         
+      DbSelectArea("STJ")
+      DbSetOrder(01)
+   EndIf
+
+Return
+
+/*
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³ Fun‡…o   ³C980PRCO   ³ Autor ³ Inacio Luiz Kolling   ³ Data ³   /06/97 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Descri‡…o³Processa as O.S. atual e O.S. historico                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTC980                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+*/
+Function C980PRCO()
+
+cCONDSTJ := 'STJ->TJ_TIPOOS = "B"'
+cCONDSTJ := cCONDSTJ + ' .And. STJ->TJ_SITUACA == "L" .And. STJ->TJ_TERMINO == "S" .AND. !EMPTY(STJ->TJ_DTMRINI)'                         
+cCONDSTJ := cCONDSTJ + ' .And. (STJ->TJ_CCUSTO >= mv_par03 .And. STJ->TJ_CCUSTO <= mv_par04)'
+
+cCONDSTS := 'STS->TS_TIPOOS = "B"'
+cCONDSTS := cCONDSTS + ' .And. STS->TS_SITUACA == "L" .And. STS->TS_TERMINO == "S" .AND. !EMPTY(STS->TS_DTMRINI)'
+cCONDSTS := cCONDSTS + ' .And. (STS->TS_CCUSTO >= mv_par03 .And. STS->TS_CCUSTO <= mv_par04)'
+
+Dmv_par01 := CTOD('01/01/'+STR(mv_par01,4))
+Dmv_par02 := CTOD('31/12/'+STR(mv_par02,4))
+
+DbSelectArea("STT")
+DbSetOrder(05)
+DbSeek(xFilial("STT")+DTOS(Dmv_par01),.T.)
+nReg := (LastRec() - Recno())
+
+DbSelectArea("STL")
+DbSetOrder(06)
+DbSeek(xFilial("STL")+DTOS(Dmv_par01),.T.)
+nReg := nReg + (LastRec() - Recno())
+
+ProcRegua(nReg)
+While !Eof() .And. STL->TL_FILIAL == xFilial("STL") .And. STL->TL_DTINICI <= Dmv_par02
+
+   IncProc()
+
+   If Alltrim(STL->TL_SEQRELA) <> "0"
+
+      DbSelectArea("STJ")
+      DbSetOrder(01)
+      If DbSeek(xFilial("STJ")+STL->TL_ORDEM+STL->TL_PLANO)
+         
+         If &(cCONDSTJ)
+        
+            nrealiza := 0.00
+         
+            // PROCURA O CALENDARIO
+            cCALEND := PROCALEND(STJ->TJ_CODBEM,STJ->TJ_SERVICO,STJ->TJ_SEQRELA)
+
+            // ESTA FUNCAO ESTA NO NGCUSTOS.PRX
+            vVETHORAS := NGTQUATINS(STL->TL_CODIGO,STL->TL_TIPOREG,STL->TL_USACALE,;
+                                    STL->TL_QUANTID,STL->TL_TIPOHOR,STL->TL_DTINICI,;
+                                    STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+            nQTDHORAS := vVETHORAS[1]
+
+            PROCINSUMO(STL->TL_TIPOREG,STL->TL_CODIGO,STL->TL_SEQRELA,;
+                       If(NGCADICBASE('TL_PCTHREX','A','STL',.F.),STL->TL_PCTHREX,Val(STL->TL_HREXTRA)),nQTDHORAS,STL->TL_DTINICI,;
+                       STL->TL_HOINICI,STL->TL_DTFIM,STL->TL_HOFIM,STL->TL_UNIDADE)
+
+            If nrealiza > 0
+               C980GRAVA(STL->TL_DTINICI,STJ->TJ_CCUSTO)
+            EndIf
+         EndIf
+      EndIf
+   EndIf
+   DbSelectArea("STL")
+   DbSkip()
+End
+
+DbSelectArea("STT")
+While !Eof() .And. STT->TT_FILIAL == xFilial("STT") .And. STT->TT_DTINICI <= Dmv_par02
+
+   IncProc()
+
+   If Alltrim(STT->TT_SEQRELA) <> "0"
+      DbSelectArea("STS")
+      DbSetOrder(01)
+      If DbSeek(xFilial("STS")+STT->TT_ORDEM+STT->TT_PLANO)
+          
+         If &(cCONDSTS)
+            
+            nrealiza := 0.00
+
+            // PROCURA O CALENDARIO
+            cCALEND := PROCALEND(STS->TS_CODBEM,STS->TS_SERVICO,STS->TS_SEQRELA)
+
+             vVETHORAS := NGTQUATINS(STT->TT_CODIGO,STT->TT_TIPOREG,STT->TT_USACALE,;
+                                     STT->TT_QUANTID,STT->TT_TIPOHOR,STT->TT_DTINICI,;
+                                     STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+             nQTDHORAS := vVETHORAS[1]
+
+            // ESTA FUNCAO ESTA NO NGCUSTOS.PRX
+            PROCINSUMO(STT->TT_TIPOREG,STT->TT_CODIGO,STT->TT_SEQRELA,;
+                       If(NGCADICBASE('TT_PCTHREX','A','STT',.F.),STT->TT_PCTHREX,Val(STT->TT_HREXTRA)),nQTDHORAS,STT->TT_DTINICI,;
+                       STT->TT_HOINICI,STT->TT_DTFIM,STT->TT_HOFIM,STT->TT_UNIDADE)
+
+            If nrealiza > 0
+               C980GRAVA(STT->TT_DTINICI,STS->TS_CCUSTO)
+            EndIf
+         EndIf
+      EndIf
+   EndIf
+   DbSelectArea("STT")
+   DbSkip()
+End
+Return .T.
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³C980GRAVA ³ Autor ³ Inacio Luiz Kolling   ³ Data ³          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Grava no arquivo auxiliar                                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MNTC980                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+/*/
+Function C980GRAVA(VDTMPINI,VCUSTO)
+DbSelectArea(cTRB)
+If !DbSeek(VCUSTO)
+   (cTRB)->(DbAppend())
+   (cTRB)->CUSTO := VCUSTO
+   
+   If Year(VDTMPINI) == mv_par01
+      (cTRB)->VLRANO1 := nrealiza
+   ElseIf Year(VDTMPINI) == (mv_par01+1)
+      (cTRB)->VLRANO2 := nrealiza
+   ElseIf Year(VDTMPINI) == mv_par02
+      (cTRB)->VLRANO3 := nrealiza
+   EndIf
+Else
+   If Year(VDTMPINI) == mv_par01
+      (cTRB)->VLRANO1 := (cTRB)->VLRANO1 + nrealiza
+   ElseIf Year(VDTMPINI) == (mv_par01+1)
+      (cTRB)->VLRANO2 := (cTRB)->VLRANO2 + nrealiza
+   ElseIf Year(VDTMPINI) == mv_par02
+      (cTRB)->VLRANO3 := (cTRB)->VLRANO3 + nrealiza
+   EndIf
+EndIf
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} C980GRAFI
+Grafico Custo das O.S. TRIMESTRAIS
+
+@author  Inacio Luiz Kolling
+@since   XX/XX/XXXX
+@version P11/P12
+/*/
+//-------------------------------------------------------------------
+Function C980GRAFI()
+
+   Local aDBF     := {}
+   Local cTRBV    := GetNextAlias()
+   Local ctilucen := "  "+cCadastro+" "+str(mv_par01,4)+STR0008+str(mv_par02,4) //" Ate "  
+   Local oTmpTbl2
+
+   // Campos da tabela temporária.
+   aDBF := {{'CODIGO' , 'C', 20, 0},;
+            {'NOMECOD', 'C', 30, 0},;
+            {'VALOR1' , 'N', 18, 0},;
+            {'VALOR2' , 'N', 18, 0},;
+            {'VALOR3' , 'N', 18, 0}}
+
+   // Instancia classe FWTemporaryTable
+   oTmpTbl2 := FWTemporaryTable():New( cTRBV, aDBF )
+   // Cria indices
+   oTmpTbl2:AddIndex( "Ind01" , {"CODIGO"} )
+   // Cria a tabela temporaria
+   oTmpTbl2:Create()
+
+   DbselectArea(cTRB)
+   Dbgotop()
+   Do While (cTRB)->( !Eof() )
+      (cTRBV)->(DbAppend())
+      (cTRBV)->CODIGO  := (cTRB)->CUSTO
+      (cTRBV)->NOMECOD := NGSEEK( 'CTT', (cTRB)->CUSTO, 1, 'SUBSTR( CTT->CTT_DESC01, 1, 20 )' )
+      (cTRBV)->VALOR1  := (cTRB)->VLRANO1
+      (cTRBV)->VALOR2  := (cTRB)->VLRANO2
+      (cTRBV)->VALOR3  := (cTRB)->VLRANO3
+      (cTRB)->( Dbskip() )
+   EndDo
+
+   // 1 - linha titulo do grafico (janela)
+   // 2 - linha titulo da direita do grafico
+   // 3 - linha titulo superior do grafico
+   // 4 - linha titulo da direita do grafico
+   // 5 - linha titulo da inferior do grafico
+   // 6 - linha series do grafico
+   // 7 - leitura ("A" - Arquivo temporario,"M" - Matriz)
+   // 8 - alias doa arquivo temporario com os dados /ou
+   // 9 - matriz com os dados
+
+   NGGRAFICO(" " + ctilucen, " ", STR0009, ctilucen, STR0010, { Str( mv_par01, 4 ),;
+               Str( ( mv_par01 + 1 ), 4 ), Str( mv_par02, 4 ) }, "A", (cTRBV) )
+
+   oTmpTbl2:Delete()
+
+Return

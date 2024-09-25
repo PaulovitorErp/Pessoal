@@ -1,0 +1,3532 @@
+#INCLUDE "MDTA640.ch"
+#include "AP5MAIL.ch"
+#Include "Protheus.ch"
+#INCLUDE "FWMVCDEF.CH"
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} MDTA640
+Rotina de cadastros de CAT - Cadastro de Acidente de Trabalho.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@param lCallPS, Lógico, Parâmetro que determina se é Prestador de Serviço.
+
+@sample MDTA640(.T.)
+
+@return Lógico, Retorna verdadeiro quando função estiver correta
+/*/
+//-------------------------------------------------------------------------
+Function MDTA640( lCallPS , nOpcAuto , aAuto , oModelAuto)
+
+	Local oBrowse
+
+	Private cPROGRAMA	:= "MDTA640"
+	Private lFicha		:= .T.
+	Private nSizeSI3	:= If( ( TAMSX3( "I3_CUSTO" )[ 1 ] ) < 1 , 9 , ( TAMSX3( "I3_CUSTO" )[ 1 ] ) )  //Usado no X3_RELACAO
+
+	//Parametrização do Sistema
+	Private lSigaMdtPS	:= SuperGetMv( "MV_MDTPS"   , .F. , "N" ) == "S"
+	Private lTNClegen	:= SuperGetMv( "MV_MDTACSE" , .F. , "N" ) == "S"
+
+	// Incluido por causa da rotina MSDOCUMENT, o MVC não precisa de nenhuma variável private
+	Private cCadastro	:= STR0006 //"Acidentes"
+	Private aRotina		:= MenuDef()
+	Private cFiltro		:= ""
+
+	//Variaveis utilizadas na Integração C.I.D.
+	Private nGrpCid, nCid, nDoenca
+	Private aTROCAF3	:= {}
+	Private oGetCID
+	Private cMarca	    := GetMark()
+	Private lInvert     := .F.
+
+	Default lCallPS		:= IsInCallStack( "MDTA640PS" )
+	Default aAuto 		:= {}
+	Default nOpcAuto 	:= 0
+
+	If Len(aAuto) > 0 //Caso seja rotina automatica
+		FwMVCRotAuto( oModelAuto , "TNC" , nOpcAuto , aAuto )
+	Else
+		If AMiIn( 35 ) .And. ; // Somente autorizado para SIGAMDT
+			fValExeRot( lCallPS ) //Caso houver algum inconsistencia será retornado as variaveis.
+
+			// Instanciamento da Classe de Browse
+			oBrowse := FWMBrowse():New()
+			// Definição da tabela do Browse
+			oBrowse:SetAlias('TNC')
+
+			If lTNClegen
+				// Definição da legenda
+				oBrowse:AddLegend( "Empty( TNC->TNC_CATINS ) .And. IIf( MDT640Rcb( 1 ), Empty( TNC->TNC_RECIBO ), .T. )", "GREEN", STR0049 ) //"Aberto"
+				oBrowse:AddLegend( "!Empty( TNC->TNC_CATINS ) .Or. IIf( MDT640Rcb( 1 ), !Empty( TNC->TNC_RECIBO ), .F. )", "RED", STR0048 ) //"Fechado"
+			EndIf
+
+			// Titulo da Browse
+			oBrowse:SetDescription( STR0006 )//"Acidentes"
+
+			// Ativação da Classe
+			oBrowse:Activate()
+		EndIf
+
+		// Retorna conteudo de variaveis padroes
+		SetKey( VK_F9, { | |  } )
+
+	EndIf
+
+Return NIL
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} MenuDef
+Definição do Menu (padrão MVC).
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MenuDef()
+
+@return aRotina, Array, Retorna as opções do Menu.
+/*/
+//-------------------------------------------------------------------------
+Static Function MenuDef()
+
+	Local lPyme		:= If( Type( "__lPyme" ) <> "U" , __lPyme , .F. )
+	Local lTNClegen	:= SuperGetMv( "MV_MDTACSE" , .F. , "N" ) == "S"
+	Local leSocial	:= IIf( FindFunction( "MDTVldEsoc" ), MDTVldEsoc(), .F. )
+	Local aRotina 	:= {}
+
+	ADD OPTION aRotina Title STR0001 Action 'AxPesqui'			OPERATION 1 ACCESS 0 //'Pesquisar'
+	ADD OPTION aRotina Title STR0002 Action 'VIEWDEF.MDTA640'	OPERATION 2 ACCESS 0 //'Visualizar'
+	ADD OPTION aRotina Title STR0003 Action 'VIEWDEF.MDTA640'	OPERATION 3 ACCESS 0 //'Incluir'
+	ADD OPTION aRotina Title STR0004 Action 'VIEWDEF.MDTA640'	OPERATION 4 ACCESS 0 //'Alterar'
+	ADD OPTION aRotina Title STR0005 Action 'VIEWDEF.MDTA640'	OPERATION 5 ACCESS 0 //'Excluir'
+	ADD OPTION aRotina Title STR0054 Action 'MDT640REAB'		OPERATION 9 ACCESS 0 //'Reabrir CAT'
+	ADD OPTION aRotina Title STR0007 Action 'VIEWDEF.MDTA640'	OPERATION 9 ACCESS 0 //'Copiar'
+
+	If leSocial
+		ADD OPTION aRotina Title STR0106 Action 'MDTGeraXml'	OPERATION 9 ACCESS 0 //'Gerar XML eSocial'
+		ADD OPTION aRotina Title STR0132 Action 'MDTA883'		OPERATION 9 ACCESS 0 //'Sincronizar Infos. CAT'
+		ADD OPTION aRotina Title STR0128 Action 'MDTR832'		OPERATION 9 ACCESS 0 //'Imprimir CAT eSocial'
+	EndIf
+
+	If lTNClegen //Utiliza Legenda.
+		ADD OPTION aRotina Title STR0047 Action 'MDTA640LEG' OPERATION 6 ACCESS 0 //'Legenda'
+	Endif
+	If !lPyme
+		ADD OPTION aRotina Title STR0008 Action 'MsDocument' OPERATION 4 ACCESS 0 //'Conhecimento'
+	EndIf
+
+Return aRotina
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Definição do Modelo (padrão MVC).
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample ModelDef()
+
+@return oModel, oBject, Retorna o modelo.
+/*/
+//-------------------------------------------------------------------------
+Static Function ModelDef()
+	// Cria as estruturas a serem usadas no Modelo de Dados
+	Local oStruTNC := FWFormStruct( 1, 'TNC' )
+	Local oStruTNM := FWFormStruct( 1, 'TNM' )
+	Local oStruTKK := FWFormStruct( 1, 'TKK' )
+	Local oStruTYE
+	Local oStruTYF
+	Local oModel // Modelo de dados construído
+	Local oEvent  := MDT640EVEN():New()
+
+	If AliasInDic("TYE")
+		oStruTYE := FWFormStruct( 1, 'TYE' )
+		oStruTYF := FWFormStruct( 1, 'TYF' )
+	EndIf
+	//|--------------------------------|
+	//| Remove elementos da estrutura  |
+	//|--------------------------------|
+	If AliasInDic("TYE") //Caso UPDDISTR foi aplicado
+		oStruTNC:RemoveField( "TNC_CODOBJ" )
+		oStruTNC:RemoveField( "TNC_DESOBJ" )
+		oStruTNC:RemoveField( "TNC_CODPAR" )
+		oStruTNC:RemoveField( "TNC_DESPAR" )
+	EndIf
+
+	oStruTNM:RemoveField( "TNM_ACIDEN" )
+	oStruTNM:RemoveField( "TNM_DESACI" )
+
+	//|----------------------------------|
+	//| Cria o objeto do Modelo de Dados |
+	//|----------------------------------|
+	oModel := MPFormModel():New( 'MDT640M' ,/*bPre*/ , /*bPos*/ , /*bCommit*/ , /*bCancel*/ )
+
+	//|-------------------------------------------------|
+	//| Adiciona ao modelo um componente de formulário  |
+	//|-------------------------------------------------|
+	oModel:AddFields( 'TNCMASTER', /*cOwner*/, oStruTNC )
+
+	//|--------------------------------------------|
+	//| Adiciona ao modelo uma componente de grid  |
+	//|--------------------------------------------|
+	oModel:AddGrid( 'TNMDETAIL' , 'TNCMASTER', oStruTNM , /*bLinePre*/, /*bLinePos*/, /*bPreVal*/, /*bPosVal*/ , /*BLoad*/ )
+	oModel:AddGrid( 'TNMDCOMPL' , 'TNCMASTER', oStruTKK, /*bLinePre*/, /*bLinePos*/, /*bPreVal*/, /*bPosVal*/ , /*BLoad*/ )
+	If AliasInDic("TYE")
+		oModel:AddGrid( 'TNMCAUSA'  , 'TNCMASTER', oStruTYE, /*bLinePre*/, /*bLinePos*/, /*bPreVal*/, /*bPosVal*/ , /*BLoad*/ )
+		oModel:AddGrid( 'TNMPARTE'  , 'TNCMASTER', oStruTYF, /*bLinePre*/,/*bLinePos*/, /*bPreVal*/ , /*bPosVal*/ , /*BLoad*/ )
+	Endif
+
+	//|----------------------------------------------------|
+	//| Retira a obrigatoriedade de preenchimento da Grid. |
+	//|----------------------------------------------------|
+	oModel:GetModel( 'TNMDETAIL' ):SetOptional( .T. )
+	oModel:GetModel( 'TNMDCOMPL' ):SetOptional( .T. )
+	If AliasInDic("TYE")
+		oModel:GetModel( 'TNMCAUSA'  ):SetOptional( .T. )
+		oModel:GetModel( 'TNMPARTE'  ):SetOptional( .T. )
+	EndIf
+
+	//|------------------------------------|
+	//| Valida repetição de Linha da Grid. |
+	//|------------------------------------|
+	oModel:GetModel( "TNMDETAIL" ):SetUniqueLine( { 'TNM_CODDES', 'TNM_DTDESP' } )
+	oModel:GetModel( "TNMDCOMPL" ):SetUniqueLine( { 'TKK_GRPCID', 'TKK_CID' } )
+	If AliasInDic("TYE")
+		oModel:GetModel( "TNMCAUSA"  ):SetUniqueLine( { 'TYE_CAUSA' } )
+		oModel:GetModel( "TNMPARTE"  ):SetUniqueLine( { 'TYF_CODPAR' } )
+	EndIf
+
+	//|--------------------------------------------------|
+	//| Faz relacionamento entre os componentes do model |
+	//|--------------------------------------------------|
+	oModel:SetRelation( 'TNMDETAIL', { { 'TNM_FILIAL', 'xFilial( "TNM" )' }, { 'TNM_ACIDEN', 'TNC_ACIDEN' } }, TNM->( IndexKey( 1 ) ) )
+	oModel:SetRelation( 'TNMDCOMPL', { { 'TKK_FILIAL', 'xFilial( "TKK" )' }, { 'TKK_ACIDEN', 'TNC_ACIDEN' } }, TKK->( IndexKey( 1 ) ) )
+	If AliasInDic("TYE")
+		oModel:SetRelation( 'TNMCAUSA' , { { 'TYE_FILIAL', 'xFilial( "TYE" )' }, { 'TYE_ACIDEN', 'TNC_ACIDEN' } }, TYE->( IndexKey( 1 ) ) )
+		oModel:SetRelation( 'TNMPARTE' , { { 'TYF_FILIAL', 'xFilial( "TYF" )' }, { 'TYF_ACIDEN', 'TNC_ACIDEN' } }, TYF->( IndexKey( 1 ) ) )
+	EndIf
+	//|------------------------------------------|
+	//| Adiciona a descrição do Modelo de Dados  |
+	//|------------------------------------------|
+	oModel:SetDescription( STR0006 )//"Despesas X Acidentes"
+
+	//|---------------------------------------------------------|
+	//| Adiciona a descrição dos Componentes do Modelo de Dados |
+	//|---------------------------------------------------------|
+	oModel:GetModel( 'TNCMASTER' ):SetDescription( STR0006 ) //"Despesas X Acidentes"
+	oModel:GetModel( 'TNMDETAIL' ):SetDescription( STR0102 ) //"Despesas"
+	oModel:GetModel( 'TNMDCOMPL' ):SetDescription( STR0103 ) //"CID Compl."
+	If AliasInDic("TYE")
+		oModel:GetModel( 'TNMCAUSA' ):SetDescription( STR0104 ) //"Causador Acidente"
+		oModel:GetModel( 'TNMPARTE' ):SetDescription( STR0105 ) //"Parte Atingida"
+	Endif
+	oModel:InstallEvent("MDT640EVEN", /*cOwner*/, oEvent)
+
+
+	//|----------------------------|
+	//| Retorna o Modelo de dados  |
+	//|----------------------------|
+Return oModel
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} ViewDef
+Definição do View (padrão MVC).
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017d
+
+@sample ViewDef()
+
+@return oView, oBject, Retorna o modelo.
+/*/
+//-------------------------------------------------------------------------
+Static Function ViewDef()
+	// Cria um objeto de Modelo de dados baseado no ModelDef do fonte informado
+	Local oModel   := FWLoadModel( 'MDTA640' )
+	// Interface de visualização construída
+	Local oView
+	// Cria as estruturas a serem usadas na View
+	Local oStruTNC := FWFormStruct( 2, 'TNC' )
+	Local oStruTNM := FWFormStruct( 2, 'TNM' )
+	Local oStruTKK := FWFormStruct( 2, 'TKK' )
+	Local oStruTYE
+	Local oStruTYF
+
+	If AliasInDic("TYE")
+		oStruTYE := FWFormStruct( 2, 'TYE' )
+		oStruTYF := FWFormStruct( 2, 'TYF' )
+	EndIf
+
+	//|-----------------------|
+	//| Cria o objeto de View |
+	//|-----------------------|
+	oView := FWFormView():New()
+
+	//|--------------------------------------------|
+	//| Define qual Modelo de dados será utilizado |
+	//|--------------------------------------------|
+	oView:SetModel( oModel )
+
+	//|-------------------------------|
+	//| Remove elementos da estrutura |
+	//|-------------------------------|
+	If AliasInDic("TYE")//Caso UPDDISTR foi aplicado.
+		oStruTNC:RemoveField( "TNC_CODOBJ" )
+		oStruTNC:RemoveField( "TNC_DESOBJ" )
+		oStruTNC:RemoveField( "TNC_CODPAR" )
+		oStruTNC:RemoveField( "TNC_DESPAR" )
+	EndIf
+	oStruTNC:RemoveField( "TNC_TPACID" )
+
+	oStruTNM:RemoveField( "TNM_ACIDEN" )
+	oStruTNM:RemoveField( "TNM_DESACI" )
+	oStruTKK:RemoveField( "TKK_ACIDEN" )
+	If AliasInDic("TYE")//Caso UPDDISTR foi aplicado.
+		oStruTYE:RemoveField( "TYE_ACIDEN" )
+		oStruTYF:RemoveField( "TYF_ACIDEN" )
+	EndIf
+
+	//|-------------------------------------------------------|
+	//| Adiciona no nosso View um controle do tipo formulário |
+	//|-------------------------------------------------------|
+	oView:AddField( 'VIEW_TNC', oStruTNC, 'TNCMASTER' )
+
+	//|--------------------------------------------------|
+	//| Adiciona no nosso View um controle do tipo Grid  |
+	//|--------------------------------------------------|
+	oView:AddGrid( 'VIEW_TNM', oStruTNM, 'TNMDETAIL' )
+	oView:AddGrid( 'VIEW_TKK', oStruTKK, 'TNMDCOMPL' )
+	If AliasInDic("TYE")
+		oView:AddGrid( 'VIEW_TYE', oStruTYE, 'TNMCAUSA' )
+		oView:AddGrid( 'VIEW_TYF', oStruTYF, 'TNMPARTE' )
+	EndIf
+	//|--------------------------------------------------------------|
+	//| Cria um "box" horizontal para receber cada elemento da view  |
+	//|--------------------------------------------------------------|
+	oView:CreateHorizontalBox( 'SUPERIOR' , 60 ) //Box utilizado na Field.
+	oView:CreateHorizontalBox( 'INFERIOR' , 40 ) //Box utilizado no Sheet (Grid).
+
+	//|--------------------------------------------------------------|
+	//| Cria as 'abas' da parte inferior da tela.                    |
+	//|--------------------------------------------------------------|
+	oView:CreateFolder( 'FOLDER','INFERIOR' )
+	oView:AddSheet( 'FOLDER', 'ABA01', STR0102 ) //"Despesas"
+	oView:AddSheet( 'FOLDER', 'ABA02', STR0103 ) //"CID Compl."
+	If AliasInDic("TYE")
+		oView:AddSheet( 'FOLDER', 'ABA03', STR0104 ) //"Agente Causador"
+		oView:AddSheet( 'FOLDER', 'ABA04', STR0105 ) //"Parte do Corpo Atingida"
+	EndIf
+	//|----------------------------------------------------------------------|
+	//| Cria um "box" horizontal para receber cada elemento dentro das abas  |
+	//|----------------------------------------------------------------------|
+	oView:CreateHorizontalBox( 'INFERIOR1', 100,,, 'FOLDER', 'ABA01' )
+	oView:CreateHorizontalBox( 'INFERIOR2', 100,,, 'FOLDER', 'ABA02' )
+	If AliasInDic("TYE")
+		oView:CreateHorizontalBox( 'INFERIOR3', 100,,, 'FOLDER', 'ABA03' )
+		oView:CreateHorizontalBox( 'INFERIOR4', 100,,, 'FOLDER', 'ABA04' )
+	EndIf
+	//|-------------------------------------------------------------------|
+	//| Relaciona o identificador (ID) da View com o "box" para exibição  |
+	//|-------------------------------------------------------------------|
+	oView:SetOwnerView( 'VIEW_TNC', 'SUPERIOR'  )
+	oView:SetOwnerView( 'VIEW_TNM', 'INFERIOR1' )
+	oView:SetOwnerView( 'VIEW_TKK', 'INFERIOR2' )
+	If AliasInDic("TYE")
+		oView:SetOwnerView( 'VIEW_TYE', 'INFERIOR3' )
+		oView:SetOwnerView( 'VIEW_TYF', 'INFERIOR4' )
+	EndIf
+
+	//Adiciona o botão de dias debitados e vincula à tecla F10
+	If FindFunction( "MDTR831" )
+    	oView:AddUserButton( STR0092 + " (F10)", "", { || fDiasDebt() }, "", VK_F10, { MODEL_OPERATION_INSERT, MODEL_OPERATION_UPDATE } ) //"Dias Debitados"
+	EndIf
+
+	//Adiciona o botão de dias debitados e vincula à tecla F12
+	oView:AddUserButton( STR0102 + " (F12)", "", { || fGetDesp() }, "", VK_F12, { MODEL_OPERATION_INSERT, MODEL_OPERATION_UPDATE } ) //"Despesas"
+
+	//|----------------------------------------------------------------------|
+	//| Inclusão de itens no Ações Relacionadas de acordo com o NGRightClick |
+	//|----------------------------------------------------------------------|
+	NGMVCUserBtn( oView )
+
+Return oView
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} MDTA640LEG
+Cria uma janela contendo a legenda da mBrowse.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MDTA640LEG()
+
+@return Sempre verdadeiro.
+/*/
+//-------------------------------------------------------------------------
+Function MDTA640LEG()
+
+	Local cTitulo := If( Type( "cCadastro" ) == "U" , cCadastro , STR0047 ) //"Legenda"
+
+	BrwLegenda(	OemToAnsi( cTitulo )				, ; //Titulo do Cadastro
+	OemToAnsi( STR0047 )							, ; //"Legenda"
+	{ { "BR_VERMELHO"	, OemToAnsi( STR0048 )	}	, ; //"Fechado"
+	{   "BR_VERDE"		, OemToAnsi( STR0049 )	}	} ) //Aberto
+
+Return .T.
+
+//----------------------------------------------------------------------------------
+/*/{Protheus.doc} MDTA640LOK
+Consiste a existencia de outro codigo na GetDados
+
+@type function
+
+@source MDTA640.prx
+
+@param lFIm , Lógico, Determinar se é Linok ou TudoOk
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MDTA640LOK( .F. )
+
+@return lRet, Lógico, Retorna verdadeiro quando todas as condiçõe forem válidas.
+/*/
+//---------------------------------------------------------------------------------
+Function MDTA640LOK( lFim )
+
+	//Variaveis auxiliares
+	Local lRet 		:= .T.
+	//Variais utilizadas no Model
+	Local oModel 	:= FWModelActive()  //Copia o Model utilizado.
+	Local oGrid 	:= oModel:GetModel( 'TNMDETAIL' ) //Posiciona no Model da Grid
+	Local nLinAtual := oGrid:GetLine()  //Linha Atual.
+	Local nLenGrid  := oGrid:Length()   //Quantidade Total de linhas do oGrid.
+	Local nLinha	:= 0
+
+	Default lFim 	:= .F. //Define fim como .F.
+
+	For nLinha := 1 to nLenGrid
+		oGrid:GoLine(nLinha)
+		If !( oGrid:IsDeleted() ) .And. lRet
+			If lFim .or. nLinha == nLinAtual//Caso seja final ou linha atual
+				If Empty(oGrid:GetValue( "TNM_CODDES" ) ) .And. !Empty(oGrid:GetValue( "TNM_VALDES" ) ) .And. If( lFim , nLenGrid <> 1 , .T. )
+					//Mostra mensagem de Help
+					Help( 1 , " " , "OBRIGAT2" , , oGrid:aHeader[ oGrid:GetIdField( "TNM_CODDES" ) , 1 ]  )
+					lRet := .F.
+				EndIf
+			EndIf
+		Endif
+	Next nLinha
+
+Return lRet
+
+//---------------------------------------------------------------------------------
+/*/{Protheus.doc} fGetDesp
+Cria a tela de seleção das despesas a serem relacionadas ao acidente
+
+@sample	fGetDesp()
+
+@author	Luis Fellipy Bett
+@since	13/06/2022
+
+@return Nil, Nulo
+/*/
+//----------------------------------------------------------------------------------
+Static Function fGetDesp()
+
+	//Pega o modelo e view ativos
+	Local oModel := FWModelActive()
+	Local oView := FWViewActive()
+
+	//Variáveis utilizadas na montagem da tabela temporária
+    Local oTmpDes
+
+    //Variáveis de tabelas temporárias
+    Private cTblDes := GetNextAlias()
+    
+    //Função que cria a tabela temporária das despesas
+    fCrtTblDes( cTblDes, @oTmpDes )
+
+    //Busca as despesas cadastradas
+    fGetDespes( cTblDes )
+    
+    //Posiciona na tabela posicionando no primeiro registro
+    dbSelectArea( cTblDes )
+    ( cTblDes )->( dbGoTop() )
+
+    //Verifica se existe algum EPI necessário ao funcionário salvo na tabela temporária
+    If ( cTblDes )->( Eof() )
+
+        //Emite a mensagem informando que não existem despesas cadastradas no sistema
+        Help( ' ', 1, "Atenção", , "Não existem despesas cadastradas no sistema", 1, 0, , , , , , { "Favor cadstrar algum despesa" } )
+
+    Else
+    
+        //Monta a tela referente à seleção das despesas do acidente e retorna se a tela foi confirmada ou não
+        If fMonTelDes( cTblDes, oModel )
+
+            //Carrega os EPI's selecionados na grid de EPI's entregues
+            fLoadDes( cTblDes, oModel, oView )
+
+        EndIf
+
+    EndIf
+
+    //Exclui a tabela temporária
+    oTmpDes:Delete()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fCrtTblDes
+Cria a tabela temporária referente às despesas do acidente
+
+@sample fCrtTblDes( "SGC00092", oTmpTbl )
+
+@param  cTblEPI, Caracter, Tabela temporária
+@param  oTmpEPI, Objeto, Objeto da tabela temporária
+
+@author Luis Fellipy Bett
+@since  13/06/2022
+/*/
+//---------------------------------------------------------------------
+Static Function fCrtTblDes( cTblDes, oTmpDes )
+
+    //Variáveis de montagem da tabela temporária
+    Local aDBF := {}
+
+    //-------------------------------
+    // Montagem da tabela temporária
+    //-------------------------------
+	aAdd( aDBF, { "OK", "C", 02, 0 } ) //Seleção
+    aAdd( aDBF, { "TNM_CODDES", "C", TAMSX3( "TNM_CODDES" )[1], 0 } ) //Código da despesa
+    aAdd( aDBF, { "TNM_NOMDES", "C", TAMSX3( "TNM_NOMDES" )[1], 0 } ) //Nome da despesa
+    aAdd( aDBF, { "TNM_VALDES", "N", TAMSX3( "TNM_VALDES" )[1], 0 } ) //Valor da despesa
+    aAdd( aDBF, { "TNM_DTDESP", "D", TAMSX3( "TNM_DTDESP" )[1], 0 } ) //Data da despesa
+
+    // Definição da tabela temporária
+    oTmpDes := FWTemporaryTable():New( cTblDes, aDBF )
+    
+    //Adiciona os índices
+    oTmpDes:AddIndex( "1", { "TNM_CODDES" } )
+
+    //Cria a tabela temporária
+    oTmpDes:Create()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fGetDespes
+Busca as despesas cadastradas
+
+@sample fGetDespes( "SGC00092" )
+
+@param  cTblEPI, Caracter, Tabela temporária
+
+@author Luis Fellipy Bett
+@since  13/06/2022
+/*/
+//---------------------------------------------------------------------
+Static Function fGetDespes( cTblDes )
+
+	//Variáveis de tabelas temporárias
+	Local cAliasTNL := GetNextAlias()
+
+	//Busca as despesas cadastradas
+	BeginSQL Alias cAliasTNL
+
+		SELECT
+			TNL.TNL_CODDES, TNL.TNL_NOMDES
+		FROM
+			%Table:TNL% TNL
+		WHERE
+			TNL.TNL_FILIAL = %xFilial:TNL% AND
+			TNL.%NotDel%
+
+	EndSQL
+
+	//Posiciona na tabela para salvas as despesas
+	dbSelectArea( cAliasTNL )
+	( cAliasTNL )->( dbGoTop() )
+
+	//Percorre as despesas adicionando na tabela temporária
+	While ( cAliasTNL )->( !Eof() )
+
+		//Salva o registro
+		RecLock( cTblDes, .T. )
+
+			( cTblDes )->TNM_CODDES := ( cAliasTNL )->TNL_CODDES
+			( cTblDes )->TNM_NOMDES := ( cAliasTNL )->TNL_NOMDES
+			( cTblDes )->TNM_VALDES := 0
+			( cTblDes )->TNM_DTDESP := SToD( "" )
+
+		( cTblDes )->( MsUnlock() )
+
+		//Pula o registro
+		( cAliasTNL )->( dbSkip() )
+
+	End
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fMonTelDes
+Cria a tela referente à seleção das despesas do acidente
+
+@sample fMonTelDes( "SGC00092" )
+
+@param  cTblDes, Caracter, Tabela temporária
+@param  oModel, Objeto, Objeto do modelo de dados
+
+@return lConfirm, Boolean, Indica se a tela foi confirmada ou não
+
+@author Luis Fellipy Bett
+@since  13/06/2022
+/*/
+//---------------------------------------------------------------------
+Static Function fMonTelDes( cTblDes, oModel )
+
+    //Variáveis de controle
+    Local lConfirm := .F.
+    
+    //Variáveis de montagem da tela de seleção dos EPI's necessários
+    Local aCpsCab  := {}
+    Local cChange  := "{ || }"
+    Local aColsMrk := {}
+    Local aCpoLmp  := {}
+
+    //---------------------------------
+    // Adiciona os campos do cabeçalho
+    //---------------------------------
+    //01 - nRow do campo say
+    //02 - nCol do campo say
+    //03 - bText do campo say
+    //04 - nWidth campo say
+    //05 - nHeight campo say
+    //06 - nRow do campo get
+    //07 - nCol do campo get
+    //08 - bSetGet do campo get
+    //09 - nWidth do campo get
+    //10 - nHeight do campo get
+    //11 - cPict do campo get
+    //12 - bValid do campo get
+    //13 - bWhen do campo get
+    //14 - lReadOnly do campo get
+    //15 - lPassword do campo get
+    //16 - cReadVar do campo get
+    //17 - lHasButton do campo get
+    //18 - lNoButton do campo get
+    //19 - cPlaceHold do campo get
+	aAdd( aCpsCab, { 017, 020, { || "Acidente" }, 030, 010, 015, 052, { || oModel:GetValue( "TNCMASTER", "TNC_ACIDEN" ) }, 010, 008, "", { || .T. }, { || .F. }, .F., .F., "", .F., .T., "" } )
+	aAdd( aCpsCab, { 017, 105, { || "Descrição" }, 030, 010, 015, 140, { || oModel:GetValue( "TNCMASTER", "TNC_DESACI" ) }, 235, 008, "", { || .T. }, { || .F. }, .F., .F., "", .F., .T., "" } )
+
+    //----------------------------------------------
+    // Adiciona as colunas utilizadas no markbrowse
+    //----------------------------------------------
+    //01 - Nome do campo
+    //02 - Campo editável?
+    //03 - Título do campo
+    //04 - Conteúdo a ser mostrado no campo
+    //05 - Tipo do campo
+    //06 - Picture do campo
+    //07 - Tamanho do campo
+    //08 - Tamanho dos decimais do campo
+    //09 - Combo Box do campo
+    //10 - Validação do campo
+    aAdd( aColsMrk, { "TNM_CODDES", .F., , "{ || ( xObjCrt )->TNM_CODDES }", , , , , , "{ || .T. }" } )
+    aAdd( aColsMrk, { "TNM_NOMDES", .F., , "{ || ( xObjCrt )->TNM_NOMDES }", , , , , , "{ || .T. }" } )
+    aAdd( aColsMrk, { "TNM_VALDES", .T., , "{ || ( xObjCrt )->TNM_VALDES }", , , , , , "{ || .T. }" } )
+    aAdd( aColsMrk, { "TNM_DTDESP", .T., , "{ || ( xObjCrt )->TNM_DTDESP }", , , , , , "{ || .T. }" } )
+
+    //Define a variável com o bloco de código a ser executada na troca de linha
+    cChange := "{ || oObjBrw:SetEditCell( !Empty( ( xObjCrt )->OK ) ) }"
+
+	//Define os campos que devem ser limpos ao deselecionar um registro do mark
+	aCpoLmp := { "TNM_VALDES", "TNM_DTDESP" }
+
+    //---------------------------------------------------------
+    // Criação do browse para seleção das despesas do acidente
+    //---------------------------------------------------------
+	lConfirm := MDTFwBrwse( .F., "Despesas", "Table", cTblDes, aCpsCab, .F., .T., , .T., cChange, aColsMrk, , aCpoLmp )
+
+Return lConfirm
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fLoadDes
+Carrega as despesas na grid do acidente
+
+@sample fLoadDes( "SGC00092", oModel, oView )
+
+@param  cTblDes, Caracter, Tabela temporária
+@param  oModel, Objeto, Objeto do modelo de dados
+@param  oView, Objeto, Objeto da view
+
+@return Nil, Nulo
+
+@author Luis Fellipy Bett
+@since  13/06/2022
+/*/
+//---------------------------------------------------------------------
+Static Function fLoadDes( cTblDes, oModel, oView )
+
+	//Variáveis do modelo
+	Local oModelTNM := oModel:GetModel( "TNMDETAIL" )
+
+	//Variáveis de controle
+	Local lFirstLin := .F.
+
+	//Posiciona na primeira linha
+	oModelTNM:GoLine( 1 )
+
+	//Verifica se o campo de código do EPI está vazio
+	If Empty( oModelTNM:GetValue( "TNM_CODDES" ) )
+
+		//Define que será a primeira linha
+		lFirstLin := .T.
+
+	EndIf
+
+	//Posiciona na tabela temporária
+	dbSelectArea( cTblDes )
+	dbSetOrder( 1 )
+	( cTblDes )->( dbGoTop() )
+
+	//Percorre os registros incluindo na grid
+	While ( cTblDes )->( !Eof() )
+
+		//Caso o registro estiver selecionado
+		If !Empty( ( cTblDes )->OK )
+	
+			//Caso não for a primeira linha
+			If !lFirstLin
+
+				//Adiciona uma nova linha
+				oModelTNM:AddLine()
+
+			EndIf
+
+			//Carrega os valores na grid
+			oModelTNM:LoadValue( "TNM_CODDES", ( cTblDes )->TNM_CODDES )
+			oModelTNM:LoadValue( "TNM_NOMDES", ( cTblDes )->TNM_NOMDES )
+			oModelTNM:LoadValue( "TNM_VALDES", ( cTblDes )->TNM_VALDES )
+			oModelTNM:LoadValue( "TNM_DTDESP", ( cTblDes )->TNM_DTDESP )
+
+			//Define a variável de controle como .F.
+            lFirstLin := .F.
+
+		EndIf
+
+		//Pula o registro
+		( cTblDes )->( dbSkip() )
+
+	End
+
+	//Volta para o primeiro registro
+    oModelTNM:GoLine( 1 )
+
+	//Atualiza a view
+	oView:Refresh()
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A640CARMEM
+Carrega memória dos campo da TNC
+TNC_CODFUN
+TNC_DESCFU
+TNC_CC
+TNC_DESCCC
+
+@type function
+
+@source MDTA640.prx
+
+@return Nil
+
+@sample A640CARMEM()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function A640CARMEM()
+
+	Local cCentroCus := ""
+	Local cCodFuncao := ""
+	Local cDescCC    := ""
+	Local cDescFunc  := ""
+	Local cFilFunc	 := ""
+	Local cMatFunc	 := ""
+	Local cCodTab	 := "SI3"
+	Local cCodDescCC := "SI3->I3_DESC"
+	Local cEmp 		 := FWGrpCompany()
+	Local dDataSRE   := CTOD("//")
+	Local aArea		 := GetArea()
+
+	//Utilização do modelo de Dados.
+	Local oModel
+
+	If !IsInCallStack("MDTA410")
+		oModel := FWModelActive() //Busca model utilizado.
+	EndIf
+
+	If Alltrim( SuperGetMv( "MV_MCONTAB" , .F. , "CTB" ) ) == "CTB"
+		cCodTab 	 := "CTT"
+		cCodDescCC 	 := "CTT->CTT_DESC01"
+	Endif
+
+	IncluiOld	:= Inclui
+	AlteraOld	:= Altera
+	Inclui		:= .F.
+	Altera		:= .T.
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 1 )
+	dbSeek( xFilial( "TM0" ) + If(!IsInCallStack("MDTA410"),oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ),M->TNC_NUMFIC) )
+	dbselectArea( "SRA" )
+	dbSetOrder( 1 )
+	If dbSeek( xFilial( "SRA" , TM0->TM0_FILFUN ) + TM0->TM0_MAT )
+		cCodFuncao := SRA->RA_CODFUNC
+		cDescFunc  := NGseek( "SRJ", SRA->RA_CODFUNC , 1 , "SRJ->RJ_DESC" )
+		cCentroCus := SRA->RA_CC
+		cDescCC    := NGseek( cCodTab, SRA->RA_CC , 1 , cCodDescCC )
+		cFilFunc   := TM0->TM0_FILFUN
+		//--------------------------------------------------
+		// Busca o Centro de custo que o funcionário estava
+		// na data do acidente.
+		//--------------------------------------------------
+		dbSelectArea( "SRE" )
+		dbSetOrder( 2 ) //RE_EMPP+RE_FILIALP+RE_MATP
+		dbSeek( cEmp + PADR( SRA->RA_FILIAL , Len(SRE->RE_FILIALP) ) + SRA->RA_MAT )
+		While SRE->( !Eof() ) .And. SRE->RE_EMPP == cEmp .And. SRE->RE_FILIALP == PADR( SRA->RA_FILIAL , Len(SRE->RE_FILIALP) ) .And.;
+		SRE->RE_MATP == SRA->RA_MAT
+
+			If If(!IsInCallStack("MDTA410"),oModel:GetValue( 'TNCMASTER', 'TNC_DTACID' ),M->TNC_DTACID) < SRE->RE_DATA
+				If !Empty( dDataSRE ) .And. ( dDataSRE >= If(!IsInCallStack("MDTA410"),oModel:GetValue( 'TNCMASTER', 'TNC_DTACID' ),M->TNC_DTACID) )
+					SRE->( dbSkip() )
+					Loop
+				EndIf
+				cCentroCus := SRE->RE_CCD
+				cFilFunc   := SRE->RE_FILIALD
+				cMatFunc   := SRE->RE_MATD
+			Else
+				cCentroCus := SRE->RE_CCP
+				cFilFunc   := SRE->RE_FILIALP
+				cMatFunc   := SRE->RE_MATP
+			EndIf
+
+			dDataSRE := SRE->RE_DATA
+			cDescCC  := NGseek( cCodTab, cCentroCus , 1 , cCodDescCC )
+
+			dbSelectArea( "SRE" )
+			dbSkip()
+		End
+	Else
+		cCodFuncao := TM0->TM0_CODFUN
+		cDescFunc  := NGseek( "SRJ", TM0->TM0_CODFUN , 1 , "SRJ->RJ_DESC" )
+		cCentroCus := TM0->TM0_CC
+		cDescCC    := NGseek( cCodTab, TM0->TM0_CC , 1 , cCodDescCC )
+		cFilFunc   := TM0->TM0_FILFUN
+		cMatFunc   := TM0->TM0_MAT
+	Endif
+
+	If !IsInCallStack("MDTA410")
+		oModel:LoadValue( 'TNCMASTER' , 'TNC_CODFUN' , cCodFuncao )
+		oModel:LoadValue( 'TNCMASTER' , 'TNC_CC'	 , cCentroCus )
+		oModel:LoadValue( 'TNCMASTER' , 'TNC_DESCFU' , cDescFunc  )
+		oModel:LoadValue( 'TNCMASTER' , 'TNC_DESCCC' , cDescCC 	  )
+	Else
+		M->TNC_CODFUN := cCodFuncao
+		M->TNC_CC 	  := cCentroCus
+		M->TNC_DESCFU := cDescFunc
+		M->TNC_DESCCC := cDescCC
+	EndIf
+
+	Inclui		:= IncluiOld
+	Altera		:= AlteraOld
+	lRefresh	:= .T.
+
+	RestArea( aArea )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fSendMail
+Envia e-mail de aviso sobre acidentes do trabalho
+
+@type function
+
+@source MDTA640.prx
+
+@sample fSendMail()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@obs Utilizado no evento MDTA640A
+
+@return lRet, Lógico, Quando validar corretamente retorna .T.
+/*/
+//---------------------------------------------------------------------
+Function fSendMail()
+
+	Local nOpcao 		:= 0
+	Local oMemo, oDlgMail, oMenu
+	Local aButMail		:= {}
+	Local aArea			:= GetArea()
+	Local lRet			:= .T.
+	Local lOk			:= .F.// Variavel que verifica se foi conectado OK
+	Local lAutOk		:= .F.
+	Local lSendOk		:= .F.// Variavel que verifica se foi enviado OK
+	Local lAccsMat		:= IIf( FindFunction( "MDTVldFldAcc" ), MDTVldFldAcc( "RA_MAT" ), .T. )
+
+	Local cMailConta	:= AllTrim( GetMV( "MV_RELACNT" , , " " ) )
+	Local cMailServer	:= AllTrim( GetMV( "MV_RELSERV" , , " " ) )
+	Local cMailSenha	:= AllTrim( GetMV( "MV_RELPSW"  , , " " ) )
+	Local lSmtpAuth		:= GetMv( "MV_RELAUTH" , , .F. )
+	Local cUserAut		:= Alltrim( GetMv( "MV_RELAUSR" , , cMailConta ) )//Usuário para Autenticação no Servidor de Email
+	Local cSenhAut		:= Alltrim( GetMv( "MV_RELAPSW" , , cMailSenha ) )//Senha para Autenticação no Servidor de Email
+	Local nTimeOut		:= GetMv( "MV_RELTIME" , , 120 ) //Tempo de Espera antes de abortar a Conexão
+
+	Private cNome		:= Space( Len( SRA->RA_NOME ) )
+	Private cMatricula	:= Space( Len( SRA->RA_MAT ) )
+	Private cEmailTo	:= Space( 120 )
+	Private cEmailCC	:= Space( 120 )
+	Private cAssunto	:= PadR( STR0010 , 120 )//"SIGAMDT - Aviso de Acidente de Trabalho"
+	Private cMensagem	:= " "
+	Private cAttach		:= " "
+	Private lAciTM0		:= .f.
+
+	dbSelectArea( "TM0" )
+	dbSetOrder( 1 )
+
+	If dbSeek( xFilial( "TM0" ) + TNC->TNC_NUMFIC )
+		lAciTM0 := .t.
+	Endif
+
+	aAdd( aButMail , { STR0026 , { | | NGCAD01( "TNC" , TNC->( Recno() ) , 2 ) } , STR0026 , STR0026 } )
+
+	// Verifica se existe o SMTP Server
+	If 	Empty( cMailServer )
+		Help( " " , 1 , STR0011 , , STR0012 + Chr( 13 ) + STR0013 , 5 , 5 ) //"ATENÇÃO"//"O servidor SMTP não foi configurado."//"Verifique o parâmetro (MV_RELSERV)."
+		RestArea( aArea )
+		lRet := .F.
+	EndIf
+
+	If lSmtpAuth
+
+		// Verifica se existe a CONTA
+		If lRet .And. Empty( cMailConta )
+			Help( " " , 1 , STR0011 , , STR0014 + Chr( 13 ) + STR0015 , 5 , 5 ) //"ATENÇÃO"//"A conta do e-mail não foi configurada."//"Verifique o parâmetro (MV_RELACNT)."
+			RestArea( aArea )
+			lRet := .F.
+		EndIf
+
+		// Verifica se existe a Senha
+		If lRet .And. Empty( cMailSenha )
+			Help( " " , 1 , STR0011 , , STR0016 + Chr( 13 ) + STR0017 , 5 , 5 ) //"ATENÇÃO"  //"A senha do e-mail nao foi configurada." //"Verifique o parâmetro (MV_RELPSW)."
+			RestArea( aArea )
+			lRet := .F.
+		EndIf
+
+	EndIf
+
+	If lRet
+
+		Define MsDialog oDlgMail From 0 , 0 To 400 , 520 Title STR0018 Pixel //"E-mail de Aviso"
+
+			TSay():New( 036 , 012 , { | | OemtoAnsi( STR0019 ) } , oDlgMail , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Matrícula"
+			TGet():New( 034 , 040 , { | u | If( PCount() > 0 , cMatricula := u , MDTHideCpo( cMatricula, "RA_MAT" ) ) } , oDlgMail , 040 , 008 , "" , { | | fVldMatric( cMatricula ) } , CLR_BLACK , CLR_WHITE , ,;
+			.F. , , .T. /*lPixel*/ , , .F. , { | | lAccsMat }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "SRA" , "" , , , , .T. /*lHasButton*/ )
+			TSay():New( 036 , 096 , { | | OemtoAnsi( STR0020 ) } , oDlgMail , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Nome"
+			TGet():New( 034 , 120 , { | u | If( PCount() > 0 , cNome := u , MDTHideCpo( cNome, "RA_NOME" ) ) } , oDlgMail , 130 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+			.F. , , .T. /*lPixel*/ , , .F. , { | | .F. }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "" , , , , .F. /*lHasButton*/ )
+
+			TSay():New( 049 , 012 , { | | OemtoAnsi( STR0021 ) } , oDlgMail , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Para"
+			TGet():New( 047 , 040 , { | u | If( PCount() > 0 , cEmailTo := u , cEmailTo ) } , oDlgMail , 210 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+			.F. , , .T. /*lPixel*/ , , .F. , { | | .T. }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "" , , , , .F. /*lHasButton*/ )
+
+			TSay():New( 062 , 012 , { | | OemtoAnsi( STR0022 ) } , oDlgMail , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Cópia"
+			TGet():New( 060 , 040 , { | u | If( PCount() > 0 , cEmailCc := u , cEmailCc ) } , oDlgMail , 210 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+			.F. , , .T. /*lPixel*/ , , .F. , { | | .T. }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "" , , , , .F. /*lHasButton*/ )
+
+			TSay():New( 075 , 012 , { | | OemtoAnsi( STR0023 ) } , oDlgMail , , , .F. , .F. , .F. , .T. , CLR_BLACK , CLR_WHITE , 200 , 010 ) //"Assunto"
+			TGet():New( 073 , 040 , { | u | If( PCount() > 0 , cAssunto := u , cAssunto ) } , oDlgMail , 210 , 008 , "" , { | | .T. } , CLR_BLACK , CLR_WHITE , ,;
+			.F. , , .T. /*lPixel*/ , , .F. , { | | .T. }/*bWhen*/ , .F. , .F. , , .F. /*lReadOnly*/ , .F. , "" , "" , , , , .F. /*lHasButton*/ )
+
+			oMemo := tMultiGet():New( 91 , 10 , {|u| If( Pcount() > 0 , cMensagem := u , cMensagem )} , oDlgMail , 240 , 100 ,/*oFont*/,/*lHScroll*/,/*uParam9*/,/*uParam10*/,;
+			/*uParam11*/,.T.,/*uParam13*/, /*uParam14*/, /*bWhen*/, /*uParam16*/, /*uParam17*/ )
+
+			//		NGPOPUP( asMenu , @oMenu )
+			oDlgMail:bRClicked:= { | o , x , y | oMenu:Activate( x , y , oDlgMail ) }
+
+		Activate MsDialog oDlgMail ON INIT EnchoiceBar(	oDlgMail , ;
+		{ | | If( !fValCpo640() , nOpcao:=0 , ( nOpcao := 1 , oDlgMail:End() ) ) } , ;
+		{ | | nOpcao := 0 , oDlgMail:End() } , , aButMail ) Centered
+
+		If nOpcao == 1
+
+			CONNECT SMTP SERVER cMailServer ACCOUNT cMailConta PASSWORD cMailSenha TIMEOUT nTimeOut RESULT lOk
+
+				If !lAutOk
+
+					If lSmtpAuth
+						lAutOk := MailAuth( cUserAut , cSenhAut )
+
+						If !lAutOk
+							Help( , , STR0027 , , STR0028 , 5 , 5 )
+							DISCONNECT SMTP SERVER
+							lRet := .F.
+						Endif
+
+					Else
+						lAutOk := .T.
+					EndIf
+
+				EndIf
+
+				If lRet
+
+					If lOk .And. lAutOk
+						SEND MAIL FROM cMailConta;
+						TO cEmailTo;
+						CC cEmailcc;
+						SUBJECT Trim( cAssunto );
+						BODY cMensagem;
+						RESULT lSendOk
+
+						If !lSendOk
+							Help( " " , 1 , STR0011 , , STR0029 , 5 , 5 )  //"ATENÇÃO" //"Erro no envio de e-mail"
+						Else
+							Help( , , STR0027 , , STR0030 , 5 , 5 )//"Atenção"
+						EndIf
+
+					Else
+						Help( " " , 1 , STR0011 , , STR0031 , 5 , 5 ) //"ATENÇÃO"//"Erro na conexão com o servidor SMTP."
+					EndIf
+
+
+				EndIf
+
+			DISCONNECT SMTP SERVER
+
+		EndIf
+
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fVldMatric
+Validacao do campo Matricula
+
+@type function
+
+@source MDTA640.prx
+
+@sample fVldMatric( '000001' )
+
+@param cMat Caracter Matricula do Funcionário
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Static Function fVldMatric( cMat )
+
+	Local lRet := .T.
+
+	If !ExCpoMDT( "SRA" , cMat )
+		lRet := .F.
+	Endif
+
+	If lRet
+		cNome     := SRA->RA_NOME
+		cEmailTo  := PadR( SRA->RA_EMAIL , 120 )
+
+		cMensagem := STR0032 + Alltrim( SRA->RA_NOME ) + CHR( 13 ) + CHR( 10 ) + CHR( 13 ) + CHR( 10 )  //"Prezado(a) "
+		cMensagem += STR0033  //"Comunico que ocorreu um acidente de trabalho"
+		If lAciTM0
+			cMensagem += 	STR0034 + Alltrim( TM0->TM0_NOMFIC ) + STR0035 + Alltrim( TM0->TM0_MAT ) + ; //" com o(a) funcionário(a) " //", matricula nº "
+			STR0036 + Alltrim( TM0->TM0_RG )//" e R.G. "
+		Endif
+		cMensagem += "." + CHR( 13 ) + CHR( 10 ) + CHR(13) + CHR( 10 )
+		cMensagem += STR0037 + CHR( 13 ) + CHR( 10 )//"Dados do Acidente"
+		cMensagem += STR0038 + DtoC( TNC->TNC_DTACID ) + STR0039 + TNC->TNC_HRACID + CHR( 13 ) + CHR( 10 )//"Data: "  //"  Hora: "
+		cMensagem += STR0040 + TNC->TNC_DESACI + CHR( 13 ) + CHR( 10 )  //"Descrição: "
+		If !Empty( TNC->TNC_DETALH )
+			cMensagem += STR0041 + TNC->TNC_DETALH//"Descrição Detalhada: "
+		Endif
+		cMensagem += 	CHR(13) + CHR( 10 ) + CHR( 13 ) + CHR( 10 ) + STR0042 + ; //"Obs: Mensagem gerada automaticamente pelo sistema de Medicina "
+		STR0043//"e Segurança do Trabalho - SIGAMDT"
+	EndIf
+
+Return lRet
+
+//------------------------------------------------------------------------
+/*/{Protheus.doc} fValCpo640
+Validacao todos os campos obrigatorios
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando campos de e-mail validos
+
+@sample fValCpo640()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//------------------------------------------------------------------------
+Function fValCpo640()
+
+	Local lRet := .T.
+
+	If 	Empty( cEmailTo )
+		Aviso( OemToAnsi( STR0027 ) , OemToAnsi( STR0044 ) , { "Ok" } )  //"Atenção"  //"Não foi informado o e-mail do destinatário."
+		lRet := .F.
+	EndIf
+	If 	Empty( cMatricula )
+		Aviso( OemToAnsi( STR0027 ) , OemToAnsi( STR0045 ) , { "Ok" } )  //"Atenção" //"Não foi informado a matrícula do destinatário."
+		lRet := .F.
+	EndIf
+	If 	Empty( cAssunto )
+		If !MsgYesNo( STR0046 , OemToAnsi( STR0027 ) )  //"Não foi informado o assunto. Deseja enviá-lo agora?"//"Atenção"
+			lRet := .F.
+		Endif
+	EndIf
+
+Return lRet
+
+//------------------------------------------------------------------------
+/*/{Protheus.doc} fDiasDebt
+Monta em tela a tabela Fixa de Dias Debitados, dando a possibilidade de
+Impressão do relatório.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MDTA640
+
+@return Sempre verdadeiro.
+/*/
+//------------------------------------------------------------------------
+Static Function fDiasDebt()
+
+	Local aHeadFx	:= {}
+	Local aColsFx	:= {}
+	Local oDlg
+	Local oGetDados
+	Local aButtons :={}
+
+	//Adiciona o botão de Imprimir
+	aAdd( aButtons , { STR0088 , { | | MDTR831() } , STR0088 , STR0088 } )//"Imprimir"
+
+	Define MsDialog oDlg From 0 , 0 To 480 , 800 Title STR0089 Pixel //"Tabela de Dias Debitados"
+
+	aAdd( aHeadFx , {;
+		  			 STR0090 , ; //X3Titulo()
+		  			 "FX_NAT" , ;//X3_CAMPO
+		  			 "@!" , ;	 //X3_PICTURE
+		  			 80 , ;		 //X3_TAMANHOd
+		  			 0 , ;		 //X3_DECIMAL
+		  			 "" , ;		 //X3_VALID
+		  			 "" , ;		 //X3_USADO
+		  			 "C" , ;	 //X3_TIPO
+		  			 "" , ;		 //X3_F3
+		  			 "V" , ;	 //X3_CONTEXT
+		  			 "" , ;		 //X3_CBOX
+		  			 "" , ;		 //X3_RELACAO
+		  			 "" } )		 //X3_WHEN
+
+	aAdd( aHeadFx , { ;
+		  			 STR0091 , ;  	//X3Titulo()
+		  			 "FX_PERC" , ;	//X3_CAMPO
+		  			 "@!" , ;		//X3_PICTURE
+		  			 10 , ;			//X3_TAMANHO
+		  			 0 , ;		 	//X3_DECIMAL
+		  			 "" , ;			//X3_VALID
+		  			 "" , ;			//X3_USADO
+		  			 "C" , ;		//X3_TIPO
+		  			 "" , ;			//X3_F3
+		  			 "V" , ;		//X3_CONTEXT
+		  			 "" , ;			//X3_CBOX
+		  			 "" , ;			//X3_RELACAO
+		  			 "" } )			//X3_WHEN
+
+	aAdd( aHeadFx , { ;
+		  			 STR0092 , ;	//X3Titulo()
+		  			 "FX_DIAS" , ;	//X3_CAMPO
+		  			 "@!" , ;	 	//X3_PICTURE
+		  			 10 , ;			//X3_TAMANHO
+		  			 0 , ;		 	//X3_DECIMAL
+		  			 "" , ;			//X3_VALID
+		  			 "" , ;			//X3_USADO
+		  			 "C" , ;	 	//X3_TIPO
+		  			 "" , ;			//X3_F3
+		  			 "V" , ;	 	//X3_CONTEXT
+		  			 "" , ;			//X3_CBOX
+		  			 "" , ;			//X3_RELACAO
+		  			 "" } )			//X3_WHEN
+
+	//--------------------------------------------
+	// Popula aCols com os valores Fixos
+	//--------------------------------------------
+	aColsFx := aClone( MDT831CAT() )
+
+	//-----------------------------------
+	// Montagem da GetDados
+	//-----------------------------------
+	oGetDados := MsNewGetDados():New( 60 , 5 , 224 , 459 , , "AllwaysTrue()" , "" , , , , , , , , oDlg , aHeadFx , aColsFx )
+	oGetDados:oBrowse:Align := CONTROL_ALIGN_ALLCLIENT
+
+	ACTIVATE MSDIALOG oDlg ON INIT EnchoiceBar( 	oDlg , ;
+											  { | | lOk := .T. , oDlg:End() } , ;
+											  { | | lOk := .F. , oDlg:End() } , .F. , aButtons ) CENTERED
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640VAll
+Realiza validação pós validação do Modelo.
+
+@type function
+
+@source MDTA640.prx
+
+@param nCpo - Campo que indica o indice de validação;
+
+@author Guilherme Benekendorf
+@since 25/11/2013
+
+@obs Função também utilizada no dicionário de dados.
+
+@return lRet - Boolean
+
+/*/
+//---------------------------------------------------------------------
+Function MDT640VAll( nCpo )
+
+	Local lRet := .T.
+	//Utilização do Modelo de Dados.
+	Local oModel
+
+	Default nCpo := 0
+
+	If IsInCallStack("MDTA410")
+		If nCpo == 0 .Or. nCpo == 1
+			//Se Tipo CAT igual 3-Óbito, campo TNC_MORTE deve indicar como 1=Sim
+			If !Empty(M->TNC_MORTE)
+				If M->TNC_TIPCAT == "3" .And. M->TNC_MORTE <> "1"
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_TIPCAT")+ "'" + STR0082 + CRLF + "'"+NGRETTITULO("TNC_MORTE") + "'" + STR0083 , 6 , 6 )//"Atenção"##" esta indicando Óbito."##" deve estar como '1=Sim'."
+					lRet := .F.
+				EndIf
+				If lRet
+					If nCpo == 1
+						lRet := Pertence("12") .And. !f640MORT()
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. ( nCpo == 0 .Or. nCpo == 2 )
+			// Feito a verificação de CNPJ apenas para o Brasil
+			If cPaisLoc == "BRA"
+				If M->TNC_INDLOC == "2" .AND. !CGC(M->TNC_CGCPRE,,.F.)
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_INDLOC")+ "'" + STR0084 + CRLF + STR0085 , 6 , 6 )//"Atenção"##" esta indicando que o acidente ocorreu na empresa onde presta serviço."##"O CNPJ da empresa deverá ser informado."
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. nCpo == 3
+			If !Empty(M->TNC_CATORI)
+				If fChkCATOri(M->TNC_CATORI , M->TNC_NUMFIC )
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_CATORI")+ "'" + STR0086 + CRLF + STR0093 , 6 , 6 )//"Atenção"## " inválido."##"O número informado deve ser de uma CAT já cadastra anteriormente, pertencente ao mesmo funcionário."
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. (nCpo == 0)
+			If M->TNC_INDACI <> "3" .And.; //Verifica se Horas Trab. foi preenchida.
+				Empty(SubSTR(M->TNC_HRTRAB,1,2))  .And.;
+				Empty(SubSTR(M->TNC_HRTRAB,4,5))
+				Help( , , STR0027 , , "'"+NGRETTITULO("TNC_HRTRAB")+ "'" + STR0086 + CRLF + STR0087 , 6 , 6 )//"Atenção"## " inválido."##"Informar o número de horas decorridas entre o inicio da jornada de trabalho e o acidente."
+				lRet := .F.
+			EndIf
+		EndIf
+	Else
+		oModel 	:= FWModelActive() //Chama modelo de Dados utilizado.
+		If nCpo == 0 .Or. nCpo == 1
+			//Se Tipo CAT igual 3-Óbito, campo TNC_MORTE deve indicar como 1=Sim
+			If !Empty(oModel:GetValue( 'TNCMASTER', 'TNC_MORTE' ))
+				If oModel:GetValue( 'TNCMASTER', 'TNC_TIPCAT' ) == "3" .And. oModel:GetValue( 'TNCMASTER', 'TNC_MORTE' ) <> "1"
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_TIPCAT")+ "'" + STR0082 + CRLF + "'"+NGRETTITULO("TNC_MORTE") + "'" + STR0083 , 6 , 6 )//"Atenção"##" esta indicando Óbito."##" deve estar como '1=Sim'."
+					lRet := .F.
+				EndIf
+				If lRet
+					If nCpo == 1
+						lRet := Pertence("12") .And. f640MORT()
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. ( nCpo == 0 .Or. nCpo == 2 )
+			// Feito a verificação de CNPJ apenas para o Brasil
+			If cPaisLoc == "BRA"
+				If oModel:GetValue( 'TNCMASTER', 'TNC_INDLOC' ) == "2" .AND. !CGC(oModel:GetValue( 'TNCMASTER', 'TNC_CGCPRE' ),,.F.)
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_INDLOC")+ "'" + STR0084 + CRLF + STR0085 , 6 , 6 )//"Atenção"##" esta indicando que o acidente ocorreu na empresa onde presta serviço."##"O CNPJ da empresa deverá ser informado."
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. nCpo == 3
+			If !Empty(oModel:GetValue( 'TNCMASTER', 'TNC_CATORI' ))
+				If fChkCATOri(oModel:GetValue( 'TNCMASTER', 'TNC_CATORI' ) , oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) )
+					Help( , , STR0027 , , "'"+NGRETTITULO("TNC_CATORI")+ "'" + STR0086 + CRLF + STR0093 , 6 , 6 )//"Atenção"## " inválido."##"O número informado deve ser de uma CAT já cadastra anteriormente, pertencente ao mesmo funcionário."
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. (nCpo == 0)
+			If oModel:GetValue( 'TNCMASTER', 'TNC_INDACI' ) <> "3" .And.; //Verifica se Horas Trab. foi preenchida.
+				Empty(SubSTR(oModel:GetValue( 'TNCMASTER', 'TNC_HRTRAB' ),1,2))  .And.;
+				Empty(SubSTR(oModel:GetValue( 'TNCMASTER', 'TNC_HRTRAB' ),4,5))
+				Help( , , STR0027 , , "'"+NGRETTITULO("TNC_HRTRAB")+ "'" + STR0086 + CRLF + STR0087 , 6 , 6 )//"Atenção"## " inválido."##"Informar o número de horas decorridas entre o inicio da jornada de trabalho e o acidente."
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fChkCATOri
+Verifica se a CAT Origem informa já foi cadastrada e se é do mesmo
+funcionario.
+
+@type function
+
+@source MDTA640.prx
+
+@param cCATOrigem - Numero da CAT origem
+@param cFuncCAT   - Funcionario a ser verificado
+
+@author Guilherme Benekendorf
+@since 25/11/2013
+
+@return lRet - Boolean
+/*/
+//---------------------------------------------------------------------
+Static Function fChkCATOri( cCATOrigem , cFuncCAT )
+
+	Local lRet := .T.
+	Local nQuantCAT
+	Local cQry
+	Local cAliasQry := GetNextAlias()
+
+	nQuantCAT:= 0
+
+	cQry := "SELECT COUNT(*) nQuantCAT FROM " + RetSqlName("TNC") + " TNC "
+	cQry += "WHERE "
+	cQry += "TNC.TNC_FILIAL = " + ValToSql(xFilial("TNC")) + " AND "
+	cQry += "TNC.TNC_NUMFIC = " + ValToSql(cFuncCAT)       + " AND "
+	cQry += "TNC.TNC_CATINS = " + ValToSql(cCATOrigem)     + " AND "
+	cQry += "TNC.D_E_L_E_T_ <> '*'"
+
+	cQry := ChangeQuery( cQry )
+
+	MPSysOpenQuery( cQry , cAliasQry )
+
+	dbSelectArea(cAliasQry)
+	If (cAliasQry)->( !Eof() )
+		lRet := (cAliasQry)->nQuantCAT == 0
+	EndIf
+
+	(cAliasQry)->(dbCloseArea())
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A640VALFIC
+Validar campo TNC_NUMFIC e alimentar o C.Custo e Funcao
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando ficha correta
+
+@sample A640VALFIC()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@Obs Função usada em X3_VALID de TNC_NUMFIC/TNC_DTACID.
+/*/
+//---------------------------------------------------------------------
+Function A640VALFIC( nCampo )
+
+	Local lRet		:= .t.
+	Local lMtest	:= NGCADICBASE( "TNC_MTEST1" , "A" , "TNC" , .F. )
+	Local aArea		:= GetArea()
+	Local dDtAcid   := StoD('')
+	Local cNumFic   := ''
+
+	//Chama o modelo utilizado.
+	Local oModel
+
+	Default nCampo 	:= 1
+
+	If IsInCallStack("MDTA410")
+		If Empty( M->TNC_NUMFIC )
+			M->TNC_VITIMA := "2"
+			ValVitAcid()
+		ElseIf nCampo == 1 //TNC_NUMFIC
+			If !ExistCpo( "TM0" , M->TNC_NUMFIC , , )
+				lRet := .f.
+			Else
+				If lMtest
+					If !Empty( M->TNC_MTEST1 ) .Or. !Empty( M->TNC_MTEST2 )
+						dbSelectArea( "TM0" )
+						dbSetOrder( 1 )
+						dbSeek( xFilial( "TM0" ) + M->TNC_NUMFIC )
+						If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == M->TNC_MTEST1 .Or.;
+							!Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == M->TNC_MTEST1
+							Help( , , STR0011 , , STR0071 , 5 , 5 )//"A testemunha não pode ter a mesma matricula da ficha medica."###"ATENÇÃO"
+							lRet := .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			If lRet
+				If M->TNC_VITIMA == "2"
+					M->TNC_VITIMA := "1"
+				Endif
+			Endif
+		EndIf
+
+		//Valida a data do acidente com a data de admissão do fucnionário
+		If lRet .And. !Empty(M->TNC_DTACID) .And. !Empty(M->TNC_NUMFIC)
+			dbSelectArea( "TM0" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "TM0" ) + M->TNC_NUMFIC )
+			If !Empty(TM0->TM0_MAT) .And. Posicione('SRA', 1, xFilial( 'SRA', TM0_FILFUN ) + TM0->TM0_MAT, 'RA_ADMISSA') > M->TNC_DTACID
+				If !MsgYesNo( STR0107, STR0011 ) //'ATENÇÃO'#'A data do acidente é menor do que a data de admissão do funcionário. Deseja manter a data?'
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. !Empty( M->TNC_NUMFIC )
+			A640CARMEM()
+		EndIf
+
+	Else
+
+		oModel 	 := FWModelActive()
+		dDtAcid  := oModel:GetValue( 'TNCMASTER', 'TNC_DTACID' )
+		cNumFic   := oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' )
+
+		If Empty( cNumFic )
+			oModel:LoadValue( 'TNCMASTER', 'TNC_VITIMA', "2" )
+			ValVitAcid()
+		ElseIf nCampo == 1 //TNC_NUMFIC
+			If !ExistCpo( "TM0" , cNumFic , , )
+				lRet := .f.
+			Else
+				If lMtest
+					If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ) ) .Or. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' ) )
+						dbSelectArea( "TM0" )
+						dbSetOrder( 1 )
+						dbSeek( xFilial( "TM0" ) + cNumFic )
+						If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ) .Or.;
+							!Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' )
+							Help( , , STR0011 , , STR0071 , 5 , 5 )//"A testemunha não pode ter a mesma matricula da ficha medica."###"ATENÇÃO"
+							lRet := .F.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+
+			If lRet
+				If oModel:GetValue( 'TNCMASTER', 'TNC_VITIMA' ) == "2"
+					oModel:LoadValue( 'TNCMASTER', 'TNC_VITIMA', "1" )
+				Endif
+			Endif
+		EndIf
+
+		//Valida a data do acidente com a data de admissão do fucnionário
+		If lRet .And. !Empty(dDtAcid) .And. !Empty(cNumFic)
+			dbSelectArea( "TM0" )
+			dbSetOrder( 1 )
+			dbSeek( xFilial( "TM0" ) + cNumFic )
+			If !Empty(TM0->TM0_MAT) .And. Posicione('SRA', 1, xFilial( 'SRA', TM0_FILFUN ) + TM0->TM0_MAT, 'RA_ADMISSA') > dDtAcid
+				If !IsBlind()
+					If !MsgYesNo( STR0107, STR0011 ) //'ATENÇÃO'#'A data do acidente é menor do que a data de admissão do funcionário. Deseja manter a data?'
+						lRet := .F.
+					EndIf
+				Else
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+
+		If lRet .And. !Empty( cNumFic )
+			A640CARMEM()
+		Endif
+	EndIf
+
+	RestArea( aArea )
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ValVitAcid
+Validar campo TNC_VITIMA
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet - Retorno Lógico
+
+@sample ValVitAcid()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function ValVitAcid()
+
+	Local lRet := .T.
+
+	//Chama modelo utilizado.
+	Local oModel
+
+	If IsInCallStack("MDTA410")
+		//Caso seja chamado através do SXB - TNCFIC não permite utiliza a opção "Não" para vitima
+		If ( Type( "lSXB" ) <> "U" .And. lSXB .And. M->TNC_VITIMA == "2" .And. !Empty( M->TNC_NUMFIC ) ) .Or.;
+			( IsInCallStack( "MDTA675" ) .And. !Empty( M->TNC_NUMFIC ) .ANd. M->TNC_VITIMA == "2" )
+			Help( , , STR0011 , , STR0097 , 6 , 6 )//"Não é permitido alterar o campo Vítima para 'Não', pois este acidente possui uma vítima já determinada."
+			lRet := .F.
+		Else
+			If M->TNC_VITIMA == "2"
+				M->TNC_NUMFIC := Space( Len( M->TNC_NUMFIC ) )
+				M->TNC_NOMFIC := Space( Len( M->TNC_NOMFIC ) )
+				M->TNC_CODFUN := Space( Len( M->TNC_CODFUN ) )
+				M->TNC_CC 	  := Space( Len( M->TNC_CC	   ) )
+				M->TNC_DESCFU := Space( Len( M->TNC_DESCFU ) )
+				M->TNC_DESCCC := Space( Len( M->TNC_DESCCC ) )
+			Endif
+		Endif
+	Else
+		oModel := FWModelActive()
+		//Caso seja chamado através do SXB - TNCFIC não permite utiliza a opção "Não" para vitima
+		If ( Type( "lSXB" ) <> "U" .And. lSXB .And. oModel:GetValue( 'TNCMASTER', 'TNC_VITIMA' ) == "2" .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) ) ) .Or.;
+			( IsInCallStack( "MDTA675" ) .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) ) .ANd. oModel:GetValue( 'TNCMASTER', 'TNC_VITIMA' ) == "2" )
+			Help( , , STR0011 , , STR0097 , 6 , 6 )//"Não é permitido alterar o campo Vítima para 'Não', pois este acidente possui uma vítima já determinada."
+			lRet := .F.
+		Else
+			If oModel:GetValue( 'TNCMASTER', 'TNC_VITIMA' ) == "2"
+				oModel:LoadValue( 'TNCMASTER', 'TNC_NUMFIC'	, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_NOMFIC'	, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_NOMFIC' ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_CODFUN'	, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_CODFUN' ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_CC'		, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_CC' 	 ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_DESCFU'	, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_DESCFU' ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_DESCCC'	, Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_DESCCC' ) ) ) )
+			Endif
+		Endif
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640FIC
+Relacao campo TNC_NUMFIC quando ocorre F3 TNC + inclusao
+
+@type function
+
+@source MDTA640.prx
+
+@return cRet Caracter Retorna o Numero da Ficha
+
+@sample MDT640FIC()
+
+@obs Função utilizada do dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640FIC()
+
+	Local cRet := Space( 9 )
+
+	lFicha := .T.
+
+	If FwIsInCallStack( 'MDTA160' ) .Or. FwIsInCallStack( 'MDTA155' ) .Or. FwIsInCallStack( 'MDTA156' )
+
+		If !Empty( M->TMT_NUMFIC )
+			lFicha := .F.
+		Endif
+
+		cRet := M->TMT_NUMFIC
+	Elseif FwIsInCallStack( 'MDTA685' ) .Or. FwIsInCallStack( 'MDTA410' )
+
+		If Type( "M->TMT_NUMFIC" ) <> "U" .And. !Empty(M->TMT_NUMFIC)
+			cRet := M->TMT_NUMFIC
+
+			If !Empty( M->TMT_NUMFIC )
+				lFicha := .F.
+			Endif
+
+		Else
+			cRet := M->TNY_NUMFIC
+
+			If !Empty( M->TNY_NUMFIC )
+				lFicha := .F.
+			Endif
+
+		EndIf
+
+	ElseIf FwIsInCallStack( 'MDTA675' )
+
+		If !Empty( TNC->TNC_NUMFIC )
+			lFicha := .F.
+		Endif
+
+		cRet := TNC->TNC_NUMFIC
+	Endif
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640C1
+Relacao campo TNC_CC quando ocorre F3 TNC + inclusao
+
+@type function
+
+@source MDTA640.prx
+
+@return cRet Caracter Retorna o Centro de Custo da Ficha
+
+@sample MDT640C1()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640C1()
+
+	Local nSizeSI3	:= If( ( TAMSX3( "I3_CUSTO" )[ 1 ] ) < 1 , 9 , ( TAMSX3( "I3_CUSTO" )[ 1 ] ) )
+	Local cRet		:= Space( nSizeSI3 )
+	Local oModel
+
+	If FwIsInCallStack( 'MDTA160' ) .Or. FwIsInCallStack( 'MDTA155' ) .Or. FwIsInCallStack( 'MDTA156' )
+		cRet := NgSeek( "TM0" , M->TMT_NUMFIC , 1 , "TM0->TM0_CC" )
+	Elseif FwIsInCallStack( 'MDTA685' )
+		oModel := FWModelActive()//Ativa o Modelo utilizado.
+		cRet := Posicione("TM0",1,xFilial("TM0")+oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ),"TM0_CC")
+	Endif
+
+Return cRet
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} MDT640C2
+Relacao campo TNC_DESCCC quando ocorre F3 TNC + inclusao
+
+@type function
+
+@source MDTA640.prx
+
+@return cRetorno Caracter Retorna a Descrição do Centro de Custo da Ficha
+
+@sample MDT640C2()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//--------------------------------------------------------------------------
+Function MDT640C2()
+
+	Local cAlias   := "SI3"
+	Local cDescr   := "SI3->I3_DESC"
+	Local cRetorno := Space( 40 )
+	Local cTNC_CC  := TNC->TNC_CC
+	Local oModel
+
+	If Inclui
+		cTNC_CC := ""
+	Endif
+
+	If Alltrim( SuperGetMv( "MV_MCONTAB" , .F. , "CTB" ) ) == "CTB"
+		cAlias := "CTT"
+		cDescr := "CTT->CTT_DESC01"
+	Endif
+
+	If FwIsInCallStack( 'MDTA160' ) .Or. FwIsInCallStack( 'MDTA155' ) .Or. FwIsInCallStack( 'MDTA156' )
+		cTNC_CC := M->TNC_CC
+	ElseIf FwIsInCallStack( 'MDTA685' ) .And. Inclui
+		oModel 	:= FWModelActive() //Ativa o modelo utilizado.
+		cTNC_CC := Posicione("TM0",1,xFilial("TM0")+oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ),"TM0_CC")
+	EndIf
+
+	If !Empty( cTNC_CC )
+		cRetorno := NgSeek( cAlias , cTNC_CC , 1 , cDescr )
+	Endif
+
+Return cRetorno
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} A640FILFUN
+Carrega variavel da filial do funcionario de acordo com
+a ficha digitada no cadastro
+
+@type function
+
+@source MDTA640.prx
+
+@return Caracter Retorna o valor gravado no campo TNC_FILFUN
+
+@param cNumFic Caracter Indica a ficha médica
+
+@sample A640FILFUN( '000000000001' )
+
+@obs Função também utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function A640FILFUN( cNumFic )
+
+	Local aArea		:= GetArea()
+	Local oModel
+
+	Default cNumFic	:= ""
+
+	If !IsInCallStack("MDTA410") .And. !IsInCallStack("MDTA675")
+
+		oModel 	:= FWModelActive() //Ativa o modelo utilizado.
+
+		If Type( "M->TNC_NUMFIC" ) != "U" .and. Empty( cNumFic )
+			cNumFic := oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' )
+		Endif
+
+		If !Empty( cNumFic )
+			dbSelectArea( "TM0" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TM0" ) + cNumFic )
+				If !Empty( TM0->TM0_MAT )
+					oModel:LoadValue( "TNCMASTER", "TNC_FILFUN"  , TM0->TM0_FILFUN  )
+				Else
+					oModel:LoadValue( "TNCMASTER", "TNC_FILFUN"  , Space( Len( SRA->RA_FILIAL ) )  )
+				Endif
+			Else
+				oModel:LoadValue( "TNCMASTER", "TNC_FILFUN"  , Space( Len( SRA->RA_FILIAL ) ) )
+			Endif
+		Else
+			oModel:LoadValue( "TNCMASTER", "TNC_FILFUN"  , Space( Len( SRA->RA_FILIAL ) ) )
+		Endif
+	Else
+		If Type( "M->TNC_NUMFIC" ) != "U" .and. Empty( cNumFic )
+			cNumFic := M->TNC_NUMFIC
+		Endif
+
+		If !Empty( cNumFic )
+			dbSelectArea( "TM0" )
+			dbSetOrder( 1 )
+			If dbSeek( xFilial( "TM0" ) + cNumFic )
+				If !Empty( TM0->TM0_MAT )
+					M->TNC_FILFUN := TM0->TM0_FILFUN
+				Else
+					M->TNC_FILFUN := Space( Len( SRA->RA_FILIAL ) )
+				Endif
+			Else
+				M->TNC_FILFUN := Space( Len( SRA->RA_FILIAL ) )
+			Endif
+		Else
+			M->TNC_FILFUN := Space( Len( SRA->RA_FILIAL ) )
+		Endif
+	Endif
+
+	RestArea( aArea )
+
+Return If( IsInCallStack("MDTA410") .Or. IsInCallStack("MDTA675") , M->TNC_FILFUN , oModel:GetValue( 'TNCMASTER', 'TNC_FILFUN' ) )
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} WhenTKKCID
+Troca F3 do campo CID
+
+@type function
+
+@source MDTA640.prx
+
+@return Sempre verdadeiro
+
+@sample WhenTKKCID()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function WhenTKKCID()
+
+	Local oModel
+	Local oCompl
+
+	If !IsInCallStack( 'mdta410' )
+
+		oModel := FWModelActive()  //Copia o Model utilizado.
+		oCompl := oModel:GetModel( 'TNMDCOMPL' ) //Posiciona no Model da Grid
+
+		If !Empty( oCompl:GetValue( "TKK_GRPCID" ) )
+			aAdd( aTROCAF3 , { "TKK_CID" , "TMR6" } )
+		Else
+			aAdd( aTROCAF3 , { "TKK_CID" , "TMR" } )
+		Endif
+
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640CIDP
+Validacoes para o C.I.D. principal
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando consistencia certa
+
+@sample MDT640CIDP()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640CIDP()
+
+	Local nLinha 	 := 0
+	Local lRet 		 := .T.
+	Local oModel 	 := FWModelActive()  //Ativação do modelo utilizado
+	Local oCompl 	 := oModel:GetModel( 'TNMDCOMPL' ) //Posiciona no Model da Grid
+	Local nLenCompl  := oCompl:Length()
+
+	If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_CID' ) )
+		lRet := ExistCPO( "TMR" , oModel:GetValue( 'TNCMASTER', 'TNC_CID' ))
+	EndIf
+
+	If lRet
+		If !Empty( ExistCPO( "TMR" , oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ))) .And.;
+		   oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) <> Substr( oModel:GetValue( 'TNCMASTER', 'TNC_CID' ) , 1 , 3 ) .And.;
+		   !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_CID' ))
+			Help( , , STR0011 , , STR0065 , 50 , 50 )//"Informe um CID dentro do Grupo de CID informado."
+			lRet := .F.
+		EndIf
+
+		If lRet
+			For nLinha := 1 to nLenGrid
+				oCompl:GoLine(nLinha)
+				If !( oCompl:IsDeleted() )
+					If oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) == oCompl:GetValue( 'TKK_GRPCID' )  .And.;
+						oModel:GetValue( 'TNCMASTER', 'TNC_CID' ) == oCompl:GetValue( 'TKK_CID' )
+						Help( , , STR0011 , , STR0061 + NGRETTITULO( "TNC_CID" ) + STR0063 + NGRETTITULO( "TKI_CID" ) + STR0064 + cValtoChar( nLinha ) + "." , 50 , 50 ) //"O campo '"##"' não pode ser igual ao campo '"##"'da linha "
+						lRet := .F.
+					EndIf
+				EndIf
+			Next nLinha
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640PrGrp
+Valida o campo Grupo CID Principal
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando consistencia certa
+
+@sample MDT640PrGrp()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640PrGrp()
+
+	Local lRet  := .T.
+	Local oModel
+
+	If IsInCallStack("MDTA410")
+		If !Empty( M->TNC_GRPCID )
+			If !ExistCpo( "TLG" , M->TNC_GRPCID )
+				lRet := .F.
+			EndIf
+			If lRet .And. M->TNC_GRPCID <> Substr( M->TNC_CID , 1 , 3 )
+				M->TNC_CID := Space( Len( M->TNC_CID ) )
+				M->TNC_DOENCA := Space( Len( M->TNC_DOENCA ) )
+			EndIf
+		EndIf
+	Else
+		oModel:= FWModelActive()  //Ativação do modelo utilizado
+		If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) )
+			If !ExistCpo( "TLG" , oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) )
+				lRet := .F.
+			EndIf
+			If lRet .And. oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) <> Substr( oModel:GetValue( 'TNCMASTER', 'TNC_CID' ) , 1 , 3 )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_CID'	  , Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_CID' ) ) ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_DOENCA', Space( Len( oModel:GetValue( 'TNCMASTER', 'TNC_DOENCA' ) ) ) )
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+//---------------------------------------------------------------------
+/*/{Protheus.doc} WhenTNCCID
+Troca F3 do campo CID
+
+@type function
+
+@source MDTA640.prx
+
+@return Sempre verdadeiro
+
+@sample WhenTNCCID()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function WhenTNCCID()
+
+	Local oModel
+
+	aTROCAF3 := {}
+
+	If IsInCallStack("MDTA410") .Or. IsInCallStack("MDTA675")
+		IF !Empty( M->TNC_GRPCID )
+			aAdd( aTROCAF3 , { "TNC_CID" , "TMR7" } )
+		Else
+			aAdd( aTROCAF3 , { "TNC_CID" , "TMR" } )
+		Endif
+	Else
+		oModel := FWModelActive()  //Ativação do modelo utilizado
+		IF !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_GRPCID' ) )
+			aAdd( aTROCAF3 , { "TNC_CID" , "TMR7" } )
+		Else
+			aAdd( aTROCAF3 , { "TNC_CID" , "TMR" } )
+		Endif
+	EndIf
+
+Return .T.
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640HAB1
+Valida campo TNC_TESTE1
+
+@type function
+
+@source MDTA640.prx
+
+@return Logico Retorna verdadeiro quando TNC_MTEST1 vazio
+
+@sample MDT640HAB1()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640HAB1()
+
+	Local oModel
+	Local lInCall := !IsInCallStack("MDTA410") .And. !IsInCallStack("MDTA675")
+	Local lRet := .T.
+
+	If lInCall
+		oModel := FWModelActive()  //Ativação do modelo utilizado
+		lRet := Empty(oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ))
+	Else
+		lRet := Empty(M->TNC_MTEST1)
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640HAB2
+Valida campo TNC_TESTE2
+
+@type function
+
+@source MDTA640.prx
+
+@return Logico Retorna verdadeiro quando TNC_MTEST2 vazio
+
+@sample MDT640HAB2()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640HAB2()
+
+	Local oModel
+	Local lInCall := !IsInCallStack("MDTA410") .And. !IsInCallStack("MDTA675")
+
+	If lInCall
+		oModel := FWModelActive()  //Ativação do modelo utilizado
+	EndIf
+
+Return If( lInCall, Empty(oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' )), Empty(M->TNC_MTEST2) )
+
+//-----------------------------------------------------------------------------------
+/*/{Protheus.doc} MDT640VALT
+Valida campo TNC_TESTE2
+
+@type function
+
+@source MDTA640.prx
+
+@return Logico Retorna verdadeiro quando TNC_MTEST2 vazio
+
+@param nX Numerico Indica se trata-se de testemunha um (1) ou testemunha dois (2)
+
+@sample MDT640VALT()
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//-----------------------------------------------------------------------------------
+Function MDT640VALT( nX )
+
+	Local lRet 	 := .T.
+	Local oModel
+
+	If IsInCallStack("MDTA410")
+		If nX == 1  //Testunha 1
+
+			lRet := ExistCPO( "SRA" ,M->TNC_MTEST1 )
+
+			If lRet .And. !Empty( M->TNC_NUMFIC )
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TM0" ) + M->TNC_NUMFIC )
+				If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == M->TNC_MTEST1
+					Help( , , STR0011 , , STR0071 , 5 , 5 )//"O funcionário informado como testemunha não pode ser o mesmo informado no campo Ficha Medica."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+			If lRet .And. !Empty( M->TNC_MTEST2 )
+				If M->TNC_MTEST1 == M->TNC_MTEST2
+					Help( , , STR0011 , , STR0070 , 5 , 5 )//"Este funcionário já foi informado como testemunha."
+					lRet := .F.
+				EndIf
+			EndIf
+
+		ElseIf nX == 2	//Testunha 2
+
+			lRet := ExistCPO( "SRA" , M->TNC_MTEST2 )
+
+			If lRet .And. !Empty( M->TNC_NUMFIC )
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TM0" ) + M->TNC_NUMFIC )
+				If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == M->TNC_MTEST2
+					Help( , , STR0011 , , STR0071 , 5 , 5 )//"O funcionário informado como testemunha não pode ser o mesmo informado no campo Ficha Medica."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+			If lRet .And. !Empty( M->TNC_MTEST1 )
+				If M->TNC_MTEST2 == M->TNC_MTEST1
+					Help( , , STR0011 , , STR0070 , 5 , 5 )//"Este funcionário já foi informado como testemunha."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+		EndIf
+	Else
+		oModel := FWModelActive()  //Ativação do modelo utilizado
+
+		If nX == 1  //Testunha 1
+
+			lRet := ExistCPO( "SRA" ,oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ) )
+
+			If lRet .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) )
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TM0" ) + oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) )
+				If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' )
+					Help( , , STR0011 , , STR0071 , 5 , 5 )//"O funcionário informado como testemunha não pode ser o mesmo informado no campo Ficha Medica."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+			If lRet .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' ) )
+				If oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ) == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' )
+					Help( , , STR0011 , , STR0070 , 5 , 5 )//"Este funcionário já foi informado como testemunha."
+					lRet := .F.
+				EndIf
+			EndIf
+
+		ElseIf nX == 2	//Testunha 2
+
+			lRet := ExistCPO( "SRA" , oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' ) )
+
+			If lRet .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) )
+				dbSelectArea( "TM0" )
+				dbSetOrder( 1 )
+				dbSeek( xFilial( "TM0" ) + oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ) )
+				If !Empty( TM0->TM0_MAT ) .And. TM0->TM0_MAT == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' )
+					Help( , , STR0011 , , STR0071 , 5 , 5 )//"O funcionário informado como testemunha não pode ser o mesmo informado no campo Ficha Medica."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+			If lRet .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' ) )
+				If oModel:GetValue( 'TNCMASTER', 'TNC_MTEST2' ) == oModel:GetValue( 'TNCMASTER', 'TNC_MTEST1' )
+					Help( , , STR0011 , , STR0070 , 5 , 5 )//"Este funcionário já foi informado como testemunha."###"ATENÇÃO"
+					lRet := .F.
+				EndIf
+			EndIf
+
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f640ACID
+Filtra acidentes pela Ficha Medica.
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando campos corretos
+
+@sample f640ACID()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function f640ACID()
+
+	Local lRet := .F.
+
+	//Prenche a variavel conforme o local de chamada
+	If Type( "M->TNY_NUMFIC" ) <> "U" .And. !Empty( M->TNY_NUMFIC )//Atestado
+		cFichaAcid:= M->TNY_NUMFIC
+	ElseIf Type( "M->TMT_NUMFIC" ) <> "U" .And. !Empty( M->TMT_NUMFIC )//Diagnostico
+		cFichaAcid:= M->TMT_NUMFIC
+	Endif
+
+	lRet := Type("cFichaAcid") == "C" .And. ( TNC->TNC_NUMFIC == cFichaAcid .Or. Empty( TNC->TNC_NUMFIC ) )
+
+Return lRet
+
+//--------------------------------------------------------------------------------------------
+/*/{Protheus.doc} f640DIAS
+Valida preenchimento dos campos refetentes ao dias de afastamento.
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando campos corretos
+
+@param nRef Numerico Indica se valida Qtd. Afast. (1), Dias Debitados (2) ou Dt. Ult. (3)
+
+@sample f640DIAS( 1 )
+
+@obs Função utilizada no dicionário de dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------------------------------
+Function f640DIAS( nRef )
+
+	Local lRet := .T.
+	Local oModel
+
+	If IsInCallStack("MDTA410")
+		If nRef == 1
+			If !Empty( M->TNC_QTAFAS ) .And. M->TNC_AFASTA == "2"
+				Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."##"Atenção"
+				lRet := .F.
+			EndIf
+		ElseIf nRef == 2
+			If !Empty( M->TNC_DIASDB )
+				If Empty( M->TNC_QTAFAS )
+					Help( , , STR0027 , , STR0076, 5 , 5 )//"Esse campo somente deve ser informado depois de informar os Dias Perdidos."##"Atenção"
+					lRet := .F.
+				ElseIf M->TNC_AFASTA == "2"
+					Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."
+					lRet := .F.
+				EndIf
+			EndIf
+		ElseIf nRef == 3
+			If !Empty( M->TNC_DTULTI ) .And. M->TNC_AFASTA == "2"
+				Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."##"Atenção"
+				lRet := .F.
+			EndIf
+		EndIf
+	Else
+		oModel 	:= FWModelActive()  //Ativação do modelo utilizado
+
+		If nRef == 1
+			If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_QTAFAS' ) ) .And. oModel:GetValue( 'TNCMASTER', 'TNC_AFASTA' ) == "2"
+				Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."##"Atenção"
+				lRet := .F.
+			EndIf
+		ElseIf nRef == 2
+			If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_DIASDB' ) )
+				If Empty( oModel:GetValue( 'TNCMASTER', 'TNC_QTAFAS' ) )
+					Help( , , STR0027 , , STR0076, 5 , 5 )//"Esse campo somente deve ser informado depois de informar os Dias Perdidos."##"Atenção"
+					lRet := .F.
+				ElseIf oModel:GetValue( 'TNCMASTER', 'TNC_AFASTA' ) == "2"
+					Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."
+					lRet := .F.
+				EndIf
+			EndIf
+		ElseIf nRef == 3
+			If !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_DTULTI' ) ) .And. oModel:GetValue( 'TNCMASTER', 'TNC_AFASTA' ) == "2"
+				Help( , , STR0027 , , STR0075, 5 , 5 )//"Esse campo somente deve ser informado quando o campo Afastamento for igual a Sim."##"Atenção"
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} f640DTAT()
+Valida se a Data não esta maior que a Data Atual.
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet,Logico, Retorna verdadeiro quando campos de Datas corretos
+
+@param lRef, Logico, Se é Data de Obito (.T.) ou Data de Atendimento (.F.)
+
+@sample f640DTOB( .T. )
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//----------------------------------------------------------------------------
+Function f640DTAT( lRef )
+
+	Local lRet 		:= .T.
+	Local oModel 	:= FWModelActive()  //Ativação do modelo utilizado
+
+	If lRef
+		If oModel:GetValue( 'TNCMASTER', 'TNC_DTOBIT' ) > dDatabase
+			Help( , , STR0027 , , STR0077, 5 , 5 )//"A Data de Obito não pode ser maior que a Data Atual."##"Atenção"
+			lRet := .F.
+		Else
+			If Empty( oModel:GetValue( 'TNCMASTER', 'TNC_DTOBIT' ) )
+				oModel:LoadValue( 'TNCMASTER', 'TNC_MORTE', "2" )
+			Else
+				oModel:LoadValue( 'TNCMASTER', 'TNC_MORTE', "1" )
+			EndIf
+		EndIf
+	Else
+		If oModel:GetValue( 'TNCMASTER', 'TNC_DTATEN' ) > dDatabase
+			Help( , , STR0027 , , STR0079, 5 , 5 )//"A Data de Atendimento não pode ser maior que a Data Atual."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------------------
+/*/{Protheus.doc} f640MORT
+Valida Data de Obito.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample f640MORT()
+
+@return lRet, Lógico, Retorna verdadeiro quando campo de Data de Obito correto
+/*/
+//------------------------------------------------------------------------------
+Function f640MORT()
+
+	Local lRet    := .T.
+	Local oModel
+
+	If IsInCallStack("MDTA410")
+		If M->TNC_MORTE == "2" .And. !Empty( M->TNC_DTOBIT )
+			Help( , , STR0027 , , STR0078, 5 , 5 )//"Quando a Data de Óbito estiver preenchida o campo Houve Morte deve estar igual a Sim." ##"Atenção"
+			lRet := .F.
+		ElseIf M->TNC_MORTE == "1" .And. Empty( M->TNC_DTOBIT )
+			Help( , , STR0027 , , STR0081, 5 , 5 )//"Para informar a ocorrência de morte primeiramente informe a Data de Óbito."
+			lRet := .F.
+		EndIf
+	Else
+		oModel  := FWModelActive()  //Ativação do modelo utilizado
+		If oModel:GetValue( 'TNCMASTER', 'TNC_MORTE' ) == "2" .And. !Empty( oModel:GetValue( 'TNCMASTER', 'TNC_DTOBIT' ) )
+			Help( , , STR0027 , , STR0078, 5 , 5 )//"Quando a Data de Óbito estiver preenchida o campo Houve Morte deve estar igual a Sim." ##"Atenção"
+			lRet := .F.
+		ElseIf oModel:GetValue( 'TNCMASTER', 'TNC_MORTE' ) == "1" .And. Empty( oModel:GetValue( 'TNCMASTER', 'TNC_DTOBIT' ) )
+			Help( , , STR0027 , , STR0081, 5 , 5 )//"Para informar a ocorrência de morte primeiramente informe a Data de Óbito."
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} f640LPDIA()
+Limpa campos dos dias do afastamento.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample f640LPDIA()
+
+@obs Função utilizada no dicionário de dados.
+
+@return Sempre verdadeiro
+/*/
+//---------------------------------------------------------------------
+Function f640LPDIA()
+
+	Local oModel
+	If IsInCallStack("MDTA410")
+		M->TNC_QTAFAS := 0
+		M->TNC_DIASDB := 0
+	Else
+		oModel 	:= FWModelActive()  //Ativação do modelo utilizado
+		If oModel:GetValue( 'TNCMASTER', 'TNC_AFASTA' ) == "2"
+			oModel:LoadValue( "TNCMASTER", "TNC_QTAFAS"  , 0  )
+			oModel:LoadValue( "TNCMASTER", "TNC_DIASDB"  , 0  )
+		EndIf
+	EndIf
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fValExeRot
+Valida execução da rotina MDTA640
+
+@type function
+
+@source MDTA640.prx
+
+@param lCallPS, Lógico, Indica se foi feito a chamada pelo MDTA190PS
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample fValExeRot( .T. )
+
+@return lIncons, Lógico, Indica se há inconsistencia na execução.
+/*/
+//---------------------------------------------------------------------
+Static Function fValExeRot( lCallPS )
+	Local lIncons := .T.
+
+	If lSigaMDTPS .And. !lCallPS
+		ShowHelpDlg( 	"NOCALLPS" , ;
+			{ STR0099 } , 1 , ; //"Função incorreta."
+			{ STR0100 + STR0101 } , 3 ) //"Faz se necessário a alteração do Menu. A rotina 'Acidentes' deverá chamar o programa MDTA640PS." ## "Favor contate administrador de sistemas"
+		lIncons := .F.
+	EndIf
+
+Return lIncons
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} fConsisCID
+Faz a consistencia do valor do CID principal. Analisa Diagnostico e
+Atestado Médico
+
+@type function
+
+@source MDTA640.prx
+
+@param cAcidente, Caracter, Código do Acidente.
+@param cNumFicha, Caracter, Código da Ficha Médica.
+@param cCID, Caracter, Código do CID.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample fConsisCID('000001','000001','01')
+
+@obs Utilizado no evento MDTA640A
+
+@return Nil
+/*/
+//---------------------------------------------------------------------
+Function fConsisCID( cAcidente , cNumFicha , cCID )
+
+	Local nX
+	Local aAlteraTNY := {}
+	Local aAreaTNC   := TNC->( GetArea() )
+	Local aArea		 := GetArea()
+
+	dbSelectArea( "TMT" )
+	dbSetOrder( 7 ) //TMT_FILIAL+TMT_ACIDEN+TMT_NUMFIC
+	If dbSeek( xFilial( "TMT" ) + cAcidente  + cNumFicha ) .And. cCID <> TMT->TMT_CID
+		If MsgYesNo( STR0094 + AllTrim( cAcidente ) + STR0095 )//"O Acidente "//" está vinculado a um Diagnóstico, deseja replicar o CID cadastrado para o Diagnóstico?"
+			RecLock( "TMT" , .F. )
+			TMT->TMT_CID :=  cCID
+			If !Empty( TMT->TMT_GRPCID ) .And. TMT->TMT_GRPCID <> Substr( cCID , 1 , 3 )
+				TMT->TMT_GRPCID := Space( Len( TNC->TNC_GRPCID ) )
+			EndIf
+			MsUnLock()
+		EndIf
+	EndIf
+
+	dbSelectArea( "TNY" )
+	dbSetOrder( 5 ) //TNY_FILIAL+TNY_ACIDEN+TNY_NUMFIC+DTOS(TNY_DTINIC)+TNY_HRINIC
+	If dbSeek( xFilial( "TNY" ) + cAcidente  + cNumFicha )
+
+		While TNY->( !Eof() ) .And. TNY->TNY_FILIAL == xFilial("TNY") .And. TNY->TNY_ACIDEN == cAcidente .And. TNY->TNY_NUMFIC == cNumFicha
+			If cCID <> TNY->TNY_CID
+				aAdd( aAlteraTNY , TNY->TNY_FILIAL + TNY->TNY_NATEST )
+			EndIf
+			TNY->( dbSkip() )
+		End
+
+		If Len( aAlteraTNY ) > 0 .And. MsgYesNo( STR0094 + AllTrim( cAcidente ) + STR0096 )//"O Acidente "//" está vinculado a um Atestado, deseja replicar o CID cadastrado para o Atestado?"
+			For nX := 1 To Len( aAlteraTNY )
+				dbSelectArea( "TNY" )
+				dbSetOrder( 2 )//TNY_FILIAL+TNY_NATEST
+				If dbSeek( aAlteraTNY[ nX ] )
+					RecLock( "TNY" , .F. )
+					TNY->TNY_CID :=  cCID
+					If !Empty( TNY->TNY_GRPCID ) .And. TNY->TNY_GRPCID <> Substr( cCID , 1 , 3 )
+						TNY->TNY_GRPCID := Space( Len( TNC->TNC_GRPCID ) )
+					EndIf
+					MsUnLock()
+				EndIf
+			Next nX
+
+		EndIf
+
+	EndIf
+
+	RestArea( aAreaTNC )
+	RestArea( aArea )
+
+Return NIL
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640RELA
+Função responsavel pelo X3_RELACAO do campo TNC_VITIMA
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MDT640RELA()
+
+@obs Função utilizada no dicionário de dados.
+
+@return nVitima, Numérico,  Retorna se possui vitima.
+/*/
+//---------------------------------------------------------------------
+Function MDT640RELA()
+
+	Local nVitima := IF( INCLUI , "2" , TNC->TNC_VITIMA )
+
+	If Type( "lSXB" ) <> "U"  //Caso seja chamado pelo Sxb - TNCFIC
+		nVitima := If( lSXB , "1" , IF( INCLUI , "2" , TNC->TNC_VITIMA ) )
+	ElseIf IsInCallStack("MDTA410")
+		nVitima := "1"
+	Endif
+
+Return nVitima
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640WHEN
+Função responsavel pelo X3_WHEN do campo TNC_VITIMA
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@sample MDT640WHEN()
+
+@obs Função utilizada no dicionário de dados.
+
+@return lTrava, Lógico,  Trava campo caso possua vítima.
+/*/
+//---------------------------------------------------------------------
+Function MDT640WHEN()
+
+	Local lTrava := .T.
+
+	If Type( "lFicha" ) <> "U"  //Caso seja chamado pelo Sxb - TNCFIC
+		lTrava := lFicha
+	ElseIf IsInCallStack("MDTA410")
+		lTrava := .F.
+	Endif
+
+Return lTrava
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640PRE
+Função de Reabertura, utilizada para validar quando for reabertura.
+
+@param oModel, Objeto, Modelo Utilizado.
+
+@sample MDT640PRE()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@return lRet, Numérico, Retorna verdadeiro quando não encontrar inconsistência.
+/*/
+//---------------------------------------------------------------------
+Function MDT640PRE( oModel )
+
+	Local leSocial  := IIf( FindFunction( "MDTVldEsoc" ), MDTVldEsoc(), .F. )
+	Local oModelTNC := oModel:GetModel( "TNCMASTER" )
+	Local oStruTNC  := oModelTNC:GetStruct()
+	Local lObrDtEm  := oStruTNC:GetProperty( 'TNC_DTEMIS', MODEL_FIELD_OBRIGAT )
+
+	If Type( "lReabreCAT" ) == "L" .And. lReabreCAT
+		
+		If ( Empty( oModelTNC:GetValue( 'TNC_CATINS' ) ) .Or. IIf( MDT640Rcb( 1 ), Empty( oModelTNC:GetValue( 'TNC_RECIBO' ) ), .F. ) ) .And. !leSocial //Caso não tenha integração com o eSocial e o campo esteja vazio
+			Help( " ", 1, STR0027, , STR0080, 5, 5 ) //"Essa CAT não pode ser Reaberta, pois ainda tem o status de Aberta."##"Atenção"
+			lReab := .F.
+		EndIf
+
+		If lReab
+			
+			// Caso usuário altere o campo de TNC_DTEMIS para obrigatório, não limpa o conteúdo
+			If !lObrDtEm
+				//Seta uma data em branco para o campo de emissão
+				oModelTNC:LoadValue( "TNC_DTEMIS", StoD( "" ) )
+			EndIf
+
+			//Caso os campos de recibo existam na TNC
+			If MDT640Rcb( 1 )
+
+				//Seta um valor em branco para os campos
+				oModelTNC:LoadValue( "TNC_RECIBO", "" )
+				oModelTNC:LoadValue( "TNC_RECORI", "" )
+				oModelTNC:LoadValue( "TNC_DTRECB", StoD( "" ) )
+
+			EndIf
+
+		EndIf
+
+	EndIf
+
+Return lReab
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640SECID
+Valida o campo Grupo CID Complementares
+
+@type function
+
+@source MDTA640.prx
+
+@return Sempre verdadeiro
+
+@sample MDT640SECID()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640SECID()
+
+	Local lRet 	 := .T.
+	Local oModel := FWModelActive()  //Ativação do modelo utilizado
+	Local oCompl := oModel:GetModel( 'TNMDCOMPL' ) //Posiciona no Model da Grid
+
+	If !Empty( oCompl:GetValue( "TKK_GRPCID" ) )
+		If !ExistCpo( "TLG" ,  oCompl:GetValue( "TKK_GRPCID" ) )
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640DOEN
+Carrega a descricao do C.I.D.
+
+@type function
+
+@source MDTA640.prx
+
+@return lRet Logico Retorna verdadeiro quando consistencia certa
+
+@sample MDT640DOEN()
+
+@obs Função utilizada no Dicionário de Dados.
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+/*/
+//---------------------------------------------------------------------
+Function MDT640DOEN()
+
+	Local oModel 	:= FWModelActive()  //Copia o Model utilizado.
+	Local oCompl 	:= oModel:GetModel( 'TNMDCOMPL' ) //Posiciona no Model da Grid
+	Local nLenCompl := oCompl:Length()
+	Local lRet 		:= .T.
+
+	If !Empty( oCompl:GetValue( "TKK_CID" ) )
+		lRet := ExistCPO( "TMR" , oCompl:GetValue( "TKK_CID" ) )
+	EndIf
+
+	If lRet .And. oCompl:GetValue( "TKK_CID" ) == M->TNC_CID .And. !Empty( oCompl:GetValue( "TKK_CID" ) )
+		Help( , , STR0011 , , STR0061 + NGRETTITULO( "TKK_CID" ) + STR0063 + NGRETTITULO( "TNC_CID" ) + "." , 5 , 5 ) //"O campo "##" não pode ser igual ao campo "
+		lRet := .F.
+	EndIf
+
+	If lRet .And. !Empty( oCompl:GetValue( "TKK_GRPCID" ) ) .And. ;
+		oCompl:GetValue( "TKK_GRPCID" ) <> Substr( oCompl:GetValue( "TKK_CID" ) , 1 , 3 ) .And. !Empty( oCompl:GetValue( "TKK_CID" ) )
+		Help( , , STR0011 , , STR0065 , 5 , 5 )//"Informe um CID dentro do Grupo de CID informado."
+		lRet := .F.
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640TUDO
+Valida a linha digitada no acols.
+
+@return lRet Logico Retorna verdadeiro quando doenca correta
+
+@param lFim Logico Indica validacao de TudoOk
+
+@sample MDT640TUDO()
+
+@author Taina A. Cardoso; Refeito por: Jackson Machado
+@since 13/04/2011; Refeito em: 27/03/2015
+/*/
+//---------------------------------------------------------------------
+Function MDT640TUDO( lFim  )
+
+	Local oModel 	 := FWModelActive()  //Ativação do modelo utilizado
+	Local oCompl 	 := oModel:GetModel( 'TNMDCOMPL' ) //Posiciona no Model da Grid
+	Local nLenCompl  := oCompl:Length()
+	Local nX  		 := 0
+	Local cCid 		 := oCompl:GetValue( "TKK_CID" ) //CID
+	Local cGrCid	 := oCompl:GetValue( "TKK_GRPCID" ) //Grupo CID
+	Local lCompDel   := !( oCompl:IsDeleted() )
+	Local lValid	 := .T.
+	Local lRet 		 := .T.
+
+	Default lFim	:= .F.
+
+	If  Empty( oCompl:GetValue( "TKK_GRPCID" ))
+		lValid := .F.
+	EndIf
+
+	If lValid
+		For nX := 1 To nLenCompl
+			oCompl:GoLine(nX)
+			If lFim // TudoOk
+				If !( oCompl:IsDeleted() ) //Verifica se registro está deletado.
+					If lRet .And. !Empty( oCompl:GetValue( "TKK_GRPCID" ) )
+						If oCompl:GetValue( "TKK_GRPCID" ) == M->TNC_GRPCID .And. ;
+						   ( Empty( oCompl:GetValue( "TKK_CID" ) ) .Or. Empty( M->TNC_CID ) ) .And. lCompDel
+						    Help( , , STR0011 , , STR0061 + NGRETTITULO( "TKK_CID" ) + STR0067 , 5 , 5 ) //"o campo" ## "deve ser preenchido quando já existir outro CID do mesmo grupo."
+							lRet := .F.
+							Exit
+						EndIf
+					EndIf
+					If lRet .And. !Empty( oCompl:GetValue( "TKK_GRPCID" ) )
+						If oCompl:GetValue( "TKK_GRPCID" ) == cGrCid .And. Empty( cCid )
+							Help( , , STR0011 , , STR0061 + NGRETTITULO( "TKK_CID" ) + STR0067 , 5 , 5 ) //"o campo" ## "deve ser preenchido quando já existir outro CID do mesmo grupo."
+							lRet := .F.
+							Exit
+						EndIf
+					EndIf
+				EndIf
+			Else // LinOk
+				If nLenCompl > 1 .And. Empty( oCompl:GetValue( "TKK_GRPCID" ) ) .And. !( oCompl:IsDeleted() ) .And. Empty( oCompl:GetValue( "TKK_CID" ) )
+					Help( , , STR0011 , , STR0065 , 5 , 5 )//"Informe um Grupo de CID ou um CID ."
+					lRet := .F.
+				EndIf
+				If lRet .And. !Empty( oCompl:GetValue( "TKK_GRPCID" ) )
+					If oCompl:GetValue( "TKK_GRPCID" ) == cGrCid .And. Empty( cCid )
+						Help( , , STR0011 , , STR0061 + NGRETTITULO( "TKK_CID" ) + STR0067 , 5 , 5 )//"O campo" ## "deve ser preenchido quando já existir outro CID do mesmo grupo."
+						lRet := .F.
+						Exit
+					EndIf
+				EndIf
+			EndIf
+			If  lRet .And. nX <> 1 .And. Empty( cCid ) .And. Empty( cGrCid )
+				//Mostra mensagem de Help
+				Help( 1 , " " , "OBRIGAT2" , , , 3 , 0 )
+				lRet := .F.
+				Exit
+			EndIf
+		Next nX
+
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640ACI
+Função responsavel por jogar o código do Acidente para o campo TKK_ACIDEN
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample MDT640ACI()
+
+@return cAciden , Caracter, Número do Acidente.
+/*/
+//---------------------------------------------------------------------
+Function MDT640ACI()
+
+	Local cAciden := ""
+	Local oModel := FWModelActive()  //Ativação do modelo utilizado
+
+	cAciden := oModel:GetValue( 'TNCMASTER', 'TNC_ACIDEN' )
+
+Return  cAciden
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640REAB
+Função responsável por abir a tela de Reabertura.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample MDT640REAB()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Function MDT640REAB()
+
+	Private oExecView
+
+	// Variáveis para controle de Reabertura
+	Private lReabreCAT := .T.
+	Private lReab := .T. //Verifica se fará reabertura.
+
+	oExecView := FWViewExec():New()
+		oExecView:SetTitle( STR0006 )//"Acidentes"
+		oExecView:SetSource( "MDTA640" )
+		oExecView:SetOK( { | oModel |  MDT640PRE(oModel) } )
+		oExecView:SetModal( .F. )
+		oExecView:SetOperation( 9 ) //MODEL_OPERATION_COPY
+		oExecView:OpenView( .F. )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640SXB
+Função responsavel por montar a tela de inclusão de Acidentes, quando
+for chamado pelo SXB TNCFIC.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample MDT640SXB()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Function MDT640SXB()
+
+	Private oExecView
+	Private lSXB := .T.
+
+	oExecView := FWViewExec():New()
+		oExecView:SetTitle( "Acidentes" )//"Acidentes"
+		oExecView:SetSource( "MDTA640" )
+		oExecView:SetModal( .F. )
+		oExecView:SetOperation( 3 ) //Inclusão.
+		oExecView:OpenView( .F. )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640FUN
+Função responsavel por montar a tela de inclusão de Acidentes, quando
+for chamado pelo SXB TNCFIC.
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample MDT640SXB()
+
+@return Vazio.
+/*/
+//---------------------------------------------------------------------
+Function MDT640FUN(nDes)
+	
+	Local cRet := ""
+	Local oModel
+
+	Default nDes := 1
+
+	If FwIsInCallStack( 'MDTA685' )
+		If Inclui
+			oModel := FWModelActive()//Ativa o Modelo utilizado.
+			cRet := Posicione("TM0",1,xFilial("TM0")+oModel:GetValue( 'TNCMASTER', 'TNC_NUMFIC' ),"TM0_CODFUN")
+		Else
+			cRet := TNC->TNC_CODFUN
+		EndIf
+		If nDes == 2
+			cRet := Posicione( "SRJ" , 1 , xFilial("SRJ") + cRet ,"RJ_DESC")
+		EndIf
+	Else
+		If nDes == 2
+			cRet := SRJ->(VDISP(TNC->TNC_CODFUN,"RJ_DESC"))
+		EndIf
+	Endif
+
+Return cRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640VCD
+Função responsavel por Gatilhar valores para campos visuais e validar
+o códiogo da cidade. Função adicionada no Valid do campo TNC_CODCID.
+
+@type   function
+@author Julia Kondlatsch
+@since  07/06/2019
+@sample MDT640VCD()
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MDT640VCD()
+
+	Local oModel := FWModelActive()  //Ativação do modelo utilizado
+	Local lRet   := .T.
+
+	If !Empty(M->TNC_CODCID)
+		If !ExistCpo( 'CC2', M->TNC_CODCID, 3 ) //Se o código de cidade não existir
+			Help( ,, STR0011, , STR0124, 5 , 5,,,,,, ; // "Atenção" # "Este código de cidade não existe"
+							{ STR0125 }) //"Informe um código de cidade válido"
+			lRet := .F.
+		Else
+			If !Empty(M->TNC_ESTACI) .And. !ExistCpo( 'CC2', M->TNC_ESTACI+M->TNC_CODCID, 1 ) // Se a cidade não existir no estado selecionado
+				Help( ,, STR0011,, STR0126, 5, 5,,,,,, ; //"Atenção" # "Esta cidade não pertence ao estado selecionado no campo 'Estado Acid.'"
+					{ STR0127 + M->TNC_ESTACI }) //"Informe uma cidade pertencente ao estado "
+				lRet := .F.
+			Else
+				If IsInCallStack('MDTA410')
+					M->TNC_CIDACI := Alltrim(Posicione("CC2",1,xFilial("CC2")+M->TNC_ESTACI+M->TNC_CODCID,"CC2_MUN"))
+				Else
+					oModel:LoadValue( "TNCMASTER", "TNC_CIDACI", ;
+						Alltrim(Posicione("CC2",1,xFilial("CC2")+oModel:GetValue( 'TNCMASTER', 'TNC_ESTACI' )+;
+						oModel:GetValue( 'TNCMASTER', 'TNC_CODCID' ),"CC2_MUN")) )
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640GAT
+Função responsavel por Gatilhar valores para campos Visuais.
+Função adicionada no Gatilho TNC_CODCID.
+
+@type function
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample MDT640GAT(1)
+@obs    Esta função deve ser retirada na virada devido a correção da
+issue DNG-5558, que resultou na função acima (MDT640VCD)
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MDT640GAT(nCamp)
+
+	Local cValor := ''
+
+	Local oModel := FWModelActive()  //Ativação do modelo utilizado
+
+	If nCamp == 1
+		If IsInCallStack( 'MDTA410' )
+			M->TNC_CIDACI := Alltrim( Posicione( 'CC2', 1, xFilial( 'CC2' ) + M->TNC_ESTACI + M->TNC_CODCID, 'CC2_MUN' ) )
+			cValor := M->TNC_CIDACI
+		Else
+			cValor := Alltrim( Posicione( 'CC2', 1, xFilial( 'CC2' ) + oModel:GetValue( 'TNCMASTER', 'TNC_ESTACI' ) + oModel:GetValue( 'TNCMASTER', 'TNC_CODCID' ), 'CC2_MUN' ) )
+			oModel:LoadValue( 'TNCMASTER', 'TNC_CIDACI', cValor )
+		EndIf
+	EndIf
+
+Return cValor
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640ACTI
+Função responsavel por realizar a ativação do Modelo, para o fonte MDTA410
+
+@type function
+
+@source MDTA640.prx
+
+@author Guilherme Freudenburg
+@since 25/04/2017
+
+@sample  MDT640ACTI()
+
+@return Sempre verdadeiro.
+/*/
+//---------------------------------------------------------------------
+Function MDT640ACTI( oModel, lActive , lGrava, nOpcx)
+
+	Local aRecTNC   := {}
+	Local aCabTNC   := {}
+	//Adiciona campos que não receberão valor no Modelo de Dados
+	Local aNao   := { "TNC_DESTIP" , "TNC_DESLOG" , "TNC_DESCR1" , ;
+					  "TNC_DESCR2" , "TNC_DESLES" , "TNC_DESCCC" , ;
+					  "TNC_DESCFU" , "TNC_NOMLES" , "TNC_DESGRP" , ;
+					  "TNC_DISTUN" , "TNC_FILFUN" ,  "TNC_MAT"   }
+
+	Local aCpsTNC   := TNC->( dbStruct() )
+	Local nCps      := 0
+	Local cCampo    := ''
+	Local lUsado    := .T.
+
+	Default oModel  := FWLoadModel( "MDTA640" ) //Realiza ativação do modelo.
+	Default lActive := .T.
+	Default lGrava  := .F.
+	Default nOpcx   := 0
+
+	If AliasInDic("TYE")
+		aAdd( aNao, "TNC_CODOBJ" )
+		aAdd( aNao, "TNC_DESOBJ" )
+		aAdd( aNao, "TNC_CODPAR" )
+		aAdd( aNao, "TNC_DESPAR" )
+	EndIf
+
+	If lActive
+		oModel:Activate()
+	EndIf
+
+	For nCps := 1 To Len( aCpsTNC )
+
+		cCampo  := AllTrim( aCpsTNC[ nCps, 1 ] )
+		lUsado  := X3Uso( GetSx3Cache( cCampo, 'X3_USADO' ) )
+		cNivCpo := GetSx3Cache( cCampo, 'X3_NIVEL')
+
+		If lUsado .And. cNivel >= cNivCpo .And. aScan( aNao , { | x | x == cCampo } ) == 0
+			oModel:LoadValue( "TNCMASTER", cCampo, &( "M->" + cCampo ) )
+		EndIf
+
+	Next nCps
+
+	If lGrava
+		For nCps := 1 To Len( aCpsTNC )
+
+			cCampo  := AllTrim( aCpsTNC[ nCps, 1 ] )
+			lUsado  := X3Uso( GetSx3Cache( cCampo, 'X3_USADO' ) )
+			cNivCpo := GetSx3Cache( cCampo, 'X3_NIVEL')
+
+			If lUsado .And. cNivel >= cNivCpo .And. aScan( aNao , { | x | x == cCampo } ) == 0
+				aAdd( aRecTNC , { cCampo, &( "M->" + cCampo ), Nil } )
+			EndIf
+
+		Next nCps
+
+		aAdd(aCabTNC , aRecTNC)
+		MDTA640( .F. , nOpcx , { { "TNCMASTER" , aRecTNC } } , oModel )
+	EndIf
+
+Return oModel
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640MT1
+Função responsavel por realizar o gatilho dos campos de Testemunha.
+
+@type function
+
+@source MDTA640.prx
+
+@sample MDT640MT1()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@return cMatTes, Caracter, Matrícula da Testemunha.
+/*/
+//---------------------------------------------------------------------
+Function MDT640MT1()
+
+	Local oModel
+	Local oModelTNC
+	Local cMatTes
+
+	If IsInCallStack("MDTA410")
+		cMatTes := M->TNC_MTEST2
+		M->TNC_TESTE1 := SRA->RA_NOME
+		M->TNC_ENDTE1 := SRA->RA_ENDEREC
+		M->TNC_BAIRR1 := SRA->RA_BAIRRO
+		M->TNC_CIDAD1 := SRA->RA_MUNICIP
+		M->TNC_CEP1   := SRA->RA_CEP
+		M->TNC_ESTAD1 := SRA->RA_ESTADO
+		M->TNC_TELEF1 := SRA->RA_TELEFON
+		M->TNC_NUEND1 :=  Val(SRA->RA_NUMENDE)
+		M->TNC_CIDT1  := SRA->RA_CODMUN
+	Else
+		oModel 	  := FWModelActive()
+		oModelTNC := oModel:GetModel( "TNCMASTER" )
+		cMatTes	  := oModelTNC:GetValue( "TNC_MTEST2" )
+		oModel:LoadValue( "TNCMASTER" , "TNC_TESTE1"  , SubSTR( SRA->RA_NOME		, 1 , TAMSX3( "TNC_TESTE1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_ENDTE1"  , SubSTR( SRA->RA_ENDEREC		, 1 , TAMSX3( "TNC_ENDTE1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_BAIRR1"  , SubSTR( SRA->RA_BAIRRO		, 1 , TAMSX3( "TNC_BAIRR1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CIDAD1"  , SubSTR( SRA->RA_MUNICIP		, 1 , TAMSX3( "TNC_CIDAD1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CEP1"    , SubSTR( SRA->RA_CEP			, 1 , TAMSX3( "TNC_CEP1"   )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_ESTAD1"  , SubSTR( SRA->RA_ESTADO		, 1 , TAMSX3( "TNC_ESTAD1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_TELEF1"  , SubSTR( SRA->RA_TELEFON		, 1 , TAMSX3( "TNC_TELEF1" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_NUEND1"  , Val(SubSTR(SRA->RA_NUMENDE	, 1 , TAMSX3( "TNC_NUEND1" )[1] ) ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CIDT1"   , SubSTR( SRA->RA_CODMUN		, 1 , TAMSX3( "TNC_CIDT1"  )[1] ) )
+	EndIf
+
+Return cMatTes
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640MT2
+Função responsavel por realizar o gatilho dos campos de Testemunha.
+
+@type function
+
+@source MDTA640.prx
+
+@sample MDT640MT2()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@return cMatTes, Caracter, Matrícula da Testemunha.
+/*/
+//---------------------------------------------------------------------
+Function MDT640MT2()
+
+	Local oModel
+	Local oModelTNC
+	Local cMatTes
+
+	If IsInCallStack("MDTA410")
+		cMatTes := M->TNC_MTEST1
+		M->TNC_TESTE2 := SRA->RA_NOME
+		M->TNC_ENDTE2 := SRA->RA_ENDEREC
+		M->TNC_BAIRR2 := SRA->RA_BAIRRO
+		M->TNC_CIDAD2 := SRA->RA_MUNICIP
+		M->TNC_CEP2   := SRA->RA_CEP
+		M->TNC_ESTAD2 := SRA->RA_ESTADO
+		M->TNC_TELEF2 := SRA->RA_TELEFON
+		M->TNC_NUEND1 :=  Val(SRA->RA_NUMENDE)
+		M->TNC_CIDT2  := SRA->RA_CODMUN
+	Else
+		oModel 	  := FWModelActive()
+		oModelTNC := oModel:GetModel( "TNCMASTER" )
+		cMatTes	  := oModelTNC:GetValue( "TNC_MTEST1" )
+		oModel:LoadValue( "TNCMASTER" , "TNC_TESTE2"  , SubSTR( SRA->RA_NOME 		 , 1 , TAMSX3( "TNC_TESTE2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_ENDTE2"  , SubSTR( SRA->RA_ENDEREC 	 , 1 , TAMSX3( "TNC_ENDTE2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_BAIRR2"  , SubSTR( SRA->RA_BAIRRO 	 	 , 1 , TAMSX3( "TNC_BAIRR2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CIDAD2"  , SubSTR( SRA->RA_MUNICIP 	 , 1 , TAMSX3( "TNC_CIDAD2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CEP2"    , SubSTR( SRA->RA_CEP 		 , 1 , TAMSX3( "TNC_CEP2"   )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_ESTAD2"  , SubSTR( SRA->RA_ESTADO 		 , 1 , TAMSX3( "TNC_ESTAD2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_TELEF2"  , SubSTR( SRA->RA_TELEFON 	 , 1 , TAMSX3( "TNC_TELEF2" )[1] ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_NUEND1"  , Val(SubSTR(SRA->RA_NUMENDE	, 1 , TAMSX3( "TNC_NUEND1" )[1] ) ) )
+		oModel:LoadValue( "TNCMASTER" , "TNC_CIDT2"   , SubSTR( SRA->RA_CODMUN 		 , 1 , TAMSX3( "TNC_CIDT2"  )[1] ) )
+	EndIf
+
+Return cMatTes
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640CIDD
+Função responsavel por realizar o gatilho dos CID Principal e CID.
+
+@type function
+
+@source MDTA640.prx
+
+@sample MDT640CIDD(1)
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@return cCid, Caracter, Descrição do CID.
+/*/
+//---------------------------------------------------------------------
+Function MDT640CIDD(nCid)
+
+	Local cCid := ""
+
+	Default nCid := 1
+
+	If IsInCallStack("MDTA410")
+		If nCid == 1 //Grupo CID
+			cCid := Alltrim(Posicione("TLG",1,xFilial("TLG")+M->TNC_GRPCID,"TLG_DESCRI"))
+		Else //CID Principal
+			cCid := Alltrim(Posicione("TMR",1,xFilial("TMR")+M->TNC_CID,"TMR_DOENCA"))
+		EndIf
+	Else
+		If nCid == 1 //Grupo CID
+			oModel 	  := FWModelActive()
+			oModelTNC := oModel:GetModel( "TNCMASTER" )
+			cCid      := Alltrim(Posicione("TLG",1,xFilial("TLG")+oModelTNC:GetValue( "TNC_GRPCID" ), "TLG_DESCRI") )
+		Else //CID Principal
+			oModel 	  := FWModelActive()
+			oModelTNC := oModel:GetModel( "TNCMASTER" )
+			cCid	  := Alltrim(Posicione("TMR",1,xFilial("TMR")+oModelTNC:GetValue( "TNC_CID" ), "TMR_DOENCA") )
+		EndIf
+	EndIf
+
+Return cCid
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640PAIS
+Função responsavel por realizar o gatilho do campo de Descrição do
+TNC_CODPAI.
+
+@type function
+
+@source MDTA640.prx
+
+@sample MDT640PAIS()
+
+@author Guilherme Freudenburg
+@since 14/03/2017
+
+@return cNome, Caracter, Nome do País selecionado.
+/*/
+//---------------------------------------------------------------------
+Function MDT640PAIS()
+
+	Local cNome := ""
+
+	If IsInCallStack("MDTA410")
+		cNome 	  := Alltrim(Posicione("C08",3,xFilial("C08")+M->TNC_CODPAI,"C08_DESCRI"))
+		M->TNC_DESPAI := Alltrim(Posicione("C08",3,xFilial("C08")+M->TNC_CODPAI,"C08_DESCRI"))
+	Else
+		oModel 	  := FWModelActive()
+		oModelTNC := oModel:GetModel( "TNCMASTER" )
+		cNome 	  := Alltrim(Posicione("C08",3,xFilial("C08")+oModelTNC:GetValue( "TNC_CODPAI" ),"C08_DESCRI"))
+		oModel:LoadValue( "TNCMASTER" , "TNC_DESPAI"  , Alltrim(Posicione("C08",3,xFilial("C08")+oModelTNC:GetValue( "TNC_CODPAI" ),"C08_DESCRI")) )
+	EndIf
+
+Return cNome
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} MDT640VIT
+Função responsável por adicionar o valor no campo TNC_VITIMA através
+do X3_RELACAO.
+
+@type function
+
+@source MDTA640.prx
+
+@sample MDT640VIT()
+
+@author Guilherme Freudenburg
+@since 30/11/2017
+
+@return cVitima, Caracter, Retorna '1'-Sim,'2'-Não ou '3'-Fatal
+/*/
+//---------------------------------------------------------------------
+Function MDT640VIT()
+
+	Local cVitima := IF(INCLUI,"2",TNC->TNC_VITIMA)
+
+	If IsInCallStack('MDT685TEL') .Or. IsInCallStack("MDTA076") .Or. IsInCallStack("MDTA410") .Or. IsInCallStack("MDTA685")
+	//Muda o campo TNC_VITIMA para '1-Sim'
+	cVitima := '1'
+
+	EndIf
+
+Return cVitima
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT640SX3
+Função utilizada para conter o X3_VALID, X3_RELACAO e X3_INIBRW do cadastro de acidentes
+
+@return	xRet, Caracter/Boolean, Retorna caracter ou lógico de acordo com a regra
+
+@param	nRegra, Caracter, Opção do campo a ser validado/retornado (1- X3_VALID, 2- X3_RELACAO, 3- X3_INIBRW)
+@param	cCampo, Caracter, Campo a ser validado/retornado
+
+@sample	MDT640SX3( 1, "TNC_RECIBO" )
+
+@author	Luis Fellipy Bett
+@since	13/01/2022
+/*/
+//-------------------------------------------------------------------
+Function MDT640SX3( nRegra, cCampo )
+
+	Local xRet //Variável de retorno
+
+	If nRegra == 1 //Caso for X3_VALID
+
+		Do Case
+			Case cCampo == "TNC_RECIBO"
+				If Altera .And. TNC->TNC_RECIBO != M->TNC_RECIBO
+					xRet := MsgYesNo( STR0129, STR0027 ) //"Deseja mesmo alterar o recibo da CAT? Isso pode causar erro de integridade entre as informações do sistema!"
+				Else
+					xRet := .T.
+				EndIf
+			Case cCampo == "TNC_RECORI"
+				If Altera .And. TNC->TNC_RECORI != M->TNC_RECORI
+					xRet := MsgYesNo( STR0130, STR0027 ) //"Deseja mesmo alterar o recibo da CAT de origem? Isso pode causar erro de integridade entre as informações do sistema!"
+				Else
+					xRet := .T.
+				EndIf
+			Case cCampo == "TNC_DTRECB"
+				If Altera .And. TNC->TNC_DTRECB != M->TNC_DTRECB
+					xRet := MsgYesNo( STR0131, STR0027 ) //"Deseja mesmo alterar a data de recebimento da CAT pelo governo? Isso pode causar erro de integridade entre as informações do sistema!"
+				Else
+					xRet := .T.
+				EndIf
+		End Case
+
+	EndIf
+
+Return xRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MDT640Rcb
+Verifica se os campos de recibo existem no dicionário de dados
+
+@return	lExst, Boolean, Retorna .T. caso os campos de recibo existirem
+
+@sample	MDT640Rcb()
+
+@author	Luis Fellipy Bett
+@since	18/01/2022
+/*/
+//-------------------------------------------------------------------
+Function MDT640Rcb( nCpo )
+
+	//Variável de controle
+	Local lExst := .F.
+
+	Default nCpo := 3
+	
+	//Verifica o campo de acordo com o parâmetro passado
+	If nCpo == 1
+		lExst := TNC->( ColumnPos( "TNC_RECIBO" ) ) > 0
+	ElseIf nCpo == 2
+		lExst := SR8->( ColumnPos( "R8_RECIBO" ) ) > 0
+	ElseIf nCpo == 3
+		lExst := TNC->( ColumnPos( "TNC_RECIBO" ) ) > 0 .And. SR8->( ColumnPos( "R8_RECIBO" ) ) > 0
+	EndIf
+
+Return lExst
+
+//--------------------------------------------------------------------------
+/*/{Protheus.doc} fGatPais()
+Quando valor do Ind. Local for igual a '1' limpa o campo do Cod. País
+caso estejam com algum valor
+
+@author Eloisa Anibaletto
+@since 13/10/2022
+
+@return	lRet, Boolean, Retorna .T. caso o campo Ind Local estiver preenchido
+e tiver valor diferente de '1' e o campo Cod. País estiver vazio
+/*/
+//--------------------------------------------------------------------------
+Static Function fGatPais()
+
+	Local lRet := .T.
+
+	If !Empty( M->TNC_INDLOC ) .And. M->TNC_INDLOC != '1'
+		If Empty( M->TNC_CODPAI )
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} fGatDesc()
+Quando valor do Ind. Local for igual a '1' limpa o campo Descrução do País 
+caso estejam com algum valor
+
+@author Eloisa Anibaletto
+@since 13/10/2022
+
+@return	lRet, Boolean, Retorna .T. caso o campo Ind Local estiver preenchido
+e tiver valor diferente de '1' e o campo Descrição do País estiver vazio
+/*/
+//----------------------------------------------------------------------------
+Static Function fGatDesc()
+
+	Local lRet := .T.
+
+	If !Empty( M->TNC_INDLOC ) .And. M->TNC_INDLOC != '1'
+		If Empty( M->TNC_DESPAI )
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} fGatPos()
+Quando valor do Ind. Local for igual a '1' limpa o campo Cod. Postal 
+caso estejam com algum valor
+
+@author Eloisa Anibaletto
+@since 13/10/2022
+
+@return	lRet, Boolean, Retorna .T. caso o campo Ind Local estiver preenchido
+e tiver valor diferente de '1' e o campo Cod. Postal estiver vazio
+/*/
+//-----------------------------------------------------------------------------
+Static Function fGatPos()
+
+	Local lRet := .T.
+
+	If !Empty( M->TNC_INDLOC ) .And. M->TNC_INDLOC != '1'
+		If Empty( M->TNC_CODPOS )
+			lRet := .F.
+		EndIf
+	EndIf
+
+Return lRet
+
+//-----------------------------------------------------------------------------
+/*/{Protheus.doc} mdta640Gat()
+Função genérica para gatilhos dos campos da tabela TNC
+
+@author Eloisa Anibaletto
+@since 13/10/2022
+
+@Param, cDom, campo domínio do gatilho
+@Param, cCon, campo contra domínio do gatilho
+@Param, cOpc, campo do gatilho (1= Regra; 2= Condição)
+@return	xRet, Caracter/Função, Retorna caracter ou função de acordo com a regra
+/*/
+//------------------------------------------------------------------------------
+Function mdta640Gat( cDom, cCon, nOpc )
+
+    Local xRet := ''
+    Default nOpc := 1
+
+    If nOpc == 1 // Regra
+        Do Case
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_CODPAI'
+				xRet := ''
+
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_DESPAI'
+				xRet := ''
+
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_CODPOS'
+				xRet := ''
+    	End Case
+    Else
+	
+        Do Case
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_CODPAI'
+				xRet := fGatPais()
+
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_DESPAI'
+				xRet := fGatDesc()
+
+			Case cDom == 'TNC_INDLOC' .And. cCon == 'TNC_CODPOS'
+				xRet := fGatPos()
+   		End Case
+    EndIf
+
+Return xRet
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} mdta640Val()
+Função genérica para validação do campo Cod. País
+
+@author Eloisa Anibaletto
+@since 13/10/2022
+
+@Param, cCampo, Caracter, Código do País
+@return	lRet, Lógico, Retorna verdadediro se existe em um determinado arquivo de dados 
+/*/
+//-------------------------------------------------------------------------------------
+Function mdta640Val( cCampo )
+
+	Local lRet := .F.
+
+    Do Case
+    	Case cCampo == 'TNC_CODPAI'
+        	lRet := !ExistCpo( 'C08', cCampo, 3 )
+  	End Case
+
+Return lRet
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} MDT640HORA()
+Função para não permitir que o campo TNC_HRACID seja alterado durante a
+reabertura da cat, utilizada no campo X3_Valid do dicionário.
+
+@author Matheus Wilbert	
+@since 02/07/2023
+
+
+@return lRet, Lógico, retorna falso caso não seja uma hora válida ou a hora correta
+/*/
+//-------------------------------------------------------------------------------------
+Function Mdt640Hora()
+
+	Local lRet	:= .T.
+	Local lReab	:= IsInCallStack( 'MDT640REAB' )
+
+	If lReab .And. M->TNC_HRACID != TNC->TNC_HRACID
+
+		// "Informação de hora inválida."
+		// "O horário do acidente não pode ser alterado na reabertura, utilizar o horário correto: "
+		Help( NIL, NIL, "HELP", NIL, STR0133, 1, 0, NIL, NIL, NIL, NIL, NIL, { STR0134 + TNC->TNC_HRACID } )
+		lRet := .F.
+
+	EndIf
+
+	If lRet .And. AllTrim( M->TNC_HRACID ) == ':' .Or. !NGValHora( M->TNC_HRACID )
+
+		lRet := .F.
+
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} MDTValInsc()
+Valida o tipo de inscrição na tabela de filiais SYS_COMPANY(SM0) e retorna o número 
+de incrição do estabelecimento de acordo com seu tipo.
+
+@author Eloisa Anibaletto
+@since 11/10/2023
+
+@return	cRet, Caracter, Retorna número de incrição do estabelecimento.
+/*/
+//-------------------------------------------------------------------------------------
+Function MDTValInsc()
+
+	Local cRet    := ""
+
+	Local aArea := ( "SM0" )->( GetArea() )
+
+    dbSelectArea( "SM0" )
+
+	If INCLUI
+
+		dbSelectArea( "F0F" )
+		dbSetOrder( 1 )
+    	If dbSeek( xFilial( 'F0F' ) + SM0->M0_CODFIL )
+			If !Empty( F0F->F0F_CAEPF )
+				cRet := F0F->F0F_CAEPF
+			Else
+				cRet := F0F->F0F_CNO
+			EndIf
+		Else
+			cRet := SM0->M0_CGC
+		EndIf
+
+	EndIf
+
+    RestArea( aArea )
+
+Return cRet
